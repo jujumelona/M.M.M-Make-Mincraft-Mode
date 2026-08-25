@@ -423,7 +423,7 @@ class MMMToolService:
         return path
 
     def _existing_dir(self, value: str) -> Path:
-        path = self._resolve_child(value)
+        path = self._resolve_child(value, allow_root=True)
         if not path.is_dir() or path.is_symlink():
             raise FileNotFoundError(f'Directory not found inside workspace: {path}')
         return path
@@ -433,14 +433,14 @@ class MMMToolService:
             raise SpecValidationError('media_paths must be a list of workspace files.')
         return tuple((str(self._existing_file(str(value))) for value in values))
 
-    def _resolve_child(self, value: str) -> Path:
+    def _resolve_child(self, value: str, *, allow_root: bool = False) -> Path:
         candidate = Path(value).expanduser()
         target = candidate.resolve() if candidate.is_absolute() else (self.workspace_root / candidate).resolve()
         try:
             target.relative_to(self.workspace_root)
         except ValueError as exc:
             raise SpecValidationError('Tool path escaped the configured workspace.') from exc
-        if target == self.workspace_root:
+        if not allow_root and target == self.workspace_root:
             raise SpecValidationError('Tools may not target the workspace root itself.')
         return target
 

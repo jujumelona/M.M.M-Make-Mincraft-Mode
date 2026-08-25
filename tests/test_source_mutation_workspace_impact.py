@@ -160,3 +160,36 @@ def test_materialize_model_source_edit_handles_apply_source_edit_and_aliases(tmp
     assert op.get("operation") == "edit"
     assert op.get("replacements", [{}])[0].get("new") == "public static void init() {}"
 
+
+def test_apply_source_patch_and_search_code_rag_allow_workspace_root(tmp_path: Path) -> None:
+    """apply_source_patch and search_code_rag accept '.' / workspace root without rejection."""
+    from minecraft_mod_ai.mcp_tools import MMMToolService
+    from minecraft_mod_ai.production_tools import ProductionToolService
+
+    (tmp_path / "build.gradle").write_text("// gradle\n", encoding="utf-8")
+    file_path = tmp_path / "src" / "main" / "java" / "Mod.java"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("public class Mod {}\n", encoding="utf-8")
+
+    mcp_service = MMMToolService(workspace_root=tmp_path)
+    # Apply patch targeting project_root="."
+    patch_result = mcp_service.apply_source_patch(
+        ".",
+        [
+            {
+                "operation": "replace",
+                "path": "src/main/java/Mod.java",
+                "expected_sha256": sha256_bytes(file_path.read_bytes()),
+                "content": "public class Mod { public static void init() {} }\n",
+            }
+        ],
+    )
+    assert patch_result.get("status") == "APPLIED"
+
+    prod_service = ProductionToolService(workspace_root=tmp_path)
+    # Search code rag targeting index_path="." or directory
+    search_result = prod_service.search_code_rag("Mod", index_path=".")
+    assert isinstance(search_result, dict)
+    assert search_result.get("schema_version") == "mmm/code-rag-result-v1"
+
+

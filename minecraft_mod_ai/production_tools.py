@@ -57,12 +57,12 @@ class ProductionToolService:
         )
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
-        target = self._resolve(index_path)
+        target = self._resolve(index_path, allow_root=True)
         if target.is_dir():
-            canonical = self._resolve('rag/project-index.json')
+            canonical = self._resolve('rag/project-index.json', allow_root=True)
             target = canonical if canonical.is_file() else target
         elif not target.exists():
-            canonical = self._resolve('rag/project-index.json')
+            canonical = self._resolve('rag/project-index.json', allow_root=True)
             if canonical.is_file():
                 target = canonical
         router = ModelRouter(profile=self.profile) if semantic or rerank else None
@@ -180,7 +180,7 @@ class ProductionToolService:
         return path
 
     def _existing_dir(self, value: str) -> Path:
-        path = self._resolve(value)
+        path = self._resolve(value, allow_root=True)
         if not path.is_dir() or path.is_symlink():
             raise FileNotFoundError(path)
         return path
@@ -204,13 +204,13 @@ class ProductionToolService:
             raise FileExistsError(path)
         return path
 
-    def _resolve(self, value: str) -> Path:
+    def _resolve(self, value: str, *, allow_root: bool = False) -> Path:
         candidate = Path(value).expanduser()
         path = candidate.resolve() if candidate.is_absolute() else (self.workspace_root / candidate).resolve()
         try:
             path.relative_to(self.workspace_root)
         except ValueError as exc:
             raise SpecValidationError('Tool path escaped the configured workspace.') from exc
-        if path == self.workspace_root:
+        if not allow_root and path == self.workspace_root:
             raise SpecValidationError('Tools may not target the workspace root itself.')
         return path

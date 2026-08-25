@@ -138,7 +138,10 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
 def _resolve_index_target(service: Any, index_path: str) -> Path:
     resolve_fn = getattr(service, "_resolve", None)
     if callable(resolve_fn):
-        target = resolve_fn(index_path)
+        try:
+            target = resolve_fn(index_path, allow_root=True)
+        except TypeError:
+            target = resolve_fn(index_path)
     else:
         target = Path(index_path).expanduser().resolve()
     if target.is_dir():
@@ -147,7 +150,10 @@ def _resolve_index_target(service: Any, index_path: str) -> Path:
             return canonical
         return target
     if not target.exists() and callable(resolve_fn):
-        canonical = resolve_fn("rag/project-index.json")
+        try:
+            canonical = resolve_fn("rag/project-index.json", allow_root=True)
+        except TypeError:
+            canonical = resolve_fn("rag/project-index.json")
         if canonical.is_file():
             return canonical
     return target
