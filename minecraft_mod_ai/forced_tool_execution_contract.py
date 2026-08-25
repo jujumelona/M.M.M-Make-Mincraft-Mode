@@ -363,11 +363,19 @@ def _focused_argument_messages(
         for raw in tuple(getattr(request, "messages", ()) or ())
         if isinstance(raw, Mapping)
     ]
-    instruction = (
-        f"HOST ACTION IS FIXED: {name}. Do not choose or emit a tool/function name. "
-        "Return exactly one JSON object containing only the arguments for that host action. "
-        "Use the supplied JSON schema exactly. The host will execute the action after validation."
-    )
+    if name == "apply_source_edit":
+        instruction = (
+            f"HOST ACTION IS FIXED: {name}. Do not emit a tool/function tag. "
+            "Return exactly one JSON object containing only the arguments for that action. "
+            "The 'operation' field specifies the edit type (one of: 'create_file', 'replace_exact', 'insert_before', 'insert_after', 'create_java_type', 'add_java_import', 'insert_java_member', 'delete_file'). "
+            "Use 'path' for target file, 'old' for span to replace, and 'new' (or 'content') for replacement text."
+        )
+    else:
+        instruction = (
+            f"HOST ACTION IS FIXED: {name}. Do not choose or emit a tool/function name. "
+            "Return exactly one JSON object containing only the arguments for that host action. "
+            "Use the supplied JSON schema exactly. The host will execute the action after validation."
+        )
     if repair_error:
         instruction += (
             " The previous argument object was invalid. Repair the arguments only; do not repeat the "

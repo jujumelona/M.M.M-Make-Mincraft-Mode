@@ -41,10 +41,18 @@ _APPLY_SOURCE_EDIT_ALIASES = {
     "file_path": "path",
     "target": "path",
     "target_path": "path",
+    "target_file": "path",
     "action": "operation",
     "apply": "operation",
     "op": "operation",
     "mode": "operation",
+    "new_text": "new",
+    "new_content": "new",
+    "replacement": "new",
+    "old_text": "old",
+    "code": "content",
+    "source": "content",
+    "body": "content",
 }
 _MAX_CONTAINER_DEPTH = 3
 

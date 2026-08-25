@@ -28,8 +28,14 @@ _OPERATION_ALIASES = {
     "replace": "replace_exact",
     "create": "create_file",
     "delete": "delete_file",
+    "apply_source_edit": "replace_exact",
+    "edit": "replace_exact",
+    "write": "create_file",
+    "modify": "replace_exact",
+    "patch": "replace_exact",
+    "update": "replace_exact",
 }
-_ACCEPTED_OPERATIONS = (*_CANONICAL_OPERATIONS, *_OPERATION_ALIASES)
+_ACCEPTED_OPERATIONS = tuple(sorted(set(_CANONICAL_OPERATIONS) | set(_OPERATION_ALIASES.keys())))
 _JAVA_PATH_SUFFIX = ".java"
 _JAVA_PACKAGE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 _JAVA_TYPE_DECLARATION = re.compile(
@@ -59,14 +65,46 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "description": "Project-relative source/resource path selected for this action.",
         },
+        "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Alias for path.",
+        },
+        "target_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Alias for path.",
+        },
+        "target_file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Alias for path.",
+        },
         "old": {
             "type": "string",
             "minLength": 1,
             "description": "Exact current span to replace for replace_exact.",
         },
+        "old_text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Alias for old.",
+        },
         "new": {
             "type": "string",
             "description": "Replacement text for replace_exact.",
+        },
+        "new_text": {
+            "type": "string",
+            "description": "Alias for new.",
+        },
+        "new_content": {
+            "type": "string",
+            "description": "Alias for new.",
+        },
+        "replacement": {
+            "type": "string",
+            "description": "Alias for new.",
         },
         "anchor": {
             "type": "string",
@@ -79,6 +117,14 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
                 "Inserted text for anchor edits, or complete content only for a new "
                 "non-Java resource. Java files must use structural Java operations."
             ),
+        },
+        "code": {
+            "type": "string",
+            "description": "Alias for content.",
+        },
+        "body": {
+            "type": "string",
+            "description": "Alias for content.",
         },
         "text": {
             "type": "string",
@@ -139,10 +185,49 @@ def _required_text(
     return value
 
 
-def _normalize_operation(runtime_module: Any, value: Any) -> str:
+def _canonicalize_payload_aliases(payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    for alias in ("file", "target_path", "target_file", "file_path"):
+        if alias in normalized and "path" not in normalized:
+            normalized["path"] = normalized.pop(alias)
+    if "new_text" in normalized and "new" not in normalized:
+        normalized["new"] = normalized.pop("new_text")
+    if "new_content" in normalized and "new" not in normalized:
+        normalized["new"] = normalized.pop("new_content")
+    if "replacement" in normalized and "new" not in normalized:
+        normalized["new"] = normalized.pop("replacement")
+    if "old_text" in normalized and "old" not in normalized:
+        normalized["old"] = normalized.pop("old_text")
+    if "code" in normalized and "content" not in normalized:
+        normalized["content"] = normalized.pop("code")
+    if "body" in normalized and "content" not in normalized:
+        normalized["content"] = normalized.pop("body")
+    return normalized
+
+
+def _normalize_operation(runtime_module: Any, value: Any, payload: Mapping[str, Any] | None = None) -> str:
     if not isinstance(value, str):
         raise runtime_module.AgentToolRuntimeError("operation must be a string")
-    operation = _OPERATION_ALIASES.get(value.strip(), value.strip())
+    clean = value.strip()
+    if clean == "apply_source_edit" and payload is not None:
+        if payload.get("old") or payload.get("old_text"):
+            return "replace_exact"
+        if payload.get("anchor"):
+            return "insert_before"
+        if payload.get("member"):
+            return "insert_java_member"
+        if payload.get("import_name"):
+            return "add_java_import"
+        if payload.get("package_name") or payload.get("declaration"):
+            return "create_java_type"
+        if payload.get("content") or payload.get("text") or payload.get("code") or payload.get("new") or payload.get("new_text"):
+            path = str(payload.get("path") or payload.get("file") or "").strip()
+            if path.endswith(_JAVA_PATH_SUFFIX):
+                return "create_java_type"
+            return "create_file"
+        return "replace_exact"
+
+    operation = _OPERATION_ALIASES.get(clean, clean)
     if operation not in _CANONICAL_OPERATIONS:
         raise runtime_module.AgentToolRuntimeError(
             f"Unsupported source write operation: {value!r}"
@@ -471,7 +556,8 @@ def materialize_model_source_edit(
             f"Unknown model-facing source-write fields: {sorted(extra)}"
         )
 
-    operation = _normalize_operation(runtime_module, payload.get("operation"))
+    payload = _canonicalize_payload_aliases(payload)
+    operation = _normalize_operation(runtime_module, payload.get("operation"), payload)
     payload = _canonicalize_text_alias(payload, operation)
     path = _required_text(runtime_module, payload, "path")
     root, project_root_argument = _bound_project(

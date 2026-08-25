@@ -134,3 +134,29 @@ def test_source_patch_failed_rollback_reports_uncertain_workspace(
 
     assert caught.value.workspace_impact == "uncertain"
     assert "[workspace_impact=uncertain]" in str(caught.value)
+
+
+def test_materialize_model_source_edit_handles_apply_source_edit_and_aliases(tmp_path: Path) -> None:
+    """materialize_model_source_edit accepts new_text/old_text aliases and operation='apply_source_edit'."""
+    from minecraft_mod_ai import agent_tool_runtime as runtime_module
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import materialize_model_source_edit
+
+    (tmp_path / "build.gradle").write_text("// gradle\n", encoding="utf-8")
+    file_path = tmp_path / "src" / "main" / "java" / "Mod.java"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("public class Mod {\n    // placeholder\n}\n", encoding="utf-8")
+
+    payload = {
+        "operation": "apply_source_edit",
+        "file": "src/main/java/Mod.java",
+        "old_text": "// placeholder",
+        "new_text": "public static void init() {}",
+    }
+    result = materialize_model_source_edit(runtime_module, tmp_path, payload)
+    assert isinstance(result, dict)
+    ops = result.get("operations")
+    assert isinstance(ops, list) and len(ops) == 1
+    op = ops[0]
+    assert op.get("operation") == "edit"
+    assert op.get("replacements", [{}])[0].get("new") == "public static void init() {}"
+
