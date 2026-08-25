@@ -179,13 +179,16 @@ class MMMToolService:
         approved.validate()
         return {'status': approved.status.value, 'proposal': approved.to_dict(), 'approval_hash': approved.calculate_hash()}
 
-    def search_project_rag(self, query: str, minecraft_version: str = "1.21.1", limit: int = 6) -> dict[str, Any]:
-        if not minecraft_version:
-            minecraft_version = "1.21.1"
+    def search_project_rag(self, query: str, minecraft_version: str | None = None, limit: int = 6) -> dict[str, Any]:
         if type(limit) is not int or limit < 1:
             raise SpecValidationError('limit must be a positive integer.')
-        sources = AuthoritativeEvidenceRetriever().search(query, minecraft_version=minecraft_version, limit=limit)
-        return {'schema_version': 'mmm/rag-result-v1', 'query': query, 'minecraft_version': minecraft_version, 'sources': [source.__dict__ for source in sources]}
+        resolved_version = (
+            minecraft_version.strip()
+            if isinstance(minecraft_version, str) and minecraft_version.strip()
+            else os.environ.get('MMM_MINECRAFT_VERSION', '').strip() or None
+        )
+        sources = AuthoritativeEvidenceRetriever().search(query, minecraft_version=resolved_version, limit=limit)
+        return {'schema_version': 'mmm/rag-result-v1', 'query': query, 'minecraft_version': resolved_version, 'sources': [source.__dict__ for source in sources]}
 
     def inspect_existing_mod(self, archive_path: str) -> dict[str, Any]:
         archive = self._existing_file(archive_path)

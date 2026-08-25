@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from typing import Any, Mapping, Sequence
 
@@ -183,7 +184,9 @@ def _parse_qwen_function(
     if missing:
         for param in list(missing):
             if param == "minecraft_version":
-                arguments["minecraft_version"] = "1.21.1"
+                env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+                if env_ver:
+                    arguments["minecraft_version"] = env_ver
                 missing.remove(param)
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(

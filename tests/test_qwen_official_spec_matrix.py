@@ -65,8 +65,9 @@ def test_qwen_tool_markup_xml_parser() -> None:
     assert "public class Example {}" in call.arguments["content"]
 
 
-def test_qwen_tool_markup_search_project_rag_defaults_minecraft_version() -> None:
-    """Verify search_project_rag defaults minecraft_version when omitted."""
+def test_qwen_tool_markup_search_project_rag_defaults_minecraft_version(monkeypatch) -> None:
+    """Verify search_project_rag dynamically resolves minecraft_version from environment when omitted."""
+    monkeypatch.setenv("MMM_MINECRAFT_VERSION", "1.20.1")
     schemas = {
         "search_project_rag": {
             "type": "object",
@@ -91,5 +92,5 @@ def test_qwen_tool_markup_search_project_rag_defaults_minecraft_version() -> Non
     call = calls[0]
     assert call.name == "search_project_rag"
     assert call.arguments["query"] == "loadLevel mixin"
-    assert call.arguments.get("minecraft_version") == "1.21.1"
+    assert call.arguments.get("minecraft_version") == "1.20.1"
 

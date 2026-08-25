@@ -643,7 +643,9 @@ def _validate_tool_calls_against_host_schema(
                 f"tool {call.name!r} has an invalid host validation schema"
             ) from exc
         if "minecraft_version" in schema.get("properties", {}) and "minecraft_version" not in call.arguments:
-            call.arguments["minecraft_version"] = "1.21.1"
+            env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+            if env_ver:
+                call.arguments["minecraft_version"] = env_ver
         if not errors:
             continue
         error = errors[0]
