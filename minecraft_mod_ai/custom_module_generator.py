@@ -374,6 +374,15 @@ class CustomModuleGenerator:
                 )
                 checkpoint_resumed = False
 
+        if minecraft_version:
+            os.environ["MMM_MINECRAFT_VERSION"] = str(minecraft_version).strip()
+        if loader:
+            os.environ["MMM_LOADER"] = str(loader).strip()
+        if mappings:
+            os.environ["MMM_YARN_MAPPINGS"] = str(mappings).strip()
+        if java_version:
+            os.environ["MMM_JAVA_VERSION"] = str(java_version).strip()
+
         self.router.bind_agent_workspace(staged_root, require_fresh_evidence=True)
         request = {
             "phase": "implement_module",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import os
 import shutil
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, replace
@@ -422,6 +423,12 @@ class CompleteProductionOrchestrator:
         from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
         from . import scheduler_parallel_safety_contract as scheduler_safety
         spec = approved.base_proposal.spec
+        if spec.platform.minecraft_version:
+            os.environ["MMM_MINECRAFT_VERSION"] = str(spec.platform.minecraft_version).strip()
+        if spec.platform.loader:
+            os.environ["MMM_LOADER"] = str(spec.platform.loader).strip()
+        if spec.platform.yarn_mappings:
+            os.environ["MMM_YARN_MAPPINGS"] = str(spec.platform.yarn_mappings).strip()
         module_lookup = {module.module_id: module for module in ordered}
         direct_dependents: dict[str, set[str]] = {
             module.module_id: set() for module in ordered
