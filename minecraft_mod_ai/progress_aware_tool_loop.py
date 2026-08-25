@@ -888,8 +888,12 @@ def _generate_turn_with_context_recovery(
             budget_bytes=emergency_budget,
         )
         if not _replace_live_messages(messages, emergency):
-            mark_context_recovery_exhausted(exc)
-            raise
+            if len(messages) > 3:
+                forced = [messages[0], messages[-2], messages[-1]]
+                _replace_live_messages(messages, tuple(forced))
+            else:
+                mark_context_recovery_exhausted(exc)
+                raise
 
         retry_request = replace(
             turn_request,
@@ -907,6 +911,19 @@ def _generate_turn_with_context_recovery(
                 return adapter.generate_turn(retry_request)
         except BaseException as retry_exc:
             if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
+                if len(messages) > 3:
+                    forced = [messages[0], messages[-2], messages[-1]]
+                    if _replace_live_messages(messages, tuple(forced)):
+                        ultra_request = replace(
+                            turn_request,
+                            messages=tuple(messages),
+                            media_paths=media_paths,
+                        )
+                        try:
+                            with router._generation_scope(config):
+                                return adapter.generate_turn(ultra_request)
+                        except BaseException:
+                            pass
                 mark_context_recovery_exhausted(exc)
                 raise exc from retry_exc
             raise
