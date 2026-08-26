@@ -1498,6 +1498,96 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
     )
     assert plan_res.target_loader == "fabric"
     assert plan_res.target_minecraft == "1.21.1"
+    assert (tmp_path / "assembly-manifest.json").exists()
+    assert (tmp_path / "dependency-lock.json").exists()
+
+
+def test_residual_generation_contract_write_guards() -> None:
+    import pytest
+    from minecraft_mod_ai.residual_generation_contract import (
+        ResidualGenerationContract,
+        ProtectedReuseArtifactError,
+        ResidualScopeViolation,
+        validate_residual_write,
+    )
+
+    contract = ResidualGenerationContract(
+        capability="trade.custom_npc",
+        protected_artifacts={"src/main/java/TradeNpc.java": "sha:123"},
+        protected_symbols=("TradeNpc",),
+        allowed_write_paths=("src/main/java/TradeInterface.java",),
+    )
+
+    # 1. Modifying protected artifact must raise ProtectedReuseArtifactError
+    with pytest.raises(ProtectedReuseArtifactError):
+        validate_residual_write("src/main/java/TradeNpc.java", None, contract)
+
+    # 2. Writing outside allowed paths / prefixes must raise ResidualScopeViolation
+    with pytest.raises(ResidualScopeViolation):
+        validate_residual_write("build.gradle", None, contract)
+
+    # 3. Allowed write path must pass
+    validate_residual_write("src/main/java/TradeInterface.java", None, contract)
+    validate_residual_write("src/main/java/NewTradeService.java", None, contract)
+
+
+def test_reusable_artifact_bundle_and_repository_locator() -> None:
+    from minecraft_mod_ai.reuse_artifacts import ReusableArtifactBundle
+    from minecraft_mod_ai.repository_artifact_index import RepositoryArtifactIndex
+    from minecraft_mod_ai.capability_implementation_locator import CapabilityImplementationLocator
+
+    bundle = ReusableArtifactBundle.from_same_project(
+        capability="magic.spell",
+        files={"src/main/java/SpellEntity.java": b"public class SpellEntity {}"},
+        symbols=("SpellEntity",),
+    )
+    assert bundle.origin_kind == "same_project"
+    assert "src/main/java/SpellEntity.java" in bundle.protected_paths
+    assert len(bundle.file_hashes) == 1
+
+    # Test RepositoryArtifactIndex and CapabilityImplementationLocator
+    tree = [
+        {"path": "src/main/java/com/mod/BossEntity.java", "sha": "b1"},
+        {"path": "src/main/resources/assets/boss_mod/models/entity/boss.json", "sha": "b2"},
+        {"path": "src/main/resources/assets/boss_mod/textures/entity/boss.png", "sha": "b3"},
+    ]
+    index = RepositoryArtifactIndex.build_from_tree("example/boss-mod", "sha:1", tree)
+    index.populate_java_symbols("src/main/java/com/mod/BossEntity.java", "package com.mod;\npublic class BossEntity {}\nRegistry.register(item, \"boss_mod:boss_entity\");")
+
+    seeds = CapabilityImplementationLocator.locate_seeds("boss.entity", index)
+    assert len(seeds) > 0
+    assert seeds[0].node_id == "src/main/java/com/mod/BossEntity.java"
+    assert seeds[0].score >= 8.0
+
+
+def test_build_model_and_resource_merge_registry() -> None:
+    from minecraft_mod_ai.build_model import BuildModel, BuildTargetSpec
+    from minecraft_mod_ai.resource_merge_registry import ResourceMergeRegistry
+
+    model = BuildModel(
+        target=BuildTargetSpec(loader="fabric", minecraft_version="1.21.1", java_version=21),
+    )
+    model.add_repository("https://maven.terraformersmc.com/releases/")
+    model.add_dependency("com.terraformersmc:modmenu:11.0.0")
+
+    rendered = model.render_gradle(modid="test_mod")
+    assert "com.terraformersmc:modmenu:11.0.0" in rendered
+    assert "https://maven.terraformersmc.com/releases/" in rendered
+    assert "JavaVersion.VERSION_21" in rendered
+
+    # Test ResourceMergeRegistry
+    tags_a = '{"values": ["mod:item1"]}'
+    tags_b = '{"values": ["mod:item2"]}'
+    merged_tags, ok, _ = ResourceMergeRegistry.merge("data/mod/tags/items/tools.json", tags_a, tags_b)
+    assert ok is True
+    assert "mod:item1" in merged_tags and "mod:item2" in merged_tags
+
+    lang_a = '{"item.mod.sword": "Iron Sword"}'
+    lang_b = '{"item.mod.shield": "Iron Shield"}'
+    merged_lang, ok, _ = ResourceMergeRegistry.merge("assets/mod/lang/en_us.json", lang_a, lang_b)
+    assert ok is True
+    assert "Iron Sword" in merged_lang and "Iron Shield" in merged_lang
+
 
 
 
