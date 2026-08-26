@@ -147,8 +147,7 @@ def test_qwen_draft_kv_stage_selects_fastest_identical_output(monkeypatch) -> No
     assert len(decision.probes) == 3
 
 
-def test_qwen_game_design_schema_uses_host_validation_fastpath(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_FORCE_SERVER_JSON_SCHEMA", raising=False)
+def test_qwen_game_design_schema_uses_native_constraint_fastpath() -> None:
     module = SimpleNamespace(
         _server_payload=lambda _adapter, _request: {
             "response_format": {"type": "json_object", "schema": {}},
@@ -158,16 +157,20 @@ def test_qwen_game_design_schema_uses_host_validation_fastpath(monkeypatch) -> N
     )
     bind_structured_decode_policy(module)
     adapter = SimpleNamespace(config=_qwen_config())
+    schema = {"type": "object", "properties": {"game_design": {}}}
     request = SimpleNamespace(
         response_format="json",
-        response_schema={"type": "object", "properties": {"game_design": {}}},
+        response_schema=schema,
     )
 
     payload = module._server_payload(adapter, request)
-    assert "response_format" not in payload
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-
-    monkeypatch.setenv("MMM_QWEN35_FORCE_SERVER_JSON_SCHEMA", "1")
-    forced = module._server_payload(adapter, request)
-    assert "response_format" in forced
