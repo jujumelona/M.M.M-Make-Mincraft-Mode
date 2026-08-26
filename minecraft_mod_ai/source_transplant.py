@@ -276,13 +276,29 @@ def inspect_repository_slice(
         truncation_reason = ""
         closure_complete = True
 
-        # Index resource files in repo
+        # Index resource files in repo using typed canonical identifiers
         resource_index: dict[str, str] = {}
         for path in blobs:
-            if "/src/main/resources/" in f"/{path}":
-                clean_path = path.casefold()
+            clean_path = path.casefold()
+            resource_index[clean_path] = path
+            m = re.search(r"src/main/resources/(assets|data)/([^/]+)/([^/]+)/(.+)$", path, re.IGNORECASE)
+            if m:
+                _area, ns, category, subpath = m.group(1).casefold(), m.group(2).casefold(), m.group(3).casefold(), m.group(4).casefold()
+                subpath_stem = Path(subpath).stem.casefold()
+                resource_index[f"{ns}:{category}/{subpath}"] = path
+                resource_index[f"{ns}:{subpath_stem}"] = path
+                resource_index[f"{ns}:{subpath}"] = path
+                if category in {"models", "model"}:
+                    resource_index[f"model:{ns}:{subpath_stem}"] = path
+                    resource_index[f"model:{ns}:{subpath}"] = path
+                    resource_index[f"{ns}:item/{subpath_stem}"] = path
+                    resource_index[f"{ns}:block/{subpath_stem}"] = path
+                elif category in {"textures", "texture"}:
+                    resource_index[f"texture:{ns}:{subpath_stem}"] = path
+                    resource_index[f"texture:{ns}:{subpath}"] = path
+                    resource_index[f"{ns}:textures/{subpath_stem}"] = path
+            else:
                 stem = Path(path).stem.casefold()
-                resource_index[clean_path] = path
                 if stem not in resource_index:
                     resource_index[stem] = path
 
@@ -344,13 +360,17 @@ def inspect_repository_slice(
                         ns, subpath = parts[0].casefold(), parts[1].casefold()
                         if ns not in {"minecraft", "fabric", "forge", "neoforge", "c"}:
                             res_name = subpath.split("/")[-1]
-                            matched_res = resource_index.get(res_name)
+                            matched_res = (
+                                resource_index.get(id_match.casefold())
+                                or resource_index.get(f"{ns}:{subpath}")
+                                or resource_index.get(f"{ns}:{res_name}")
+                                or resource_index.get(res_name)
+                            )
                             if matched_res:
                                 if matched_res not in selected_set:
                                     artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
                                     pending.append(matched_res)
                             else:
-                                # Internal resource reference missing from repo
                                 unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="missing_internal_resource"))
                                 closure_complete = False
                                 if not truncation_reason:
@@ -363,8 +383,13 @@ def inspect_repository_slice(
                     parts = parent_match.split(":", 1)
                     ns = parts[0].casefold() if len(parts) == 2 else ""
                     if ns not in {"minecraft", "builtin"}:
-                        parent_stem = (parts[1] if len(parts) == 2 else parent_match).split("/")[-1].casefold()
-                        matched_parent = resource_index.get(parent_stem)
+                        sub = parts[1] if len(parts) == 2 else parent_match
+                        parent_stem = sub.split("/")[-1].casefold()
+                        matched_parent = (
+                            resource_index.get(f"model:{ns}:{parent_stem}")
+                            or resource_index.get(f"{ns}:{sub.casefold()}")
+                            or resource_index.get(parent_stem)
+                        )
                         if matched_parent:
                             if matched_parent not in selected_set:
                                 artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
@@ -380,16 +405,24 @@ def inspect_repository_slice(
                     parts = tex_match.split(":", 1)
                     ns = parts[0].casefold() if len(parts) == 2 else ""
                     if ns not in {"minecraft"}:
-                        tex_stem = (parts[1] if len(parts) == 2 else tex_match).split("/")[-1].casefold()
-                        matched_tex = resource_index.get(tex_stem)
+                        sub = parts[1] if len(parts) == 2 else tex_match
+                        tex_stem = sub.split("/")[-1].casefold()
+                        matched_tex = (
+                            resource_index.get(f"texture:{ns}:{tex_stem}")
+                            or resource_index.get(f"{ns}:{sub.casefold()}")
+                            or resource_index.get(tex_stem)
+                        )
                         if matched_tex and matched_tex not in selected_set:
                             artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_tex, relation="texture_ref"))
                             pending.append(matched_tex)
 
-                # 3. Mixin JSON target classes
-                if "mixins" in path.casefold():
+                # 3. Mixin JSON target classes with package resolution
+                if "mixin" in path.casefold():
+                    pkg_match = re.search(r'"package"\s*:\s*"([^"]+)"', text)
+                    pkg_prefix = (pkg_match.group(1).strip() + ".") if pkg_match else ""
                     for mixin_class in re.findall(r'"([A-Za-z0-9_]+)"', text):
-                        matched_class = declarations.get(mixin_class)
+                        full_class = f"{pkg_prefix}{mixin_class}"
+                        matched_class = declarations.get(full_class) or declarations.get(mixin_class)
                         if matched_class and matched_class not in selected_set:
                             artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_class, relation="mixin_target"))
                             pending.append(matched_class)

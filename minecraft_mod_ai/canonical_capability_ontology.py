@@ -566,14 +566,29 @@ _CLAUSE_SPLIT = re.compile(
 
 
 def _extract_canonical_tokens(word: str) -> tuple[str, ...]:
-    """Extract canonical domain keywords or strip Korean particles from compound tokens."""
+    """Extract canonical domain keywords by prioritizing exact match, particle stripping, and compound segmentation."""
     low = word.casefold().strip()
     if not low:
         return ()
+
+    # 1. Exact match
     if low in _CANONICAL_DOMAIN_MAP or low in _THEME_ARCHETYPES or low in _FUNCTIONAL_ARCHETYPES:
         return (low,)
 
-    # Longest-key substring matching for compound phrases (e.g. 잡몹부터 -> 잡몹, 보스까지 -> 보스)
+    # 2. Particle / suffix stripping (e.g. 잡몹부터 -> 잡몹, 보스까지 -> 보스, 레벨도 -> 레벨)
+    stripped = low
+    changed = True
+    while changed and len(stripped) >= 2:
+        changed = False
+        for p in _KOREAN_PARTICLES:
+            if stripped.endswith(p) and len(stripped) > len(p):
+                stripped = stripped[:-len(p)]
+                changed = True
+                break
+    if stripped in _CANONICAL_DOMAIN_MAP or stripped in _THEME_ARCHETYPES or stripped in _FUNCTIONAL_ARCHETYPES:
+        return (stripped,)
+
+    # 3. Compound segmentation and longest-key substring matching
     matched_keys: list[str] = []
     for key in sorted(_CANONICAL_DOMAIN_MAP.keys(), key=lambda k: -len(k)):
         if len(key) >= 2 and key in low:
@@ -586,18 +601,6 @@ def _extract_canonical_tokens(word: str) -> tuple[str, ...]:
     if matched_keys:
         return tuple(matched_keys)
 
-    # Particle stripping
-    stripped = low
-    changed = True
-    while changed and len(stripped) >= 2:
-        changed = False
-        for p in _KOREAN_PARTICLES:
-            if stripped.endswith(p) and len(stripped) > len(p):
-                stripped = stripped[:-len(p)]
-                changed = True
-                break
-    if stripped in _CANONICAL_DOMAIN_MAP or stripped in _THEME_ARCHETYPES or stripped in _FUNCTIONAL_ARCHETYPES:
-        return (stripped,)
     return ()
 
 

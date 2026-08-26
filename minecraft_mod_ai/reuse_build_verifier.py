@@ -106,39 +106,14 @@ def verify_scratch_workspace_build(
                 missing_resources=(),
             )
 
-    # Static linkage / syntax check fallback across Java files
-    java_files = list(ws.rglob("*.java"))
-    if not java_files:
-        return BuildVerificationReceipt(
-            build_tool="static_linkage",
-            command=("static_check",),
-            exit_code=0,
-            stdout="No Java files present.",
-            stderr="",
-            compile_passed=True,
-            tests_passed=False,
-            unresolved_symbols=(),
-            missing_resources=(),
-        )
-
-    # Basic Java syntax and balanced-braces validation
-    syntax_errors: list[str] = []
-    for jf in java_files:
-        try:
-            content = jf.read_text(encoding="utf-8", errors="replace")
-            if content.count("{") != content.count("}"):
-                syntax_errors.append(f"Unbalanced braces in {jf.name}")
-        except Exception as e:
-            syntax_errors.append(f"Cannot read {jf.name}: {e}")
-
-    compile_passed = (len(syntax_errors) == 0)
+    # Without a verified build environment (e.g. Gradle wrapper), compilation proof cannot be attested.
     return BuildVerificationReceipt(
-        build_tool="static_linkage",
-        command=("static_syntax_check",),
-        exit_code=0 if compile_passed else 1,
-        stdout=f"Checked {len(java_files)} Java files.",
-        stderr="\n".join(syntax_errors),
-        compile_passed=compile_passed,
+        build_tool="none",
+        command=(),
+        exit_code=1,
+        stdout="",
+        stderr="No Gradle build wrapper found in target workspace; compile proof cannot be attested.",
+        compile_passed=False,
         tests_passed=False,
         unresolved_symbols=(),
         missing_resources=(),

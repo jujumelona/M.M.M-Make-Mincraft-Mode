@@ -318,3 +318,121 @@ def test_strict_materialized_proof_level_without_compile() -> None:
     assert receipt.compile_passed is False
     assert receipt.tests_passed is False
     assert receipt.proof_level == "MATERIALIZED"
+
+
+def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_path) -> None:
+    fake_code = b"package com.donor.mod;\npublic class RealItem {\n    public static void test() {}\n}"
+    fake_sha = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+
+    def mock_fetch(client, repo, blob_sha):
+        if blob_sha == "blob-real-1":
+            return fake_code
+        return b""
+
+    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", mock_fetch)
+
+    donor = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/real-mod",
+        commit_sha="4444444444444444444444444444444444444444",
+        license_id="MIT",
+        source_url="https://github.com/example/real-mod",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/com/donor/mod/RealItem.java",
+                blob_sha="blob-real-1",
+                sha256=fake_sha,
+                size_bytes=len(fake_code),
+                symbols=("RealItem",),
+            ),
+        ),
+        seed_files=("src/main/java/com/donor/mod/RealItem.java",),
+        source_symbols=("RealItem",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    evaluated_files = {}
+
+    def mock_compile(files, context):
+        evaluated_files.update(files)
+        return {"compile_passed": True, "tests_passed": True}
+
+    from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace=tmp_path,
+        target_context={"target_package": "ai.target.mod"},
+        compile_checker=mock_compile,
+    )
+
+    # 1. Real bytes were evaluated, not placeholders
+    assert "src/main/java/com/donor/mod/RealItem.java" in evaluated_files
+    assert "public class RealItem" in evaluated_files["src/main/java/com/donor/mod/RealItem.java"]
+
+    # 2. Both compile and tests passed -> BEHAVIOR_VERIFIED
+    assert receipt.compile_passed is True
+    assert receipt.tests_passed is True
+    assert receipt.proof_level == "BEHAVIOR_VERIFIED"
+
+    # 3. Caller workspace remained unpolluted by ephemeral compilation
+    assert not (tmp_path / "src/main/java/com/donor/mod/RealItem.java").exists()
+
+
+def test_reuse_ledger_status_strictly_maps_proof_level() -> None:
+    from minecraft_mod_ai.reuse_planner import ReuseDecision, TargetImplementationPlan
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+
+    adapter = adapter_for_target("1.21.1", "fabric")
+
+    d_verified = ReuseDecision(
+        capability="boss.entity",
+        mode="source_transplant",
+        confidence=0.9,
+        fresh_implementation_cost=20.0,
+        fresh_verification_cost=8.0,
+        proof_level="COMPILE_VERIFIED",
+    )
+    d_mat = ReuseDecision(
+        capability="item.upgrade",
+        mode="adapt",
+        confidence=0.8,
+        fresh_implementation_cost=15.0,
+        fresh_verification_cost=6.0,
+        proof_level="MATERIALIZED",
+    )
+    d_fresh = ReuseDecision(
+        capability="magic.spell",
+        mode="fresh",
+        confidence=1.0,
+        fresh_implementation_cost=25.0,
+        fresh_verification_cost=10.0,
+        proof_level="DISCOVERED",
+    )
+
+    plan = TargetImplementationPlan(
+        adapter=adapter,
+        capabilities=(d_verified, d_mat, d_fresh),
+        platform_evidence=None,
+        cross_component_integration_cost=0.0,
+        platform_verification_cost=1.0,
+        maintenance_risk=0.0,
+        total_expected_cost=50.0,
+        weighted_verified_reuse=15.0,
+        fresh_work=25.0,
+        adaptation_work=5.0,
+        verification_work=10.0,
+        uncertainty=0.0,
+        reusable_registry_candidates=0,
+    )
+
+    ledger = {item["capability"]: item["status"] for item in plan.to_dict()["reuse_ledger"]}
+
+    assert ledger["boss.entity"] == "VERIFIED_REUSE"
+    assert ledger["item.upgrade"] == "MATERIALIZED"
+    assert ledger["magic.spell"] == "FRESH_REQUIRED"
+

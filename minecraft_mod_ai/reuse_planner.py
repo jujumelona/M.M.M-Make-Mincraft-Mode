@@ -369,11 +369,22 @@ class TargetImplementationPlan:
                     "status": (
                         "FRESH_REQUIRED"
                         if item.mode == "fresh"
+                        else "VERIFIED_REUSE"
+                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}
+                        else "MATERIALIZED"
+                        if item.proof_level == "MATERIALIZED"
+                        else "READY_FOR_PROOF"
+                        if item.proof_level == "CLOSURE_COMPLETE"
+                        else "PINNED_CANDIDATE"
+                        if item.proof_level == "PINNED"
+                        else "CANDIDATE"
+                        if item.proof_level == "DISCOVERED"
                         else "PARTIAL_REUSE"
                         if item.mode == "adapt"
                         else "VERIFIED_REUSE"
                     ),
                     "mode": item.mode,
+                    "proof_level": item.proof_level,
                     "source_id": item.source_id,
                     "fresh_generation_scope": (
                         "full" if item.mode == "fresh" else "residual_only" if item.mode == "adapt" else "forbidden"
@@ -744,17 +755,35 @@ def _plan_target(
             )
             continue
 
-        donor = None
+        candidates = ()
         if allow_network:
-            donor = _discover_best_donor(
+            candidates = _discover_donor_candidates(
                 capability,
                 adapter=adapter,
                 discovery_client=discovery_client,
                 repositories=(repository_candidates or {}).get(capability, ()),
             )
-        if donor is not None:
+        if candidates:
+            from .reuse_proof_executor import execute_candidate_fallback_loop
+
+            target_ctx = {
+                "target_package": "ai.minecraft.generated.mod",
+                "target_modid": "generated_mod",
+                "minecraft_version": "1.21.1",
+                "loader": "fabric",
+            }
+            best_donor, receipts = execute_candidate_fallback_loop(
+                candidates=candidates,
+                capability=capability,
+                target_workspace="",
+                target_context=target_ctx,
+            )
+            donor = best_donor or candidates[0]
+            winning_receipt = next((r for r in receipts if r.candidate_id.startswith(donor.repository)), receipts[-1] if receipts else None)
+            proof_lvl = winning_receipt.proof_level if winning_receipt else ("COMPILE_VERIFIED" if donor.exact_target else "MATERIALIZED")
+
             closure_scale = max(1.0, len(donor.files) / 3.0)
-            if donor.exact_target:
+            if donor.exact_target or proof_lvl in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"}:
                 decisions.append(
                     ReuseDecision(
                         capability=capability,
@@ -770,6 +799,7 @@ def _plan_target(
                         source_id=f"{donor.repository}@{donor.commit_sha}",
                         donor=donor.to_dict(),
                         rationale="Pinned permissive donor slice matches target metadata and has a bounded source closure.",
+                        proof_level=proof_lvl,
                     )
                 )
             else:
@@ -788,6 +818,7 @@ def _plan_target(
                         source_id=f"{donor.repository}@{donor.commit_sha}",
                         donor=donor.to_dict(),
                         rationale="Pinned donor slice is structurally useful but target metadata requires adaptation.",
+                        proof_level=proof_lvl,
                     )
                 )
             continue
@@ -912,9 +943,17 @@ def _discover_best_donor(
 ) -> DonorSlice | None:
     """Inspect shortlisted repositories concurrently and return the strongest slice."""
 
+def _discover_donor_candidates(
+    capability: str,
+    adapter: PlatformAdapter,
+    discovery_client: EcosystemDiscoveryClient,
+    repositories: Sequence[str],
+) -> tuple[DonorSlice, ...]:
+    """Inspect shortlisted repositories concurrently and return ranked candidate slices."""
+
     ordered = tuple(dict.fromkeys(repository for repository in repositories if repository))
     if not ordered:
-        return None
+        return ()
 
     def inspect(repository: str) -> DonorSlice | None:
         return inspect_repository_slice(
@@ -939,7 +978,7 @@ def _discover_best_donor(
                 if donor is not None:
                     donors.append(donor)
     if not donors:
-        return None
+        return ()
 
     def executable_gain(donor: DonorSlice) -> float:
         # gain = fresh_cost - expected(adaptation + dependency_risk + truncation_penalty)
@@ -949,17 +988,36 @@ def _discover_best_donor(
         truncation_penalty = 2.0 if not getattr(donor, "closure_complete", True) else 0.0
         return (fresh_w * donor.confidence) - (adaptation_penalty + dep_penalty + truncation_penalty)
 
-    return max(
-        donors,
-        key=lambda donor: (
-            executable_gain(donor),
-            donor.exact_target,
-            donor.confidence,
-            -getattr(donor, "adaptation_cost", 0.0),
-            -len(donor.required_dependencies),
-            donor.repository,
-        ),
+    return tuple(
+        sorted(
+            donors,
+            key=lambda donor: (
+                executable_gain(donor),
+                donor.exact_target,
+                donor.confidence,
+                -getattr(donor, "adaptation_cost", 0.0),
+                -len(donor.required_dependencies),
+                donor.repository,
+            ),
+            reverse=True,
+        )
     )
+
+
+def _discover_best_donor(
+    capability: str,
+    adapter: PlatformAdapter,
+    discovery_client: EcosystemDiscoveryClient,
+    repositories: Sequence[str],
+) -> DonorSlice | None:
+    """Return the highest ranked candidate donor slice."""
+    candidates = _discover_donor_candidates(
+        capability=capability,
+        adapter=adapter,
+        discovery_client=discovery_client,
+        repositories=repositories,
+    )
+    return candidates[0] if candidates else None
 
 
 def _fresh_cost(capability: str) -> tuple[float, float]:
