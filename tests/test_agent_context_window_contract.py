@@ -254,7 +254,16 @@ def test_compaction_preserves_tool_pairs_latest_mutation_and_archives_old_histor
                     "tool": "apply_source_patch",
                     "status": "APPLIED_BY_HOST_RUNTIME",
                 },
-                "result": {"status": "applied"},
+                "result": {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "before_sha256": "sha256:before",
+                            "after_sha256": "sha256:after",
+                        }
+                    ],
+                },
             },
         ),
     ]
