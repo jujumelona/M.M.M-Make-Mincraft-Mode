@@ -12,6 +12,7 @@ import hashlib
 import heapq
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -24,7 +25,7 @@ _COMPONENT_ID_RE = re.compile(
 )
 _SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
 _CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\|)\s*",
+    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
     re.IGNORECASE | re.UNICODE,
 )
 _BRANCHES = (
@@ -169,8 +170,42 @@ def _hash_without(value: Mapping[str, Any], field: str) -> str:
     return _sha(payload)
 
 
-def _slug(value: Any, fallback: str = "semantic") -> str:
-    text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").casefold()).strip("_")
+_CHOSUNG = (
+    "g", "gg", "n", "d", "dd", "r", "m", "b", "bb", "s",
+    "ss", "", "j", "jj", "c", "k", "t", "p", "h"
+)
+_JUNGSUNG = (
+    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa",
+    "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"
+)
+_JONGSUNG = (
+    "", "g", "gg", "gs", "n", "nj", "nh", "d", "l", "lg",
+    "lm", "lb", "ls", "lt", "lp", "lh", "m", "b", "bs", "s",
+    "ss", "ng", "j", "c", "k", "t", "p", "h"
+)
+
+
+def romanize_korean_universal(text: str) -> str:
+    """Universal dependency-free Romanization of Korean hangul and Unicode normalization."""
+    result = []
+    for char in str(text or ""):
+        code = ord(char)
+        if 0xAC00 <= code <= 0xD7A3:
+            offset = code - 0xAC00
+            cho = offset // 588
+            jung = (offset % 588) // 28
+            jong = offset % 28
+            result.append(_CHOSUNG[cho] + _JUNGSUNG[jung] + _JONGSUNG[jong])
+        else:
+            result.append(char)
+    normalized = unicodedata.normalize("NFKD", "".join(result))
+    return normalized.encode("ascii", "ignore").decode("ascii")
+
+
+def _slug(value: Any, fallback: str = "item") -> str:
+    text = romanize_korean_universal(str(value or ""))
+    text = re.sub(r"[^a-z0-9_]+", "_", text.casefold()).strip("_")
+    text = re.sub(r"_+", "_", text)
     if not text:
         text = fallback
     if not text[0].isalpha():
@@ -259,15 +294,13 @@ def _capability_from_statement(statement: str) -> str:
 
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "그리고", "추가", "만들어",
-        "만들기", "구현", "모드",
+        "minecraft", "mod", "with", "to", "for", "that", "and", "or",
+        "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템",
     }
-    semantic = [item for item in words if item.casefold() not in ignored]
-    # Capability semantics are never truncated to fit an identifier field.  Only
-    # host-generated task IDs use the bounded slug plus a content digest.
-    value = "_".join(semantic) or statement
-    normalized = re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_")
-    return re.sub(r"_+", "_", normalized) or "gameplay.core"
+    meaningful = [item for item in words if item.casefold() not in ignored]
+    raw_phrase = "_".join(meaningful) if meaningful else statement
+    slug = _slug(raw_phrase, fallback="core")
+    return slug or "gameplay.core"
 
 
 def _source_span(prompt: str, statement: str) -> dict[str, Any]:

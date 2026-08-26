@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.evidence_first_planning import build_request_catalog
+from minecraft_mod_ai.evidence_first_planning import build_request_catalog, romanize_korean_universal
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph
 from minecraft_mod_ai import reuse_discovery
 
@@ -44,6 +44,27 @@ def test_capability_graph_decomposition_and_search_terms() -> None:
         terms = search_dict[cap]
         assert len(terms) >= 1
         assert any(len(t.strip()) > 2 for t in terms)
+
+
+def test_arbitrary_unseen_prompt_decomposition_and_romanization() -> None:
+    # Test completely arbitrary, non-hardcoded mod concepts
+    prompt = "우주선 워프 엔진 • 핵융합 발전기 • 사이버네틱스 의수 • 디멘션 게이트"
+    catalog = build_request_catalog(prompt, {})
+    requirements = catalog.get("requirements", [])
+
+    assert len(requirements) >= 3
+    capabilities = [req["capability"] for req in requirements]
+
+    # Must be distinct, romanized/slugified, and non-empty
+    assert "semantic" not in capabilities
+    assert len(set(capabilities)) >= 3
+    for cap in capabilities:
+        assert cap.isascii()
+        assert len(cap) > 2
+
+    # Direct test of universal romanization
+    assert "ujuseon" in romanize_korean_universal("우주선")
+    assert "haegyunghab" in romanize_korean_universal("핵융합")
 
 
 def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None:

@@ -202,16 +202,16 @@ def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
-    clean_query = query.strip()
-    if any(ord(c) > 127 for c in clean_query):
-        clean_tokens = [tok for tok in re.findall(r"[A-Za-z0-9_]+", clean_query) if len(tok) > 1]
-        if clean_tokens:
-            clean_query = " ".join(clean_tokens)
-        else:
-            clean_query = "minecraft mod"
+    from .evidence_first_planning import romanize_korean_universal
+
+    clean_query = romanize_korean_universal(query.strip())
+    clean_query = re.sub(r"[^a-zA-Z0-9\s_-]+", " ", clean_query).strip()
+    clean_query = re.sub(r"\s+", " ", clean_query)
+    if not clean_query or len(clean_query) < 2:
+        clean_query = "minecraft mod"
     params = {
         "gameId": str(_MINECRAFT_GAME_ID),
-        "searchFilter": clean_query,
+        "searchFilter": clean_query[:80],
         "sortField": "2",
         "sortOrder": "desc",
         "pageSize": str(min(limit, 50)),

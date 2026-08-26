@@ -353,11 +353,14 @@ def _capability_id(raw: Any) -> str:
         return ""
     if text in _CAPABILITY_HINTS:
         return _CAPABILITY_HINTS[text][0]
-    text = re.sub(r"[^a-z0-9_.-]+", "_", text).strip("_.-")
-    text = re.sub(r"_+", "_", text)
-    if not text or text in {"minecraft", "mod", "module", "system", "feature"}:
+    from .evidence_first_planning import romanize_korean_universal
+
+    romanized = romanize_korean_universal(text)
+    clean = re.sub(r"[^a-z0-9_.-]+", "_", romanized.casefold()).strip("_.-")
+    clean = re.sub(r"_+", "_", clean)
+    if not clean or clean in {"minecraft", "mod", "module", "system", "feature"}:
         return ""
-    return text[:128]
+    return clean[:128]
 
 
 def _expand_capability(value: str) -> tuple[str, ...]:
