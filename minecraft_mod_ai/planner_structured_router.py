@@ -3,15 +3,18 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
+from .structured_output import StructuredOutputValidationError
+
 
 class StructuredPlannerRouter:
-    """Delegate to one router while making structured planner decode tool-free.
+    """Delegate structured planner generation through a bounded tool-free path.
 
     Research, ecosystem discovery and project evidence are collected before the
     production-outline/page phase. Re-entering the agent tool loop while serializing a
-    bounded JSON contract repeats retrieval and adds extra model round-trips. This
-    proxy changes only calls made through the structured planner path; ordinary game
-    design, research and coder turns keep their normal tool policy.
+    bounded JSON contract repeats retrieval and adds extra model round-trips. Structured
+    planner JSON is therefore tool-free and, if host validation rejects one complete
+    response, regenerated exactly once before the validation error is allowed to escape.
+    Ordinary game design, research and coder turns keep their normal tool policy.
     """
 
     def __init__(self, router: Any) -> None:
@@ -39,13 +42,18 @@ class StructuredPlannerRouter:
         return getattr(self._router, name)
 
     def generate_text(self, role: str, messages: Any, **kwargs: Any) -> str:
-        if (
-            self._accepts_enable_tools
-            and role == "planner"
-            and kwargs.get("response_format") == "json"
-        ):
+        structured_planner = role == "planner" and kwargs.get("response_format") == "json"
+        if self._accepts_enable_tools and structured_planner:
             kwargs["enable_tools"] = False
-        return self._router.generate_text(role, messages, **kwargs)
+
+        try:
+            return self._router.generate_text(role, messages, **kwargs)
+        except StructuredOutputValidationError:
+            if not structured_planner:
+                raise
+            # Retry the entire structured generation once. Do not mutate or locally
+            # repair the malformed response, and do not recurse through this proxy.
+            return self._router.generate_text(role, messages, **kwargs)
 
 
 def structured_planner_router(router: Any) -> Any:
