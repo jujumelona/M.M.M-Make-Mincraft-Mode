@@ -22,6 +22,18 @@ def _bounded_section_output_tokens(adapter: Any) -> int:
     return min(configured, requested)
 
 
+def _is_qwen35(adapter: Any) -> bool:
+    config = getattr(adapter, "config", None)
+    model_id = str(getattr(config, "model_id", "")).casefold()
+    extra = getattr(config, "extra", {})
+    filename = (
+        str(extra.get("gguf_filename", "")).casefold()
+        if isinstance(extra, Mapping)
+        else ""
+    )
+    return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
+
+
 def _structured_response_format(request: Any) -> dict[str, Any]:
     schema = getattr(request, "response_schema", None)
     if schema is None:
@@ -115,13 +127,21 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
             return result
 
         result["response_format"] = _structured_response_format(request)
-        result["reasoning_effort"] = "none"
-        result["chat_template_kwargs"] = {"enable_thinking": False}
-        result.pop("thinking_budget_tokens", None)
 
         schema = getattr(request, "response_schema", None)
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
-        if isinstance(properties, Mapping) and "section" in properties:
+        bounded_section = isinstance(properties, Mapping) and "section" in properties
+        qwen35_game_design = (
+            isinstance(properties, Mapping)
+            and "game_design" in properties
+            and _is_qwen35(adapter)
+        )
+        if schema is None or bounded_section or qwen35_game_design:
+            result["reasoning_effort"] = "none"
+            result["chat_template_kwargs"] = {"enable_thinking": False}
+            result.pop("thinking_budget_tokens", None)
+
+        if bounded_section:
             current_max = max(1, int(result.get("max_tokens", 1) or 1))
             result["max_tokens"] = min(
                 current_max,
