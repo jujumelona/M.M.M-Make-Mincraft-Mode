@@ -536,6 +536,11 @@ def _qwen_tool_generation_response(
             "llama-server returned both structured tool_calls and raw Qwen tool markup"
         )
     calls = native_calls or markup_calls
+    if len(calls) > 1 and not request.parallel_tool_calls:
+        # Qwen/llama.cpp can ignore the OpenAI parallel-tool hint. Preserve the
+        # host's serial execution contract by exposing only the first action now;
+        # the next action must be regenerated after this tool result is observed.
+        calls = calls[:1]
     _validate_tool_calls_against_host_schema(calls, schemas)
     _validate_tool_choice(request, calls)
     return GenerationResponse(
