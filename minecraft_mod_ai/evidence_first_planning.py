@@ -40,6 +40,7 @@ _BRANCHES = (
 from .canonical_capability_ontology import (
     canonical_domain_map as _canonical_domain_map,
     resolve_capabilities_from_phrase,
+    resolve_capabilities_from_phrase_structured,
     romanize_korean_universal,
 )
 
@@ -287,17 +288,12 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         return catalog
     records = _capability_records(game_design)
     if not records:
-        clause_spans = _semantic_clause_spans(prompt)
-        if len(clause_spans) > 1:
-            records = tuple(
-                (_capability_from_statement(prompt[start:end]), prompt[start:end])
-                for start, end in clause_spans
-            )
-        else:
-            records = tuple(
-                (_capability_from_statement(prompt[start:end]), prompt[start:end])
-                for start, end in _semantic_spans(prompt)
-            )
+        structured = resolve_capabilities_from_phrase_structured(prompt)
+        extracted: list[tuple[str, str]] = []
+        for node in structured.nodes:
+            span_text = node.source_span if (node.source_span and node.source_span in prompt) else prompt
+            extracted.append((node.capability_id, span_text))
+        records = tuple(extracted)
     if not records:
         raise EvidencePlanError("The request did not yield any semantic requirement.")
 

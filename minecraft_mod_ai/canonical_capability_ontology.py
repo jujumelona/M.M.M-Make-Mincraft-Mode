@@ -551,6 +551,56 @@ class CapabilityResolution:
         }
 
 
+_KOREAN_PARTICLES = (
+    "부터", "까지", "에게", "한테", "에서", "으로", "로",
+    "에는", "에도", "에", "은", "는", "이", "가", "을", "를",
+    "와", "과", "도", "만", "의", "등", "및",
+    "시스템", "모드", "기능", "구현", "해줘", "만들어줘", "넣어줘",
+    "해야해", "하게해줘",
+)
+
+_CLAUSE_SPLIT = re.compile(
+    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014|\.|\n|\r)\s*",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _extract_canonical_tokens(word: str) -> tuple[str, ...]:
+    """Extract canonical domain keywords or strip Korean particles from compound tokens."""
+    low = word.casefold().strip()
+    if not low:
+        return ()
+    if low in _CANONICAL_DOMAIN_MAP or low in _THEME_ARCHETYPES or low in _FUNCTIONAL_ARCHETYPES:
+        return (low,)
+
+    # Longest-key substring matching for compound phrases (e.g. 잡몹부터 -> 잡몹, 보스까지 -> 보스)
+    matched_keys: list[str] = []
+    for key in sorted(_CANONICAL_DOMAIN_MAP.keys(), key=lambda k: -len(k)):
+        if len(key) >= 2 and key in low:
+            if key not in matched_keys:
+                matched_keys.append(key)
+    for theme_key in sorted(_THEME_ARCHETYPES.keys(), key=lambda k: -len(k)):
+        if len(theme_key) >= 2 and theme_key in low:
+            if theme_key not in matched_keys:
+                matched_keys.append(theme_key)
+    if matched_keys:
+        return tuple(matched_keys)
+
+    # Particle stripping
+    stripped = low
+    changed = True
+    while changed and len(stripped) >= 2:
+        changed = False
+        for p in _KOREAN_PARTICLES:
+            if stripped.endswith(p) and len(stripped) > len(p):
+                stripped = stripped[:-len(p)]
+                changed = True
+                break
+    if stripped in _CANONICAL_DOMAIN_MAP or stripped in _THEME_ARCHETYPES or stripped in _FUNCTIONAL_ARCHETYPES:
+        return (stripped,)
+    return ()
+
+
 def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolution:
     """Resolve a user phrase to a structured capability graph with provenance and requires-edges."""
     clean = str(phrase or "").strip()
@@ -563,71 +613,84 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
         )
         return CapabilityResolution(nodes=(default_node,), edges=(), unresolved_spans=())
 
-    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", clean)
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "and", "or",
+        "minecraft", "mod", "with", "to", "for", "that", "and", "or", "all", "every",
         "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템", "해줘", "넣어줘",
+        "모두", "점점", "등", "해야해", "하게해줘", "부터", "까지",
     }
+
+    # Clause-based separation
+    raw_clauses = [c.strip() for c in _CLAUSE_SPLIT.split(clean) if c.strip()]
+    if not raw_clauses:
+        raw_clauses = [clean]
 
     nodes: list[CapabilityResolutionNode] = []
     seen_caps: set[str] = set()
-    unresolved_words: list[str] = []
-
-    for word in words:
-        low = word.casefold()
-        if low in ignored:
-            continue
-        if low in _THEME_ARCHETYPES:
-            for cap in _THEME_ARCHETYPES[low]:
-                if cap not in seen_caps:
-                    seen_caps.add(cap)
-                    nodes.append(
-                        CapabilityResolutionNode(
-                            capability_id=cap,
-                            source_span=word,
-                            origin="archetype_inferred",
-                            confidence=0.85,
-                            is_required=False,
-                        )
-                    )
-        elif low in _FUNCTIONAL_ARCHETYPES or low in _CANONICAL_DOMAIN_MAP:
-            caps = _CANONICAL_DOMAIN_MAP.get(low, ())
-            for idx, cap in enumerate(caps):
-                if cap not in seen_caps:
-                    seen_caps.add(cap)
-                    nodes.append(
-                        CapabilityResolutionNode(
-                            capability_id=cap,
-                            source_span=word,
-                            origin="explicit" if idx == 0 else "dependency_required",
-                            confidence=0.95 if idx == 0 else 0.85,
-                            is_required=True if idx == 0 else False,
-                        )
-                    )
-        else:
-            unresolved_words.append(word)
-
     unresolved_spans: list[str] = []
-    if unresolved_words:
-        unresolved_phrase = " ".join(unresolved_words)
-        raw_slug = romanize_korean_universal(unresolved_phrase)
-        slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
-        slug = re.sub(r"_+", "_", slug)
-        if slug:
-            cap_id = f"unresolved:{slug[:48]}"
-            if cap_id not in seen_caps:
-                seen_caps.add(cap_id)
-                nodes.append(
-                    CapabilityResolutionNode(
-                        capability_id=cap_id,
-                        source_span=unresolved_phrase,
-                        origin="unresolved_concept",
-                        confidence=0.70,
-                        is_required=True,
+
+    for clause in raw_clauses:
+        words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", clause)
+        clause_unresolved_words: list[str] = []
+
+        for word in words:
+            low = word.casefold()
+            if low in ignored:
+                continue
+
+            extracted_keys = _extract_canonical_tokens(word)
+            if not extracted_keys:
+                clause_unresolved_words.append(word)
+                continue
+
+            for canon_key in extracted_keys:
+                if canon_key in _THEME_ARCHETYPES:
+                    for cap in _THEME_ARCHETYPES[canon_key]:
+                        if cap not in seen_caps:
+                            seen_caps.add(cap)
+                            nodes.append(
+                                CapabilityResolutionNode(
+                                    capability_id=cap,
+                                    source_span=word,
+                                    origin="archetype_inferred",
+                                    confidence=0.85,
+                                    is_required=False,
+                                )
+                            )
+                elif canon_key in _FUNCTIONAL_ARCHETYPES or canon_key in _CANONICAL_DOMAIN_MAP:
+                    caps = _CANONICAL_DOMAIN_MAP.get(canon_key, ())
+                    for idx, cap in enumerate(caps):
+                        if cap not in seen_caps:
+                            seen_caps.add(cap)
+                            nodes.append(
+                                CapabilityResolutionNode(
+                                    capability_id=cap,
+                                    source_span=word,
+                                    origin="explicit" if idx == 0 else "dependency_required",
+                                    confidence=0.95 if idx == 0 else 0.85,
+                                    is_required=True if idx == 0 else False,
+                                )
+                            )
+
+        if clause_unresolved_words:
+            clause_unresolved = " ".join(clause_unresolved_words)
+            raw_slug = romanize_korean_universal(clause_unresolved)
+            slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
+            slug = re.sub(r"_+", "_", slug)
+            if slug:
+                cap_id = f"unresolved:{slug[:48]}"
+                if cap_id not in seen_caps:
+                    seen_caps.add(cap_id)
+                    nodes.append(
+                        CapabilityResolutionNode(
+                            capability_id=cap_id,
+                            source_span=clause_unresolved,
+                            origin="unresolved_concept",
+                            confidence=0.70,
+                            is_required=True,
+                        )
                     )
-                )
-                unresolved_spans.append(unresolved_phrase)
+                    unresolved_spans.append(clause_unresolved)
 
     if not nodes:
         nodes.append(

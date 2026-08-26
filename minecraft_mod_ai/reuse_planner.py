@@ -188,12 +188,20 @@ def decompose_capability_graph(
         for kind in module_kinds:
             add(kind, "module_kind")
 
-    if not ordered:
-        words = {token.casefold() for token in _TOKEN.findall(str(prompt))}
-        for word in sorted(words & _PROMPT_CAPABILITY_WORDS):
-            anchor = add(word, "prompt_capability_word")
-            if anchor:
-                register_search_terms(anchor, (word,))
+    # Always resolve structured capabilities from prompt and enrich with semantic inference
+    from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
+    from .capability_semantic_inference import enrich_resolution_with_semantic_inference
+
+    prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
+    enriched_res = enrich_resolution_with_semantic_inference(prompt_res)
+    for node in enriched_res.nodes:
+        anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
+        if anchor:
+            register_search_terms(anchor, (node.source_span or anchor,))
+    for u, v in enriched_res.edges:
+        if u in seen and v in seen and (u, v) not in edges:
+            edges.append((u, v))
+
     if not ordered:
         add("gameplay.core", "fallback")
 
@@ -256,6 +264,7 @@ class ReuseDecision:
     source_id: str = ""
     donor: Mapping[str, Any] | None = None
     rationale: str = ""
+    proof_level: str = "DISCOVERED"
 
     @property
     def fresh_total(self) -> float:
@@ -280,7 +289,9 @@ class ReuseDecision:
 
     @property
     def verified_reuse(self) -> bool:
-        return self.mode in {"same_project", "mmm_verified", "library", "source_transplant", "adapt"}
+        if self.mode == "fresh":
+            return False
+        return self.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"} or self.mode in {"same_project", "mmm_verified"}
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -299,6 +310,7 @@ class ReuseDecision:
             "actual_reuse_gain": round(self.actual_reuse_gain, 4),
             "source_id": self.source_id,
             "rationale": self.rationale,
+            "proof_level": self.proof_level,
         }
         if self.donor is not None:
             value["donor"] = dict(self.donor)

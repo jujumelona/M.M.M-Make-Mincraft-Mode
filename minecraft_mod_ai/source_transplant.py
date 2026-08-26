@@ -38,9 +38,9 @@ _METHOD_DECL = re.compile(
 _MINECRAFT_PROP = re.compile(r"(?m)^\s*minecraft_version\s*=\s*([^\s#]+)")
 _GRADLE_DEP = re.compile(r"(?m)^\s*(?:modImplementation|implementation|api|compileOnly|runtimeOnly)\s*[\( ]\s*['\"]([^'\"]+)")
 _MAX_TREE_FILES = 20_000
-_MAX_SEEDS = 3
-_MAX_CLOSURE_FILES = 12
-_MAX_SLICE_BYTES = 192 * 1024
+_MAX_SEEDS = 8
+_MAX_CLOSURE_FILES = 64
+_MAX_SLICE_BYTES = 1024 * 1024
 _SNAPSHOT_LOCK = Lock()
 _SNAPSHOT_CACHE: dict[str, Mapping[str, Any] | None] = {}
 _SNAPSHOT_INFLIGHT: dict[str, Event] = {}
@@ -341,20 +341,58 @@ def inspect_repository_slice(
                 for id_match in re.findall(r'"([a-z0-9_.-]+:[a-z0-9_/.-]+)"', text):
                     parts = id_match.split(":", 1)
                     if len(parts) == 2:
-                        res_name = parts[1].split("/")[-1].casefold()
-                        matched_res = resource_index.get(res_name)
-                        if matched_res and matched_res not in selected_set:
-                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
-                            pending.append(matched_res)
+                        ns, subpath = parts[0].casefold(), parts[1].casefold()
+                        if ns not in {"minecraft", "fabric", "forge", "neoforge", "c"}:
+                            res_name = subpath.split("/")[-1]
+                            matched_res = resource_index.get(res_name)
+                            if matched_res:
+                                if matched_res not in selected_set:
+                                    artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
+                                    pending.append(matched_res)
+                            else:
+                                # Internal resource reference missing from repo
+                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="missing_internal_resource"))
+                                closure_complete = False
+                                if not truncation_reason:
+                                    truncation_reason = f"Missing internal resource: {id_match}"
 
             # JSON model parent/texture closure
             elif path.endswith(".json"):
+                # 1. Model Parent
                 for parent_match in re.findall(r'"parent"\s*:\s*"([^"]+)"', text):
-                    parent_stem = parent_match.split(":")[-1].split("/")[-1].casefold()
-                    matched_parent = resource_index.get(parent_stem)
-                    if matched_parent and matched_parent not in selected_set:
-                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
-                        pending.append(matched_parent)
+                    parts = parent_match.split(":", 1)
+                    ns = parts[0].casefold() if len(parts) == 2 else ""
+                    if ns not in {"minecraft", "builtin"}:
+                        parent_stem = (parts[1] if len(parts) == 2 else parent_match).split("/")[-1].casefold()
+                        matched_parent = resource_index.get(parent_stem)
+                        if matched_parent:
+                            if matched_parent not in selected_set:
+                                artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
+                                pending.append(matched_parent)
+                        elif ns:
+                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="missing_model_parent"))
+                            closure_complete = False
+                            if not truncation_reason:
+                                truncation_reason = f"Missing parent model: {parent_match}"
+
+                # 2. Textures in Model JSON
+                for tex_match in re.findall(r'"(?:layer[0-9]|texture|particle|all|top|bottom|side)"\s*:\s*"([^"]+)"', text):
+                    parts = tex_match.split(":", 1)
+                    ns = parts[0].casefold() if len(parts) == 2 else ""
+                    if ns not in {"minecraft"}:
+                        tex_stem = (parts[1] if len(parts) == 2 else tex_match).split("/")[-1].casefold()
+                        matched_tex = resource_index.get(tex_stem)
+                        if matched_tex and matched_tex not in selected_set:
+                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_tex, relation="texture_ref"))
+                            pending.append(matched_tex)
+
+                # 3. Mixin JSON target classes
+                if "mixins" in path.casefold():
+                    for mixin_class in re.findall(r'"([A-Za-z0-9_]+)"', text):
+                        matched_class = declarations.get(mixin_class)
+                        if matched_class and matched_class not in selected_set:
+                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_class, relation="mixin_target"))
+                            pending.append(matched_class)
 
         if not selected:
             return None

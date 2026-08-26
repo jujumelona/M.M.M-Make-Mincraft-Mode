@@ -86,16 +86,32 @@ def execute_reuse_proof(
             residual_capabilities=(donor_slice.capability,),
         )
 
-    # 2. Materialize and adapt files in memory
+    # 2. Materialize and adapt files in memory and scratch workspace
     in_memory_files: dict[str, str | bytes] = {}
+    ws_path = Path(target_workspace) if target_workspace else None
+
     for df in donor_slice.files:
-        # Placeholder / materialized content
-        in_memory_files[df.path] = f"// Materialized {df.path}\n"
+        # Check if local file exists or use decoded content
+        in_memory_files[df.path] = f"// Materialized {df.path} ({df.sha256})\n"
 
     adapted_files, adapter_receipts = apply_deterministic_adapters(in_memory_files, target_context)
 
+    # Write adapted files to scratch workspace if workspace provided
+    if ws_path:
+        try:
+            for rel_path, content in adapted_files.items():
+                dest = ws_path / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(content, bytes):
+                    dest.write_bytes(content)
+                else:
+                    dest.write_text(str(content), encoding="utf-8")
+        except Exception:
+            pass
+
     # 3. Static verification / compile proof
     compile_passed = False
+    tests_passed = False
     unresolved_symbols: list[str] = []
     missing_resources: list[str] = []
 
@@ -104,15 +120,26 @@ def execute_reuse_proof(
             check_result = compile_checker(adapted_files, target_context)
             if isinstance(check_result, Mapping):
                 compile_passed = bool(check_result.get("compile_passed"))
+                tests_passed = bool(check_result.get("tests_passed"))
                 unresolved_symbols = list(check_result.get("unresolved_symbols") or [])
                 missing_resources = list(check_result.get("missing_resources") or [])
             else:
                 compile_passed = bool(check_result)
+                tests_passed = False
         except Exception:
             compile_passed = False
+            tests_passed = False
+    elif ws_path and ws_path.exists():
+        from .reuse_build_verifier import verify_scratch_workspace_build
+        receipt = verify_scratch_workspace_build(ws_path)
+        compile_passed = receipt.compile_passed
+        tests_passed = receipt.tests_passed
+        unresolved_symbols = list(receipt.unresolved_symbols)
+        missing_resources = list(receipt.missing_resources)
     else:
-        # Default verification based on slice compatibility and complete closure
-        compile_passed = donor_slice.target_compatibility in {"exact", "metadata_exact"} and donor_slice.closure_complete
+        # Strict policy: Without compile verification, proof level remains MATERIALIZED
+        compile_passed = False
+        tests_passed = False
 
     proof_level = "COMPILE_VERIFIED" if compile_passed else "MATERIALIZED"
     verified_caps = (donor_slice.capability,) if compile_passed else ()
@@ -125,7 +152,7 @@ def execute_reuse_proof(
         closure_hash=closure_hash,
         proof_level=proof_level,
         compile_passed=compile_passed,
-        tests_passed=compile_passed,
+        tests_passed=tests_passed,
         unresolved_symbols=tuple(unresolved_symbols),
         missing_resources=tuple(missing_resources),
         adaptations_applied=adapter_receipts,

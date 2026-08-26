@@ -230,3 +230,91 @@ def test_reuse_proof_executor_fallback_loop() -> None:
     assert receipts[0].compile_passed is False
     assert receipts[1].compile_passed is True
     assert receipts[1].proof_level == "COMPILE_VERIFIED"
+
+
+def test_unpunctuated_natural_korean_maplestory_prompt_regression() -> None:
+    # Verbatim exact user failure prompt without punctuation or explicit arrow separators
+    prompt = "메이플스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"
+
+    # 1. Request Catalog must contain all decomposed requirements, not collapsed to caps[0]
+    from minecraft_mod_ai.evidence_first_planning import build_request_catalog
+    catalog = build_request_catalog(prompt, {})
+    req_caps = {req["capability"] for req in catalog["requirements"]}
+
+    assert "mob.spawning" in req_caps
+    assert "boss.entity" in req_caps
+    assert "item.equipment" in req_caps or "item.weapon" in req_caps
+    assert "progression.level" in req_caps
+    assert "item.upgrade" in req_caps
+
+    # 2. Decompose Capability Graph must retain all subsystems
+    graph = decompose_capability_graph(prompt)
+    assert len(graph.nodes) >= 5
+    assert any("mob" in n for n in graph.nodes)
+    assert any("boss" in n for n in graph.nodes)
+    assert any("item" in n or "equipment" in n for n in graph.nodes)
+    assert any("level" in n or "progression" in n for n in graph.nodes)
+    assert any("upgrade" in n for n in graph.nodes)
+
+
+def test_package_prefix_relocation_preserves_subpackages() -> None:
+    donor_files = {
+        "src/main/java/com/donor/mod/client/BossRenderer.java": (
+            "package com.donor.mod.client;\n"
+            "import com.donor.mod.common.BossEntity;\n"
+            "public class BossRenderer {}\n"
+        ),
+        "src/main/java/com/donor/mod/common/BossEntity.java": (
+            "package com.donor.mod.common;\n"
+            "public class BossEntity {}\n"
+        ),
+    }
+
+    target_context = {
+        "target_package": "ai.minecraft.generated.maple",
+        "target_modid": "maple",
+    }
+
+    adapted, _ = apply_deterministic_adapters(donor_files, target_context)
+
+    client_code = adapted["src/main/java/com/donor/mod/client/BossRenderer.java"]
+    common_code = adapted["src/main/java/com/donor/mod/common/BossEntity.java"]
+
+    assert "package ai.minecraft.generated.maple.client;" in client_code
+    assert "package ai.minecraft.generated.maple.common;" in common_code
+    assert "import ai.minecraft.generated.maple.common.BossEntity;" in client_code
+
+
+def test_strict_materialized_proof_level_without_compile() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/mod",
+        commit_sha="3333333333333333333333333333333333333333",
+        license_id="MIT",
+        source_url="https://github.com/example/mod",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/Item.java",
+                blob_sha="b3",
+                sha256="sha256:3333",
+                size_bytes=50,
+                symbols=("Item",),
+            ),
+        ),
+        seed_files=("src/main/java/Item.java",),
+        source_symbols=("Item",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.90,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # When no compile_checker and no local workspace build runs, proof level MUST be MATERIALIZED (no fake compile verification)
+    from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
+    receipt = execute_reuse_proof(donor, target_workspace="", target_context={})
+
+    assert receipt.compile_passed is False
+    assert receipt.tests_passed is False
+    assert receipt.proof_level == "MATERIALIZED"

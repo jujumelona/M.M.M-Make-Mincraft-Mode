@@ -12,7 +12,7 @@ edges, and provenance. All provisional nodes remain distinct from canonical veri
 
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from .canonical_capability_ontology import (
     CapabilityResolutionNode,
@@ -44,7 +44,7 @@ def infer_provisional_capabilities(
     unresolved_spans: Sequence[str],
     *,
     router: Any = None,
-) -> tuple[CapabilityResolutionNode, ..., tuple[tuple[str, str], ...]]:
+) -> tuple[tuple[CapabilityResolutionNode, ...], tuple[tuple[str, str], ...]]:
     """Infer provisional atomic capabilities and dependency edges for unresolved concept spans."""
     inferred_nodes: list[CapabilityResolutionNode] = []
     inferred_edges: list[tuple[str, str]] = []
@@ -53,38 +53,71 @@ def infer_provisional_capabilities(
         clean = str(span or "").strip()
         if not clean:
             continue
-        # Deterministic atomic breakdown of unresolved concept
-        raw_slug = romanize_korean_universal(clean)
-        slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
-        slug = re.sub(r"_+", "_", slug)
-        if not slug:
-            slug = "unresolved_feature"
 
-        primary_id = f"provisional:{slug[:40]}"
-        state_id = f"provisional:{slug[:30]}.state"
+        proposals: list[ProvisionalCapabilityProposal] = []
 
-        inferred_nodes.append(
-            CapabilityResolutionNode(
-                capability_id=primary_id,
-                source_span=clean,
-                origin="provisional_inferred",
-                confidence=0.80,
-                is_required=True,
+        # 1. Try model router if provided
+        if callable(router):
+            try:
+                prompt_text = f"Decompose Minecraft mod concept into atomic sub-features: {clean}"
+                response = router(prompt_text)
+                if isinstance(response, Sequence):
+                    for item in response:
+                        if isinstance(item, Mapping) and str(item.get("name") or "").strip():
+                            raw_name = str(item["name"]).strip()
+                            slug = re.sub(r"[^a-z0-9_]+", "_", raw_name.casefold()).strip("_")
+                            cap_id = f"provisional:{slug[:40]}"
+                            proposals.append(
+                                ProvisionalCapabilityProposal(
+                                    capability_id=cap_id,
+                                    source_span=clean,
+                                    category=str(item.get("category") or "custom"),
+                                    description=str(item.get("description") or clean),
+                                    suggested_dependencies=tuple(item.get("dependencies") or ()),
+                                    search_queries=(f"{slug} mod", f"minecraft {slug}"),
+                                )
+                            )
+            except Exception:
+                proposals = []
+
+        # 2. Deterministic atomic breakdown fallback
+        if not proposals:
+            raw_slug = romanize_korean_universal(clean)
+            slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
+            slug = re.sub(r"_+", "_", slug)
+            if not slug:
+                slug = "unresolved_feature"
+
+            primary_id = f"provisional:{slug[:40]}"
+            state_id = f"provisional:{slug[:30]}.state"
+            logic_id = f"provisional:{slug[:30]}.logic"
+
+            proposals.append(
+                ProvisionalCapabilityProposal(
+                    capability_id=primary_id,
+                    source_span=clean,
+                    category="custom_mechanic",
+                    description=f"Primary mechanic for {clean}",
+                    suggested_dependencies=(state_id, logic_id, "persistence.state_store", "network.action_sync"),
+                    search_queries=(f"{slug} mod", f"minecraft {slug} mod"),
+                )
             )
-        )
-        inferred_nodes.append(
-            CapabilityResolutionNode(
-                capability_id=state_id,
-                source_span=clean,
-                origin="dependency_required",
-                confidence=0.75,
-                is_required=False,
+            proposals.append(
+                ProvisionalCapabilityProposal(
+                    capability_id=state_id,
+                    source_span=clean,
+                    category="state",
+                    description=f"Persistent state store for {clean}",
+                    suggested_dependencies=("persistence.state_store",),
+                    search_queries=(),
+                )
             )
-        )
 
-        inferred_edges.append((primary_id, state_id))
-        inferred_edges.append((primary_id, "persistence.state_store"))
-        inferred_edges.append((primary_id, "network.action_sync"))
+        for prop in proposals:
+            inferred_nodes.append(prop.to_node())
+            for dep in prop.suggested_dependencies:
+                if (prop.capability_id, dep) not in inferred_edges:
+                    inferred_edges.append((prop.capability_id, dep))
 
     return tuple(inferred_nodes), tuple(inferred_edges)
 

@@ -42,7 +42,7 @@ def _sha(text: str) -> str:
 
 
 class PackageRelocationAdapter:
-    """Relocates donor package declarations and cross-imports to target project package namespace."""
+    """Relocates donor package declarations and cross-imports while preserving subpackage hierarchy."""
 
     def can_apply(self, files: Mapping[str, str], target_context: Mapping[str, Any]) -> bool:
         target_pkg = str(target_context.get("target_package") or "").strip()
@@ -54,13 +54,33 @@ class PackageRelocationAdapter:
         pre_hashes: dict[str, str] = {}
         post_hashes: dict[str, str] = {}
 
-        # Discover all donor packages
+        # 1. Discover all donor packages and find common root prefix
         donor_packages: set[str] = set()
         for path, content in files.items():
             if path.endswith(".java"):
                 match = re.search(r"^\s*package\s+([A-Za-z0-9_.]+)\s*;", content, re.MULTILINE)
                 if match:
                     donor_packages.add(match.group(1).strip())
+
+        # Determine common root prefix among donor packages
+        root_prefix = ""
+        if donor_packages:
+            split_pkgs = [p.split(".") for p in donor_packages]
+            min_len = min(len(p) for p in split_pkgs)
+            common_parts = []
+            for i in range(min_len):
+                part = split_pkgs[0][i]
+                if all(p[i] == part for p in split_pkgs):
+                    common_parts.append(part)
+                else:
+                    break
+            root_prefix = ".".join(common_parts)
+
+        def relocate_pkg(old_pkg: str) -> str:
+            if root_prefix and old_pkg.startswith(root_prefix):
+                suffix = old_pkg[len(root_prefix):].strip(".")
+                return f"{target_pkg}.{suffix}" if suffix else target_pkg
+            return target_pkg
 
         for path in list(files):
             if not path.endswith(".java"):
@@ -69,22 +89,25 @@ class PackageRelocationAdapter:
             pre_hashes[path] = _sha(original)
             updated = original
 
-            # Replace package declaration
+            # Replace package declaration preserving subpackage
             pkg_match = re.search(r"^\s*package\s+([A-Za-z0-9_.]+)\s*;", updated, re.MULTILINE)
             if pkg_match:
+                donor_pkg = pkg_match.group(1).strip()
+                new_pkg = relocate_pkg(donor_pkg)
                 updated = re.sub(
                     r"^\s*package\s+[A-Za-z0-9_.]+\s*;",
-                    f"package {target_pkg};",
+                    f"package {new_pkg};",
                     updated,
                     flags=re.MULTILINE,
                 )
 
-            # Rewrite cross-imports among donor classes to target package
-            for dp in donor_packages:
-                if dp != target_pkg:
+            # Rewrite cross-imports among donor classes
+            for dp in sorted(donor_packages, key=lambda x: -len(x)):
+                new_dp = relocate_pkg(dp)
+                if dp != new_dp:
                     updated = re.sub(
                         rf"^\s*import\s+{re.escape(dp)}\.([A-Za-z0-9_*]+)\s*;",
-                        rf"import {target_pkg}.\1;",
+                        rf"import {new_dp}.\1;",
                         updated,
                         flags=re.MULTILINE,
                     )
@@ -100,7 +123,7 @@ class PackageRelocationAdapter:
             modified_files=tuple(modified),
             pre_hashes=pre_hashes,
             post_hashes=post_hashes,
-            details=f"Relocated {len(modified)} Java files to target package '{target_pkg}'.",
+            details=f"Relocated {len(modified)} Java files to target root '{target_pkg}'.",
         )
 
 
@@ -110,7 +133,7 @@ class ModIdRewriteAdapter:
     def can_apply(self, files: Mapping[str, str], target_context: Mapping[str, Any]) -> bool:
         target_modid = str(target_context.get("target_modid") or "").strip()
         donor_modid = str(target_context.get("donor_modid") or "").strip()
-        return bool(target_modid) and (bool(donor_modid) or any("Identifier" in c for c in files.values()))
+        return bool(target_modid) and (bool(donor_modid) or any("Identifier" in c or "mod.json" in p for p, c in files.items()))
 
     def apply(self, files: dict[str, str], target_context: Mapping[str, Any]) -> AdapterReceipt:
         target_modid = str(target_context.get("target_modid") or "generated_mod").strip()
@@ -147,6 +170,23 @@ class ModIdRewriteAdapter:
                     f'Identifier.of("{target_modid}", ',
                     updated,
                 )
+                # fabric.mod.json contract rewrites
+                if path.endswith("fabric.mod.json"):
+                    updated = re.sub(
+                        rf'"id"\s*:\s*"{re.escape(donor_modid)}"',
+                        f'"id": "{target_modid}"',
+                        updated,
+                    )
+                    updated = re.sub(
+                        rf'"{re.escape(donor_modid)}\.mixins\.json"',
+                        f'"{target_modid}.mixins.json"',
+                        updated,
+                    )
+                    updated = re.sub(
+                        rf'"{re.escape(donor_modid)}\.accesswidener"',
+                        f'"{target_modid}.accesswidener"',
+                        updated,
+                    )
 
             if updated != original:
                 files[path] = updated
@@ -178,10 +218,14 @@ class ModIdRewriteAdapter:
 
 
 class FabricApiMigrationAdapter:
-    """Migrates deprecated Fabric API conventions (e.g. FabricItemSettings -> Item.Settings)."""
+    """Migrates deprecated Fabric and Minecraft API conventions with versioned transforms."""
 
     def can_apply(self, files: Mapping[str, str], target_context: Mapping[str, Any]) -> bool:
-        return any("FabricItemSettings" in c for c in files.values() if isinstance(c, str))
+        return any(
+            "FabricItemSettings" in c or "Registry.ITEM" in c or "Registry.BLOCK" in c
+            for c in files.values()
+            if isinstance(c, str)
+        )
 
     def apply(self, files: dict[str, str], target_context: Mapping[str, Any]) -> AdapterReceipt:
         modified: list[str] = []
@@ -194,13 +238,29 @@ class FabricApiMigrationAdapter:
             pre_hashes[path] = _sha(original)
             updated = original
 
+            # 1. FabricItemSettings -> Item.Settings()
             if "FabricItemSettings" in updated:
                 updated = re.sub(r"\bnew\s+FabricItemSettings\s*\(\s*\)", "new Item.Settings()", updated)
                 updated = re.sub(r"import\s+net\.fabricmc\.fabric\.api\.item\.v1\.FabricItemSettings\s*;", "", updated)
-                if updated != original:
-                    files[path] = updated
-                    modified.append(path)
-                    post_hashes[path] = _sha(updated)
+
+            # 2. Modern 1.20+ Registries mappings
+            if "Registry.ITEM" in updated:
+                updated = updated.replace("Registry.ITEM", "Registries.ITEM")
+                if "net.minecraft.registry.Registries" not in updated:
+                    updated = "import net.minecraft.registry.Registries;\n" + updated
+            if "Registry.BLOCK" in updated:
+                updated = updated.replace("Registry.BLOCK", "Registries.BLOCK")
+                if "net.minecraft.registry.Registries" not in updated:
+                    updated = "import net.minecraft.registry.Registries;\n" + updated
+            if "Registry.ENTITY_TYPE" in updated:
+                updated = updated.replace("Registry.ENTITY_TYPE", "Registries.ENTITY_TYPE")
+                if "net.minecraft.registry.Registries" not in updated:
+                    updated = "import net.minecraft.registry.Registries;\n" + updated
+
+            if updated != original:
+                files[path] = updated
+                modified.append(path)
+                post_hashes[path] = _sha(updated)
 
         return AdapterReceipt(
             adapter_name="FabricApiMigrationAdapter",
