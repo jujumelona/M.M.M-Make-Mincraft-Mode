@@ -15,6 +15,7 @@ from minecraft_mod_ai.reuse_planner import decompose_capability_graph, _CAPABILI
 from minecraft_mod_ai.reuse_adapters import apply_deterministic_adapters
 from minecraft_mod_ai.reuse_proof_executor import (
     execute_candidate_fallback_loop,
+    execute_reuse_proof,
 )
 from minecraft_mod_ai import source_transplant
 
@@ -695,6 +696,110 @@ dependencies {
     assert applied is True
     assert 'maven("https://maven.shedaniel.me/")' in updated_kts
     assert 'modImplementation("me.shedaniel.cloth:cloth-config-fabric:15.0.127")' in updated_kts
+
+
+def test_behavior_verified_requires_nonzero_tests_executed() -> None:
+    fake_code = b"package com.donor.mod;\npublic class Item {}"
+    import hashlib
+    fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
+
+    donor = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/mod",
+        commit_sha="4444444444444444444444444444444444444444",
+        license_id="MIT",
+        source_url="https://github.com/example/mod",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/Item.java",
+                blob_sha="4444444444444444444444444444444444444444",
+                sha256=fake_sha,
+                size_bytes=len(fake_code),
+                symbols=("Item",),
+            ),
+        ),
+        seed_files=("src/main/java/Item.java",),
+        source_symbols=("Item",),
+        required_dependencies=(),
+        donor_tests=("ItemTest",),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # 1. 0 executed tests: Must NOT be promoted to BEHAVIOR_VERIFIED
+    def mock_no_tests(files, context):
+        return {"compile_passed": True, "tests_passed": False, "tests_executed": 0, "tests_passed_count": 0}
+
+    receipt_zero = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_no_tests)
+    assert receipt_zero.proof_level == "COMPILE_VERIFIED"
+    assert receipt_zero.tests_passed is False
+
+    # 2. >= 1 executed test and passed: Promotes to BEHAVIOR_VERIFIED
+    def mock_has_tests(files, context):
+        return {"compile_passed": True, "tests_passed": True, "tests_executed": 2, "tests_passed_count": 2}
+
+    receipt_passed = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_has_tests)
+    assert receipt_passed.proof_level == "BEHAVIOR_VERIFIED"
+    assert receipt_passed.tests_passed is True
+    assert receipt_passed.tests_executed == 2
+
+
+def test_artifact_level_partial_reuse_slicing(monkeypatch) -> None:
+    code_a = b"package com.donor.mod;\npublic class CleanClass {}"
+    code_b = b"package com.donor.mod;\npublic class BrokenClass { MissingSymbol field; }"
+    import hashlib
+
+    monkeypatch.setattr(
+        source_transplant,
+        "_fetch_blob_bytes",
+        lambda client, repo, sha: code_a if sha == "5a" else code_b,
+    )
+
+    donor = source_transplant.DonorSlice(
+        capability="combat.damage",
+        repository="example/slice",
+        commit_sha="5555555555555555555555555555555555555555",
+        license_id="MIT",
+        source_url="https://github.com/example/slice",
+        target_compatibility="adapt",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/CleanClass.java",
+                blob_sha="5a",
+                sha256="sha256:" + hashlib.sha256(code_a).hexdigest(),
+                size_bytes=len(code_a),
+                symbols=("CleanClass",),
+            ),
+            source_transplant.DonorFile(
+                path="src/main/java/BrokenClass.java",
+                blob_sha="5b",
+                sha256="sha256:" + hashlib.sha256(code_b).hexdigest(),
+                size_bytes=len(code_b),
+                symbols=("BrokenClass",),
+            ),
+        ),
+        seed_files=("src/main/java/CleanClass.java", "src/main/java/BrokenClass.java"),
+        source_symbols=("CleanClass", "BrokenClass"),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.85,
+        adaptation_cost=20.0,
+        closure_complete=True,
+    )
+
+    def mock_partial(files, context):
+        return {"compile_passed": False, "unresolved_symbols": ["MissingSymbol"]}
+
+    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_partial)
+
+    assert receipt.proof_level == "PARTIAL_REUSE"
+    assert "src/main/java/CleanClass.java" in receipt.verified_artifacts
+    assert "src/main/java/BrokenClass.java" in receipt.residual_artifacts
+    assert "CleanClass" in receipt.verified_symbols
+    assert "MissingSymbol" in receipt.residual_symbols
+
 
 
 

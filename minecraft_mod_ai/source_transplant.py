@@ -374,21 +374,27 @@ def inspect_repository_slice(
                         ns, subpath = parts[0].casefold(), parts[1].casefold()
                         if ns not in {"minecraft", "fabric", "forge", "neoforge", "c"}:
                             res_name = subpath.split("/")[-1]
-                            matched_res = (
-                                resource_index.get(id_match.casefold())
-                                or resource_index.get(f"{ns}:{subpath}")
-                                or resource_index.get(f"{ns}:{res_name}")
-                                or resource_index.get(res_name)
-                            )
-                            if matched_res:
-                                if matched_res not in selected_set:
-                                    artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
-                                    pending.append(matched_res)
-                            else:
-                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="missing_internal_resource"))
+                            if res_name in ambiguous_stems or f"{ns}:{res_name}" in ambiguous_stems:
+                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="ambiguous_registry_ref"))
                                 closure_complete = False
                                 if not truncation_reason:
-                                    truncation_reason = f"Missing internal resource: {id_match}"
+                                    truncation_reason = f"Ambiguous registry reference: {id_match}"
+                            else:
+                                matched_res = (
+                                    resource_index.get(id_match.casefold())
+                                    or resource_index.get(f"{ns}:{subpath}")
+                                    or resource_index.get(f"{ns}:{res_name}")
+                                    or resource_index.get(res_name)
+                                )
+                                if matched_res:
+                                    if matched_res not in selected_set:
+                                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
+                                        pending.append(matched_res)
+                                else:
+                                    unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="missing_internal_resource"))
+                                    closure_complete = False
+                                    if not truncation_reason:
+                                        truncation_reason = f"Missing internal resource: {id_match}"
 
             # JSON model parent/texture closure
             elif path.endswith(".json"):

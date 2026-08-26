@@ -26,7 +26,7 @@ class ReuseProofReceipt:
     capability: str
     commit_sha: str
     closure_hash: str
-    proof_level: str  # "DISCOVERED" | "PINNED" | "CLOSURE_COMPLETE" | "MATERIALIZED" | "COMPILE_VERIFIED" | "BEHAVIOR_VERIFIED"
+    proof_level: str  # "DISCOVERED" | "PINNED" | "CLOSURE_COMPLETE" | "MATERIALIZED" | "PARTIAL_REUSE" | "COMPILE_VERIFIED" | "BEHAVIOR_VERIFIED"
     compile_passed: bool
     tests_passed: bool
     unresolved_symbols: tuple[str, ...]
@@ -34,6 +34,13 @@ class ReuseProofReceipt:
     adaptations_applied: tuple[AdapterReceipt, ...]
     verified_capabilities: tuple[str, ...]
     residual_capabilities: tuple[str, ...]
+    verified_artifacts: tuple[str, ...] = ()
+    residual_artifacts: tuple[str, ...] = ()
+    verified_symbols: tuple[str, ...] = ()
+    residual_symbols: tuple[str, ...] = ()
+    tests_executed: int = 0
+    tests_passed_count: int = 0
+    capability_acceptance_tests: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +57,13 @@ class ReuseProofReceipt:
             "adaptations_applied": [a.to_dict() for a in self.adaptations_applied],
             "verified_capabilities": list(self.verified_capabilities),
             "residual_capabilities": list(self.residual_capabilities),
+            "verified_artifacts": list(self.verified_artifacts),
+            "residual_artifacts": list(self.residual_artifacts),
+            "verified_symbols": list(self.verified_symbols),
+            "residual_symbols": list(self.residual_symbols),
+            "tests_executed": self.tests_executed,
+            "tests_passed_count": self.tests_passed_count,
+            "capability_acceptance_tests": list(self.capability_acceptance_tests),
         }
 
 
@@ -305,12 +319,17 @@ def execute_reuse_proof(
                 dest.write_text(str(content), encoding="utf-8")
 
         # Compile and verify
+        tests_executed = 0
+        tests_passed_count = 0
+
         if callable(compile_checker):
             try:
                 check_result = compile_checker(adapted_files, target_context)
                 if isinstance(check_result, Mapping):
                     compile_passed = bool(check_result.get("compile_passed"))
                     tests_passed = bool(check_result.get("tests_passed"))
+                    tests_executed = int(check_result.get("tests_executed", 1 if tests_passed else 0))
+                    tests_passed_count = int(check_result.get("tests_passed_count", 1 if tests_passed else 0))
                     unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
                     missing_resources.extend(check_result.get("missing_resources") or [])
                 else:
@@ -324,12 +343,42 @@ def execute_reuse_proof(
             receipt = verify_scratch_workspace_build(sandbox_path, run_tests=run_tests)
             compile_passed = receipt.compile_passed
             tests_passed = receipt.tests_passed
+            tests_executed = receipt.tests_executed
+            tests_passed_count = receipt.tests_passed_count
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
 
-    # Determine fine-grained proof level with strict closure gating
+    # Granular Artifact Slicing
+    unresolved_set = set(unresolved_symbols)
+    verified_art_list: list[str] = []
+    residual_art_list: list[str] = []
+
+    for path, content in adapted_files.items():
+        text_content = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
+        df_match = next((df for df in donor_slice.files if df.path == path), None)
+        df_syms = set(df_match.symbols) if df_match else set()
+
+        has_unresolved = (
+            any(sym in text_content for sym in unresolved_set if sym)
+            or any(sym in df_syms for sym in unresolved_set if sym)
+            or any(sym.casefold() in path.casefold() for sym in unresolved_set if sym)
+        )
+
+        if compile_passed:
+            verified_art_list.append(path)
+        elif has_unresolved:
+            residual_art_list.append(path)
+        else:
+            verified_art_list.append(path)
+
+    verified_artifacts = tuple(verified_art_list)
+    residual_artifacts = tuple(residual_art_list)
+    verified_symbols = tuple(s for s in donor_slice.source_symbols if s not in unresolved_set)
+    residual_symbols = tuple(dict.fromkeys(unresolved_symbols))
+
+    # Determine fine-grained proof level with strict test & closure gating
     if compile_passed and donor_slice.closure_complete:
-        if tests_passed:
+        if tests_passed and tests_executed > 0:
             proof_level = "BEHAVIOR_VERIFIED"
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
@@ -337,8 +386,8 @@ def execute_reuse_proof(
             proof_level = "COMPILE_VERIFIED"
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
-    elif compile_passed or (adapted_files and (unresolved_symbols or not donor_slice.closure_complete)):
-        # Closure incomplete or residual symbols remain -> PARTIAL_REUSE!
+    elif len(verified_artifacts) > 0 and (residual_artifacts or unresolved_symbols or not donor_slice.closure_complete):
+        # Proven partial compilation of individual artifacts -> PARTIAL_REUSE!
         proof_level = "PARTIAL_REUSE"
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
@@ -358,12 +407,19 @@ def execute_reuse_proof(
         closure_hash=closure_hash,
         proof_level=proof_level,
         compile_passed=compile_passed and donor_slice.closure_complete,
-        tests_passed=tests_passed and donor_slice.closure_complete,
+        tests_passed=tests_passed and donor_slice.closure_complete and tests_executed > 0,
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
         missing_resources=tuple(dict.fromkeys(missing_resources)),
         adaptations_applied=tuple(all_receipts),
         verified_capabilities=verified_caps,
         residual_capabilities=residual_caps,
+        verified_artifacts=verified_artifacts,
+        residual_artifacts=residual_artifacts,
+        verified_symbols=verified_symbols,
+        residual_symbols=residual_symbols,
+        tests_executed=tests_executed,
+        tests_passed_count=tests_passed_count,
+        capability_acceptance_tests=donor_slice.donor_tests,
     )
 
 

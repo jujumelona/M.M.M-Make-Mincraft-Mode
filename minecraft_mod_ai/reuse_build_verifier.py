@@ -27,6 +27,9 @@ class BuildVerificationReceipt:
     tests_passed: bool
     unresolved_symbols: tuple[str, ...]
     missing_resources: tuple[str, ...]
+    tests_executed: int = 0
+    tests_passed_count: int = 0
+    tests_failed_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +43,9 @@ class BuildVerificationReceipt:
             "tests_passed": self.tests_passed,
             "unresolved_symbols": list(self.unresolved_symbols),
             "missing_resources": list(self.missing_resources),
+            "tests_executed": self.tests_executed,
+            "tests_passed_count": self.tests_passed_count,
+            "tests_failed_count": self.tests_failed_count,
         }
 
 
@@ -53,6 +59,37 @@ def _find_gradle_wrapper(workspace_root: Path) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int]:
+    """Extract (tests_executed, tests_passed_count, tests_failed_count) from test XMLs or output."""
+    executed = 0
+    failed = 0
+
+    test_results_dir = workspace_root / "build" / "test-results" / "test"
+    if test_results_dir.is_dir():
+        import xml.etree.ElementTree as ET
+        for xml_file in test_results_dir.glob("*.xml"):
+            try:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                if root.tag == "testsuite":
+                    suite_tests = int(root.attrib.get("tests", 0))
+                    suite_failures = int(root.attrib.get("failures", 0)) + int(root.attrib.get("errors", 0))
+                    executed += suite_tests
+                    failed += suite_failures
+            except Exception:
+                pass
+
+    if executed == 0:
+        # Fallback to parsing console output if XML reports were not found
+        match = re.search(r"(\d+)\s+tests completed,\s+(\d+)\s+failed", stdout, re.IGNORECASE)
+        if match:
+            executed = int(match.group(1))
+            failed = int(match.group(2))
+
+    passed = max(0, executed - failed)
+    return executed, passed, failed
 
 
 def verify_scratch_workspace_build(
@@ -80,7 +117,17 @@ def verify_scratch_workspace_build(
             stdout, stderr = res.stdout, res.stderr
             exit_code = res.returncode
             compile_passed = (exit_code == 0)
-            tests_passed = compile_passed and run_tests
+
+            tests_executed = 0
+            tests_passed_count = 0
+            tests_failed_count = 0
+            tests_passed = False
+
+            if run_tests:
+                tests_executed, tests_passed_count, tests_failed_count = _parse_test_results(ws, stdout)
+                # Strict: BEHAVIOR_VERIFIED requires at least 1 executed test and 0 failures
+                tests_passed = compile_passed and (tests_executed > 0) and (tests_failed_count == 0)
+
             unresolved = tuple(re.findall(r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)", stderr + stdout))
             return BuildVerificationReceipt(
                 build_tool="gradle",
@@ -92,6 +139,9 @@ def verify_scratch_workspace_build(
                 tests_passed=tests_passed,
                 unresolved_symbols=unresolved,
                 missing_resources=(),
+                tests_executed=tests_executed,
+                tests_passed_count=tests_passed_count,
+                tests_failed_count=tests_failed_count,
             )
         except Exception as e:
             return BuildVerificationReceipt(
@@ -104,6 +154,9 @@ def verify_scratch_workspace_build(
                 tests_passed=False,
                 unresolved_symbols=(),
                 missing_resources=(),
+                tests_executed=0,
+                tests_passed_count=0,
+                tests_failed_count=0,
             )
 
     # Without a verified build environment (e.g. Gradle wrapper), compilation proof cannot be attested.
@@ -117,4 +170,7 @@ def verify_scratch_workspace_build(
         tests_passed=False,
         unresolved_symbols=(),
         missing_resources=(),
+        tests_executed=0,
+        tests_passed_count=0,
+        tests_failed_count=0,
     )

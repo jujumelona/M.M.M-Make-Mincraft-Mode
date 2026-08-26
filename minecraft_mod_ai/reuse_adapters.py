@@ -325,6 +325,9 @@ class DependencyAdaptationPlan:
         coord = coords_map.get(loader.casefold()) or next(iter(coords_map.values()), "")
         if not coord:
             return None
+        # Format version if template placeholder exists
+        if "{mc_version}" in coord:
+            coord = coord.replace("{mc_version}", mc_version)
         return maven, coord
 
     @classmethod
@@ -334,6 +337,7 @@ class DependencyAdaptationPlan:
         required_dependencies: Sequence[str],
         *,
         loader: str = "fabric",
+        minecraft_version: str = "1.21.1",
         is_kotlin_dsl: bool = False,
     ) -> tuple[str, bool]:
         """Inject required maven repos and dependencies into a build.gradle or build.gradle.kts script."""
@@ -344,7 +348,7 @@ class DependencyAdaptationPlan:
         applied = False
 
         for dep in required_dependencies:
-            resolved = cls.resolve_coordinate(dep, loader, "1.21.1")
+            resolved = cls.resolve_coordinate(dep, loader, minecraft_version)
             if not resolved:
                 continue
 

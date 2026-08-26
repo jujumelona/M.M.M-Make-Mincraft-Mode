@@ -92,6 +92,7 @@ def decompose_capability_graph(
     *,
     design: Mapping[str, Any] | None = None,
     module_kinds: Iterable[str] = (),
+    semantic_router: Any = None,
 ) -> CapabilityGraph:
     """Locate reusable feature boundaries without using whole-mod topical similarity.
 
@@ -193,7 +194,7 @@ def decompose_capability_graph(
     from .capability_semantic_inference import enrich_resolution_with_semantic_inference
 
     prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
-    enriched_res = enrich_resolution_with_semantic_inference(prompt_res)
+    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
     for node in enriched_res.nodes:
         anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
         if anchor:
@@ -457,10 +458,16 @@ def optimize_platform_and_reuse(
     version_constraint: str | None = None,
     target_research_fn: _platform.TargetResearchFn | None = None,
     discovery_client: EcosystemDiscoveryClient | None = None,
+    semantic_router: Any = None,
 ) -> ReuseAwareOptimization:
     """Evaluate every executable target and select the lowest expected-cost plan."""
 
-    graph = decompose_capability_graph(prompt, design=design, module_kinds=module_kinds)
+    graph = decompose_capability_graph(
+        prompt,
+        design=design,
+        module_kinds=module_kinds,
+        semantic_router=semantic_router,
+    )
     queries = graph.nodes
     target_keys = discover_target_keys(
         loader=loader_constraint,
