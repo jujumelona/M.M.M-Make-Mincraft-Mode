@@ -143,9 +143,6 @@ def build_repository_observation_ledger(
         seen.add(key)
         records.append(record)
 
-    observation_digest = hashlib.sha256()
-    for record in records:
-        _update_digest(observation_digest, record)
     query_sha256 = "sha256:" + hashlib.sha256(query.encode("utf-8")).hexdigest()
     project_sha256 = str(index.manifest_receipt()["sha256"])
     procedural_receipt = {
@@ -161,7 +158,7 @@ def build_repository_observation_ledger(
         "query_sha256": query_sha256,
         "source_page_count": baseline_meta["source_partition_count"],
         "observation_count": len(records),
-        "observations_sha256": "sha256:" + observation_digest.hexdigest(),
+        "observations_sha256": "",
         "exploration_sha256": exploration_fingerprint(exploration),
         "procedural_retrieval_sha256": "sha256:"
         + hashlib.sha256(
@@ -198,15 +195,28 @@ def build_repository_observation_ledger(
             "generic_similar_code_not_authoritative": True,
         },
     }
+    exploration_receipt = exploration.to_dict()
+    exploration_receipt["region_count"] = len(exploration.regions)
+    exploration_receipt.pop("regions", None)
     ledger = {
         "schema_version": "mmm/source-observation-ledger-v2",
         "receipt": receipt,
-        "exploration": exploration.to_dict(),
+        "exploration": exploration_receipt,
         "procedural_retrieval": procedural_receipt,
         "records": records,
     }
     while records and _json_size(ledger) > byte_budget:
         records.pop()
+
+    observation_digest = hashlib.sha256()
+    for record in records:
+        _update_digest(observation_digest, record)
+    receipt["observation_count"] = len(records)
+    receipt["observations_sha256"] = "sha256:" + observation_digest.hexdigest()
+    receipt["baseline_anchor_count"] = sum(
+        item.get("kind") == "global_exact_source_anchor" for item in records
+    )
+    receipt["lines_selected"] = sum(_record_line_count(item) for item in records)
     return ledger
 
 
