@@ -455,10 +455,10 @@ _FUNCTIONAL_ARCHETYPES: dict[str, tuple[str, ...]] = {
     "디멘션": ("worldgen.dimension", "teleport.portal"),
 
     # Economy / Shops / Quests
-    "trade": ("trade.offer_model", "trade.shop_registry", "economy.currency"),
-    "거래": ("trade.offer_model", "trade.shop_registry", "economy.currency"),
-    "shop": ("trade.shop_registry", "ui.menu", "economy.currency"),
-    "상점": ("trade.shop_registry", "ui.menu", "economy.currency"),
+    "trade": ("trade.transaction", "trade.validation", "trade.offer_model", "trade.shop_registry", "economy.currency"),
+    "거래": ("trade.transaction", "trade.validation", "trade.offer_model", "trade.shop_registry", "economy.currency"),
+    "shop": ("ui.shop_menu", "trade.shop_registry", "ui.menu", "economy.currency"),
+    "상점": ("ui.shop_menu", "trade.shop_registry", "ui.menu", "economy.currency"),
     "quest": ("quest.state", "quest.progression", "quest.reward"),
     "퀘스트": ("quest.state", "quest.progression", "quest.reward"),
     "dungeon": ("worldgen.dungeon", "worldgen.structure", "loot.drop_table"),

@@ -827,7 +827,7 @@ def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> Co
 
     if (mc_ver == adapter.minecraft_version or adapter.minecraft_version in text) and loader_evidenced:
         status = "metadata_exact"
-    elif loader_evidenced:
+    elif loader_evidenced or mc_ver or (adapter.minecraft_version in text):
         status = "metadata_adapt"
     else:
         status = "unverified"

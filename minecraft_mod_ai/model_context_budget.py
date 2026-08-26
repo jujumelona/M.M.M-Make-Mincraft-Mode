@@ -435,6 +435,7 @@ def _compact_old_exchanges(
         return original
 
     first = assistants[0]
+    mutation_start = _last_mutation_exchange_start(original)
     best_candidate = original
     best_size = _canonical_size(original)
 
@@ -442,6 +443,8 @@ def _compact_old_exchanges(
         if len(assistants) <= keep:
             continue
         start = assistants[-keep]
+        if mutation_start is not None and first < mutation_start < start:
+            start = mutation_start
         dropped = original[first:start]
         if not dropped:
             continue

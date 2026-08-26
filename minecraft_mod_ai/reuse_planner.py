@@ -192,21 +192,22 @@ def decompose_capability_graph(
         for kind in module_kinds:
             add(kind, "module_kind")
 
-    # Always resolve structured capabilities from prompt and enrich with semantic inference
-    from .canonical_capability_ontology import (
-        resolve_capabilities_from_phrase_structured,
-    )
-    from .capability_semantic_inference import enrich_resolution_with_semantic_inference
+    if not ordered:
+        # Prompt fallback resolution
+        from .canonical_capability_ontology import (
+            resolve_capabilities_from_phrase_structured,
+        )
+        from .capability_semantic_inference import enrich_resolution_with_semantic_inference
 
-    prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
-    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
-    for node in enriched_res.nodes:
-        anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
-        if anchor:
-            register_search_terms(anchor, (node.source_span or anchor,))
-    for u, v in enriched_res.edges:
-        if u in seen and v in seen and (u, v) not in edges:
-            edges.append((u, v))
+        prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
+        enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
+        for node in enriched_res.nodes:
+            anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
+            if anchor:
+                register_search_terms(anchor, (node.source_span or anchor,))
+        for u, v in enriched_res.edges:
+            if u in seen and v in seen and (u, v) not in edges:
+                edges.append((u, v))
 
     if not ordered:
         add("gameplay.core", "fallback")
@@ -252,7 +253,10 @@ def _capability_id(raw: Any) -> str:
 
 
 def _expand_capability(value: str) -> tuple[str, ...]:
-    return resolve_capabilities_from_phrase(value)
+    if "." in value and not value.startswith("unresolved:"):
+        return (value,)
+    res = resolve_capabilities_from_phrase(value)
+    return res if res else (value,)
 
 
 @dataclass(frozen=True)
