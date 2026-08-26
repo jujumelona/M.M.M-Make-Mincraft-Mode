@@ -32,7 +32,7 @@ allowed_tools:
   - discover_ecosystem_resources
   - inspect_modrinth_project
   - inspect_github_repository
-  - inspect_huggingface_model
+  - read_reuse_source
   - assess_technology_compatibility
   - java_diagnostics
   - java_workspace_symbols
