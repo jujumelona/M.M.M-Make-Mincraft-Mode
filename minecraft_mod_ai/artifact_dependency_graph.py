@@ -72,6 +72,22 @@ class ArtifactEdge:
         }
 
 
+@dataclass(frozen=True)
+class UnresolvedArtifactEdge:
+    source_id: str
+    requested_target: str
+    relation: str  # "import", "registry", "model_parent", "texture_ref", "mixin_target"
+    reason: str = "TARGET_NODE_NOT_FOUND"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "requested_target": self.requested_target,
+            "relation": self.relation,
+            "reason": self.reason,
+        }
+
+
 def _classify_artifact_kind(path_str: str) -> ArtifactKind:
     p = path_str.lower()
     if p.endswith(".java"):
@@ -106,7 +122,9 @@ class ArtifactDependencyGraph:
 
     def __init__(self) -> None:
         self.nodes: dict[str, ArtifactNode] = {}
-        self.adjacency: dict[str, set[str]] = {}  # source -> set of targets it depends on
+        self.adjacency: dict[str, set[str]] = {}  # source -> set of targets it depends on (A requires B)
+        self.unresolved_edges: list[UnresolvedArtifactEdge] = []
+        self.ambiguous_edges: list[UnresolvedArtifactEdge] = []
 
     def add_node(self, node: ArtifactNode) -> None:
         self.nodes[node.id] = node
@@ -115,6 +133,26 @@ class ArtifactDependencyGraph:
     def add_edge(self, source_id: str, target_id: str) -> None:
         if source_id in self.nodes and target_id in self.nodes:
             self.adjacency.setdefault(source_id, set()).add(target_id)
+        elif source_id in self.nodes:
+            self.unresolved_edges.append(
+                UnresolvedArtifactEdge(
+                    source_id=source_id,
+                    requested_target=target_id,
+                    relation="reference",
+                    reason="TARGET_NODE_NOT_FOUND",
+                )
+            )
+
+    def is_closure_complete(self, node_ids: Sequence[str]) -> bool:
+        """Check if all nodes in the given closure have 0 unresolved or ambiguous required edges."""
+        node_set = set(node_ids)
+        for edge in self.unresolved_edges:
+            if edge.source_id in node_set:
+                return False
+        for edge in self.ambiguous_edges:
+            if edge.source_id in node_set:
+                return False
+        return True
 
     @classmethod
     def build_from_files(
@@ -165,10 +203,14 @@ class ArtifactDependencyGraph:
 
             # Layer 2 & 3: Registry identifiers & resource stems ("modid:path" or "path")
             for token in re.findall(r'"([a-zA-Z0-9_/.-]+)"', text):
-                stem = token.split(":")[-1].split("/")[-1].lower()
-                if stem and stem in resource_stem_to_nodes:
-                    for target_id in resource_stem_to_nodes[stem]:
-                        if target_id != source_id:
+                clean_tok = token.split(":")[-1].lower()
+                stem = clean_tok.split("/")[-1]
+
+                # Direct logical path match (e.g. "entity/boss" in "assets/modid/models/entity/boss.json")
+                for target_id in files:
+                    if target_id != source_id:
+                        tid_low = target_id.lower()
+                        if clean_tok in tid_low or (len(stem) >= 3 and f"/{stem}." in tid_low):
                             graph.add_edge(source_id, target_id)
 
             # Layer 4: Mod metadata / Mixin entries
@@ -219,9 +261,18 @@ class ArtifactDependencyGraph:
 
         return sccs
 
-    def compute_directional_closures(self) -> list[list[str]]:
-        """Compute connected directional closed subgraphs covering all transitive dependencies."""
-        # Find weakly connected components across directional edges
+    def compute_directional_closures(self, seed_nodes: Sequence[str] | None = None) -> list[list[str]]:
+        """Compute exact directional closed subgraphs on the artifact graph.
+
+        Groups artifacts into independent, closed subgraphs that contain all mutual dependencies and helpers.
+        """
+        sccs = self.compute_scc()
+        node_to_scc: dict[str, int] = {}
+        for scc_idx, scc_nodes in enumerate(sccs):
+            for n in scc_nodes:
+                node_to_scc[n] = scc_idx
+
+        # Build bidirectional component connectivity to group full feature units
         undirected_adj: dict[str, set[str]] = {nid: set() for nid in self.nodes}
         for u, targets in self.adjacency.items():
             for v in targets:
@@ -243,6 +294,6 @@ class ArtifactDependencyGraph:
                         if neighbor not in visited:
                             visited.add(neighbor)
                             queue.append(neighbor)
-                subgraphs.append(comp)
+                subgraphs.append(sorted(comp))
 
         return subgraphs

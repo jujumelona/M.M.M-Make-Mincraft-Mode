@@ -112,25 +112,54 @@ def resolve_dependency_for_target(
     entry = _CANONICAL_DEPENDENCY_REGISTRY.get(norm_dep)
 
     if not entry:
-        # Fallback resolution for custom or unmapped coordinates
         return DependencyResolutionReceipt(
             donor_declared_coordinate=dep_name,
             requested_constraint=dep_name,
             target_loader=target_loader,
             target_minecraft=target_minecraft,
-            resolved_coordinate=f"com.example:{dep_name}:1.0.0",
-            repository="https://repo.maven.apache.org/maven2/",
-            selected_version="1.0.0",
-            resolution_reason="unregistered_fallback",
-            is_resolved=True,
+            resolved_coordinate="",
+            repository="",
+            selected_version="",
+            resolution_reason="NO_VERIFIED_COORDINATE",
+            is_resolved=False,
         )
 
     repo_url = entry["repository"]
     group = entry["group"]
     loader_names = entry.get("name_by_loader", {})
-    art_name = loader_names.get(target_loader.lower(), list(loader_names.values())[0])
+    art_name = loader_names.get(target_loader.lower())
+    if not art_name:
+        return DependencyResolutionReceipt(
+            donor_declared_coordinate=dep_name,
+            requested_constraint=f"{target_loader}@{target_minecraft}",
+            target_loader=target_loader,
+            target_minecraft=target_minecraft,
+            resolved_coordinate="",
+            repository=repo_url,
+            selected_version="",
+            resolution_reason=f"UNSUPPORTED_LOADER_{target_loader.upper()}",
+            is_resolved=False,
+        )
+
     version_map = entry.get("version_matrix", {})
-    version = version_map.get(target_minecraft, list(version_map.values())[0] if version_map else "1.0.0")
+    version = version_map.get(target_minecraft)
+    if not version:
+        # Check minor version match
+        mc_prefix = ".".join(target_minecraft.split(".")[:2])
+        version = version_map.get(mc_prefix)
+
+    if not version:
+        return DependencyResolutionReceipt(
+            donor_declared_coordinate=dep_name,
+            requested_constraint=f"{target_loader}@{target_minecraft}",
+            target_loader=target_loader,
+            target_minecraft=target_minecraft,
+            resolved_coordinate="",
+            repository=repo_url,
+            selected_version="",
+            resolution_reason=f"NO_COMPATIBLE_VERSION_FOR_MC_{target_minecraft}",
+            is_resolved=False,
+        )
 
     resolved_coord = f"{group}:{art_name}:{version}"
     return DependencyResolutionReceipt(

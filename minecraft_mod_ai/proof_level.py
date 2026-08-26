@@ -54,3 +54,53 @@ class ProofLevel(str, Enum):
     def allows_reuse(self) -> bool:
         """Return True if either full or partial reuse proof is attested."""
         return self.is_verified() or self.is_partial()
+
+
+_LEGAL_TRANSITIONS: dict[ProofLevel, set[ProofLevel]] = {
+    ProofLevel.DISCOVERED: {ProofLevel.LICENSE_VERIFIED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.LICENSE_VERIFIED: {ProofLevel.PINNED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.PINNED: {ProofLevel.CLOSURE_COMPLETE, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.CLOSURE_COMPLETE: {ProofLevel.MATERIALIZED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.MATERIALIZED: {
+        ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
+        ProofLevel.COMPILE_VERIFIED,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
+    ProofLevel.SUBGRAPH_COMPILE_VERIFIED: {ProofLevel.PARTIAL_REUSE, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.PARTIAL_REUSE: {ProofLevel.HOST_VERIFIED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.COMPILE_VERIFIED: {
+        ProofLevel.BEHAVIOR_VERIFIED,
+        ProofLevel.HOST_VERIFIED,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
+    ProofLevel.BEHAVIOR_VERIFIED: {ProofLevel.HOST_VERIFIED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.HOST_VERIFIED: {ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.FRESH_REQUIRED: {ProofLevel.UNVERIFIED},
+    ProofLevel.UNVERIFIED: {ProofLevel.DISCOVERED, ProofLevel.FRESH_REQUIRED},
+}
+
+
+def validate_proof_transition(
+    from_level: Any,
+    to_level: Any,
+    *,
+    receipt: Any = None,
+) -> tuple[bool, str]:
+    """Strictly validate whether a proof level state transition is legally permissible."""
+    src = ProofLevel.from_value(from_level)
+    dst = ProofLevel.from_value(to_level)
+
+    if src == dst:
+        return True, "identity_transition"
+
+    allowed = _LEGAL_TRANSITIONS.get(src, set())
+    if dst not in allowed:
+        return False, f"ILLEGAL_TRANSITION: cannot jump from {src.value} to {dst.value}"
+
+    if dst in {ProofLevel.COMPILE_VERIFIED, ProofLevel.BEHAVIOR_VERIFIED, ProofLevel.HOST_VERIFIED, ProofLevel.SUBGRAPH_COMPILE_VERIFIED, ProofLevel.PARTIAL_REUSE}:
+        if receipt is None:
+            return False, f"MISSING_RECEIPT: transition to {dst.value} requires an attested proof receipt"
+
+    return True, "transition_valid"

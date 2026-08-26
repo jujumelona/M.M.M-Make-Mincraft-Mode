@@ -1260,6 +1260,111 @@ def test_multi_donor_joint_composition_solver_and_sbom() -> None:
     assert any(c.conflict_type == "class_collision" for c in res_conflict.conflicts)
 
 
+def test_proof_transition_validator_rules() -> None:
+    from minecraft_mod_ai.proof_level import ProofLevel, validate_proof_transition
+
+    # Valid step with receipt
+    valid, msg = validate_proof_transition(
+        ProofLevel.MATERIALIZED,
+        ProofLevel.COMPILE_VERIFIED,
+        receipt={"compile_passed": True},
+    )
+    assert valid is True
+
+    # Missing receipt on verified transition
+    invalid_receipt, msg2 = validate_proof_transition(
+        ProofLevel.MATERIALIZED,
+        ProofLevel.COMPILE_VERIFIED,
+        receipt=None,
+    )
+    assert invalid_receipt is False
+    assert "MISSING_RECEIPT" in msg2
+
+    # Illegal jump from DISCOVERED to COMPILE_VERIFIED
+    illegal_jump, msg3 = validate_proof_transition(
+        ProofLevel.DISCOVERED,
+        ProofLevel.COMPILE_VERIFIED,
+        receipt={"compile_passed": True},
+    )
+    assert illegal_jump is False
+    assert "ILLEGAL_TRANSITION" in msg3
+
+
+def test_multi_donor_beam_search_composition_solver() -> None:
+    from minecraft_mod_ai.composition_solver import search_best_donor_composition
+
+    # Capability 1: Boss options (A1 vs A2)
+    boss_a1 = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss-a1",
+        commit_sha="1111111111111111111111111111111111111111",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-a1",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/BossA1.java", "b1", "sha:1", 100, ("BossA1",)),
+        ),
+        seed_files=("src/main/java/BossA1.java",),
+        source_symbols=("BossA1",),
+        required_dependencies=("geckolib",),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # Capability 2: Quest options (Q1 conflicts with BossA1, Q2 is clean)
+    quest_q1_conflict = source_transplant.DonorSlice(
+        capability="quest.system",
+        repository="example/quest-q1",
+        commit_sha="2222222222222222222222222222222222222222",
+        license_id="MIT",
+        source_url="https://github.com/example/quest-q1",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/BossA1.java", "q1", "sha:q1", 100, ("BossA1",)),
+        ),
+        seed_files=("src/main/java/BossA1.java",),
+        source_symbols=("BossA1",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    quest_q2_clean = source_transplant.DonorSlice(
+        capability="quest.system",
+        repository="example/quest-q2",
+        commit_sha="3333333333333333333333333333333333333333",
+        license_id="MIT",
+        source_url="https://github.com/example/quest-q2",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/QuestManager.java", "q2", "sha:q2", 100, ("QuestManager",)),
+        ),
+        seed_files=("src/main/java/QuestManager.java",),
+        source_symbols=("QuestManager",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    candidates = {
+        "boss.entity": (boss_a1,),
+        "quest.system": (quest_q1_conflict, quest_q2_clean),
+    }
+
+    # Beam search must find the valid combination (boss_a1 + quest_q2_clean)
+    result = search_best_donor_composition(candidates, target_loader="fabric", target_minecraft="1.21.1")
+    assert result.is_valid is True
+    assert len(result.selected_donors) == 2
+    assert any(d.repository == "example/quest-q2" for d in result.selected_donors)
+
+
+
 
 
 

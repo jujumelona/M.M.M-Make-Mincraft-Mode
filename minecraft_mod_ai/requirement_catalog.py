@@ -1,32 +1,32 @@
-from __future__ import annotations
-
-"""Requirement Catalog and Structured Capability Specification Engine.
-
-Preserves verbatim user requirements (REQ-001..N) and maps them cleanly into
-atomic, verifiable CapabilitySpec nodes with full input/output/state/dependency/acceptance tracking.
-"""
-
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .canonical_capability_ontology import CapabilityResolution
+from .canonical_capability_ontology import CapabilityResolution, resolve_capabilities_from_phrase_structured
 
 
 @dataclass(frozen=True)
 class RequirementSpec:
     id: str
     statement: str
+    original_span: str = ""
+    normalized_statement: str = ""
     mandatory: bool = True
     provides: tuple[str, ...] = ()
     confidence: float = 1.0
+    status: str = "RESOLVED"  # "RESOLVED" | "UNRESOLVED"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "statement": self.statement,
+            "original_span": self.original_span or self.statement,
+            "normalized_statement": self.normalized_statement or self.statement,
             "mandatory": self.mandatory,
             "provides": list(self.provides),
             "confidence": self.confidence,
+            "status": self.status,
         }
 
 
@@ -68,6 +68,14 @@ class RequirementCatalog:
     def get_mandatory_requirements(self) -> tuple[RequirementSpec, ...]:
         return tuple(r for r in self.requirements if r.mandatory)
 
+    def validate_coverage_invariants(self) -> tuple[bool, list[str]]:
+        """Verify that every mandatory requirement has at least one bound capability or explicit UNRESOLVED status."""
+        violations: list[str] = []
+        for req in self.requirements:
+            if req.mandatory and not req.provides and req.status != "UNRESOLVED":
+                violations.append(f"Requirement {req.id} ({req.statement!r}) is mandatory but has 0 bound capabilities")
+        return len(violations) == 0, violations
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "requirements": [r.to_dict() for r in self.requirements],
@@ -75,54 +83,155 @@ class RequirementCatalog:
         }
 
 
+def _split_into_semantic_clauses(text: str) -> list[str]:
+    """Split natural language prompt into distinct semantic requirement clauses."""
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return []
+
+    # First split by linebreaks
+    lines = [line.strip() for line in cleaned.replace("\r", "\n").split("\n") if line.strip()]
+    clauses: list[str] = []
+
+    # Conjunction and clause boundary delimiters (Korean & English)
+    pattern = re.compile(
+        r"(?<=[^\s])(?:\s*,\s*|\s*;\s*|\s+그리고\s+|\s+또한\s+|\s+하고\s+|\s+하며\s+|\s+and\s+)(?=[^\s])",
+        re.IGNORECASE,
+    )
+
+    for line in lines:
+        parts = [p.strip() for p in pattern.split(line) if p.strip()]
+        if parts:
+            clauses.extend(parts)
+        else:
+            clauses.append(line)
+
+    return clauses if clauses else [cleaned]
+
+
 def build_requirement_catalog(
     prompt: str,
-    resolution: CapabilityResolution,
+    resolution: CapabilityResolution | None = None,
+    *,
+    evidence_request_catalog: Mapping[str, Any] | None = None,
+    explicit_capabilities: Sequence[str] | None = None,
 ) -> RequirementCatalog:
-    """Build a formal RequirementCatalog mapping natural user prompt into atomic CapabilitySpecs."""
+    """Build a formal RequirementCatalog with fine-grained span tracking and many-to-many capability bindings.
+
+    If an authoritative evidence_request_catalog is provided, it is used as the single source of truth.
+    """
     reqs: list[RequirementSpec] = []
     caps: list[CapabilitySpec] = []
+    cap_to_reqs: dict[str, list[str]] = {}
 
-    # Extract user sentences / clauses as base requirement specifications
-    sentences = [s.strip() for s in prompt.replace("\r", "\n").split("\n") if s.strip()]
-    if not sentences:
-        sentences = [prompt.strip()] if prompt.strip() else ["Default Mod Feature Requirement"]
+    # Case 1: Authoritative evidence_request_catalog provided
+    if evidence_request_catalog and isinstance(evidence_request_catalog.get("requirements"), Sequence):
+        raw_reqs = evidence_request_catalog["requirements"]
+        for i, r in enumerate(raw_reqs, 1):
+            if not isinstance(r, Mapping):
+                continue
+            req_id = str(r.get("requirement_id") or r.get("id") or f"REQ-{i:03d}")
+            stmt = str(r.get("statement") or r.get("description") or f"Requirement {req_id}")
+            provides = []
+            if r.get("capability"):
+                provides.append(str(r["capability"]))
+            if isinstance(r.get("provides"), Sequence):
+                for p in r["provides"]:
+                    if str(p).strip() and str(p) not in provides:
+                        provides.append(str(p).strip())
 
-    primary_req_id = "REQ-001"
-    for i, sent in enumerate(sentences, 1):
-        req_id = f"REQ-{i:03d}"
-        if i == 1:
-            primary_req_id = req_id
-        matched_caps = tuple(n.capability_id for n in resolution.nodes) if i == 1 else ()
-        reqs.append(
-            RequirementSpec(
+            req_spec = RequirementSpec(
                 id=req_id,
-                statement=sent,
-                mandatory=True,
-                provides=matched_caps,
+                statement=stmt,
+                original_span=str(r.get("original_span") or stmt),
+                normalized_statement=stmt,
+                mandatory=bool(r.get("mandatory", True)),
+                provides=tuple(provides),
+                confidence=float(r.get("confidence", 1.0)),
+                status="RESOLVED" if provides else "UNRESOLVED",
             )
-        )
+            reqs.append(req_spec)
+            for c in provides:
+                cap_to_reqs.setdefault(c, []).append(req_id)
 
-    # Convert resolution capability nodes into rich CapabilitySpecs
+    else:
+        # Case 2: Parse from natural language prompt clauses
+        clauses = _split_into_semantic_clauses(prompt)
+        if not clauses:
+            clauses = ["Default Mod Feature Requirement"]
+
+        if resolution is None:
+            resolution = resolve_capabilities_from_phrase_structured(prompt)
+
+        # Build list of available resolution capability nodes
+        nodes = list(resolution.nodes) if resolution else []
+        if explicit_capabilities:
+            for exp in explicit_capabilities:
+                if not any(n.capability_id == exp for n in nodes):
+                    from .canonical_capability_ontology import CapabilityResolutionNode
+                    nodes.append(CapabilityResolutionNode(capability_id=exp, source_span=exp, origin="explicit"))
+
+        for i, clause in enumerate(clauses, 1):
+            req_id = f"REQ-{i:03d}"
+            clause_low = clause.lower()
+
+            # Match capabilities specifically relevant to this clause span
+            matched: list[str] = []
+            for node in nodes:
+                span_low = (node.source_span or node.capability_id).lower()
+                stem = node.capability_id.split(".")[-1].lower()
+                if span_low in clause_low or stem in clause_low:
+                    matched.append(node.capability_id)
+
+            # If no specific match was found, and we only have 1 clause or this is the first clause, attach available nodes
+            if not matched and len(clauses) == 1:
+                matched = [n.capability_id for n in nodes]
+            elif not matched:
+                # Try structured sub-resolution on this exact clause
+                clause_res = resolve_capabilities_from_phrase_structured(clause)
+                matched = [n.capability_id for n in clause_res.nodes]
+
+            status = "RESOLVED" if matched else "UNRESOLVED"
+            req_spec = RequirementSpec(
+                id=req_id,
+                statement=clause,
+                original_span=clause,
+                normalized_statement=clause,
+                mandatory=True,
+                provides=tuple(dict.fromkeys(matched)),
+                status=status,
+            )
+            reqs.append(req_spec)
+            for c in req_spec.provides:
+                cap_to_reqs.setdefault(c, []).append(req_id)
+
+    # Ensure all distinct capabilities referenced across requirements are reified into CapabilitySpecs
+    all_cap_ids = list(dict.fromkeys(c for r in reqs for c in r.provides))
+    if resolution:
+        for n in resolution.nodes:
+            if n.capability_id not in all_cap_ids:
+                all_cap_ids.append(n.capability_id)
+
     dep_map: dict[str, list[str]] = {}
-    for u, v in resolution.edges:
-        dep_map.setdefault(u, []).append(v)
+    if resolution:
+        for u, v in resolution.edges:
+            dep_map.setdefault(u, []).append(v)
 
-    for node in resolution.nodes:
-        cap_id = node.capability_id
+    for cap_id in all_cap_ids:
+        bound_req_ids = tuple(cap_to_reqs.get(cap_id, (reqs[0].id if reqs else "REQ-001",)))
         node_deps = tuple(dep_map.get(cap_id, ()))
         is_state = "state" in cap_id or "persistence" in cap_id
         is_net = "network" in cap_id or "sync" in cap_id
 
         search_intents = (
             f"minecraft {cap_id.replace('.', ' ')} mod",
-            f"{node.origin} {cap_id.split('.')[-1]} github",
+            f"{cap_id.split('.')[-1]} github",
         )
 
         caps.append(
             CapabilitySpec(
                 id=cap_id,
-                source_requirement_ids=(primary_req_id,),
+                source_requirement_ids=bound_req_ids,
                 inputs=(),
                 outputs=(),
                 state=(cap_id,) if is_state else (),
@@ -136,3 +245,4 @@ def build_requirement_catalog(
         )
 
     return RequirementCatalog(requirements=tuple(reqs), capabilities=tuple(caps))
+

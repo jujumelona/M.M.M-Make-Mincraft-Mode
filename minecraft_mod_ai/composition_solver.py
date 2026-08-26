@@ -11,7 +11,7 @@ Validates that selected donor slices integrate cohesively without runtime collis
 Emits structured CompositionResult records and generates cryptographic SBOM / reuse-manifest.json.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,35 +60,59 @@ def solve_multi_donor_composition(
 ) -> CompositionResult:
     """Evaluate a joint set of candidate donors for integration compatibility and hard conflicts."""
     conflicts: list[CompositionConflict] = []
-    seen_symbols: dict[str, str] = {}
+    seen_fqcns: dict[str, str] = {}
     seen_files: dict[str, str] = {}
+    seen_registry_ids: dict[str, str] = {}
     resolved_deps: list[DependencyResolutionReceipt] = []
 
     # 1. Check class / file collisions
     for donor in donors:
         for df in donor.files:
-            if df.path in seen_files:
+            # Normalized path collision
+            norm_path = df.path.replace("\\", "/").strip("/")
+            if norm_path in seen_files:
                 conflicts.append(
                     CompositionConflict(
                         conflict_type="class_collision",
-                        conflicting_items=(df.path, seen_files[df.path], donor.repository),
-                        message=f"Duplicate file path '{df.path}' defined in multiple donors: {seen_files[df.path]} and {donor.repository}",
+                        conflicting_items=(norm_path, seen_files[norm_path], donor.repository),
+                        message=f"Duplicate file path '{norm_path}' defined in multiple donors: {seen_files[norm_path]} and {donor.repository}",
                     )
                 )
             else:
-                seen_files[df.path] = donor.repository
+                seen_files[norm_path] = donor.repository
 
-            for sym in df.symbols:
-                if sym in seen_symbols and sym not in {"Mod", "Main", "Init"}:
+            # FQCN (Package + Class Name) collision
+            if norm_path.endswith(".java") or norm_path.endswith(".kt"):
+                # Approximate FQCN from src/main/java/ or relative path
+                clean_fqcn = norm_path
+                for prefix in ("src/main/java/", "src/main/kotlin/", "src/"):
+                    if clean_fqcn.startswith(prefix):
+                        clean_fqcn = clean_fqcn[len(prefix):]
+                clean_fqcn = clean_fqcn.replace("/", ".").rsplit(".", 1)[0]
+                if clean_fqcn in seen_fqcns:
                     conflicts.append(
                         CompositionConflict(
-                            conflict_type="symbol_collision",
-                            conflicting_items=(sym, seen_symbols[sym], donor.repository),
-                            message=f"Symbol '{sym}' defined in both {seen_symbols[sym]} and {donor.repository}",
+                            conflict_type="fqcn_collision",
+                            conflicting_items=(clean_fqcn, seen_fqcns[clean_fqcn], donor.repository),
+                            message=f"FQCN '{clean_fqcn}' collision between {seen_fqcns[clean_fqcn]} and {donor.repository}",
                         )
                     )
                 else:
-                    seen_symbols[sym] = donor.repository
+                    seen_fqcns[clean_fqcn] = donor.repository
+
+            # Registry ID collision
+            for sym in df.symbols:
+                if ":" in sym:
+                    if sym in seen_registry_ids and seen_registry_ids[sym] != donor.repository:
+                        conflicts.append(
+                            CompositionConflict(
+                                conflict_type="registry_collision",
+                                conflicting_items=(sym, seen_registry_ids[sym], donor.repository),
+                                message=f"Registry ID '{sym}' collision between {seen_registry_ids[sym]} and {donor.repository}",
+                            )
+                        )
+                    else:
+                        seen_registry_ids[sym] = donor.repository
 
     # 2. Check external dependencies
     dep_versions: dict[str, str] = {}
@@ -97,7 +121,15 @@ def solve_multi_donor_composition(
             receipt = resolve_dependency_for_target(dep, target_loader=target_loader, target_minecraft=target_minecraft)
             resolved_deps.append(receipt)
 
-            if dep in dep_versions and dep_versions[dep] != receipt.selected_version:
+            if not receipt.is_resolved:
+                conflicts.append(
+                    CompositionConflict(
+                        conflict_type="unresolved_dependency",
+                        conflicting_items=(dep, donor.repository, receipt.resolution_reason),
+                        message=f"Mandatory dependency '{dep}' could not be resolved for {target_loader}@{target_minecraft}: {receipt.resolution_reason}",
+                    )
+                )
+            elif dep in dep_versions and dep_versions[dep] != receipt.selected_version:
                 conflicts.append(
                     CompositionConflict(
                         conflict_type="dependency_conflict",
@@ -114,6 +146,54 @@ def solve_multi_donor_composition(
         selected_donors=tuple(donors) if is_valid else (),
         conflicts=tuple(conflicts),
         resolved_dependencies=tuple(resolved_deps),
+    )
+
+
+def search_best_donor_composition(
+    candidates_by_capability: Mapping[str, Sequence[DonorSlice]],
+    *,
+    target_loader: str = "fabric",
+    target_minecraft: str = "1.21.1",
+    beam_width: int = 4,
+) -> CompositionResult:
+    """Explore candidate donor combinations across capabilities via beam search and return the highest-scoring valid composition."""
+    caps = [cap for cap, candidates in candidates_by_capability.items() if candidates]
+    if not caps:
+        return CompositionResult(is_valid=True)
+
+    # Beams contain tuple of selected DonorSlices
+    beams: list[tuple[DonorSlice, ...]] = [()]
+
+    for cap in caps:
+        next_beams: list[tuple[DonorSlice, ...]] = []
+        candidates = candidates_by_capability[cap]
+        for combo in beams:
+            for cand in candidates:
+                new_combo = (*combo, cand)
+                eval_res = solve_multi_donor_composition(
+                    new_combo,
+                    target_loader=target_loader,
+                    target_minecraft=target_minecraft,
+                )
+                if eval_res.is_valid:
+                    next_beams.append(new_combo)
+
+        if not next_beams:
+            # If all combinations for this capability conflict, keep the best partial combos
+            break
+
+        # Score and prune beams (higher file count / lower donor diversity score)
+        next_beams.sort(key=lambda b: sum(len(d.files) for d in b), reverse=True)
+        beams = next_beams[:beam_width]
+
+    if not beams or not beams[0]:
+        return CompositionResult(is_valid=False)
+
+    best_combo = beams[0]
+    return solve_multi_donor_composition(
+        best_combo,
+        target_loader=target_loader,
+        target_minecraft=target_minecraft,
     )
 
 
@@ -140,5 +220,8 @@ def generate_reuse_manifest(
         "schema_version": "mmm/reuse-manifest-v1",
         "project_name": project_name,
         "total_reused_files": len(manifest_files),
+        "reused_file_count": len(manifest_files),
+        "donor_count": len(selected_donors),
+        "donors": [d.to_dict() for d in selected_donors],
         "files": manifest_files,
     }
