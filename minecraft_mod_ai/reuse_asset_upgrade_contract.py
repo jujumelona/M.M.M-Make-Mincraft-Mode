@@ -32,8 +32,6 @@ from .source_transplant import materialize_source_slices
 _MATERIALIZE_LOCK = threading.RLock()
 _MATERIALIZE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 _MATERIALIZE_KEY_LOCKS: dict[tuple[str, str], tuple[threading.Lock, int]] = {}
-_MODEL_CONTEXT_BYTES = 24 * 1024
-_MODEL_CONTEXT_FILE_BYTES = 8 * 1024
 _TRANSPORT_CONFIG_KEYS = frozenset(
     {
         "_approved_reuse_plan",
@@ -267,7 +265,8 @@ def _install_reuse_materialization(custom_module_generator: Any) -> None:
                         "the minimal project-local integration/adaptation work listed in "
                         "_adapter_capabilities. A source_transplant decision is pinned donor "
                         "evidence, not a completed project implementation: use its source context "
-                        "and implement only the residual integration delta. Reuse approved "
+                        "and implement only the residual integration delta. Read pinned donor source "
+                        "on demand with read_reuse_source instead of asking the model to recreate it. Reuse approved "
                         "same-project/MMM/library capabilities exactly as the compact reuse "
                         "decisions specify; do not reimplement them."
                     ),
@@ -318,14 +317,9 @@ def _materialize_once(project_root: str | Path, reuse_plan: Mapping[str, Any]) -
                     _MATERIALIZE_KEY_LOCKS[key] = (tracked_lock, users - 1)
 
 
-def _materialized_donor_context(
-    receipt: Mapping[str, Any],
-    *,
-    byte_budget: int = _MODEL_CONTEXT_BYTES,
-    per_file_budget: int = _MODEL_CONTEXT_FILE_BYTES,
-) -> list[dict[str, Any]]:
+def _materialized_donor_context(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Expose only donor manifests; source text is fetched on demand by read_reuse_source."""
     context: list[dict[str, Any]] = []
-    used = 0
     donors = receipt.get("donors")
     if not isinstance(donors, Sequence) or isinstance(donors, (str, bytes)):
         return context
@@ -336,32 +330,21 @@ def _materialized_donor_context(
         if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
             continue
         for item in files:
-            if not isinstance(item, Mapping) or used >= byte_budget:
-                break
-            path = Path(str(item.get("path") or ""))
-            if not path.is_file() or path.is_symlink():
+            if not isinstance(item, Mapping):
                 continue
-            remaining = byte_budget - used
-            take = min(per_file_budget, remaining)
-            if take <= 0:
-                break
-            raw = path.read_bytes()
-            excerpt = raw[:take]
-            used += len(excerpt)
             context.append(
                 {
                     "repository": donor.get("repository"),
                     "commit_sha": donor.get("commit_sha"),
                     "license_id": donor.get("license_id"),
                     "capability": donor.get("capability"),
-                    "path": str(path),
+                    "path": item.get("path"),
                     "sha256": item.get("sha256"),
-                    "content": excerpt.decode("utf-8", errors="replace"),
-                    "truncated": len(raw) > len(excerpt),
+                    "size_bytes": item.get("size_bytes"),
+                    "read_tool": "read_reuse_source",
                 }
             )
     return context
-
 
 def _install_verified_promotion(orchestrator: Any) -> None:
     cls = orchestrator.CompleteProductionOrchestrator

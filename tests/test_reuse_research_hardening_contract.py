@@ -117,12 +117,12 @@ def test_model_facing_reuse_config_drops_transport_manifests(monkeypatch, tmp_pa
         assert key not in output
 
 
-def test_donor_context_is_bounded_per_file_and_globally(tmp_path) -> None:
+def test_donor_context_exposes_manifest_metadata_without_eager_source_text(tmp_path) -> None:
     files = []
     for index in range(4):
         path = tmp_path / f"F{index}.java"
         path.write_bytes(bytes([65 + index]) * 10_000)
-        files.append({"path": str(path), "sha256": f"sha256:{index}"})
+        files.append({"path": str(path), "sha256": f"sha256:{index}", "size_bytes": 10_000})
     receipt = {
         "donors": [
             {
@@ -135,11 +135,12 @@ def test_donor_context_is_bounded_per_file_and_globally(tmp_path) -> None:
         ]
     }
 
-    context = contract._materialized_donor_context(receipt, byte_budget=12_000, per_file_budget=4_000)
+    context = contract._materialized_donor_context(receipt)
 
-    assert len(context) == 3
-    assert sum(len(item["content"].encode("utf-8")) for item in context) <= 12_000
-    assert all(item["truncated"] for item in context)
+    assert len(context) == 4
+    assert all(item["read_tool"] == "read_reuse_source" for item in context)
+    assert all("content" not in item for item in context)
+    assert [item["path"] for item in context] == [item["path"] for item in files]
 
 
 def test_unverified_target_repository_is_not_a_reuse_candidate(monkeypatch) -> None:

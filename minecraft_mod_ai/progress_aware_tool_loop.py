@@ -65,6 +65,7 @@ _LOCALIZATION_EVIDENCE_TOOLS = frozenset({
     "search_project_rag",
     "java_workspace_symbols",
     "inspect_existing_mod",
+    "read_reuse_source",
 })
 
 _READ_OBSERVE_TOOLS = frozenset({
@@ -85,6 +86,7 @@ _READ_OBSERVE_TOOLS = frozenset({
     "external_mcp_capabilities",
     "external_mcp_schema",
     "external_mcp_call",
+    "read_reuse_source",
 })
 
 _MUTATION_ACT_TOOLS = frozenset({
@@ -154,6 +156,9 @@ def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> s
         parts.append(f"symbol={symbol}")
     if norm_query:
         parts.append(f"q={norm_query}")
+    cursor = arguments.get("cursor") or arguments.get("offset_bytes")
+    if cursor not in (None, "", 0, "0"):
+        parts.append(f"cursor={cursor}")
     return ":".join(parts)
 
 

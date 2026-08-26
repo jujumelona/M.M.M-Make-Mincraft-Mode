@@ -1,4 +1,6 @@
 from __future__ import annotations
+import hashlib
+import json
 import os
 from dataclasses import asdict
 from functools import cached_property
@@ -68,6 +70,71 @@ class ProductionToolService:
         router = ModelRouter(profile=self.profile) if semantic or rerank else None
         result = ProjectRAGIndex(target).search_with_receipt(query, limit=limit, router=router, semantic=semantic, rerank=rerank, required_metadata=required_metadata)
         return {'schema_version': 'mmm/code-rag-result-v1', 'query': query, 'hits': [asdict(hit) for hit in result.hits], 'receipt': asdict(result.receipt)}
+
+    def read_reuse_source(
+        self,
+        project_root: str,
+        path: str,
+        *,
+        offset_bytes: int = 0,
+        limit_bytes: int = 16 * 1024,
+    ) -> dict[str, Any]:
+        """Read one host-materialized, manifest-authorized donor source slice."""
+        if type(offset_bytes) is not int or offset_bytes < 0:
+            raise SpecValidationError("offset_bytes must be a non-negative integer.")
+        if type(limit_bytes) is not int or not 1 <= limit_bytes <= 32 * 1024:
+            raise SpecValidationError("limit_bytes must be between 1 and 32768.")
+        project = self._existing_dir(project_root)
+        donor_root = (project / ".minecraft_ai" / "reuse" / "donors").resolve()
+        candidate = Path(path).expanduser()
+        target = candidate.resolve() if candidate.is_absolute() else (project / candidate).resolve()
+        try:
+            relative = target.relative_to(donor_root)
+        except ValueError as exc:
+            raise SpecValidationError("Reuse source path escaped the approved donor root.") from exc
+        if len(relative.parts) < 2 or not target.is_file() or target.is_symlink():
+            raise FileNotFoundError(target)
+        donor_dir = donor_root / relative.parts[0]
+        manifest_path = donor_dir / "manifest.json"
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            raise FileNotFoundError(manifest_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(files, list):
+            raise SpecValidationError("Reuse donor manifest has no authorized file list.")
+        authorized = None
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            manifest_file = Path(str(item.get("path") or "")).expanduser()
+            manifest_target = manifest_file.resolve() if manifest_file.is_absolute() else (donor_dir / manifest_file).resolve()
+            if manifest_target == target:
+                authorized = item
+                break
+        if authorized is None:
+            raise SpecValidationError("Reuse source file is not authorized by the donor manifest.")
+        raw = target.read_bytes()
+        actual_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+        expected_sha256 = str(authorized.get("sha256") or "")
+        if expected_sha256 and actual_sha256 != expected_sha256:
+            raise SpecValidationError("Reuse source file no longer matches its pinned manifest hash.")
+        start = min(offset_bytes, len(raw))
+        end = min(len(raw), start + limit_bytes)
+        chunk = raw[start:end]
+        return {
+            "schema_version": "mmm/reuse-source-read-v1",
+            "repository": manifest.get("repository"),
+            "commit_sha": manifest.get("commit_sha"),
+            "license_id": manifest.get("license_id"),
+            "capability": manifest.get("capability"),
+            "path": str(target),
+            "sha256": actual_sha256,
+            "size_bytes": len(raw),
+            "offset_bytes": start,
+            "next_offset_bytes": end if end < len(raw) else None,
+            "eof": end >= len(raw),
+            "content": chunk.decode("utf-8", errors="replace"),
+        }
 
     def java_diagnostics(self, project_root: str, relative_files: list[str] | None=None, timeout_seconds: int=60) -> dict[str, Any]:
         root = self._existing_dir(project_root)
