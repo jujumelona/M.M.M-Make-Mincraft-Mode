@@ -197,27 +197,54 @@ def _compute_dependency_closed_subgraphs(
     adapted_files: Mapping[str, Any],
     donor_slice: DonorSlice,
 ) -> list[list[str]]:
-    """Partition donor files into dependency-closed connected subgraphs."""
+    """Partition donor files into multi-layer dependency-closed connected subgraphs."""
     paths = list(adapted_files.keys())
     if not paths:
         return []
 
-    # Map symbols to defining files
+    # Layer 1: Java symbols and import statements
     symbol_to_files: dict[str, list[str]] = {}
     for df in donor_slice.files:
         if df.path in adapted_files:
             for sym in df.symbols:
                 symbol_to_files.setdefault(sym, []).append(df.path)
 
-    # Build adjacency list
+    # Layer 2: Registry identifiers and resource stems
+    resource_stems: dict[str, list[str]] = {}
+    for p in paths:
+        stem = Path(p).stem.lower()
+        if stem and stem not in {"mod", "main", "init"}:
+            resource_stems.setdefault(stem, []).append(p)
+
+    # Build adjacency list across all 4 layers
     adj: dict[str, set[str]] = {p: {p} for p in paths}
+
     for p, content in adapted_files.items():
         text = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
+
+        # Layer 1: Java imports & symbols
         for sym, def_paths in symbol_to_files.items():
-            if sym and sym in text:
+            if sym and (sym in text or f"import " in text and sym in text):
                 for dp in def_paths:
                     adj[p].add(dp)
                     adj[dp].add(p)
+
+        # Layer 2 & 3: Resource stem / JSON texture / model links
+        # Extract quoted identifiers e.g. "mymod:boss", "boss", "textures": "..."
+        for token in re.findall(r'"([a-zA-Z0-9_/.-]+)"', text):
+            stem = token.split(":")[-1].split("/")[-1].lower()
+            if stem and stem in resource_stems:
+                for res_path in resource_stems.get(stem, ()):
+                    adj[p].add(res_path)
+                    adj[res_path].add(p)
+
+        # Layer 4: Entrypoints / Mixin config references
+        if p.endswith(".json") or p.endswith(".toml"):
+            for sym, def_paths in symbol_to_files.items():
+                if sym in text:
+                    for dp in def_paths:
+                        adj[p].add(dp)
+                        adj[dp].add(p)
 
     # Compute connected components (closed subgraphs)
     visited: set[str] = set()
@@ -376,6 +403,7 @@ def execute_reuse_proof(
         tests_executed = 0
         tests_passed_count = 0
         executed_test_ids: tuple[str, ...] = ()
+        individual_results: Mapping[str, bool] = {}
 
         if callable(compile_checker):
             try:
@@ -386,6 +414,7 @@ def execute_reuse_proof(
                     tests_executed = int(check_result.get("tests_executed", 1 if tests_passed else 0))
                     tests_passed_count = int(check_result.get("tests_passed_count", 1 if tests_passed else 0))
                     executed_test_ids = tuple(check_result.get("executed_test_ids") or (donor_slice.donor_tests if tests_passed else ()))
+                    individual_results = dict(check_result.get("individual_test_results") or {})
                     unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
                     missing_resources.extend(check_result.get("missing_resources") or [])
                 else:
@@ -402,6 +431,7 @@ def execute_reuse_proof(
             tests_executed = receipt.tests_executed
             tests_passed_count = receipt.tests_passed_count
             executed_test_ids = receipt.executed_test_ids
+            individual_results = receipt.individual_test_results
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
 
@@ -414,7 +444,8 @@ def execute_reuse_proof(
     for contract in req_contracts:
         pat = contract.acceptance_pattern.casefold()
         matched_tid = next((tid for tid in executed_test_ids if re.search(pat, tid.casefold())), "")
-        is_passed = bool(matched_tid) and tests_passed
+        individual_pass = individual_results.get(matched_tid, tests_passed) if matched_tid else False
+        is_passed = bool(matched_tid) and individual_pass
         acceptance_map.append((contract.requirement_id, contract.description, matched_tid or "none", is_passed))
         if is_passed:
             matched_tests.append(matched_tid)

@@ -11,9 +11,9 @@ Executes actual compilation and static validation in isolated scratch target wor
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class BuildVerificationReceipt:
     tests_passed_count: int = 0
     tests_failed_count: int = 0
     executed_test_ids: tuple[str, ...] = ()
+    individual_test_results: Mapping[str, bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class BuildVerificationReceipt:
             "tests_passed_count": self.tests_passed_count,
             "tests_failed_count": self.tests_failed_count,
             "executed_test_ids": list(self.executed_test_ids),
+            "individual_test_results": dict(self.individual_test_results),
         }
 
 
@@ -69,11 +71,12 @@ def _find_gradle_wrapper(workspace_root: Path) -> tuple[Path | None, str]:
     return None, "none"
 
 
-def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int, tuple[str, ...]]:
-    """Extract (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids)."""
+def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int, tuple[str, ...], dict[str, bool]]:
+    """Extract (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results)."""
     executed = 0
     failed = 0
     test_ids: list[str] = []
+    individual_results: dict[str, bool] = {}
 
     test_results_dir = workspace_root / "build" / "test-results" / "test"
     if test_results_dir.is_dir():
@@ -89,10 +92,17 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
                     executed += suite_tests
                     failed += suite_failures
                     test_ids.append(suite_name)
+                    individual_results[suite_name] = (suite_failures == 0)
+
                     for case in root.findall("testcase"):
                         case_name = case.attrib.get("name")
                         if case_name:
-                            test_ids.append(f"{suite_name}.{case_name}")
+                            full_id = f"{suite_name}.{case_name}"
+                            has_fail = bool(case.findall("failure") or case.findall("error"))
+                            test_ids.append(full_id)
+                            test_ids.append(case_name)
+                            individual_results[full_id] = not has_fail
+                            individual_results[case_name] = not has_fail
             except Exception:
                 pass
 
@@ -104,9 +114,10 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
             failed = int(match.group(2))
         for t_match in re.findall(r"> Task :test\s+([A-Za-z0-9_.]+)", stdout):
             test_ids.append(t_match)
+            individual_results[t_match] = (failed == 0)
 
     passed = max(0, executed - failed)
-    return executed, passed, failed, tuple(dict.fromkeys(test_ids))
+    return executed, passed, failed, tuple(dict.fromkeys(test_ids)), individual_results
 
 
 def verify_scratch_workspace_build(
@@ -141,6 +152,7 @@ def verify_scratch_workspace_build(
             tests_passed_count = 0
             tests_failed_count = 0
             executed_test_ids: tuple[str, ...] = ()
+            individual_results: dict[str, bool] = {}
             tests_passed = False
             combined_stdout = compile_stdout
             combined_stderr = compile_stderr
@@ -157,7 +169,7 @@ def verify_scratch_workspace_build(
                     )
                     combined_stdout += "\n" + res_test.stdout
                     combined_stderr += "\n" + res_test.stderr
-                    tests_executed, tests_passed_count, tests_failed_count, executed_test_ids = _parse_test_results(ws, res_test.stdout)
+                    tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results = _parse_test_results(ws, res_test.stdout)
                     tests_passed = (tests_executed > 0) and (tests_failed_count == 0) and (res_test.returncode == 0)
                 except Exception as test_err:
                     combined_stderr += f"\nTest execution failed: {test_err}"
@@ -177,6 +189,7 @@ def verify_scratch_workspace_build(
                 tests_passed_count=tests_passed_count,
                 tests_failed_count=tests_failed_count,
                 executed_test_ids=executed_test_ids,
+                individual_test_results=individual_results,
             )
         except Exception as e:
             return BuildVerificationReceipt(

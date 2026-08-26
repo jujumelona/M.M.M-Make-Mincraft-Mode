@@ -997,6 +997,94 @@ def test_requirement_acceptance_contract_mapping() -> None:
     assert all(item[3] is True for item in receipt_complete.requirement_acceptance_map)
 
 
+def test_multi_layer_typed_artifact_closure_slicing() -> None:
+    from minecraft_mod_ai.reuse_proof_executor import _compute_dependency_closed_subgraphs
+
+    adapted_files = {
+        "src/main/java/BossEntity.java": "package com.mod;\npublic class BossEntity {\n    Identifier ID = Identifier.of(\"modid\", \"boss\");\n}",
+        "src/main/java/BossRenderer.java": "package com.mod;\nimport com.mod.BossEntity;\npublic class BossRenderer {}",
+        "assets/modid/models/entity/boss.json": '{"textures": {"layer0": "modid:entity/boss"}}',
+        "assets/modid/textures/entity/boss.png": b"fake png bytes",
+        "src/main/java/UnrelatedItem.java": "package com.mod;\npublic class UnrelatedItem {}",
+    }
+
+    donor = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss-full",
+        commit_sha="9999999999999999999999999999999999999999",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-full",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/BossEntity.java", "s1", "sha:1", 100, ("BossEntity",)),
+            source_transplant.DonorFile("src/main/java/BossRenderer.java", "s2", "sha:2", 100, ("BossRenderer",)),
+            source_transplant.DonorFile("assets/modid/models/entity/boss.json", "s3", "sha:3", 50, ()),
+            source_transplant.DonorFile("assets/modid/textures/entity/boss.png", "s4", "sha:4", 50, ()),
+            source_transplant.DonorFile("src/main/java/UnrelatedItem.java", "s5", "sha:5", 100, ("UnrelatedItem",)),
+        ),
+        seed_files=("src/main/java/BossEntity.java",),
+        source_symbols=("BossEntity", "BossRenderer", "UnrelatedItem"),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor)
+    # BossEntity, BossRenderer, boss.json, and boss.png must be grouped into one closed component!
+    boss_comp = next((comp for comp in subgraphs if "src/main/java/BossEntity.java" in comp), None)
+    assert boss_comp is not None
+    assert "src/main/java/BossRenderer.java" in boss_comp
+    assert "assets/modid/models/entity/boss.json" in boss_comp
+    assert "assets/modid/textures/entity/boss.png" in boss_comp
+    # UnrelatedItem must be in its own separate subgraph
+    assert "src/main/java/UnrelatedItem.java" not in boss_comp
+
+
+def test_individual_requirement_test_verification() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss-contract",
+        commit_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-contract",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=("BossEntity",),
+        required_dependencies=(),
+        donor_tests=("BossSpawnTest", "BossHealthStateTest", "BossPhaseAITest", "BossLootDeathTest"),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # 3 out of 4 tests pass individually; BossPhaseAITest fails individually in test XML
+    def mock_per_test_results(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": False,
+            "tests_executed": 4,
+            "tests_passed_count": 3,
+            "executed_test_ids": ["BossSpawnTest", "BossHealthStateTest", "BossPhaseAITest", "BossLootDeathTest"],
+            "individual_test_results": {
+                "BossSpawnTest": True,
+                "BossHealthStateTest": True,
+                "BossPhaseAITest": False,  # INDIVIDUAL FAILURE
+                "BossLootDeathTest": True,
+            },
+        }
+
+    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_per_test_results)
+    assert receipt.proof_level == "COMPILE_VERIFIED"
+    assert any(item[0] == "REQ-BOSS-001" and item[3] is True for item in receipt.requirement_acceptance_map)
+    assert any(item[0] == "REQ-BOSS-002" and item[3] is True for item in receipt.requirement_acceptance_map)
+    assert any(item[0] == "REQ-BOSS-003" and item[3] is False for item in receipt.requirement_acceptance_map)
+    assert any(item[0] == "REQ-BOSS-004" and item[3] is True for item in receipt.requirement_acceptance_map)
+
+
+
 
 
 
