@@ -1,0 +1,109 @@
+name: Apply reuse source reader
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-reuse-source-read.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Bind current main
+        run: |
+          git fetch origin +main:refs/remotes/origin/main
+          git reset --hard refs/remotes/origin/main
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Patch read-only donor source retrieval
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          production = Path('minecraft_mod_ai/production_tools.py')
+          text = production.read_text(encoding='utf-8')
+          if 'import hashlib\n' not in text:
+              text = text.replace('from __future__ import annotations\n', 'from __future__ import annotations\nimport hashlib\nimport json\n', 1)
+          marker = '    def java_diagnostics(self, project_root: str, relative_files: list[str] | None=None, timeout_seconds: int=60) -> dict[str, Any]:\n'
+          if '    def read_reuse_source(' not in text:
+              if marker not in text:
+                  raise SystemExit('production_tools insertion anchor changed')
+              method = '''    def read_reuse_source(\n        self,\n        project_root: str,\n        path: str,\n        *,\n        offset_bytes: int = 0,\n        limit_bytes: int = 16 * 1024,\n    ) -> dict[str, Any]:\n        """Read one host-materialized, manifest-authorized donor source slice."""\n        if type(offset_bytes) is not int or offset_bytes < 0:\n            raise SpecValidationError("offset_bytes must be a non-negative integer.")\n        if type(limit_bytes) is not int or not 1 <= limit_bytes <= 32 * 1024:\n            raise SpecValidationError("limit_bytes must be between 1 and 32768.")\n        project = self._existing_dir(project_root)\n        donor_root = (project / ".minecraft_ai" / "reuse" / "donors").resolve()\n        candidate = Path(path).expanduser()\n        target = candidate.resolve() if candidate.is_absolute() else (project / candidate).resolve()\n        try:\n            relative = target.relative_to(donor_root)\n        except ValueError as exc:\n            raise SpecValidationError("Reuse source path escaped the approved donor root.") from exc\n        if len(relative.parts) < 2 or not target.is_file() or target.is_symlink():\n            raise FileNotFoundError(target)\n        donor_dir = donor_root / relative.parts[0]\n        manifest_path = donor_dir / "manifest.json"\n        if not manifest_path.is_file() or manifest_path.is_symlink():\n            raise FileNotFoundError(manifest_path)\n        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))\n        files = manifest.get("files") if isinstance(manifest, dict) else None\n        if not isinstance(files, list):\n            raise SpecValidationError("Reuse donor manifest has no authorized file list.")\n        authorized = None\n        for item in files:\n            if not isinstance(item, dict):\n                continue\n            manifest_file = Path(str(item.get("path") or "")).expanduser()\n            manifest_target = manifest_file.resolve() if manifest_file.is_absolute() else (donor_dir / manifest_file).resolve()\n            if manifest_target == target:\n                authorized = item\n                break\n        if authorized is None:\n            raise SpecValidationError("Reuse source file is not authorized by the donor manifest.")\n        raw = target.read_bytes()\n        actual_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()\n        expected_sha256 = str(authorized.get("sha256") or "")\n        if expected_sha256 and actual_sha256 != expected_sha256:\n            raise SpecValidationError("Reuse source file no longer matches its pinned manifest hash.")\n        start = min(offset_bytes, len(raw))\n        end = min(len(raw), start + limit_bytes)\n        chunk = raw[start:end]\n        return {\n            "schema_version": "mmm/reuse-source-read-v1",\n            "repository": manifest.get("repository"),\n            "commit_sha": manifest.get("commit_sha"),\n            "license_id": manifest.get("license_id"),\n            "capability": manifest.get("capability"),\n            "path": str(target),\n            "sha256": actual_sha256,\n            "size_bytes": len(raw),\n            "offset_bytes": start,\n            "next_offset_bytes": end if end < len(raw) else None,\n            "eof": end >= len(raw),\n            "content": chunk.decode("utf-8", errors="replace"),\n        }\n\n'''
+              text = text.replace(marker, method + marker, 1)
+          production.write_text(text, encoding='utf-8')
+
+          mcp = Path('minecraft_mod_ai/mcp_server.py')
+          text = mcp.read_text(encoding='utf-8')
+          stage_anchor = "'search_code_rag': frozenset({'research', 'generation', 'quality'}),"
+          if "'read_reuse_source':" not in text:
+              if stage_anchor not in text:
+                  raise SystemExit('mcp stage anchor changed')
+              text = text.replace(stage_anchor, stage_anchor + " 'read_reuse_source': frozenset({'generation'}),", 1)
+          fn_anchor = '''@_stage_tool()\ndef inspect_existing_mod(archive_path: str) -> dict[str, Any]:\n'''
+          if 'def read_reuse_source(' not in text:
+              if fn_anchor not in text:
+                  raise SystemExit('mcp function anchor changed')
+              function = '''@_stage_tool()\ndef read_reuse_source(project_root: str, path: str, offset_bytes: int=0, limit_bytes: int=16384) -> dict[str, Any]:\n    """Read a bounded chunk from one pinned donor file materialized by the host."""\n    return _production().read_reuse_source(project_root, path, offset_bytes=offset_bytes, limit_bytes=limit_bytes)\n\n'''
+              text = text.replace(fn_anchor, function + fn_anchor, 1)
+          mcp.write_text(text, encoding='utf-8')
+
+          loop = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = loop.read_text(encoding='utf-8')
+          if '    "read_reuse_source",\n' not in text.split('_LOCALIZATION_EVIDENCE_TOOLS', 1)[1].split('})', 1)[0]:
+              text = text.replace('    "inspect_existing_mod",\n})\n\n_READ_OBSERVE_TOOLS', '    "inspect_existing_mod",\n    "read_reuse_source",\n})\n\n_READ_OBSERVE_TOOLS', 1)
+          read_section_start = text.index('_READ_OBSERVE_TOOLS')
+          read_section_end = text.index('})', read_section_start)
+          if '"read_reuse_source"' not in text[read_section_start:read_section_end]:
+              text = text[:read_section_end] + '    "read_reuse_source",\n' + text[read_section_end:]
+          sig_anchor = '    if norm_query:\n        parts.append(f"q={norm_query}")\n'
+          if 'offset_bytes' not in text[text.index('def retrieval_query_signature'):text.index('def _stable_value')]:
+              text = text.replace(sig_anchor, sig_anchor + '    cursor = arguments.get("cursor") or arguments.get("offset_bytes")\n    if cursor not in (None, "", 0, "0"):\n        parts.append(f"cursor={cursor}")\n', 1)
+          loop.write_text(text, encoding='utf-8')
+
+          contract = Path('minecraft_mod_ai/reuse_asset_upgrade_contract.py')
+          text = contract.read_text(encoding='utf-8')
+          text = text.replace('_MODEL_CONTEXT_BYTES = 24 * 1024\n_MODEL_CONTEXT_FILE_BYTES = 8 * 1024\n', '')
+          start = text.index('def _materialized_donor_context(')
+          end = text.index('\ndef _install_verified_promotion', start)
+          replacement = '''def _materialized_donor_context(receipt: Mapping[str, Any]) -> list[dict[str, Any]]:\n    """Expose only donor manifests; source text is fetched on demand by read_reuse_source."""\n    context: list[dict[str, Any]] = []\n    donors = receipt.get("donors")\n    if not isinstance(donors, Sequence) or isinstance(donors, (str, bytes)):\n        return context\n    for donor in donors:\n        if not isinstance(donor, Mapping):\n            continue\n        files = donor.get("files")\n        if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):\n            continue\n        for item in files:\n            if not isinstance(item, Mapping):\n                continue\n            context.append(\n                {\n                    "repository": donor.get("repository"),\n                    "commit_sha": donor.get("commit_sha"),\n                    "license_id": donor.get("license_id"),\n                    "capability": donor.get("capability"),\n                    "path": item.get("path"),\n                    "sha256": item.get("sha256"),\n                    "size_bytes": item.get("size_bytes"),\n                    "read_tool": "read_reuse_source",\n                }\n            )\n    return context\n\n'''
+          text = text[:start] + replacement + text[end + 1:]
+          rule_anchor = '                        "and implement only the residual integration delta. Reuse approved "\n'
+          if 'read_reuse_source' not in text[text.index('"_generation_rule"'):text.index('return current', text.index('"_generation_rule"'))]:
+              text = text.replace(rule_anchor, '                        "and implement only the residual integration delta. Read pinned donor source "\n                        "on demand with read_reuse_source instead of asking the model to recreate it. Reuse approved "\n', 1)
+          contract.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_reuse_source_read_tool.py')
+          test.write_text('''from __future__ import annotations\n\nimport hashlib\nimport json\nfrom pathlib import Path\n\nimport pytest\n\nfrom minecraft_mod_ai.production_tools import ProductionToolService\nfrom minecraft_mod_ai.spec import SpecValidationError\n\n\ndef _fixture(tmp_path: Path):\n    workspace = tmp_path / "workspace"\n    project = workspace / "project"\n    donor = project / ".minecraft_ai" / "reuse" / "donors" / "a" * 20\n    source = donor / "src/main/java/example/Trade.java"\n    source.parent.mkdir(parents=True)\n    raw = b"package example;\\nfinal class Trade { static int price = 7; }\\n"\n    source.write_bytes(raw)\n    manifest = {\n        "repository": "example/trade",\n        "commit_sha": "b" * 40,\n        "license_id": "MIT",\n        "capability": "trade.transaction",\n        "files": [{"path": str(source), "sha256": "sha256:" + hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}],\n    }\n    (donor / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")\n    return ProductionToolService(workspace_root=workspace), project, source, raw\n\n\ndef test_read_reuse_source_is_manifest_authorized_and_paginated(tmp_path):\n    service, project, source, raw = _fixture(tmp_path)\n    first = service.read_reuse_source(str(project), str(source), limit_bytes=12)\n    assert first["schema_version"] == "mmm/reuse-source-read-v1"\n    assert first["content"] == raw[:12].decode()\n    assert first["eof"] is False\n    second = service.read_reuse_source(str(project), str(source), offset_bytes=first["next_offset_bytes"], limit_bytes=32768)\n    assert second["eof"] is True\n    assert second["content"] == raw[12:].decode()\n\n\ndef test_read_reuse_source_rejects_unmanifested_file(tmp_path):\n    service, project, source, _raw = _fixture(tmp_path)\n    other = source.with_name("Other.java")\n    other.write_text("class Other {}", encoding="utf-8")\n    with pytest.raises(SpecValidationError, match="not authorized"):\n        service.read_reuse_source(str(project), str(other))\n''', encoding='utf-8')
+
+          Path('.github/workflows/apply-reuse-source-read.yml').unlink(missing_ok=True)
+          PY
+      - name: Validate source reader contracts
+        run: |
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_reuse_source_read_tool.py \
+            tests/test_agent_tool_runtime_mcp_errors.py \
+            tests/test_agent_tool_calling.py \
+            $(find tests -maxdepth 1 -name 'test_*reuse*.py' -print)
+      - name: Commit directly to main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(reuse): add on-demand donor source reader"
+          git push origin HEAD:main
+          gh workflow run ci.yml --ref main
