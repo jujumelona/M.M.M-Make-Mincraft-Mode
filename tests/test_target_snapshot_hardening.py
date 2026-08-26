@@ -286,7 +286,7 @@ def _configure_official_gate_fixture(
     monkeypatch.setattr(
         reuse,
         "_parallel_donor_repository_discovery",
-        lambda queries, _client: {query: () for query in queries},
+        lambda queries, _client, **_kwargs: {query: () for query in queries},
     )
     monkeypatch.setattr(reuse, "_plan_target", plan_target)
     monkeypatch.setattr(
@@ -375,7 +375,7 @@ def test_every_feasible_target_is_evidenced_and_unverified_target_cannot_win(
     monkeypatch.setattr(
         reuse,
         "_parallel_donor_repository_discovery",
-        lambda queries, _client: {query: () for query in queries},
+        lambda queries, _client, **_kwargs: {query: () for query in queries},
     )
     monkeypatch.setattr(reuse, "_plan_target", plan_target)
     monkeypatch.setattr(reuse._platform, "_parallel_support_matrix", support_matrix)
