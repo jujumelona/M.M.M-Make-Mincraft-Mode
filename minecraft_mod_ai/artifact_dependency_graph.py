@@ -266,13 +266,9 @@ class ArtifactDependencyGraph:
 
         Groups artifacts into independent, closed subgraphs that contain all mutual dependencies and helpers.
         """
-        sccs = self.compute_scc()
-        node_to_scc: dict[str, int] = {}
-        for scc_idx, scc_nodes in enumerate(sccs):
-            for n in scc_nodes:
-                node_to_scc[n] = scc_idx
+        del seed_nodes  # Reserved compatibility input; current behavior returns all closed feature units.
 
-        # Build bidirectional component connectivity to group full feature units
+        # Build bidirectional component connectivity to group full feature units.
         undirected_adj: dict[str, set[str]] = {nid: set() for nid in self.nodes}
         for u, targets in self.adjacency.items():
             for v in targets:
