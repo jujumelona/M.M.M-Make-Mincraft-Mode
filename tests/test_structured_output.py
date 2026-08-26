@@ -41,11 +41,18 @@ def _validate(output: str, request: GenerationRequest | None = None) -> str:
     )
 
 
-def test_llama_server_keeps_schema_validation_host_owned() -> None:
+def test_llama_server_uses_native_schema_constraint_with_host_validation() -> None:
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
     payload = _server_payload(adapter, _request())
 
-    assert "response_format" not in payload
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": _SCHEMA,
+        },
+    }
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
 
