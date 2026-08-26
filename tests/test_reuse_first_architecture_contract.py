@@ -94,8 +94,24 @@ def test_target_plan_exposes_generation_scope_ledger():
             return {"minecraft_version": "1.21.1", "loader": "fabric"}
 
     decisions = (
-        ReuseDecision("trade", "source_transplant", 0.9, 10, 4, source_id="a/b@1"),
-        ReuseDecision("npc", "adapt", 0.8, 10, 4, source_id="a/b@1"),
+        ReuseDecision(
+            "trade",
+            "source_transplant",
+            0.9,
+            10,
+            4,
+            source_id="a/b@1",
+            proof_level="COMPILE_VERIFIED",
+        ),
+        ReuseDecision(
+            "npc",
+            "adapt",
+            0.8,
+            10,
+            4,
+            source_id="a/b@1",
+            proof_level="PARTIAL_REUSE",
+        ),
         ReuseDecision("boss", "fresh", 1.0, 10, 4),
     )
     plan = TargetImplementationPlan(
