@@ -361,7 +361,7 @@ def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_p
         seed_files=("src/main/java/com/donor/mod/RealItem.java",),
         source_symbols=("RealItem",),
         required_dependencies=(),
-        donor_tests=("RealItemTest",),
+        donor_tests=("RealItemRegistryTest", "RealItemUsageTest"),
         confidence=0.95,
         adaptation_cost=0.0,
         closure_complete=True,
@@ -374,9 +374,9 @@ def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_p
         return {
             "compile_passed": True,
             "tests_passed": True,
-            "tests_executed": 1,
-            "tests_passed_count": 1,
-            "executed_test_ids": ["RealItemTest"],
+            "tests_executed": 2,
+            "tests_passed_count": 2,
+            "executed_test_ids": ["RealItemRegistryTest", "RealItemUsageTest"],
         }
 
     from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
@@ -728,7 +728,7 @@ def test_behavior_verified_requires_nonzero_tests_executed() -> None:
         seed_files=("src/main/java/Item.java",),
         source_symbols=("Item",),
         required_dependencies=(),
-        donor_tests=("ItemTest",),
+        donor_tests=("ItemRegistryTest", "ItemUsageTest"),
         confidence=0.95,
         adaptation_cost=0.0,
         closure_complete=True,
@@ -749,7 +749,7 @@ def test_behavior_verified_requires_nonzero_tests_executed() -> None:
             "tests_passed": True,
             "tests_executed": 2,
             "tests_passed_count": 2,
-            "executed_test_ids": ["ItemTest"],
+            "executed_test_ids": ["ItemRegistryTest", "ItemUsageTest"],
         }
 
     receipt_passed = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_has_tests)
@@ -861,7 +861,7 @@ def test_capability_acceptance_test_matching() -> None:
         seed_files=(),
         source_symbols=("BossEntity",),
         required_dependencies=(),
-        donor_tests=("BossEntityTest",),
+        donor_tests=("BossSpawnTest", "BossHealthStateTest", "BossPhaseAITest", "BossLootDeathTest"),
         confidence=0.9,
         adaptation_cost=0.0,
         closure_complete=True,
@@ -881,19 +881,19 @@ def test_capability_acceptance_test_matching() -> None:
     assert receipt_unrelated.proof_level == "COMPILE_VERIFIED"
     assert len(receipt_unrelated.matched_capability_tests) == 0
 
-    # 2. Matching capability test passed: BossEntityTest yields BEHAVIOR_VERIFIED
+    # 2. Matching capability contracts passed: All 4 REQ-BOSS contracts satisfied -> BEHAVIOR_VERIFIED
     def mock_matching_test(files, context):
         return {
             "compile_passed": True,
             "tests_passed": True,
-            "tests_executed": 1,
-            "tests_passed_count": 1,
-            "executed_test_ids": ["BossEntityTest"],
+            "tests_executed": 4,
+            "tests_passed_count": 4,
+            "executed_test_ids": ["BossSpawnTest", "BossHealthStateTest", "BossPhaseAITest", "BossLootDeathTest"],
         }
 
     receipt_matching = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_matching_test)
     assert receipt_matching.proof_level == "BEHAVIOR_VERIFIED"
-    assert receipt_matching.matched_capability_tests == ("BossEntityTest",)
+    assert len(receipt_matching.matched_capability_tests) == 4
 
 
 def test_dynamic_minecraft_version_dependency_injection() -> None:
@@ -979,8 +979,8 @@ def test_requirement_acceptance_contract_mapping() -> None:
 
     receipt_partial = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_partial_pass)
     assert receipt_partial.proof_level == "COMPILE_VERIFIED"
-    assert ("magic.spell", "SpellCastAcceptanceTest", True) in receipt_partial.requirement_acceptance_map
-    assert ("magic.spell", "ManaDrainAcceptanceTest", False) in receipt_partial.requirement_acceptance_map
+    assert any(item[0] == "REQ-MAGIC-001" and item[3] is True for item in receipt_partial.requirement_acceptance_map)
+    assert any(item[0] == "REQ-MAGIC-002" and item[3] is False for item in receipt_partial.requirement_acceptance_map)
 
     # 2. Complete acceptance pass (both tests passed) -> BEHAVIOR_VERIFIED
     def mock_complete_pass(files, context):
@@ -994,8 +994,8 @@ def test_requirement_acceptance_contract_mapping() -> None:
 
     receipt_complete = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_complete_pass)
     assert receipt_complete.proof_level == "BEHAVIOR_VERIFIED"
-    assert ("magic.spell", "SpellCastAcceptanceTest", True) in receipt_complete.requirement_acceptance_map
-    assert ("magic.spell", "ManaDrainAcceptanceTest", True) in receipt_complete.requirement_acceptance_map
+    assert all(item[3] is True for item in receipt_complete.requirement_acceptance_map)
+
 
 
 

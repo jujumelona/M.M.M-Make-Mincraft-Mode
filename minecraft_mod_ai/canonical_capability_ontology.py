@@ -750,3 +750,57 @@ def canonical_domain_map() -> Mapping[str, tuple[str, ...]]:
 def atomic_capability_definitions() -> Mapping[str, CapabilityDefinition]:
     """Return the registry of atomic capability definitions."""
     return dict(_ATOMIC_CAPABILITIES)
+
+
+@dataclass(frozen=True)
+class CapabilityRequirementContract:
+    requirement_id: str
+    capability_id: str
+    description: str
+    acceptance_pattern: str
+
+
+_CAPABILITY_REQUIREMENT_CONTRACTS: dict[str, tuple[CapabilityRequirementContract, ...]] = {
+    "boss.entity": (
+        CapabilityRequirementContract("REQ-BOSS-001", "boss.entity", "Boss entity spawn and initialization", "spawn|init|entity"),
+        CapabilityRequirementContract("REQ-BOSS-002", "boss.entity", "Boss health and state persistence", "health|state|persist"),
+        CapabilityRequirementContract("REQ-BOSS-003", "boss.entity", "Boss phase transition mechanics", "phase|transition|ai|goal"),
+        CapabilityRequirementContract("REQ-BOSS-004", "boss.entity", "Boss death rewards and drop table", "death|loot|drop|reward"),
+    ),
+    "combat.boss": (
+        CapabilityRequirementContract("REQ-BOSS-001", "combat.boss", "Boss attack phase orchestration", "phase|attack|combat"),
+        CapabilityRequirementContract("REQ-BOSS-002", "combat.boss", "Boss damage validation and immunity", "damage|immunity|hit"),
+    ),
+    "item.equipment": (
+        CapabilityRequirementContract("REQ-ITEM-001", "item.equipment", "Item registry and equipment attributes", "item|equip|attr|registry"),
+        CapabilityRequirementContract("REQ-ITEM-002", "item.equipment", "Durability and usage behavior", "durability|use|usage|tier"),
+    ),
+    "combat.damage": (
+        CapabilityRequirementContract("REQ-COMBAT-001", "combat.damage", "Damage source calculation and attributes", "damage|calc|source"),
+        CapabilityRequirementContract("REQ-COMBAT-002", "combat.damage", "Knockback and hit reactions", "knockback|hit|reaction"),
+    ),
+    "worldgen.ore": (
+        CapabilityRequirementContract("REQ-WORLD-001", "worldgen.ore", "Ore feature registry and placement modifier", "ore|feature|world|placement"),
+    ),
+    "magic.spell": (
+        CapabilityRequirementContract("REQ-MAGIC-001", "magic.spell", "Spell casting invocation and mana consumption", "spell|cast|mana"),
+        CapabilityRequirementContract("REQ-MAGIC-002", "magic.spell", "Spell projectile effect execution", "projectile|effect|drain"),
+    ),
+}
+
+
+def capability_requirement_contracts(capability_id: str) -> tuple[CapabilityRequirementContract, ...]:
+    """Return formal requirement contracts for a capability."""
+    clean = capability_id.removeprefix("unresolved:").removeprefix("provisional:")
+    if clean in _CAPABILITY_REQUIREMENT_CONTRACTS:
+        return _CAPABILITY_REQUIREMENT_CONTRACTS[clean]
+    dom = clean.split(".")[0].upper() if "." in clean else "CAP"
+    return (
+        CapabilityRequirementContract(
+            requirement_id=f"REQ-{dom}-001",
+            capability_id=clean,
+            description=f"Core behavioral acceptance contract for {clean}",
+            acceptance_pattern=clean.split(".")[-1].replace("_", "|"),
+        ),
+    )
+

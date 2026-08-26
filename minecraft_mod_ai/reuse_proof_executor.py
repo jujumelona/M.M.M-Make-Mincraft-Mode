@@ -12,6 +12,7 @@ to Candidate B before marking any residual capability as fresh.
 """
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -192,6 +193,53 @@ tasks.withType(JavaCompile).configureEach {{
         gradlew_bat.write_text("@echo off\r\ngradle %*\r\n", encoding="utf-8")
 
 
+def _compute_dependency_closed_subgraphs(
+    adapted_files: Mapping[str, Any],
+    donor_slice: DonorSlice,
+) -> list[list[str]]:
+    """Partition donor files into dependency-closed connected subgraphs."""
+    paths = list(adapted_files.keys())
+    if not paths:
+        return []
+
+    # Map symbols to defining files
+    symbol_to_files: dict[str, list[str]] = {}
+    for df in donor_slice.files:
+        if df.path in adapted_files:
+            for sym in df.symbols:
+                symbol_to_files.setdefault(sym, []).append(df.path)
+
+    # Build adjacency list
+    adj: dict[str, set[str]] = {p: {p} for p in paths}
+    for p, content in adapted_files.items():
+        text = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
+        for sym, def_paths in symbol_to_files.items():
+            if sym and sym in text:
+                for dp in def_paths:
+                    adj[p].add(dp)
+                    adj[dp].add(p)
+
+    # Compute connected components (closed subgraphs)
+    visited: set[str] = set()
+    components: list[list[str]] = []
+    for p in paths:
+        if p not in visited:
+            comp: list[str] = []
+            queue = [p]
+            visited.add(p)
+            while queue:
+                curr = queue.pop(0)
+                comp.append(curr)
+                for neighbor in adj.get(curr, ()):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            components.append(comp)
+
+    return components
+
+
+
 def execute_reuse_proof(
     donor_slice: DonorSlice,
     *,
@@ -358,27 +406,23 @@ def execute_reuse_proof(
             missing_resources.extend(receipt.missing_resources)
 
     # Capability Acceptance Test Contract Mapping
-    cap_tokens = {donor_slice.capability.casefold(), donor_slice.capability.split(".")[-1].casefold()}
-    req_tests = {t.casefold(): t for t in donor_slice.donor_tests}
+    from .canonical_capability_ontology import capability_requirement_contracts
+    req_contracts = capability_requirement_contracts(donor_slice.capability)
     matched_tests = []
     acceptance_map = []
 
-    for req_lower, req_orig in req_tests.items():
-        is_passed = any(req_lower in tid.casefold() for tid in executed_test_ids) and tests_passed
-        acceptance_map.append((donor_slice.capability, req_orig, is_passed))
+    for contract in req_contracts:
+        pat = contract.acceptance_pattern.casefold()
+        matched_tid = next((tid for tid in executed_test_ids if re.search(pat, tid.casefold())), "")
+        is_passed = bool(matched_tid) and tests_passed
+        acceptance_map.append((contract.requirement_id, contract.description, matched_tid or "none", is_passed))
         if is_passed:
-            matched_tests.append(req_orig)
-
-    if not req_tests and executed_test_ids:
-        for tid in executed_test_ids:
-            if any(ct in tid.casefold() for ct in cap_tokens):
-                matched_tests.append(tid)
-                acceptance_map.append((donor_slice.capability, tid, tests_passed))
+            matched_tests.append(matched_tid)
 
     matched_capability_tests = tuple(dict.fromkeys(matched_tests))
     requirement_acceptance_map = tuple(acceptance_map)
 
-    # Isolated Subgraph Compilation Slicing
+    # Dependency-Closed Subgraph Compilation Slicing
     unresolved_set = set(unresolved_symbols)
     verified_art_list: list[str] = []
     residual_art_list: list[str] = []
@@ -386,38 +430,64 @@ def execute_reuse_proof(
     if compile_passed:
         verified_art_list.extend(adapted_files.keys())
     else:
-        # Isolate and verify each individual file / closed subgraph
-        for path, content in adapted_files.items():
-            text_content = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
-            df_match = next((df for df in donor_slice.files if df.path == path), None)
-            df_syms = set(df_match.symbols) if df_match else set()
+        # Partition into dependency-closed subgraphs
+        subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor_slice)
+        for comp in subgraphs:
+            # Check if any file in comp has obvious unresolvable error
+            comp_has_error = False
+            for path in comp:
+                content = adapted_files.get(path, "")
+                text_content = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
+                df_match = next((df for df in donor_slice.files if df.path == path), None)
+                df_syms = set(df_match.symbols) if df_match else set()
+                if (
+                    any(sym in text_content for sym in unresolved_set if sym)
+                    or any(sym in df_syms for sym in unresolved_set if sym)
+                    or any(sym.casefold() in path.casefold() for sym in unresolved_set if sym)
+                ):
+                    comp_has_error = True
+                    break
 
-            has_error = (
-                any(sym in text_content for sym in unresolved_set if sym)
-                or any(sym in df_syms for sym in unresolved_set if sym)
-                or any(sym.casefold() in path.casefold() for sym in unresolved_set if sym)
-            )
+            if comp_has_error:
+                residual_art_list.extend(comp)
+                continue
 
-            if not has_error:
-                # Perform isolated compilation test for this artifact subset
-                if callable(compile_checker):
-                    try:
-                        single_res = compile_checker({path: content}, target_context)
-                        if isinstance(single_res, Mapping):
-                            if bool(single_res.get("compile_passed")):
-                                verified_art_list.append(path)
-                            else:
-                                residual_art_list.append(path)
-                        elif bool(single_res):
-                            verified_art_list.append(path)
-                        else:
-                            residual_art_list.append(path)
-                    except Exception:
-                        residual_art_list.append(path)
-                else:
-                    verified_art_list.append(path)
+            # Perform isolated compilation test for this closed subgraph
+            comp_files = {p: adapted_files[p] for p in comp}
+            comp_passed = False
+            if callable(compile_checker):
+                try:
+                    comp_res = compile_checker(comp_files, target_context)
+                    if isinstance(comp_res, Mapping):
+                        comp_passed = bool(comp_res.get("compile_passed"))
+                    else:
+                        comp_passed = bool(comp_res)
+                except Exception:
+                    comp_passed = False
             else:
-                residual_art_list.append(path)
+                # Real sandbox isolated compilation
+                try:
+                    import tempfile
+                    with tempfile.TemporaryDirectory(prefix="mmm_subgraph_") as sub_tmp:
+                        sub_path = Path(sub_tmp)
+                        scaffold_minimal_ephemeral_workspace(sub_path, target_context=target_context)
+                        for rp, c in comp_files.items():
+                            dst = sub_path / rp
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            if isinstance(c, bytes):
+                                dst.write_bytes(c)
+                            else:
+                                dst.write_text(str(c), encoding="utf-8")
+                        from .reuse_build_verifier import verify_scratch_workspace_build
+                        sub_receipt = verify_scratch_workspace_build(sub_path, run_tests=False)
+                        comp_passed = sub_receipt.compile_passed
+                except Exception:
+                    comp_passed = False
+
+            if comp_passed:
+                verified_art_list.extend(comp)
+            else:
+                residual_art_list.extend(comp)
 
     verified_artifacts = tuple(verified_art_list)
     residual_artifacts = tuple(residual_art_list)
@@ -427,7 +497,8 @@ def execute_reuse_proof(
     # Determine fine-grained proof level with strict capability acceptance contract gating
     has_full_acceptance = (
         bool(donor_slice.donor_tests)
-        and len(matched_capability_tests) == len(donor_slice.donor_tests)
+        and bool(req_contracts)
+        and all(item[3] for item in acceptance_map)
         and tests_executed > 0
         and tests_passed
     )
