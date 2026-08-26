@@ -1,0 +1,156 @@
+name: Apply reuse finalization
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-reuse-finalize.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Rebase work on current main
+        run: |
+          git fetch origin +main:refs/remotes/origin/main
+          git reset --hard refs/remotes/origin/main
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply source and contract fixes
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          from pathlib import Path
+
+          modified_tests: set[str] = set()
+
+          # 1) Colab: optional CurseForge API key. Blank means CurseForge is skipped;
+          #    Modrinth/GitHub remain active. The key is never printed.
+          notebook_path = Path('M.M.M_Make_Mincraft_Mode_Colab.ipynb')
+          notebook = json.loads(notebook_path.read_text(encoding='utf-8'))
+          config = next(cell for cell in notebook['cells'] if cell.get('id') == 'configuration')
+          source = list(config['source'])
+          key_line = 'CURSEFORGE_API_KEY = "" #@param {type:"string"}\n'
+          if not any('CURSEFORGE_API_KEY =' in line for line in source):
+              anchor = next(i for i, line in enumerate(source) if 'ALLOW_REMOTE_TRAJECTORY_STORE =' in line)
+              source.insert(anchor + 1, key_line)
+          if not any('MMM_CURSEFORGE_API_KEY' in line for line in source):
+              anchor = next(i for i, line in enumerate(source) if 'os.environ["MMM_PERFORMANCE_MODE"]' in line)
+              block = [
+                  '\n',
+                  'curseforge_api_key = str(CURSEFORGE_API_KEY or "").strip()\n',
+                  'if not curseforge_api_key:\n',
+                  '    try:\n',
+                  '        from google.colab import userdata as colab_userdata\n',
+                  '        curseforge_api_key = str(colab_userdata.get("CURSEFORGE_API_KEY") or "").strip()\n',
+                  '    except Exception:\n',
+                  '        curseforge_api_key = ""\n',
+                  'if curseforge_api_key:\n',
+                  '    os.environ["MMM_CURSEFORGE_API_KEY"] = curseforge_api_key\n',
+                  'else:\n',
+                  '    os.environ.pop("MMM_CURSEFORGE_API_KEY", None)\n',
+              ]
+              source[anchor + 1:anchor + 1] = block
+          config['source'] = source
+          notebook_path.write_text(json.dumps(notebook, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+          # 2) Reuse discovery: one canonical key owner for optional CurseForge lane.
+          reuse_path = Path('minecraft_mod_ai/reuse_discovery.py')
+          reuse = reuse_path.read_text(encoding='utf-8')
+          if 'def _curseforge_api_key()' not in reuse:
+              marker = 'def _minimum_candidates() -> int:\n    return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 3, minimum=1, maximum=12)\n\n\n'
+              helper = marker + 'def _curseforge_api_key() -> str:\n    """Return the optional host-owned CurseForge credential without exposing it."""\n\n    return (\n        os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()\n        or os.environ.get("CURSEFORGE_API_KEY", "").strip()\n    )\n\n\n'
+              if marker not in reuse:
+                  raise SystemExit('reuse_discovery insertion anchor changed')
+              reuse = reuse.replace(marker, helper, 1)
+          reuse = reuse.replace(
+              '    api_key = (\n        os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()\n        or os.environ.get("CURSEFORGE_API_KEY", "").strip()\n    )\n',
+              '    api_key = _curseforge_api_key()\n',
+              1,
+          )
+          reuse = reuse.replace(
+              '    if os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip() or os.environ.get("CURSEFORGE_API_KEY", "").strip():\n        providers.append("curseforge")\n',
+              '    if _curseforge_api_key():\n        providers.append("curseforge")\n',
+              1,
+          )
+          reuse_path.write_text(reuse, encoding='utf-8')
+
+          # 3) Grounding: host metadata must not evict all globally distant exact anchors.
+          grounding_path = Path('minecraft_mod_ai/repository_grounding.py')
+          grounding = grounding_path.read_text(encoding='utf-8')
+          old = '''    while records and _json_size(ledger) > byte_budget:\n        records.pop()\n\n    observation_digest = hashlib.sha256()\n'''
+          new = '''    if records and _json_size(ledger) > byte_budget:\n        baseline = [item for item in records if item.get("kind") == "global_exact_source_anchor"]\n        protected_anchor_ids: set[str] = set()\n        if baseline:\n            by_path = sorted(baseline, key=lambda item: str(item.get("path", "")))\n            protected_anchor_ids.add(str(by_path[0].get("observation_id", "")))\n            protected_anchor_ids.add(str(by_path[-1].get("observation_id", "")))\n\n        def removable_record_index() -> int | None:\n            # Ranked regions are opportunistic context and leave first. Exact baseline\n            # anchors are removed only after that, while retaining lexically distant\n            # endpoints so a tight host metadata budget cannot collapse global coverage.\n            for index in range(len(records) - 1, -1, -1):\n                if records[index].get("kind") != "global_exact_source_anchor":\n                    return index\n            for index in range(len(records) - 1, -1, -1):\n                if str(records[index].get("observation_id", "")) not in protected_anchor_ids:\n                    return index\n            return None\n\n        while records and _json_size(ledger) > byte_budget:\n            index = removable_record_index()\n            if index is None:\n                break\n            records.pop(index)\n\n    observation_digest = hashlib.sha256()\n'''
+          if old in grounding:
+              grounding = grounding.replace(old, new, 1)
+          elif 'def removable_record_index()' not in grounding:
+              raise SystemExit('repository_grounding trim anchor changed')
+          policy_line = '            "global_contract_anchors_before_ranked_regions": True,\n'
+          if '"distant_exact_anchor_protection"' not in grounding and policy_line in grounding:
+              grounding = grounding.replace(policy_line, policy_line + '            "distant_exact_anchor_protection": True,\n', 1)
+          grounding_path.write_text(grounding, encoding='utf-8')
+
+          # 4) Old test monkeypatches used the pre-capability_graph private signature.
+          #    Update only tests; production keeps the richer call contract.
+          old_lambda = 'lambda queries, _client: {query: () for query in queries}'
+          new_lambda = 'lambda queries, _client, **_kwargs: {query: () for query in queries}'
+          for test_path in Path('tests').glob('test_*.py'):
+              text = test_path.read_text(encoding='utf-8')
+              if old_lambda in text:
+                  text = text.replace(old_lambda, new_lambda)
+                  test_path.write_text(text, encoding='utf-8')
+                  modified_tests.add(test_path.as_posix())
+
+          # 5) Lock optional CurseForge behavior without a real network/API key.
+          cf_test = Path('tests/test_reuse_discovery_optional_curseforge.py')
+          cf_test.write_text('''from __future__ import annotations\n\nfrom types import SimpleNamespace\n\nfrom minecraft_mod_ai import reuse_discovery\n\n\ndef test_curseforge_lane_is_disabled_without_api_key(monkeypatch):\n    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)\n    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)\n    called = False\n\n    def fail_get(*args, **kwargs):\n        nonlocal called\n        called = True\n        raise AssertionError("CurseForge HTTP must not run without a key")\n\n    monkeypatch.setattr(reuse_discovery.httpx, "get", fail_get)\n    assert reuse_discovery._search_curseforge("trade system", limit=8) == []\n    assert called is False\n\n\ndef test_curseforge_lane_uses_host_key_and_resolves_github_source(monkeypatch):\n    monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "secret-test-key")\n    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)\n    observed = {}\n\n    class Response:\n        def raise_for_status(self):\n            return None\n\n        def json(self):\n            return {\n                "data": [\n                    {"links": {"sourceUrl": "https://github.com/example/trade-mod"}}\n                ]\n            }\n\n    def fake_get(url, **kwargs):\n        observed["url"] = url\n        observed["headers"] = dict(kwargs["headers"])\n        return Response()\n\n    monkeypatch.setattr(reuse_discovery.httpx, "get", fake_get)\n    result = reuse_discovery._search_curseforge("trade system", limit=8)\n    assert result == [("example/trade-mod", 1.0)]\n    assert observed["url"] == "https://api.curseforge.com/v1/mods/search"\n    assert observed["headers"]["x-api-key"] == "secret-test-key"\n''', encoding='utf-8')
+          modified_tests.add(cf_test.as_posix())
+
+          colab_test = Path('tests/test_colab_curseforge_key_contract.py')
+          colab_test.write_text('''from __future__ import annotations\n\nimport json\nfrom pathlib import Path\n\n\ndef test_colab_exposes_optional_curseforge_key_without_logging_it():\n    notebook = json.loads(Path("M.M.M_Make_Mincraft_Mode_Colab.ipynb").read_text(encoding="utf-8"))\n    source = "".join(next(cell for cell in notebook["cells"] if cell.get("id") == "configuration")["source"])\n    assert 'CURSEFORGE_API_KEY = "" #@param {type:"string"}' in source\n    assert 'os.environ["MMM_CURSEFORGE_API_KEY"] = curseforge_api_key' in source\n    assert 'colab_userdata.get("CURSEFORGE_API_KEY")' in source\n    assert 'print(curseforge_api_key' not in source\n''', encoding='utf-8')
+          modified_tests.add(colab_test.as_posix())
+
+          # The diagnostic shard workflow was temporary and must not remain in main.
+          Path('.github/workflows/shard1-diagnostic.yml').unlink(missing_ok=True)
+          # This one-shot workflow removes itself in the final source commit.
+          Path('.github/workflows/apply-reuse-finalize.yml').unlink(missing_ok=True)
+
+          Path('/tmp/modified_tests.txt').write_text('\n'.join(sorted(modified_tests)) + '\n', encoding='utf-8')
+          PY
+      - name: Validate focused contracts
+        run: |
+          python tools/validate_colab_notebook.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_repository_grounding.py \
+            tests/test_llama_cpp_adapter_request_contract.py \
+            tests/test_notebook_registry_policy.py \
+            tests/test_reuse_discovery_optional_curseforge.py \
+            tests/test_colab_curseforge_key_contract.py \
+            $(cat /tmp/modified_tests.txt)
+      - name: Commit directly to main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "feat(reuse): finalize optional CurseForge discovery and grounding"
+          git push origin HEAD:main
+          gh workflow run ci.yml --ref main
