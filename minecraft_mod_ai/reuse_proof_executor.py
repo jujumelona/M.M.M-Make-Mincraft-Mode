@@ -128,54 +128,55 @@ def execute_reuse_proof(
 
     adapted_files, adapter_receipts = apply_deterministic_adapters(in_memory_files, target_context)
 
-    # 3. Static verification / compile proof inside isolated ephemeral sandbox
-    import tempfile
-    import shutil
-
     compile_passed = False
     tests_passed = False
     unresolved_symbols: list[str] = []
     missing_resources: list[str] = [edge.target_path for edge in donor_slice.unresolved_edges]
 
-    with tempfile.TemporaryDirectory() as sandbox_dir:
-        sandbox_path = Path(sandbox_dir)
-        ws_path = Path(target_workspace) if target_workspace and Path(target_workspace).exists() else None
-
-        # Clone full target workspace tree if available (excluding build caches / vcs)
-        if ws_path and ws_path.is_dir():
-            def ignore_patterns(path: str, names: Sequence[str]) -> set[str]:
-                return {n for n in names if n in {".git", ".gradle", "build", ".idea", ".vscode", ".gemini", "__pycache__", "cache"}}
-
-            try:
-                shutil.copytree(ws_path, sandbox_path, ignore=ignore_patterns, dirs_exist_ok=True)
-            except Exception:
-                pass
-
-        # Overlay adapted files directly onto cloned target project tree
-        for rel_path, content in adapted_files.items():
-            dest = sandbox_path / rel_path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if isinstance(content, bytes):
-                dest.write_bytes(content)
+    if callable(compile_checker):
+        try:
+            check_result = compile_checker(adapted_files, target_context)
+            if isinstance(check_result, Mapping):
+                compile_passed = bool(check_result.get("compile_passed"))
+                tests_passed = bool(check_result.get("tests_passed"))
+                unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
+                missing_resources.extend(check_result.get("missing_resources") or [])
             else:
-                dest.write_text(str(content), encoding="utf-8")
-
-        if callable(compile_checker):
-            try:
-                check_result = compile_checker(adapted_files, target_context)
-                if isinstance(check_result, Mapping):
-                    compile_passed = bool(check_result.get("compile_passed"))
-                    tests_passed = bool(check_result.get("tests_passed"))
-                    unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
-                    missing_resources.extend(check_result.get("missing_resources") or [])
-                else:
-                    compile_passed = bool(check_result)
-                    tests_passed = False
-            except Exception:
-                compile_passed = False
+                compile_passed = bool(check_result)
                 tests_passed = False
-        else:
+        except Exception:
+            compile_passed = False
+            tests_passed = False
+    else:
+        # 3. Static verification / compile proof inside isolated ephemeral sandbox
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as sandbox_dir:
+            sandbox_path = Path(sandbox_dir)
+            ws_path = Path(target_workspace) if target_workspace and Path(target_workspace).exists() else None
+
+            # Clone full target workspace tree if available (excluding build caches / vcs)
+            if ws_path and ws_path.is_dir():
+                def ignore_patterns(path: str, names: Sequence[str]) -> set[str]:
+                    return {n for n in names if n in {".git", ".gradle", "build", ".idea", ".vscode", ".gemini", "__pycache__", "cache"}}
+
+                try:
+                    shutil.copytree(ws_path, sandbox_path, ignore=ignore_patterns, dirs_exist_ok=True)
+                except Exception:
+                    pass
+
+            # Overlay adapted files directly onto cloned target project tree
+            for rel_path, content in adapted_files.items():
+                dest = sandbox_path / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(content, bytes):
+                    dest.write_bytes(content)
+                else:
+                    dest.write_text(str(content), encoding="utf-8")
+
             from .reuse_build_verifier import verify_scratch_workspace_build
+
             receipt = verify_scratch_workspace_build(sandbox_path)
             compile_passed = receipt.compile_passed
             tests_passed = receipt.tests_passed
