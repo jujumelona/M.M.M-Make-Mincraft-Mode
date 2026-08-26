@@ -43,7 +43,7 @@ class ReuseProofReceipt:
     tests_passed_count: int = 0
     capability_acceptance_tests: tuple[str, ...] = ()
     matched_capability_tests: tuple[str, ...] = ()
-    requirement_acceptance_map: tuple[tuple[str, str, bool], ...] = ()
+    requirement_acceptance_map: tuple[tuple[str, str, str, bool], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -325,7 +325,7 @@ def execute_reuse_proof(
 
     with tempfile.TemporaryDirectory() as sandbox_dir:
         sandbox_path = Path(sandbox_dir)
-        ws_path = Path(target_workspace) if target_workspace and Path(target_workspace).exists() else None
+        ws_path = None if callable(compile_checker) else (Path(target_workspace) if target_workspace and Path(target_workspace).exists() else None)
 
         # Clone full target workspace tree if available (excluding build caches / vcs)
         if ws_path and ws_path.is_dir():
