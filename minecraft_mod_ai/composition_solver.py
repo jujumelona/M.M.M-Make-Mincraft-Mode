@@ -284,21 +284,19 @@ def _score_composition_beam(combo: Sequence[DonorSlice], total_caps: int) -> flo
     return coverage_score + confidence_score + proof_score - cost_penalty - donor_count_penalty
 
 
-def search_best_donor_composition(
+def search_ranked_donor_composition_beams(
     candidates_by_capability: Mapping[str, Sequence[DonorSlice]],
     *,
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
-    beam_width: int = 4,
-) -> CompositionResult:
-    """Explore candidate donor combinations across capabilities via beam search and return the highest-scoring valid composition."""
+    beam_width: int = 6,
+) -> tuple[CompositionResult, ...]:
+    """Explore candidate donor combinations across capabilities via beam search and return all valid candidate beams ranked by score."""
     caps = [cap for cap, candidates in candidates_by_capability.items() if candidates]
     if not caps:
-        return CompositionResult(is_valid=True)
+        return (CompositionResult(is_valid=True),)
 
-    # Beams contain tuple of selected DonorSlices
     beams: list[tuple[DonorSlice, ...]] = [()]
-
     for cap in caps:
         next_beams: list[tuple[DonorSlice, ...]] = []
         candidates = candidates_by_capability[cap]
@@ -315,23 +313,44 @@ def search_best_donor_composition(
                     next_beams.append(new_combo)
 
         if not next_beams:
-            # If all combinations for this capability conflict, keep the best partial combos
             break
 
-        # Score and prune beams using proof-quality scoring
         next_beams.sort(key=lambda b: _score_composition_beam(b, len(caps)), reverse=True)
         beams = next_beams[:beam_width]
 
-    if not beams or not beams[0]:
-        return CompositionResult(is_valid=False, required_capabilities=tuple(caps), residual_capabilities=tuple(caps), complete_coverage=False)
+    results: list[CompositionResult] = []
+    for b in beams:
+        if b:
+            cr = solve_multi_donor_composition(
+                b,
+                target_loader=target_loader,
+                target_minecraft=target_minecraft,
+                required_capabilities=tuple(caps),
+            )
+            if cr.is_valid:
+                results.append(cr)
 
-    best_combo = beams[0]
-    return solve_multi_donor_composition(
-        best_combo,
+    return tuple(results)
+
+
+def search_best_donor_composition(
+    candidates_by_capability: Mapping[str, Sequence[DonorSlice]],
+    *,
+    target_loader: str = "fabric",
+    target_minecraft: str = "1.21.1",
+    beam_width: int = 4,
+) -> CompositionResult:
+    """Explore candidate donor combinations across capabilities via beam search and return the highest-scoring valid composition."""
+    ranked = search_ranked_donor_composition_beams(
+        candidates_by_capability,
         target_loader=target_loader,
         target_minecraft=target_minecraft,
-        required_capabilities=tuple(caps),
+        beam_width=beam_width,
     )
+    if ranked:
+        return ranked[0]
+    caps = [cap for cap, candidates in candidates_by_capability.items() if candidates]
+    return CompositionResult(is_valid=False, required_capabilities=tuple(caps), residual_capabilities=tuple(caps), complete_coverage=False)
 
 
 def generate_reuse_manifest(

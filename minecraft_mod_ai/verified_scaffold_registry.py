@@ -78,21 +78,31 @@ SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
 }
 
 
+class UnsupportedTargetSpecificationError(ValueError):
+    """Raised when an unverified loader/minecraft version target is requested."""
+    pass
+
+
+def is_target_supported(loader: str, minecraft_version: str) -> bool:
+    """Check if the given loader and Minecraft version combination is strictly verified."""
+    return (loader.lower().strip(), minecraft_version.strip()) in SUPPORTED_TARGET_SPECS
+
+
 def get_verified_scaffold_template(
     loader: str = "fabric",
     minecraft_version: str = "1.21.1",
 ) -> VerifiedScaffoldTemplate:
     norm_loader = loader.lower().strip()
-    spec = SUPPORTED_TARGET_SPECS.get((norm_loader, minecraft_version)) or {
-        "gradle_version": "8.10.2",
-        "loom_version": "1.7-SNAPSHOT",
-        "loader_version": "0.16.5",
-        "fabric_api": f"0.104.0+{minecraft_version}",
-        "mappings": f"net.fabricmc:yarn:{minecraft_version}+build.1:v2",
-        "java_release": 21,
-    }
-    gradle_ver = spec.get("gradle_version", "8.10.2")
-    java_rel = spec.get("java_release", 21)
+    norm_mc = minecraft_version.strip()
+    key = (norm_loader, norm_mc)
+    if key not in SUPPORTED_TARGET_SPECS:
+        raise UnsupportedTargetSpecificationError(
+            f"Target ({norm_loader}@{norm_mc}) is not in SUPPORTED_TARGET_SPECS: "
+            f"{sorted(SUPPORTED_TARGET_SPECS.keys())}"
+        )
+    spec = SUPPORTED_TARGET_SPECS[key]
+    gradle_ver = spec["gradle_version"]
+    java_rel = spec["java_release"]
 
     if norm_loader == "neoforge":
         moddev_ver = spec.get("moddev_version", "2.0.78")
