@@ -173,12 +173,20 @@ def _parse_qwen_function(
             )
         value_start = key_end + 1
         close_at = _find_parameter_close(text, value_start)
-        if close_at < 0:
-            raise ToolCallValidationError(
-                f"Qwen tool {name!r} parameter {emitted_key!r} is missing a structural "
-                "</parameter> terminator"
-            )
-        raw = _unwrap_parameter_text(text[value_start:close_at])
+        if close_at >= 0:
+            raw = _unwrap_parameter_text(text[value_start:close_at])
+            next_pos = close_at + len(_PARAMETER_CLOSE)
+        else:
+            next_func = text.find(_FUNCTION_CLOSE, value_start)
+            next_param = text.find(_PARAMETER_OPEN, value_start)
+            next_tool = text.find(_TOOL_CALL_CLOSE, value_start)
+            candidates = [p for p in (next_func, next_param, next_tool) if p >= 0]
+            if candidates:
+                close_at = min(candidates)
+            else:
+                close_at = len(text)
+            raw = _unwrap_parameter_text(text[value_start:close_at])
+            next_pos = close_at
 
         if emitted_key not in properties and emitted_key in _ARGUMENT_CONTAINER_KEYS:
             container = _decode_argument_container(raw)
@@ -193,10 +201,10 @@ def _parse_qwen_function(
                     argument_sources,
                     depth=1,
                 )
-                pos = close_at + len(_PARAMETER_CLOSE)
+                pos = next_pos
                 continue
         if _is_host_owned_argument(emitted_key, properties):
-            pos = close_at + len(_PARAMETER_CLOSE)
+            pos = next_pos
             continue
         key = _canonical_key(name, emitted_key, properties)
         if key not in properties and additional is False:
@@ -213,7 +221,7 @@ def _parse_qwen_function(
             arguments,
             argument_sources,
         )
-        pos = close_at + len(_PARAMETER_CLOSE)
+        pos = next_pos
 
     missing = sorted(required - arguments.keys())
     if missing:
@@ -382,9 +390,12 @@ def _find_parameter_close(text: str, start: int) -> int:
             return -1
         after = _skip_space(text, candidate + len(_PARAMETER_CLOSE))
         if (
-            text.startswith(_PARAMETER_OPEN, after)
+            after >= len(text)
+            or text.startswith(_PARAMETER_OPEN, after)
             or text.startswith(_FUNCTION_CLOSE, after)
             or text.startswith(_TOOL_CALL_CLOSE, after)
+            or text.startswith(_FUNCTION_OPEN, after)
+            or text.startswith(_TOOL_CALL_OPEN, after)
         ):
             return candidate
         search = candidate + len(_PARAMETER_CLOSE)
