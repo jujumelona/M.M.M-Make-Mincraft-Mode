@@ -222,9 +222,6 @@ def _normalize_operation(runtime_module: Any, value: Any, payload: Mapping[str, 
         if payload.get("package_name") or payload.get("declaration"):
             return "create_java_type"
         if payload.get("content") or payload.get("text") or payload.get("code") or payload.get("new") or payload.get("new_text"):
-            path = str(payload.get("path") or payload.get("file") or "").strip()
-            if path.endswith(_JAVA_PATH_SUFFIX):
-                return "create_java_type"
             return "create_file"
 
     operation = _OPERATION_ALIASES.get(clean, clean)

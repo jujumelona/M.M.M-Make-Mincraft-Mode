@@ -121,10 +121,14 @@ class RepairEngine:
 
                 signature = self._signature(evidence)
                 if signature in signatures:
-                    raise RepairEngineError(
-                        "Repair stopped because the same normalized error signature repeated; "
-                        "there is no new machine-verifiable progress to justify another model call."
-                    )
+                    return {
+                        "schema_version": "mmm/repair-result-v2",
+                        "status": "FAIL",
+                        "attempts": attempt,
+                        "stop_reason": "repeated_signature",
+                        "evidence": evidence,
+                        "patch_receipts": receipts,
+                    }
                 signatures.add(signature)
 
                 if max_attempts is not None and attempt >= max_attempts:

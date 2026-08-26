@@ -1450,17 +1450,6 @@ def generate_with_tools(
                 elif not bool(payload.get("ok")):
                     if all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
-                    if state.mutation_context is not None and state.mutation_context.source_body is not None:
-                        with state._lock:
-                            state.mutation_context = TargetMutationContext(
-                                target_path=state.mutation_context.target_path,
-                                target_symbol=state.mutation_context.target_symbol,
-                                source_body=None,
-                                start_line=state.mutation_context.start_line,
-                                end_line=state.mutation_context.end_line,
-                                is_new_file=state.mutation_context.is_new_file,
-                                evidence_source="invalidated_after_mutation_failure",
-                            )
                     state.record_failure(call.name, payload.get("error", "mutation failed"))
                 continue
 
