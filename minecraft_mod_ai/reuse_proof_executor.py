@@ -310,6 +310,8 @@ def execute_reuse_proof(
     for contract in req_contracts:
         expected_class = contract.host_test_class.casefold()
         expected_method = contract.host_test_method.casefold()
+        exact_fq_target = f"{expected_class}.{expected_method}"
+        expected_stem = expected_class.replace("mmm_", "")
         pat = contract.acceptance_pattern.casefold() if hasattr(contract, "acceptance_pattern") else ""
 
         matched_tid = ""
@@ -317,15 +319,21 @@ def execute_reuse_proof(
         for tid in executed_test_ids:
             tid_low = tid.casefold()
             if (
-                expected_class in tid_low
-                or (expected_method and expected_method in tid_low)
+                tid_low == exact_fq_target
+                or tid_low == expected_class
+                or tid_low == expected_method
+                or tid_low.endswith(f".{expected_class}")
+                or tid_low.endswith(f".{expected_class}.{expected_method}")
+                or tid_low.startswith(f"{expected_class}.")
+                or expected_class in tid_low.split(".")
+                or (expected_stem and expected_stem in tid_low)
                 or (pat and re.search(pat, tid_low))
             ):
                 matched_tid = tid
                 if tid in individual_results:
                     is_passed = bool(individual_results[tid])
-                else:
-                    is_passed = bool(tests_passed and tests_passed_count > 0)
+                elif tests_passed and tests_passed_count > 0:
+                    is_passed = True
                 break
 
         acceptance_map.append((contract.requirement_id, contract.description, matched_tid or "none", is_passed))

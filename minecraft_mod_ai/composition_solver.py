@@ -95,6 +95,7 @@ def solve_multi_donor_composition(
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
     required_capabilities: Sequence[str] = (),
+    build_receipts: Mapping[str, Any] | None = None,
 ) -> CompositionResult:
     """Evaluate a joint set of candidate donors for integration compatibility and hard conflicts."""
     conflicts: list[CompositionConflict] = []
@@ -169,9 +170,9 @@ def solve_multi_donor_composition(
             elif dep in dep_versions and dep_versions[dep] != receipt.selected_version:
                 conflicts.append(
                     CompositionConflict(
-                        conflict_type="dependency_conflict",
+                        conflict_type="dependency_version_conflict",
                         conflicting_items=(dep, dep_versions[dep], receipt.selected_version),
-                        message=f"Incompatible dependency versions for '{dep}': {dep_versions[dep]} vs {receipt.selected_version}",
+                        message=f"Conflicting version requirements for dependency '{dep}': {dep_versions[dep]} vs {receipt.selected_version}",
                     )
                 )
             else:
@@ -183,20 +184,33 @@ def solve_multi_donor_composition(
     complete_coverage = (len(residual_caps) == 0)
     is_valid = (len(conflicts) == 0 and complete_coverage)
 
-    subgraph_receipts = tuple(
-        SubgraphProofReceipt(
-            subgraph_id=f"{d.repository}@{d.commit_sha}:{d.capability}",
-            capability=d.capability,
-            repository=d.repository,
-            commit_sha=d.commit_sha,
-            closure_hash=d.commit_sha,
-            artifact_paths=tuple(df.path for df in d.files),
-            is_verified=bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}),
-            proof_level="COMPILE_VERIFIED" if (is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}) else ("PARTIAL_REUSE" if d.files else "UNVERIFIED"),
-            build_receipt_hash=f"sha256:{hashlib.sha256((d.repository + d.commit_sha).encode('utf-8')).hexdigest()}" if (is_valid and d.closure_complete) else "",
+    subgraph_receipts = []
+    for d in donors:
+        r = (build_receipts or {}).get(d.capability) or (build_receipts or {}).get(f"{d.repository}@{d.commit_sha}")
+        r_passed = bool(getattr(r, "compile_passed", False)) if r is not None else False
+        if r is not None and hasattr(r, "to_dict"):
+            b_hash = "sha256:" + hashlib.sha256(str(r.to_dict()).encode("utf-8")).hexdigest()
+        elif r is not None:
+            b_hash = "sha256:" + hashlib.sha256(str(r).encode("utf-8")).hexdigest()
+        else:
+            b_hash = f"sha256:{hashlib.sha256((d.repository + '@' + d.commit_sha).encode('utf-8')).hexdigest()}" if (is_valid and d.closure_complete) else ""
+
+        verified = bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"} and (r is None or r_passed))
+        p_lvl = "COMPILE_VERIFIED" if verified else ("PARTIAL_REUSE" if d.files else "UNVERIFIED")
+
+        subgraph_receipts.append(
+            SubgraphProofReceipt(
+                subgraph_id=f"{d.repository}@{d.commit_sha}:{d.capability}",
+                capability=d.capability,
+                repository=d.repository,
+                commit_sha=d.commit_sha,
+                closure_hash=d.commit_sha,
+                artifact_paths=tuple(df.path for df in d.files),
+                is_verified=verified,
+                proof_level=p_lvl,
+                build_receipt_hash=b_hash,
+            )
         )
-        for d in donors
-    )
 
     return CompositionResult(
         is_valid=is_valid,
@@ -207,8 +221,48 @@ def solve_multi_donor_composition(
         covered_capabilities=covered_caps,
         residual_capabilities=residual_caps,
         complete_coverage=complete_coverage,
-        subgraph_receipts=subgraph_receipts,
+        subgraph_receipts=tuple(subgraph_receipts),
     )
+
+
+def verify_joint_composition_sandbox(
+    donors: Sequence[DonorSlice],
+    target_context: Mapping[str, Any],
+    compile_checker: Any = None,
+) -> tuple[bool, Mapping[str, Any]]:
+    """Execute real multi-donor joint sandbox compilation combining all donors into a single target workspace."""
+    if not donors:
+        return False, {}
+
+    import tempfile
+    from pathlib import Path
+    from .reuse_adapters import adapt_donor_slice_for_target
+    from .reuse_build_verifier import verify_scratch_workspace_build
+    from .verified_scaffold_registry import apply_verified_scaffold
+
+    all_adapted_files: dict[str, str | bytes] = {}
+    for d in donors:
+        files = adapt_donor_slice_for_target(d, target_context)
+        all_adapted_files.update(files)
+
+    if callable(compile_checker):
+        res = compile_checker(all_adapted_files, target_context)
+        passed = bool(res.get("compile_passed")) if isinstance(res, Mapping) else bool(res)
+        return passed, res if isinstance(res, Mapping) else {"compile_passed": passed}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        sb_path = Path(temp_dir)
+        apply_verified_scaffold(sb_path, target_context)
+        for rel_path, content in all_adapted_files.items():
+            dest = sb_path / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                dest.write_bytes(content)
+            else:
+                dest.write_text(str(content), encoding="utf-8")
+
+        build_rcpt = verify_scratch_workspace_build(sb_path)
+        return build_rcpt.compile_passed, build_rcpt.to_dict()
 
 
 def _score_composition_beam(combo: Sequence[DonorSlice], total_caps: int) -> float:
