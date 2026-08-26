@@ -124,6 +124,53 @@ def _classify_artifact_kind(path_str: str) -> ArtifactKind:
     return ArtifactKind.OTHER
 
 
+_ALLOWED_TARGET_KINDS: dict[str, set[ArtifactKind]] = {
+    "model_parent": {ArtifactKind.MODEL_JSON},
+    "texture_ref": {ArtifactKind.TEXTURE_PNG},
+    "blockstate_model": {ArtifactKind.MODEL_JSON},
+    "mixin_target": {ArtifactKind.JAVA_SOURCE, ArtifactKind.KOTLIN_SOURCE},
+    "entrypoint": {ArtifactKind.JAVA_SOURCE, ArtifactKind.KOTLIN_SOURCE},
+    "tag_ref": {ArtifactKind.TAG_JSON},
+    "import": {ArtifactKind.JAVA_SOURCE, ArtifactKind.KOTLIN_SOURCE},
+    "registry": {
+        ArtifactKind.MODEL_JSON,
+        ArtifactKind.TEXTURE_PNG,
+        ArtifactKind.LOOT_TABLE_JSON,
+        ArtifactKind.RECIPE_JSON,
+        ArtifactKind.TAG_JSON,
+        ArtifactKind.BLOCKSTATE_JSON,
+    },
+    "data_ref": {
+        ArtifactKind.LOOT_TABLE_JSON,
+        ArtifactKind.RECIPE_JSON,
+        ArtifactKind.TAG_JSON,
+        ArtifactKind.MODEL_JSON,
+    },
+}
+
+
+def _infer_source_set_and_env(path_str: str) -> tuple[str, str]:
+    p = path_str.replace("\\", "/")
+    env = "common"
+    source_set = "main"
+    if "src/client/" in p or "client" in p.lower():
+        env = "client"
+        source_set = "main"
+    elif "src/server/" in p or "server" in p.lower():
+        env = "server"
+        source_set = "main"
+    elif "src/test/" in p:
+        env = "common"
+        source_set = "test"
+    elif "src/gametest/" in p:
+        env = "common"
+        source_set = "gametest"
+    elif "src/datagen/" in p:
+        env = "common"
+        source_set = "datagen"
+    return source_set, env
+
+
 def _infer_namespace_and_logical_id(rel_path: str, kind: ArtifactKind) -> tuple[str, str, str]:
     """Infer namespace, logical_id, and environment ('client' | 'server' | 'common') from standard paths."""
     norm = rel_path.replace("\\", "/").strip("/")
@@ -265,15 +312,17 @@ class ArtifactDependencyGraph:
                 candidates = logical_res_to_nodes[ref_path]
             elif ref_stem in logical_res_to_nodes:
                 candidates = logical_res_to_nodes[ref_stem]
-
             if candidates is not None:
-                valid_matches = [m for m in candidates if m != source_id]
+                allowed_kinds = _ALLOWED_TARGET_KINDS.get(relation)
+                valid_matches = [
+                    m for m in candidates
+                    if m != source_id and (allowed_kinds is None or graph.nodes[m].kind in allowed_kinds)
+                ]
                 if len(valid_matches) == 1:
                     graph.add_edge(source_id, valid_matches[0])
                 elif len(valid_matches) > 1:
-                    # If multiple matches are different kinds (e.g. 1 model + 1 texture for entity/boss), link both
                     kinds = {graph.nodes[m].kind for m in valid_matches}
-                    if len(kinds) == len(valid_matches):
+                    if relation in {"registry", "data_ref"} and len(kinds) == len(valid_matches):
                         for m in valid_matches:
                             graph.add_edge(source_id, m)
                     else:

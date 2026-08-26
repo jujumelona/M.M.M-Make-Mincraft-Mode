@@ -14,7 +14,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import platform_optimizer as _platform
@@ -333,6 +333,22 @@ class ReuseDecision:
 
 
 @dataclass(frozen=True)
+class CompositionSelection:
+    bundles: tuple[Any, ...] = ()
+    joint_build_receipt: Mapping[str, Any] = field(default_factory=dict)
+    conflicts_resolved: tuple[str, ...] = ()
+    total_covered_requirements: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "bundles": [b.to_dict() if hasattr(b, "to_dict") else b for b in self.bundles],
+            "joint_build_receipt": dict(self.joint_build_receipt),
+            "conflicts_resolved": list(self.conflicts_resolved),
+            "total_covered_requirements": list(self.total_covered_requirements),
+        }
+
+
+@dataclass(frozen=True)
 class TargetImplementationPlan:
     adapter: PlatformAdapter
     capabilities: tuple[ReuseDecision, ...]
@@ -348,6 +364,8 @@ class TargetImplementationPlan:
     uncertainty: float
     reusable_registry_candidates: int
     capability_graph: Mapping[str, Any] | None = None
+    selected_composition: CompositionSelection | None = None
+    residual_contracts: tuple[Any, ...] = ()
 
     @property
     def unresolved_capabilities(self) -> int:

@@ -118,6 +118,19 @@ class DonorFile:
     size_bytes: int
     symbols: tuple[str, ...]
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DonorFile":
+        size = value.get("size_bytes")
+        if size is None:
+            size = value.get("size", 0)
+        return cls(
+            path=str(value["path"]),
+            blob_sha=str(value["blob_sha"]),
+            sha256=str(value["sha256"]),
+            size_bytes=int(size),
+            symbols=tuple(value.get("symbols", ())),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path,
@@ -157,6 +170,72 @@ class DonorSlice:
     @property
     def exact_target(self) -> bool:
         return self.metadata_match
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DonorSlice":
+        files = tuple(DonorFile.from_dict(f) for f in value.get("files", ()))
+        artifact_nodes = tuple(
+            ArtifactNode(
+                path=str(n["path"]),
+                artifact_kind=str(n.get("artifact_kind", "java_source")),
+                blob_sha=str(n.get("blob_sha", "")),
+                sha256=str(n.get("sha256", "")),
+                size_bytes=int(n.get("size_bytes", n.get("size", 0))),
+                declared_symbols=tuple(n.get("declared_symbols", ())),
+                referenced_symbols=tuple(n.get("referenced_symbols", ())),
+            )
+            for n in value.get("artifact_nodes", ())
+        )
+        artifact_edges = tuple(
+            ArtifactEdge(
+                source_path=str(e["source_path"]),
+                target_path=str(e["target_path"]),
+                relation=str(e.get("relation", "import")),
+            )
+            for e in value.get("artifact_edges", ())
+        )
+        unresolved_edges = tuple(
+            ArtifactEdge(
+                source_path=str(e["source_path"]),
+                target_path=str(e["target_path"]),
+                relation=str(e.get("relation", "unresolved")),
+            )
+            for e in value.get("unresolved_edges", ())
+        )
+        compat_raw = value.get("compatibility_evidence")
+        compat = None
+        if compat_raw:
+            compat = CompatibilityEvidence(
+                minecraft_version=str(compat_raw.get("minecraft_version", "")),
+                loader=str(compat_raw.get("loader", "")),
+                loader_version=str(compat_raw.get("loader_version", "")),
+                java_version=str(compat_raw.get("java_version", "")),
+                fabric_api_dependency=str(compat_raw.get("fabric_api_dependency", "")),
+                mixin_count=int(compat_raw.get("mixin_count", 0)),
+                has_access_widener=bool(compat_raw.get("has_access_widener", False)),
+                status=str(compat_raw.get("status", "unverified")),
+            )
+        return cls(
+            capability=str(value.get("capability", "")),
+            repository=str(value.get("repository", "")),
+            commit_sha=str(value.get("commit_sha", "")),
+            license_id=str(value.get("license_id", "")),
+            source_url=str(value.get("source_url", "")),
+            target_compatibility=str(value.get("target_compatibility", "exact")),
+            files=files,
+            seed_files=tuple(value.get("seed_files", ())),
+            source_symbols=tuple(value.get("source_symbols", ())),
+            required_dependencies=tuple(value.get("required_dependencies", ())),
+            donor_tests=tuple(value.get("donor_tests", ())),
+            confidence=float(value.get("confidence", 0.0)),
+            adaptation_cost=float(value.get("adaptation_cost", 0.0)),
+            closure_complete=bool(value.get("closure_complete", True)),
+            truncation_reason=str(value.get("truncation_reason", "")),
+            artifact_nodes=artifact_nodes,
+            artifact_edges=artifact_edges,
+            unresolved_edges=unresolved_edges,
+            compatibility_evidence=compat,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

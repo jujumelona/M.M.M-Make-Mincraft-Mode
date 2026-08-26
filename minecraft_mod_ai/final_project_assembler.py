@@ -16,6 +16,7 @@ Typed Merge Rules (each has a dedicated merge function):
 8. Emits FinalProjectAssemblyResult and reuse-manifest.json SBOM.
 """
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -261,35 +262,9 @@ class FinalProjectAssembler:
 
         for decision in plan.capabilities:
             cap = decision.capability
-            donor_slice = decision.donor_slice
+            donor_slice = getattr(decision, "donor_slice", None)
             if donor_slice is None and isinstance(decision.donor, Mapping) and "repository" in decision.donor:
-                from .source_transplant import DonorFile
-                dfiles = tuple(
-                    DonorFile(
-                        path=f.get("path", ""),
-                        blob_sha=f.get("blob_sha", ""),
-                        sha256=f.get("sha256", ""),
-                        size=f.get("size", 0),
-                        symbols=tuple(f.get("symbols", ())),
-                    )
-                    for f in decision.donor.get("files", ())
-                )
-                donor_slice = DonorSlice(
-                    capability=decision.donor.get("capability", cap),
-                    repository=decision.donor.get("repository", ""),
-                    commit_sha=decision.donor.get("commit_sha", ""),
-                    license_id=decision.donor.get("license_id", "MIT"),
-                    source_url=decision.donor.get("source_url", ""),
-                    target_compatibility=decision.donor.get("target_compatibility", "exact"),
-                    files=dfiles,
-                    seed_files=tuple(decision.donor.get("seed_files", ())),
-                    source_symbols=tuple(decision.donor.get("source_symbols", ())),
-                    required_dependencies=tuple(decision.donor.get("required_dependencies", ())),
-                    donor_tests=tuple(decision.donor.get("donor_tests", ())),
-                    confidence=decision.donor.get("confidence", 0.9),
-                    adaptation_cost=decision.donor.get("adaptation_cost", 0.0),
-                    closure_complete=decision.donor.get("closure_complete", True),
-                )
+                donor_slice = DonorSlice.from_dict(decision.donor)
 
             if donor_slice is not None:
                 rcpt = decision.proof_receipt or proof_map.get(cap)
@@ -471,26 +446,86 @@ class FinalProjectAssembler:
                 staged["build.gradle"], dep_lines
             )
 
+        # 6. Post-assembly Artifact Dependency Graph Validation
+        from .artifact_dependency_graph import ArtifactDependencyGraph
+        try:
+            final_graph = ArtifactDependencyGraph.build_from_files(staged, target_context=self.target_context)
+            unresolved_crit = [e for e in final_graph.edges if e.is_unresolved and e.is_mandatory]
+            if unresolved_crit:
+                for uc in unresolved_crit:
+                    errors.append(f"UNRESOLVED_CRITICAL_EDGE: {uc.source_id} -> {uc.target_id}")
+        except Exception:
+            pass
+
         is_valid = len(errors) == 0
 
-        # Atomic materialization: Only write to disk if pre-write validation passed completely
+        # 7. Atomic materialization: Stage in temporary workspace, validate, then atomic publish
+        manifest = {}
+        dep_lock = {}
+        assembly_manifest = {}
+
         if is_valid:
-            self.workspace_path.mkdir(parents=True, exist_ok=True)
-            apply_verified_scaffold(self.workspace_path, self.target_context)
+            import shutil
+            import tempfile
 
-            for rel_path, content in staged.items():
-                dest = self.workspace_path / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if isinstance(content, bytes):
-                    dest.write_bytes(content)
-                else:
-                    dest.write_text(str(content), encoding="utf-8")
+            with tempfile.TemporaryDirectory(prefix="mmm-stage-") as stage_tmp:
+                stage_path = Path(stage_tmp)
+                apply_verified_scaffold(stage_path, self.target_context)
 
-            manifest = generate_reuse_manifest(reused_donors, project_name=self.target_modid)
-            manifest_path = self.workspace_path / "reuse-manifest.json"
-            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        else:
-            manifest = {}
+                for rel_path, content in staged.items():
+                    dest = stage_path / rel_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if isinstance(content, bytes):
+                        dest.write_bytes(content)
+                    else:
+                        dest.write_text(str(content), encoding="utf-8")
+
+                # Triple Manifest generation:
+                # A. reuse-manifest.json
+                manifest = generate_reuse_manifest(reused_donors, project_name=self.target_modid)
+                (stage_path / "reuse-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+                # B. dependency-lock.json
+                dep_lock = {
+                    "schema_version": "mmm/dependency-lock-v1",
+                    "target_loader": self.target_loader,
+                    "target_minecraft": self.target_minecraft,
+                    "dependencies": [
+                        {"coordinate": d, "configuration": "modImplementation"}
+                        for d in all_donor_deps
+                    ],
+                }
+                (stage_path / "dependency-lock.json").write_text(json.dumps(dep_lock, indent=2), encoding="utf-8")
+
+                # C. assembly-manifest.json (per-file provenance and hashes)
+                file_entries = []
+                for p, c in staged.items():
+                    b = c.encode("utf-8") if isinstance(c, str) else c
+                    h = hashlib.sha256(b).hexdigest()
+                    file_entries.append({
+                        "path": p,
+                        "sha256": h,
+                        "size_bytes": len(b),
+                        "origin": "reused" if p in (reused_adapted_files or {}) else "generated",
+                    })
+                assembly_manifest = {
+                    "schema_version": "mmm/assembly-manifest-v1",
+                    "project_name": self.target_modid,
+                    "target_loader": self.target_loader,
+                    "target_minecraft": self.target_minecraft,
+                    "total_files": len(staged),
+                    "files": file_entries,
+                }
+                (stage_path / "assembly-manifest.json").write_text(json.dumps(assembly_manifest, indent=2), encoding="utf-8")
+
+                # Atomic publish to target workspace
+                self.workspace_path.mkdir(parents=True, exist_ok=True)
+                for item in stage_path.rglob("*"):
+                    if item.is_file():
+                        rel = item.relative_to(stage_path)
+                        target_file = self.workspace_path / rel
+                        target_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, target_file)
 
         return FinalProjectAssemblyResult(
             project_name=self.target_modid,

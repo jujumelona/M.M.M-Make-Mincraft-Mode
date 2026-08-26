@@ -70,6 +70,7 @@ class ReuseProofReceipt:
     matched_capability_tests: tuple[str, ...] = ()
     requirement_acceptance_map: tuple[tuple[str, str, str, bool], ...] = ()
     work_order: ResidualWorkOrder | None = None
+    contract: Any | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +97,7 @@ class ReuseProofReceipt:
             "matched_capability_tests": list(self.matched_capability_tests),
             "requirement_acceptance_map": [list(item) for item in self.requirement_acceptance_map],
             "work_order": self.work_order.to_dict() if self.work_order else None,
+            "contract": self.contract.to_dict() if hasattr(self.contract, "to_dict") else self.contract,
         }
 
 
@@ -475,7 +477,7 @@ def execute_reuse_proof(
     reused_cls = tuple(p for p in verified_artifacts if p.endswith(".java") or p.endswith(".kt"))
     missing_res = tuple(dict.fromkeys(missing_resources))
     unbound_reg = tuple(s for s in unresolved_symbols if ":" in s)
-    missing_ifaces = tuple(s for s in unresolved_symbols if ":" not in s and (s.startswith("I") or "Interface" in s or "Handler" in s))
+    missing_ifaces = tuple(s for s in unresolved_symbols if ":" not in s)
     glue_reqs = (f"Integrate {len(verified_artifacts)} reused artifacts with host {donor_slice.capability} lifecycle",) if verified_artifacts else ()
 
     work_order = ResidualWorkOrder(
@@ -486,6 +488,56 @@ def execute_reuse_proof(
         missing_resources=missing_res,
         unbound_registries=unbound_reg,
         glue_code_requirements=glue_reqs,
+    )
+
+    from .residual_generation_contract import (
+        ResidualGenerationContract,
+        ResourceRequirement,
+        RegistryRequirement,
+        GlueContract,
+    )
+
+    protected_hashes: dict[str, str] = {}
+    for p in verified_artifacts:
+        content = adapted_files.get(p, "")
+        b = content.encode("utf-8") if isinstance(content, str) else content
+        protected_hashes[p] = hashlib.sha256(b).hexdigest()
+
+    res_reqs = tuple(
+        ResourceRequirement(
+            logical_id=mr,
+            resource_type="data" if "data/" in mr else "texture",
+            target_path=mr,
+        )
+        for mr in missing_res
+    )
+    reg_reqs = tuple(
+        RegistryRequirement(
+            registry_key="minecraft:custom",
+            entry_id=ur,
+            backing_class="",
+        )
+        for ur in unbound_reg
+    )
+    glue_contracts = tuple(
+        GlueContract(
+            target_symbol=s,
+            caller_symbol=donor_slice.capability,
+            purpose="Lifecycle integration",
+        )
+        for s in verified_symbols
+    )
+
+    residual_contract = ResidualGenerationContract(
+        capability=donor_slice.capability,
+        requirement_ids=(donor_slice.capability,),
+        protected_artifacts=protected_hashes,
+        protected_symbols=verified_symbols,
+        required_symbols=residual_symbols,
+        required_interfaces=missing_ifaces,
+        required_resource_edges=res_reqs,
+        required_registry_bindings=reg_reqs,
+        glue_contracts=glue_contracts,
     )
 
     return ReuseProofReceipt(
@@ -511,6 +563,7 @@ def execute_reuse_proof(
         matched_capability_tests=matched_capability_tests,
         requirement_acceptance_map=requirement_acceptance_map,
         work_order=work_order,
+        contract=residual_contract,
     )
 
 

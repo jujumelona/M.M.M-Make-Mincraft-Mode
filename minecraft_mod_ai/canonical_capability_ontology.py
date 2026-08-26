@@ -18,6 +18,15 @@ from typing import Any
 # 1. Atomic Canonical Capabilities
 # ---------------------------------------------------------------------------
 
+from enum import Enum
+
+
+class CapabilityOrigin(str, Enum):
+    EXPLICIT = "explicit"
+    ONTOLOGY = "ontology"
+    SEMANTIC_INFERRED = "semantic_inferred"
+
+
 @dataclass(frozen=True)
 class CapabilityDefinition:
     id: str
