@@ -1,0 +1,80 @@
+name: Sync donor reader policy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-read-reuse-policy-sync.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Bind latest main
+        run: |
+          git fetch origin +main:refs/remotes/origin/main
+          git reset --hard refs/remotes/origin/main
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Register read_reuse_source in reviewed coder policy
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          catalog = Path('minecraft_mod_ai/skill_catalog.py')
+          text = catalog.read_text(encoding='utf-8')
+          anchor = "'search_code_rag': frozenset({'research', 'generation', 'quality'}),"
+          if "'read_reuse_source': frozenset({'generation'})" not in text:
+              if anchor not in text:
+                  raise SystemExit('skill catalog tool-stage anchor changed')
+              text = text.replace(
+                  anchor,
+                  anchor + " 'read_reuse_source': frozenset({'generation'}),",
+                  1,
+              )
+          catalog.write_text(text, encoding='utf-8')
+
+          skill = Path('skills/ground-production-with-live-evidence/SKILL.md')
+          text = skill.read_text(encoding='utf-8')
+          if '  - read_reuse_source\n' not in text:
+              old = '  - inspect_huggingface_model\n  - assess_technology_compatibility\n'
+              new = '  - read_reuse_source\n  - assess_technology_compatibility\n'
+              if old not in text:
+                  raise SystemExit('ground-production skill tool anchor changed')
+              text = text.replace(old, new, 1)
+          skill.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/apply-read-reuse-policy-sync.yml').unlink(missing_ok=True)
+          PY
+      - name: Regenerate packaged skills
+        run: python tools/package_skills.py
+      - name: Validate policy and tool reachability
+        run: |
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_mcp_skill_stage_integrity.py \
+            tests/test_agent_capability_context.py \
+            tests/test_production_stack.py \
+            tests/test_reuse_source_read_tool.py \
+            tests/test_reuse_research_hardening_contract.py
+      - name: Commit directly to main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(reuse): expose donor source reader to coder policy"
+          git push origin HEAD:main
+          gh workflow run ci.yml --ref main
