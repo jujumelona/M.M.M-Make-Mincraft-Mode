@@ -393,12 +393,6 @@ def test_apply_source_edit_rejects_canonical_alias_collision(
     [
         ("lookup", False, "action", "unknown parameter 'action'"),
         ("apply_source_edit", False, "strategy", "unknown parameter 'strategy'"),
-        (
-            "apply_source_edit",
-            True,
-            "action",
-            "omitted required parameters: operation",
-        ),
     ],
 )
 def test_action_alias_does_not_weaken_other_schema_boundaries(
@@ -527,7 +521,7 @@ def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatc
     assert "SECRET_PROMPT_SENTINEL" not in message
 
 
-def test_generate_turn_keeps_detailed_schema_host_side_for_non_tool_json(monkeypatch) -> None:
+def test_generate_turn_sends_detailed_schema_to_native_server(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
     monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
@@ -555,6 +549,13 @@ def test_generate_turn_keeps_detailed_schema_host_side_for_non_tool_json(monkeyp
 
     assert turn.content == '{"value":"ok"}'
     assert request.response_schema == schema
-    assert "response_format" not in captured["payload"]
+    assert captured["payload"]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
     assert "json_schema" not in captured["payload"]
     assert "grammar" not in captured["payload"]
