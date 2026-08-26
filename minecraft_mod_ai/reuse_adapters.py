@@ -275,36 +275,68 @@ class FabricApiMigrationAdapter:
 class DependencyAdaptationPlan:
     """Calculates and applies build script modifications for required external dependencies."""
 
-    DEPENDENCY_COORDINATES: dict[str, dict[str, str]] = {
+    DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
         "cloth_config": {
             "maven": "https://maven.shedaniel.me/",
-            "coord": "me.shedaniel.cloth:cloth-config-fabric:15.0.127",
+            "coords": {
+                "fabric": "me.shedaniel.cloth:cloth-config-fabric:15.0.127",
+                "neoforge": "me.shedaniel.cloth:cloth-config-neoforge:15.0.127",
+                "forge": "me.shedaniel.cloth:cloth-config-forge:15.0.127",
+            },
         },
         "cloth-config": {
             "maven": "https://maven.shedaniel.me/",
-            "coord": "me.shedaniel.cloth:cloth-config-fabric:15.0.127",
+            "coords": {
+                "fabric": "me.shedaniel.cloth:cloth-config-fabric:15.0.127",
+                "neoforge": "me.shedaniel.cloth:cloth-config-neoforge:15.0.127",
+                "forge": "me.shedaniel.cloth:cloth-config-forge:15.0.127",
+            },
         },
         "cardinal_components": {
             "maven": "https://ladysnake.jfrog.io/artifactory/mods",
-            "coord": "dev.onyxstudios.cardinal-components-api:cardinal-components-base:6.0.0",
+            "coords": {
+                "fabric": "dev.onyxstudios.cardinal-components-api:cardinal-components-base:6.0.0",
+            },
         },
         "geckolib": {
             "maven": "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/",
-            "coord": "software.bernie.geckolib:geckolib-fabric-1.21.1:4.6.6",
+            "coords": {
+                "fabric": "software.bernie.geckolib:geckolib-fabric-1.21.1:4.6.6",
+                "neoforge": "software.bernie.geckolib:geckolib-neoforge-1.21.1:4.6.6",
+            },
         },
         "patchouli": {
             "maven": "https://maven.blamejared.com/",
-            "coord": "vazkii.patchouli:Patchouli:1.21-87-FABRIC",
+            "coords": {
+                "fabric": "vazkii.patchouli:Patchouli:1.21-87-FABRIC",
+                "neoforge": "vazkii.patchouli:Patchouli:1.21-87-NEOFORGE",
+            },
         },
     }
+
+    @classmethod
+    def resolve_coordinate(cls, dep_name: str, loader: str, mc_version: str) -> tuple[str, str] | None:
+        dep_key = dep_name.casefold().replace("-", "_")
+        entry = cls.DEPENDENCY_REGISTRY.get(dep_key)
+        if not entry:
+            return None
+        maven = entry.get("maven", "")
+        coords_map = entry.get("coords", {})
+        coord = coords_map.get(loader.casefold()) or next(iter(coords_map.values()), "")
+        if not coord:
+            return None
+        return maven, coord
 
     @classmethod
     def inject_dependencies_into_build_gradle(
         cls,
         build_gradle_content: str,
         required_dependencies: Sequence[str],
+        *,
+        loader: str = "fabric",
+        is_kotlin_dsl: bool = False,
     ) -> tuple[str, bool]:
-        """Inject required maven repos and dependencies into a build.gradle script."""
+        """Inject required maven repos and dependencies into a build.gradle or build.gradle.kts script."""
         if not required_dependencies:
             return build_gradle_content, False
 
@@ -312,63 +344,43 @@ class DependencyAdaptationPlan:
         applied = False
 
         for dep in required_dependencies:
-            dep_key = dep.casefold().replace("-", "_")
-            config = cls.DEPENDENCY_COORDINATES.get(dep_key)
-            if not config:
+            resolved = cls.resolve_coordinate(dep, loader, "1.21.1")
+            if not resolved:
                 continue
 
-            maven_url = config["maven"]
-            coord = config["coord"]
+            maven_url, coord = resolved
+            dep_keyword = "modImplementation" if loader.casefold() == "fabric" else "implementation"
+
+            if is_kotlin_dsl:
+                repo_block = f'    maven("{maven_url}")\n'
+                dep_line = f'    {dep_keyword}("{coord}")\n'
+            else:
+                repo_block = f"    maven {{ url '{maven_url}' }}\n"
+                dep_line = f"    {dep_keyword} '{coord}'\n"
 
             # 1. Inject maven repo if missing
             if maven_url not in modified and "repositories {" in modified:
-                repo_block = f"    maven {{ url '{maven_url}' }}\n"
                 modified = modified.replace("repositories {", f"repositories {{\n{repo_block}", 1)
                 applied = True
 
             # 2. Inject dependency coordinate if missing
             if coord not in modified and "dependencies {" in modified:
-                dep_line = f"    modImplementation '{coord}'\n"
                 modified = modified.replace("dependencies {", f"dependencies {{\n{dep_line}", 1)
                 applied = True
 
         return modified, applied
 
 
-class DiagnosticRepairAdapter:
-    """Applies targeted repairs based on compilation error diagnostics."""
+class ResidualSymbolAnalyzer:
+    """Analyzes compilation diagnostics to extract honest residual symbol gaps without fake stubs."""
 
     @classmethod
-    def repair_unresolved_symbols(
+    def analyze_unresolved_symbols(
         cls,
-        files: dict[str, str],
         unresolved_symbols: Sequence[str],
-        target_context: Mapping[str, Any],
-    ) -> list[str]:
-        """Generate minimal interface/class stubs for isolated residual symbols."""
-        if not unresolved_symbols:
-            return []
-
-        repaired_paths: list[str] = []
-        target_pkg = str(target_context.get("target_package") or "ai.minecraft.generated.mod")
-        clean_target = re.sub(r"[^a-zA-Z0-9_.]", "", target_pkg).strip(".")
-
-        for sym in set(unresolved_symbols):
-            # If symbol is a simple class name (e.g. "CustomDamageSource", "SpecialItem")
-            if re.fullmatch(r"[A-Z][a-zA-Z0-9_]+", sym):
-                stub_path = f"src/main/java/{clean_target.replace('.', '/')}/{sym}.java"
-                if stub_path not in files:
-                    stub_code = (
-                        f"package {clean_target};\n\n"
-                        f"/** Generated stub for residual symbol linkage during reuse proof. */\n"
-                        f"public class {sym} {{\n"
-                        f"    public static final {sym} INSTANCE = new {sym}();\n"
-                        f"}}\n"
-                    )
-                    files[stub_path] = stub_code
-                    repaired_paths.append(stub_path)
-
-        return repaired_paths
+    ) -> tuple[str, ...]:
+        """Return canonical sorted list of unresolvable residual symbols."""
+        return tuple(dict.fromkeys(sym for sym in unresolved_symbols if sym))
 
 
 def apply_deterministic_adapters(

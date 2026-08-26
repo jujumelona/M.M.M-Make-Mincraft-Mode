@@ -59,14 +59,56 @@ def _closure_sha256(donor_slice: DonorSlice) -> str:
 
 
 def scaffold_minimal_ephemeral_workspace(sandbox_path: Path, target_context: Mapping[str, Any]) -> None:
-    """Synthesize minimal Fabric build files if sandbox has no build.gradle."""
-    build_gradle = sandbox_path / "build.gradle"
-    if not build_gradle.exists():
-        mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
-        mod_id = str(target_context.get("target_modid") or "generated_mod")
-        java_ver = str(target_context.get("java_version") or "21")
-        build_gradle.write_text(
-            f"""plugins {{
+    """Synthesize minimal build files and Gradle wrapper for Fabric/NeoForge/Forge."""
+    loader = str(target_context.get("loader") or "fabric").casefold()
+    mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
+    mod_id = str(target_context.get("target_modid") or "generated_mod")
+    java_ver = str(target_context.get("java_version") or "21")
+
+    # Check for existing build scripts
+    has_build = (sandbox_path / "build.gradle").exists() or (sandbox_path / "build.gradle.kts").exists()
+    if not has_build:
+        if loader == "neoforge":
+            (sandbox_path / "build.gradle").write_text(
+                f"""plugins {{
+    id 'net.neoforged.moddev' version '2.0.78'
+}}
+
+version = '1.0.0'
+group = 'ai.minecraft.generated'
+
+neoForge {{
+    version = '{mc_ver}-21.1.0'
+}}
+
+tasks.withType(JavaCompile).configureEach {{
+    it.options.release = {java_ver}
+}}
+""",
+                encoding="utf-8",
+            )
+        elif loader == "forge":
+            (sandbox_path / "build.gradle").write_text(
+                f"""plugins {{
+    id 'net.minecraftforge.gradle' version '6.0.29'
+}}
+
+version = '1.0.0'
+group = 'ai.minecraft.generated'
+
+minecraft {{
+    mappings channel: 'official', version: '{mc_ver}'
+}}
+
+tasks.withType(JavaCompile).configureEach {{
+    it.options.release = {java_ver}
+}}
+""",
+                encoding="utf-8",
+            )
+        else:  # Fabric default
+            (sandbox_path / "build.gradle").write_text(
+                f"""plugins {{
     id 'fabric-loom' version '1.7-SNAPSHOT'
     id 'maven-publish'
 }}
@@ -95,16 +137,41 @@ tasks.withType(JavaCompile).configureEach {{
     it.options.release = {java_ver}
 }}
 """,
-            encoding="utf-8",
-        )
+                encoding="utf-8",
+            )
 
     settings_gradle = sandbox_path / "settings.gradle"
-    if not settings_gradle.exists():
+    if not settings_gradle.exists() and not (sandbox_path / "settings.gradle.kts").exists():
         settings_gradle.write_text("pluginManagement {\n    repositories {\n        maven { url 'https://maven.fabricmc.net/' }\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n", encoding="utf-8")
 
     gradle_props = sandbox_path / "gradle.properties"
     if not gradle_props.exists():
         gradle_props.write_text("org.gradle.jvmargs=-Xmx2G\n", encoding="utf-8")
+
+    # Ensure Gradle wrapper exists
+    wrapper_props = sandbox_path / "gradle" / "wrapper" / "gradle-wrapper.properties"
+    if not wrapper_props.exists():
+        wrapper_props.parent.mkdir(parents=True, exist_ok=True)
+        wrapper_props.write_text(
+            "distributionBase=GRADLE_USER_HOME\n"
+            "distributionPath=wrapper/dists\n"
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip\n"
+            "zipStoreBase=GRADLE_USER_HOME\n"
+            "zipStorePath=wrapper/dists\n",
+            encoding="utf-8",
+        )
+
+    gradlew_sh = sandbox_path / "gradlew"
+    if not gradlew_sh.exists():
+        gradlew_sh.write_text("#!/bin/sh\nexec gradle \"$@\"\n", encoding="utf-8")
+        try:
+            gradlew_sh.chmod(0o755)
+        except Exception:
+            pass
+
+    gradlew_bat = sandbox_path / "gradlew.bat"
+    if not gradlew_bat.exists():
+        gradlew_bat.write_text("@echo off\r\ngradle %*\r\n", encoding="utf-8")
 
 
 def execute_reuse_proof(
@@ -118,7 +185,7 @@ def execute_reuse_proof(
 ) -> ReuseProofReceipt:
     """Materialize adapted slice and execute Gradle verification in an isolated sandbox."""
     candidate_id = f"{donor_slice.repository}@{donor_slice.commit_sha}"
-    closure_hash = f"closure:{hashlib.sha256(''.join(df.path for df in donor_slice.files).encode('utf-8')).hexdigest()[:16]}"
+    closure_hash = _closure_sha256(donor_slice)
 
     # 1. Provenance check
     if not donor_slice.license_id or donor_slice.license_id.casefold() in {"unlicensed", "all rights reserved", "unknown"}:
@@ -182,7 +249,7 @@ def execute_reuse_proof(
     # 3. Static verification / compile proof inside isolated ephemeral sandbox
     import tempfile
     import shutil
-    from .reuse_adapters import DependencyAdaptationPlan, DiagnosticRepairAdapter
+    from .reuse_adapters import DependencyAdaptationPlan
 
     compile_passed = False
     tests_passed = False
@@ -207,17 +274,24 @@ def execute_reuse_proof(
         # Synthesize minimal scaffold if target workspace has no build files
         scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
 
-        # Inject donor external dependencies into sandbox build.gradle
-        build_file = sandbox_path / "build.gradle"
-        if build_file.exists() and donor_slice.required_dependencies:
+        # Inject donor external dependencies into sandbox build script
+        loader = str(target_context.get("loader") or "fabric")
+        kts_file = sandbox_path / "build.gradle.kts"
+        groovy_file = sandbox_path / "build.gradle"
+        build_target = kts_file if kts_file.exists() else groovy_file
+        is_kts = kts_file.exists()
+
+        if build_target.exists() and donor_slice.required_dependencies:
             try:
-                bg_content = build_file.read_text(encoding="utf-8")
+                bg_content = build_target.read_text(encoding="utf-8")
                 injected_bg, was_injected = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
                     bg_content,
                     donor_slice.required_dependencies,
+                    loader=loader,
+                    is_kotlin_dsl=is_kts,
                 )
                 if was_injected:
-                    build_file.write_text(injected_bg, encoding="utf-8")
+                    build_target.write_text(injected_bg, encoding="utf-8")
             except Exception:
                 pass
 
@@ -230,62 +304,45 @@ def execute_reuse_proof(
             else:
                 dest.write_text(str(content), encoding="utf-8")
 
-        # Multi-Pass compilation & diagnostic repair loop (up to 3 passes)
-        for pass_idx in range(1, 4):
-            if callable(compile_checker):
-                try:
-                    check_result = compile_checker(adapted_files, target_context)
-                    if isinstance(check_result, Mapping):
-                        compile_passed = bool(check_result.get("compile_passed"))
-                        tests_passed = bool(check_result.get("tests_passed"))
-                        unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
-                        missing_resources.extend(check_result.get("missing_resources") or [])
-                    else:
-                        compile_passed = bool(check_result)
-                        tests_passed = False
-                except Exception:
-                    compile_passed = False
-                    tests_passed = False
-            else:
-                from .reuse_build_verifier import verify_scratch_workspace_build
-                receipt = verify_scratch_workspace_build(sandbox_path)
-                compile_passed = receipt.compile_passed
-                tests_passed = receipt.tests_passed
-                unresolved_symbols.extend(receipt.unresolved_symbols)
-                missing_resources.extend(receipt.missing_resources)
-
-            if compile_passed:
-                break
-
-            # Diagnostic repair on failure
-            if unresolved_symbols and pass_idx < 3:
-                string_files = {k: v for k, v in adapted_files.items() if isinstance(v, str)}
-                repaired = DiagnosticRepairAdapter.repair_unresolved_symbols(
-                    string_files,
-                    unresolved_symbols,
-                    target_context,
-                )
-                if repaired:
-                    for rep_path in repaired:
-                        dest = sandbox_path / rep_path
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        dest.write_text(string_files[rep_path], encoding="utf-8")
-                    adapted_files.update(string_files)
+        # Compile and verify
+        if callable(compile_checker):
+            try:
+                check_result = compile_checker(adapted_files, target_context)
+                if isinstance(check_result, Mapping):
+                    compile_passed = bool(check_result.get("compile_passed"))
+                    tests_passed = bool(check_result.get("tests_passed"))
+                    unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
+                    missing_resources.extend(check_result.get("missing_resources") or [])
                 else:
-                    break
-            else:
-                break
+                    compile_passed = bool(check_result)
+                    tests_passed = False
+            except Exception:
+                compile_passed = False
+                tests_passed = False
+        else:
+            from .reuse_build_verifier import verify_scratch_workspace_build
+            receipt = verify_scratch_workspace_build(sandbox_path, run_tests=run_tests)
+            compile_passed = receipt.compile_passed
+            tests_passed = receipt.tests_passed
+            unresolved_symbols.extend(receipt.unresolved_symbols)
+            missing_resources.extend(receipt.missing_resources)
 
-    # Determine fine-grained proof level
-    if compile_passed and tests_passed:
-        proof_level = "BEHAVIOR_VERIFIED"
-        verified_caps = (donor_slice.capability,)
-        residual_caps = ()
-    elif compile_passed:
-        proof_level = "COMPILE_VERIFIED"
-        verified_caps = (donor_slice.capability,)
-        residual_caps = ()
-    elif donor_slice.closure_complete and adapted_files:
+    # Determine fine-grained proof level with strict closure gating
+    if compile_passed and donor_slice.closure_complete:
+        if tests_passed:
+            proof_level = "BEHAVIOR_VERIFIED"
+            verified_caps = (donor_slice.capability,)
+            residual_caps = ()
+        else:
+            proof_level = "COMPILE_VERIFIED"
+            verified_caps = (donor_slice.capability,)
+            residual_caps = ()
+    elif compile_passed or (adapted_files and (unresolved_symbols or not donor_slice.closure_complete)):
+        # Closure incomplete or residual symbols remain -> PARTIAL_REUSE!
+        proof_level = "PARTIAL_REUSE"
+        verified_caps = ()
+        residual_caps = (donor_slice.capability,)
+    elif adapted_files:
         proof_level = "MATERIALIZED"
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
@@ -300,8 +357,8 @@ def execute_reuse_proof(
         commit_sha=donor_slice.commit_sha,
         closure_hash=closure_hash,
         proof_level=proof_level,
-        compile_passed=compile_passed,
-        tests_passed=tests_passed,
+        compile_passed=compile_passed and donor_slice.closure_complete,
+        tests_passed=tests_passed and donor_slice.closure_complete,
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
         missing_resources=tuple(dict.fromkeys(missing_resources)),
         adaptations_applied=tuple(all_receipts),
@@ -319,8 +376,14 @@ def execute_candidate_fallback_loop(
     discovery_client: Any = None,
     compile_checker: Any = None,
 ) -> tuple[DonorSlice | None, tuple[ReuseProofReceipt, ...]]:
-    """Try candidate donor slices in order of executable gain until one passes compile verification."""
+    """Try candidate donor slices in order of executable gain.
+    
+    1. If a candidate passes full compile verification (COMPILE_VERIFIED or BEHAVIOR_VERIFIED), return it immediately.
+    2. Otherwise, if no candidate passed full verification, return the best candidate that achieved PARTIAL_REUSE.
+    3. If all candidates fail completely, return None (triggering fresh generation).
+    """
     receipts: list[ReuseProofReceipt] = []
+    partial_candidate: DonorSlice | None = None
 
     for candidate in candidates:
         receipt = execute_reuse_proof(
@@ -331,7 +394,12 @@ def execute_candidate_fallback_loop(
             compile_checker=compile_checker,
         )
         receipts.append(receipt)
-        if receipt.compile_passed or receipt.proof_level == "PARTIAL_REUSE":
+        if receipt.compile_passed:
             return candidate, tuple(receipts)
+        if receipt.proof_level == "PARTIAL_REUSE" and partial_candidate is None:
+            partial_candidate = candidate
+
+    if partial_candidate is not None:
+        return partial_candidate, tuple(receipts)
 
     return None, tuple(receipts)

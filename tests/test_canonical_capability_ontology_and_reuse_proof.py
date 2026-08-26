@@ -589,28 +589,69 @@ dependencies {
     assert "software.bernie.geckolib:geckolib-fabric" in updated_bg
 
 
-def test_diagnostic_repair_adapter_generates_stubs() -> None:
-    from minecraft_mod_ai.reuse_adapters import DiagnosticRepairAdapter
+def test_residual_symbol_analyzer_extracts_symbols_honestly() -> None:
+    from minecraft_mod_ai.reuse_adapters import ResidualSymbolAnalyzer
 
-    files = {"src/main/java/ai/mod/Main.java": "package ai.mod;\npublic class Main {}"}
-    repaired = DiagnosticRepairAdapter.repair_unresolved_symbols(
-        files,
-        unresolved_symbols=["CustomBossEntity", "SpecialWeaponItem"],
-        target_context={"target_package": "ai.mod"},
+    residuals = ResidualSymbolAnalyzer.analyze_unresolved_symbols(
+        ["CustomBossEntity", "SpecialWeaponItem", "CustomBossEntity"]
     )
 
-    assert len(repaired) == 2
-    assert "src/main/java/ai/mod/CustomBossEntity.java" in files
-    assert "src/main/java/ai/mod/SpecialWeaponItem.java" in files
-    assert "public class CustomBossEntity" in files["src/main/java/ai/mod/CustomBossEntity.java"]
+    assert residuals == ("CustomBossEntity", "SpecialWeaponItem")
 
 
-def test_scaffold_minimal_ephemeral_workspace(tmp_path) -> None:
+def test_closure_incomplete_capped_at_partial_reuse() -> None:
+    fake_code = b"package com.donor.mod;\npublic class Item {}"
+    import hashlib
+    fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
+
+    donor = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/mod",
+        commit_sha="3333333333333333333333333333333333333333",
+        license_id="MIT",
+        source_url="https://github.com/example/mod",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/Item.java",
+                blob_sha="3333333333333333333333333333333333333333",
+                sha256=fake_sha,
+                size_bytes=len(fake_code),
+                symbols=("Item",),
+            ),
+        ),
+        seed_files=("src/main/java/Item.java",),
+        source_symbols=("Item",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.90,
+        adaptation_cost=0.0,
+        closure_complete=False,  # INCOMPLETE CLOSURE (e.g. missing texture/model)
+    )
+
+    def mock_pass(files, context):
+        return {"compile_passed": True, "tests_passed": True}
+
+    from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace="",
+        target_context={},
+        compile_checker=mock_pass,
+    )
+
+    # Incomplete closure MUST NEVER be promoted to COMPILE_VERIFIED or BEHAVIOR_VERIFIED
+    assert receipt.proof_level == "PARTIAL_REUSE"
+    assert receipt.compile_passed is False
+
+
+def test_loader_aware_scaffold_neoforge_and_wrapper(tmp_path) -> None:
     from minecraft_mod_ai.reuse_proof_executor import scaffold_minimal_ephemeral_workspace
 
     scaffold_minimal_ephemeral_workspace(
         tmp_path,
         target_context={
+            "loader": "neoforge",
             "minecraft_version": "1.21.1",
             "target_modid": "maple_mod",
             "java_version": "21",
@@ -620,10 +661,41 @@ def test_scaffold_minimal_ephemeral_workspace(tmp_path) -> None:
     assert (tmp_path / "build.gradle").exists()
     assert (tmp_path / "settings.gradle").exists()
     assert (tmp_path / "gradle.properties").exists()
+    assert (tmp_path / "gradlew").exists()
+    assert (tmp_path / "gradlew.bat").exists()
+    assert (tmp_path / "gradle" / "wrapper" / "gradle-wrapper.properties").exists()
 
     bg_text = (tmp_path / "build.gradle").read_text(encoding="utf-8")
-    assert "archivesName = 'maple_mod'" in bg_text
-    assert "com.mojang:minecraft:1.21.1" in bg_text
+    assert "net.neoforged.moddev" in bg_text
+    assert "1.21.1-21.1.0" in bg_text
+
+
+def test_kotlin_dsl_dependency_injection() -> None:
+    from minecraft_mod_ai.reuse_adapters import DependencyAdaptationPlan
+
+    sample_kts = """plugins {
+    kotlin("jvm") version "2.0.0"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("com.example:lib:1.0")
+}
+"""
+    updated_kts, applied = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
+        sample_kts,
+        required_dependencies=["cloth-config", "geckolib"],
+        loader="fabric",
+        is_kotlin_dsl=True,
+    )
+
+    assert applied is True
+    assert 'maven("https://maven.shedaniel.me/")' in updated_kts
+    assert 'modImplementation("me.shedaniel.cloth:cloth-config-fabric:15.0.127")' in updated_kts
+
 
 
 
