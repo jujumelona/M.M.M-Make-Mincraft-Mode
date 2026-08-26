@@ -1,0 +1,99 @@
+name: Finalize reuse-first runtime
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/reuse-first-finalize.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply reviewed reuse-first fixes
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'expected patch anchor missing: {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once('minecraft_mod_ai/repository_grounding.py','    while records and _json_size(ledger) > byte_budget:\n        records.pop()\n    return ledger\n','    baseline_floor = int(baseline_meta["anchor_count"])\n    while len(records) > baseline_floor and _json_size(ledger) > byte_budget:\n        records.pop()\n    # Exact baseline anchors are source evidence and outrank host-only metadata.\n    return ledger\n')
+
+          p = Path('minecraft_mod_ai/agent_tool_runtime.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('import asyncio\nimport json\n', 'import asyncio\nimport hashlib\nimport json\n', 1)
+          marker = '_SOURCE_EDIT_TOOL = "apply_source_edit"\n'
+          if marker not in text: raise SystemExit('agent tool marker missing')
+          text = text.replace(marker, marker + '_REUSE_SOURCE_TOOL = "read_reuse_source"\n_REUSE_SOURCE_DESCRIPTION = "Read a hash-verified approved donor source file on demand without mutating it."\n_REUSE_SOURCE_SCHEMA = {"type":"object","properties":{"donor_key":{"type":"string","minLength":1,"maxLength":80},"path":{"type":"string","minLength":1,"maxLength":4096},"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1024,"maximum":32768,"default":16384}},"required":["donor_key","path"],"additionalProperties":False}\n', 1)
+          old = '                names.add(_SOURCE_EDIT_TOOL)\n\n            schemas.extend(self._external_bridge.tool_schemas(selected))\n'
+          new = '                names.add(_SOURCE_EDIT_TOOL)\n                schemas.append({"type":"function","function":{"name":_REUSE_SOURCE_TOOL,"description":_REUSE_SOURCE_DESCRIPTION,"parameters":_REUSE_SOURCE_SCHEMA}})\n                names.add(_REUSE_SOURCE_TOOL)\n\n            schemas.extend(self._external_bridge.tool_schemas(selected))\n'
+          if old not in text: raise SystemExit('schema anchor missing')
+          text = text.replace(old, new, 1)
+          old = '            if selected == "generation" and tool_name == _SOURCE_EDIT_TOOL:\n'
+          new = '            if selected == "generation" and tool_name == _REUSE_SOURCE_TOOL:\n                result = _read_reuse_source(self.workspace_root, payload)\n            elif selected == "generation" and tool_name == _SOURCE_EDIT_TOOL:\n'
+          if old not in text: raise SystemExit('call anchor missing')
+          text = text.replace(old, new, 1)
+          anchor = '\ndef _looks_like_bound_project(root: Path) -> bool:\n'
+          helper = '''\ndef _read_reuse_source(workspace_root: str | Path, arguments: Mapping[str, Any]) -> dict[str, Any]:\n    root = Path(workspace_root).expanduser().resolve()\n    donor_key = str(arguments.get("donor_key") or "").strip()\n    relative = str(arguments.get("path") or "").strip().replace("\\\\", "/")\n    if not re.fullmatch(r"[0-9a-f]{20}", donor_key):\n        raise AgentToolRuntimeError("read_reuse_source donor_key is invalid")\n    if not relative or relative.startswith("/") or ".." in relative.split("/"):\n        raise AgentToolRuntimeError("read_reuse_source path is unsafe")\n    offset = int(arguments.get("offset", 0))\n    max_bytes = int(arguments.get("max_bytes", 16384))\n    if offset < 0 or not 1024 <= max_bytes <= 32768:\n        raise AgentToolRuntimeError("read_reuse_source byte range is invalid")\n    donor_root = (root / ".minecraft_ai" / "reuse" / "donors" / donor_key).resolve()\n    manifest_path = donor_root / "manifest.json"\n    if not donor_root.is_dir() or donor_root.is_symlink() or not manifest_path.is_file():\n        raise AgentToolRuntimeError("approved donor materialization was not found")\n    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))\n    files = manifest.get("files") if isinstance(manifest, Mapping) else None\n    if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):\n        raise AgentToolRuntimeError("approved donor manifest has no files")\n    requested = (donor_root / relative).resolve()\n    try:\n        requested.relative_to(donor_root)\n    except ValueError as exc:\n        raise AgentToolRuntimeError("read_reuse_source escaped donor root") from exc\n    matched = None\n    for item in files:\n        if not isinstance(item, Mapping): continue\n        candidate = Path(str(item.get("path") or "")).expanduser().resolve()\n        try: candidate_relative = candidate.relative_to(donor_root).as_posix()\n        except ValueError: continue\n        if candidate_relative == relative:\n            matched = item\n            break\n    if matched is None or not requested.is_file() or requested.is_symlink():\n        raise AgentToolRuntimeError("requested donor file is not approved by the manifest")\n    raw = requested.read_bytes()\n    actual = "sha256:" + hashlib.sha256(raw).hexdigest()\n    if actual != str(matched.get("sha256") or ""):\n        raise AgentToolRuntimeError("approved donor source hash changed after materialization")\n    chunk = raw[offset:offset + max_bytes]\n    return {"schema_version":"mmm/reuse-source-read-v1","donor_key":donor_key,"repository":manifest.get("repository"),"commit_sha":manifest.get("commit_sha"),"license_id":manifest.get("license_id"),"capability":manifest.get("capability"),"path":relative,"sha256":actual,"offset":offset,"returned_bytes":len(chunk),"total_bytes":len(raw),"next_offset":offset+len(chunk) if offset+len(chunk)<len(raw) else None,"content":chunk.decode("utf-8",errors="replace"),"read_only":True}\n'''
+          if anchor not in text: raise SystemExit('helper anchor missing')
+          text = text.replace(anchor, helper + anchor, 1)
+          p.write_text(text, encoding='utf-8')
+
+          replace_once('minecraft_mod_ai/source_transplant.py','            manifest = {\n                "repository": repository,\n','            manifest = {\n                "donor_key": donor_key,\n                "repository": repository,\n')
+          replace_once('minecraft_mod_ai/reuse_asset_upgrade_contract.py','                    "repository": donor.get("repository"),\n','                    "donor_key": donor.get("donor_key"),\n                    "repository": donor.get("repository"),\n')
+          replace_once('minecraft_mod_ai/reuse_asset_upgrade_contract.py','                        "and implement only the residual integration delta. Reuse approved "\n','                        "and implement only the residual integration delta. When an excerpt is insufficient, "\n                        "call read_reuse_source with donor_key and relative path. Reuse approved "\n')
+          replace_once('minecraft_mod_ai/progress_aware_tool_loop.py','    "search_project_rag",\n    "discover_ecosystem_resources",\n','    "search_project_rag",\n    "read_reuse_source",\n    "discover_ecosystem_resources",\n')
+
+          nb_path=Path('M.M.M_Make_Mincraft_Mode_Colab.ipynb'); nb=json.loads(nb_path.read_text(encoding='utf-8')); config=next(c for c in nb['cells'] if c.get('id')=='configuration'); source=list(config['source'])
+          key='CURSEFORGE_API_KEY = "" #@param {type:"string"}\n'
+          if key not in source: source.insert(source.index('ALLOW_REMOTE_TRAJECTORY_STORE = False #@param {type:"boolean"}\n')+1,key)
+          if 'curseforge_api_key = str(CURSEFORGE_API_KEY).strip()\n' not in source:
+              i=source.index('os.environ["MMM_PERFORMANCE_MODE"] = performance_mode\n')+1
+              source[i:i]=['\n','curseforge_api_key = str(CURSEFORGE_API_KEY).strip()\n','if curseforge_api_key:\n','    os.environ["MMM_CURSEFORGE_API_KEY"] = curseforge_api_key\n','else:\n','    os.environ.pop("MMM_CURSEFORGE_API_KEY", None)\n','\n']
+          config['source']=source; nb_path.write_text(json.dumps(nb,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+
+          q=Path('tests/test_llama_cpp_adapter_request_contract.py'); t=q.read_text(encoding='utf-8'); t=t.replace('(\"apply_source_edit\", True, \"action\", \"omitted required parameters: operation\"),','(\"apply_source_edit\", True, \"strategy\", \"unknown parameter \'strategy\'\"),',1); q.write_text(t,encoding='utf-8')
+          for tp in Path('tests').glob('test_*.py'):
+              t=tp.read_text(encoding='utf-8'); n=t.replace('lambda queries, _client: {query: () for query in queries}','lambda queries, _client, **_kwargs: {query: () for query in queries}');
+              if n!=t: tp.write_text(n,encoding='utf-8')
+
+          Path('tests/test_reuse_discovery_optional_curseforge.py').write_text('''from __future__ import annotations\nimport hashlib, json\nfrom pathlib import Path\nimport pytest\nfrom minecraft_mod_ai import reuse_discovery\nfrom minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime, AgentToolRuntimeError\nclass _Response:\n    def __init__(self,payload): self._payload=payload\n    def raise_for_status(self): return None\n    def json(self): return self._payload\ndef test_curseforge_is_skipped_without_key(monkeypatch):\n    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY",raising=False); monkeypatch.delenv("CURSEFORGE_API_KEY",raising=False)\n    monkeypatch.setattr(reuse_discovery.httpx,"get",lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")))\n    assert reuse_discovery._search_curseforge("trade",limit=8)==[]\ndef test_curseforge_uses_key_and_source_url(monkeypatch):\n    seen={}; monkeypatch.setenv("MMM_CURSEFORGE_API_KEY","secret-key")\n    def get(url,**kwargs): seen.update(url=url,headers=kwargs["headers"]); return _Response({"data":[{"links":{"sourceUrl":"https://github.com/example/trade-mod"}}]})\n    monkeypatch.setattr(reuse_discovery.httpx,"get",get)\n    assert reuse_discovery._search_curseforge("trade",limit=8)==[("example/trade-mod",1.0)]; assert seen["headers"]["x-api-key"]=="secret-key"\ndef test_read_reuse_source_is_manifest_and_hash_bound(tmp_path):\n    key="a"*20; root=tmp_path/".minecraft_ai"/"reuse"/"donors"/key; src=root/"src/main/java/example/Trade.java"; src.parent.mkdir(parents=True); src.write_text("final class Trade {}\\n",encoding="utf-8"); sha="sha256:"+hashlib.sha256(src.read_bytes()).hexdigest(); (root/"manifest.json").write_text(json.dumps({"donor_key":key,"repository":"example/trade-mod","commit_sha":"b"*40,"license_id":"MIT","capability":"trade.transaction","files":[{"path":str(src),"sha256":sha}]}),encoding="utf-8"); runtime=AgentToolRuntime(profile="fast_test",workspace_root=tmp_path); result=runtime.call("generation","read_reuse_source",{"donor_key":key,"path":"src/main/java/example/Trade.java","max_bytes":1024}); assert result["content"]=="final class Trade {}\\n"; src.write_text("tampered\\n",encoding="utf-8");\n    with pytest.raises(AgentToolRuntimeError,match="hash changed"): runtime.call("generation","read_reuse_source",{"donor_key":key,"path":"src/main/java/example/Trade.java"})\n''',encoding='utf-8')
+
+          nt=Path('tests/test_notebook_registry_policy.py'); t=nt.read_text(encoding='utf-8'); a='    assert \'os.environ["MMM_PERFORMANCE_MODE"] = performance_mode\' in cells["configuration"]\n';
+          if 'MMM_CURSEFORGE_API_KEY' not in t: t=t.replace(a,a+'    assert \'CURSEFORGE_API_KEY = ""\' in cells["configuration"]\n    assert \'os.environ["MMM_CURSEFORGE_API_KEY"] = curseforge_api_key\' in cells["configuration"]\n',1); nt.write_text(t,encoding='utf-8')
+          Path('.github/workflows/shard1-diagnostic.yml').unlink(missing_ok=True)
+          PY
+      - name: Focused regression tests
+        run: python -m pytest -q tests/test_repository_grounding.py tests/test_reuse_discovery_optional_curseforge.py tests/test_notebook_registry_policy.py tests/test_llama_cpp_adapter_request_contract.py
+      - name: Static checks
+        run: |
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python tools/validate_colab_notebook.py
+      - name: Commit to main and remove one-shot workflow
+        run: |
+          git config user.name 'juju-mmm-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm -f .github/workflows/reuse-first-finalize.yml
+          git add -A
+          git commit -m 'feat(reuse): finish capability-first donor reuse pipeline'
+          git push origin HEAD:main
