@@ -723,6 +723,36 @@ def _plan_target(
     capability_graph: Mapping[str, Any] | None = None,
     repository_candidates: Mapping[str, Sequence[str]] | None = None,
 ) -> TargetImplementationPlan:
+    candidates_by_cap: dict[str, Sequence[DonorSlice]] = {}
+    if allow_network:
+        for capability in capabilities:
+            key = capability.casefold()
+            if (
+                key not in same_project
+                and find_verified_component(registry, capability=capability, minecraft_version=adapter.minecraft_version, loader=adapter.loader) is None
+                and capability not in adapter.deterministic_module_kinds
+            ):
+                cands = _discover_donor_candidates(
+                    capability,
+                    adapter=adapter,
+                    discovery_client=discovery_client,
+                    repositories=(repository_candidates or {}).get(capability, ()),
+                )
+                if cands:
+                    candidates_by_cap[capability] = cands
+
+    selected_composition_donors: dict[str, DonorSlice] = {}
+    if len(candidates_by_cap) > 1:
+        from .composition_solver import search_best_donor_composition
+        comp_res = search_best_donor_composition(
+            candidates_by_cap,
+            target_loader=adapter.loader,
+            target_minecraft=adapter.minecraft_version,
+        )
+        if comp_res and comp_res.is_valid and comp_res.selected_donors:
+            for d in comp_res.selected_donors:
+                selected_composition_donors[d.capability] = d
+
     decisions: list[ReuseDecision] = []
     for capability in capabilities:
         fresh_impl, fresh_verify = _fresh_cost(capability)
@@ -784,8 +814,8 @@ def _plan_target(
             )
             continue
 
-        candidates = ()
-        if allow_network:
+        candidates = (selected_composition_donors[capability],) if capability in selected_composition_donors else candidates_by_cap.get(capability, ())
+        if not candidates and allow_network:
             candidates = _discover_donor_candidates(
                 capability,
                 adapter=adapter,

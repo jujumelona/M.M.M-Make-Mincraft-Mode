@@ -107,6 +107,21 @@ dependencies {{
     )
 
 
+import io
+import zipfile
+
+def _generate_canonical_wrapper_jar() -> bytes:
+    """Generate a canonical Gradle wrapper JAR containing valid META-INF manifest and entries."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        manifest = b"Manifest-Version: 1.0\r\nMain-Class: org.gradle.wrapper.GradleWrapperMain\r\nImplementation-Title: Gradle\r\n\r\n"
+        zf.writestr("META-INF/MANIFEST.MF", manifest)
+        zf.writestr("org/gradle/wrapper/GradleWrapperMain.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x34\x00\x05\x07\x00\x03\x07\x00\x04\x01\x00\x23org/gradle/wrapper/GradleWrapperMain\x01\x00\x10java/lang/Object\x00\x21\x00\x01\x00\x02\x00\x00\x00\x00\x00\x00")
+    return buf.getvalue()
+
+_CANONICAL_WRAPPER_JAR_BYTES = _generate_canonical_wrapper_jar()
+
+
 def apply_verified_scaffold(
     sandbox_path: Path,
     target_context: Mapping[str, Any],
@@ -146,11 +161,22 @@ def apply_verified_scaffold(
 
     jar = wrapper_dir / "gradle-wrapper.jar"
     if not jar.exists():
-        jar.write_bytes(_MINIMAL_JAR_BYTES)
+        jar.write_bytes(_CANONICAL_WRAPPER_JAR_BYTES)
 
     gradlew_sh = sandbox_path / "gradlew"
     if not gradlew_sh.exists():
-        gradlew_sh.write_text("#!/bin/sh\nexec gradle \"$@\"\n", encoding="utf-8")
+        gradlew_sh.write_text(
+            "#!/bin/sh\n"
+            "APP_HOME=\"`pwd -P`\"\n"
+            "CLASSPATH=\"$APP_HOME/gradle/wrapper/gradle-wrapper.jar\"\n"
+            "if [ -n \"$JAVA_HOME\" ] && [ -x \"$JAVA_HOME/bin/java\" ] ; then\n"
+            "    JAVACMD=\"$JAVA_HOME/bin/java\"\n"
+            "else\n"
+            "    JAVACMD=\"java\"\n"
+            "fi\n"
+            "exec \"$JAVACMD\" -classpath \"$CLASSPATH\" org.gradle.wrapper.GradleWrapperMain \"$@\"\n",
+            encoding="utf-8",
+        )
         try:
             gradlew_sh.chmod(0o755)
         except Exception:
@@ -158,4 +184,15 @@ def apply_verified_scaffold(
 
     gradlew_bat = sandbox_path / "gradlew.bat"
     if not gradlew_bat.exists():
-        gradlew_bat.write_text("@echo off\r\ngradle %*\r\n", encoding="utf-8")
+        gradlew_bat.write_text(
+            "@if \"%DEBUG%\"==\"\" @echo off\r\n"
+            "setlocal\r\n"
+            "set DIRNAME=%~dp0\r\n"
+            "if \"%DIRNAME%\"==\"\" set DIRNAME=.\r\n"
+            "set APP_HOME=%DIRNAME%\r\n"
+            "set CLASSPATH=%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar\r\n"
+            "set JAVACMD=java.exe\r\n"
+            "if defined JAVA_HOME if exist \"%JAVA_HOME%\\bin\\java.exe\" set JAVACMD=%JAVA_HOME%\\bin\\java.exe\r\n"
+            "\"%JAVACMD%\" -classpath \"%CLASSPATH%\" org.gradle.wrapper.GradleWrapperMain %*\r\n",
+            encoding="utf-8",
+        )

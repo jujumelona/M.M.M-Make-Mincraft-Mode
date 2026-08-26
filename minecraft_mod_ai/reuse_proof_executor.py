@@ -237,21 +237,21 @@ def execute_reuse_proof(
         build_target = kts_file if kts_file.exists() else groovy_file
         is_kts = kts_file.exists()
 
-        verified_dep_names = tuple(r.resolved_coordinate for r in resolved_dependencies if r.is_resolved)
+        verified_dep_names = tuple(r.resolved_coordinate for r in resolved_dependencies if r.is_resolved and r.resolved_coordinate)
         if build_target.exists() and verified_dep_names:
             try:
                 bg_content = build_target.read_text(encoding="utf-8")
                 injected_bg, was_injected = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
                     bg_content,
-                    donor_slice.required_dependencies,
+                    verified_dep_names,
                     loader=loader,
                     minecraft_version=mc_ver,
                     is_kotlin_dsl=is_kts,
                 )
                 if was_injected:
                     build_target.write_text(injected_bg, encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as inj_err:
+                unresolved_symbols.append(f"DEPENDENCY_INJECTION_FAILED: {inj_err}")
 
         # Overlay adapted files
         for rel_path, content in adapted_files.items():
@@ -261,6 +261,10 @@ def execute_reuse_proof(
                 dest.write_bytes(content)
             else:
                 dest.write_text(str(content), encoding="utf-8")
+
+        # Materialize MMM host-owned JUnit 5 acceptance test classes
+        from .acceptance_contracts import materialize_host_acceptance_tests
+        generated_tests, test_source_hash = materialize_host_acceptance_tests(sandbox_path, donor_slice.capability)
 
         tests_executed = 0
         tests_passed_count = 0

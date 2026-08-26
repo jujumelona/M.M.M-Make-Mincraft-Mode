@@ -12,7 +12,6 @@ import hashlib
 import os
 import re
 import subprocess
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -172,8 +171,18 @@ def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
         mc_ver = mc_match.group(1).strip()
 
     java_ver = "21"
+    try:
+        res_java = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=2.0)
+        j_text = res_java.stderr + res_java.stdout
+        j_match = re.search(r'version\s+"?([0-9._]+)"?', j_text)
+        if j_match:
+            v_str = j_match.group(1)
+            parts = v_str.split(".")
+            java_ver = parts[1] if parts[0] == "1" and len(parts) > 1 else parts[0]
+    except Exception:
+        pass
 
-    toolchain_id = f"{loader}:{gradle_ver}:{mc_ver}:{dist_sha or 'local'}"
+    toolchain_id = f"{loader}:{gradle_ver}:{mc_ver}:{java_ver}:{dist_sha or 'local'}"
     toolchain_hash = "sha256:" + hashlib.sha256(toolchain_id.encode("utf-8")).hexdigest()
 
     return BuildToolchainReceipt(

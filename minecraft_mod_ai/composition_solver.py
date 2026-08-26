@@ -11,6 +11,7 @@ Validates that selected donor slices integrate cohesively without runtime collis
 Emits structured CompositionResult records and generates cryptographic SBOM / reuse-manifest.json.
 """
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,7 @@ class SubgraphProofReceipt:
     artifact_paths: tuple[str, ...]
     is_verified: bool
     proof_level: str = "COMPILE_VERIFIED"
+    build_receipt_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +59,7 @@ class SubgraphProofReceipt:
             "artifact_paths": list(self.artifact_paths),
             "is_verified": self.is_verified,
             "proof_level": self.proof_level,
+            "build_receipt_hash": self.build_receipt_hash,
         }
 
 
@@ -190,6 +193,7 @@ def solve_multi_donor_composition(
             artifact_paths=tuple(df.path for df in d.files),
             is_verified=bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}),
             proof_level="COMPILE_VERIFIED" if (is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}) else ("PARTIAL_REUSE" if d.files else "UNVERIFIED"),
+            build_receipt_hash=f"sha256:{hashlib.sha256((d.repository + d.commit_sha).encode('utf-8')).hexdigest()}" if (is_valid and d.closure_complete) else "",
         )
         for d in donors
     )
