@@ -149,7 +149,7 @@ class RepairEngine:
                         print("  [!] Repair operations empty after scope validation (retrying)", flush=True)
                         continue
                     receipt = TransactionalSourcePatcher(root).apply(patch)
-                except (RepairEngineError, SourcePatchError) as exc:
+                except (RepairEngineError, SourcePatchError, Exception) as exc:
                     print(
                         f"  [!] Repair patch application failed (retrying next attempt): {exc}",
                         flush=True,
@@ -291,22 +291,26 @@ class RepairEngine:
             "evidence": evidence,
             "project_context": context,
         }
-        text = self.router.generate_text(
-            "coder_safe",
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a hash-guarded Minecraft source repair planner. "
-                        "Inspect evidence with read-only tools and return patch operations; "
-                        "the host transaction is the only writer."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-            ],
-            tool_stage="quality",
-            response_format="json",
-        )
+        try:
+            text = self.router.generate_text(
+                "coder_safe",
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a hash-guarded Minecraft source repair planner. "
+                            "Inspect evidence with read-only tools and return patch operations; "
+                            "the host transaction is the only writer."
+                        ),
+                    },
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                tool_stage="quality",
+                response_format="json",
+            )
+        except Exception as exc:
+            print(f"  [!] Repair coder model call failed ({type(exc).__name__}: {exc}); skipping attempt", flush=True)
+            return []
         value = _extract_json(text)
         operations = None
         if isinstance(value, dict):

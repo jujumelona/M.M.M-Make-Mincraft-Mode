@@ -551,8 +551,8 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     return ctx
         return None
 
-    # Recursively unwrap envelope fields if present (e.g. MCP structured_content)
-    for wrapper_key in ("structured_content", "result", "data", "body"):
+    # Recursively unwrap envelope fields if present (e.g. MCP structured_content, _mmm_observation)
+    for wrapper_key in ("structured_content", "result", "data", "body", "_mmm_observation", "raw_result", "structured", "observation"):
         wrapped = payload.get(wrapper_key)
         if isinstance(wrapped, (Mapping, list, tuple)) and wrapped is not payload:
             ctx = _extract_mutation_context_from_payload(wrapped)

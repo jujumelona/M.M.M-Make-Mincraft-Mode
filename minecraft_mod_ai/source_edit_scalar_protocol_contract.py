@@ -710,6 +710,20 @@ def materialize_model_source_edit(
             f"Fields {sorted(forbidden)} are invalid for {operation}"
         )
 
+    if operation == "replace_exact" and "old" not in payload and "old_text" not in payload:
+        new_text = str(payload.get("new") or payload.get("new_text") or payload.get("text") or "")
+        return {
+            "project_root": project_root_argument,
+            "operations": [
+                {
+                    "operation": "replace",
+                    "path": normalized,
+                    "expected_sha256": expected_sha256,
+                    "content": new_text,
+                }
+            ],
+        }
+
     replacement = _replacement_for_edit(
         runtime_module,
         operation=operation,
@@ -740,6 +754,19 @@ def materialize_model_source_edit(
             if found == 1:
                 replacement["old"] = fuzzy_matches[0]
                 text = norm_text
+
+    if found == 0 and (not norm_old.strip() or norm_old == norm_text):
+        return {
+            "project_root": project_root_argument,
+            "operations": [
+                {
+                    "operation": "replace",
+                    "path": normalized,
+                    "expected_sha256": expected_sha256,
+                    "content": replacement["new"],
+                }
+            ],
+        }
 
     if found != replacement["count"]:
         raise runtime_module.AgentToolRuntimeError(
