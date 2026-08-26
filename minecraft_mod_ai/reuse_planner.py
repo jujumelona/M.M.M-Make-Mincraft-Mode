@@ -742,16 +742,30 @@ def _plan_target(
                     candidates_by_cap[capability] = cands
 
     selected_composition_donors: dict[str, DonorSlice] = {}
+    joint_composition_receipts: dict[str, Any] = {}
     if len(candidates_by_cap) > 1:
-        from .composition_solver import search_best_donor_composition
+        from .composition_solver import search_best_donor_composition, verify_joint_composition_sandbox
         comp_res = search_best_donor_composition(
             candidates_by_cap,
             target_loader=adapter.loader,
             target_minecraft=adapter.minecraft_version,
         )
         if comp_res and comp_res.is_valid and comp_res.selected_donors:
+            design_map = design if isinstance(design, Mapping) else {}
+            target_ctx = {
+                "target_package": str(design_map.get("package") or "ai.minecraft.generated.mod").strip(),
+                "target_modid": str(design_map.get("mod_id") or "generated_mod").strip(),
+                "minecraft_version": adapter.minecraft_version,
+                "loader": adapter.loader,
+                "java_version": adapter.java_version,
+            }
+            joint_passed, joint_build_receipt = verify_joint_composition_sandbox(
+                comp_res.selected_donors,
+                target_context=target_ctx,
+            )
             for d in comp_res.selected_donors:
                 selected_composition_donors[d.capability] = d
+                joint_composition_receipts[d.capability] = joint_build_receipt
 
     decisions: list[ReuseDecision] = []
     for capability in capabilities:

@@ -188,15 +188,15 @@ def solve_multi_donor_composition(
     for d in donors:
         r = (build_receipts or {}).get(d.capability) or (build_receipts or {}).get(f"{d.repository}@{d.commit_sha}")
         r_passed = bool(getattr(r, "compile_passed", False)) if r is not None else False
-        if r is not None and hasattr(r, "to_dict"):
-            b_hash = "sha256:" + hashlib.sha256(str(r.to_dict()).encode("utf-8")).hexdigest()
-        elif r is not None:
-            b_hash = "sha256:" + hashlib.sha256(str(r).encode("utf-8")).hexdigest()
-        else:
-            b_hash = f"sha256:{hashlib.sha256((d.repository + '@' + d.commit_sha).encode('utf-8')).hexdigest()}" if (is_valid and d.closure_complete) else ""
+        b_hash = ""
+        if r is not None and r_passed:
+            if hasattr(r, "to_dict"):
+                b_hash = "sha256:" + hashlib.sha256(str(r.to_dict()).encode("utf-8")).hexdigest()
+            else:
+                b_hash = "sha256:" + hashlib.sha256(str(r).encode("utf-8")).hexdigest()
 
-        verified = bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"} and (r is None or r_passed))
-        p_lvl = "COMPILE_VERIFIED" if verified else ("PARTIAL_REUSE" if d.files else "UNVERIFIED")
+        verified = bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"} and r is not None and r_passed)
+        p_lvl = "COMPILE_VERIFIED" if verified else ("MATERIALIZED" if d.closure_complete else ("PARTIAL_REUSE" if d.files else "UNVERIFIED"))
 
         subgraph_receipts.append(
             SubgraphProofReceipt(
