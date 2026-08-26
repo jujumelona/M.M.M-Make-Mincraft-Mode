@@ -352,7 +352,7 @@ class RepairEngine:
             }:
                 continue
             normalized = path.as_posix()
-            if normalized.startswith("/") or ".." in path.parts:
+            if normalized.startswith("/") or ".." in path.parts or any(part.startswith(".") for part in path.parts):
                 continue
             if normalized in paths:
                 continue
@@ -401,7 +401,6 @@ class RepairEngine:
                     elif isinstance(replacements, dict) and "old" in replacements and "new" in replacements:
                         item["replacements"] = [replacements]
                 elif isinstance(replacements, list):
-                    # Clean up replacement entries
                     clean_replacements = []
                     for rep in replacements:
                         if isinstance(rep, dict) and "old" in rep and "new" in rep:
@@ -429,13 +428,17 @@ class RepairEngine:
                         item["content"] = ""
 
             if op in {"replace", "edit", "delete"}:
-                expected = str(item.get("expected_sha256", "")).strip()
-                if (not expected.startswith("sha256:") or len(expected) != 71) and target.is_file() and not target.is_symlink():
+                if not target.is_file() or target.is_symlink():
+                    if op in {"replace", "edit"}:
+                        op = "create"
+                        item["operation"] = "create"
+                        item.pop("expected_sha256", None)
+                else:
                     item["expected_sha256"] = sha256_bytes(target.read_bytes())
             elif op == "create" and target.is_file() and not target.is_symlink():
-                if isinstance(item.get("content"), str):
-                    item["operation"] = "replace"
-                    item["expected_sha256"] = sha256_bytes(target.read_bytes())
+                op = "replace"
+                item["operation"] = "replace"
+                item["expected_sha256"] = sha256_bytes(target.read_bytes())
 
             # Strip disallowed metadata fields so TransactionalSourcePatcher strictly validates
             allowed_fields = {

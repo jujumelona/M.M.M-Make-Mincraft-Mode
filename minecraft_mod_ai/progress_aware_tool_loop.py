@@ -1452,7 +1452,9 @@ def generate_with_tools(
                     turn_made_progress = True
                     if all_exposed_names & _VERIFY_TOOLS:
                         state.phase = LoopPhase.VERIFY
-                elif not bool(payload.get("ok")):
+                elif bool(payload.get("ok")):
+                    turn_made_progress = True
+                else:
                     if all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
                     state.record_failure(call.name, payload.get("error", "mutation failed"))
