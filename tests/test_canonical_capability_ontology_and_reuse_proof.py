@@ -1393,6 +1393,72 @@ def test_multi_donor_beam_search_composition_solver() -> None:
     assert any(d.repository == "example/quest-q2" for d in result.selected_donors)
 
 
+def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None:
+    from minecraft_mod_ai.final_project_assembler import FinalProjectAssembler
+    from minecraft_mod_ai.reuse_proof_executor import ResidualWorkOrder
+
+    donor = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss-mod",
+        commit_sha="1111111111111111111111111111111111111111",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-mod",
+        target_compatibility="exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/BossEntity.java", "b1", "sha:1", 100, ("BossEntity",)),
+        ),
+        seed_files=("src/main/java/BossEntity.java",),
+        source_symbols=("BossEntity",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    work_order = ResidualWorkOrder(
+        capability="boss.entity",
+        reused_classes=("BossEntity.java",),
+        reused_symbols=("BossEntity",),
+        missing_interfaces=("IBossPhase",),
+        missing_resources=("assets/boss_mod/textures/entity/boss.png",),
+        unbound_registries=("boss_mod:boss_entity",),
+        glue_code_requirements=("Integrate BossEntity with ModEntities",),
+    )
+
+    assembler = FinalProjectAssembler(
+        tmp_path,
+        target_context={
+            "loader": "fabric",
+            "minecraft_version": "1.21.1",
+            "target_modid": "my_rpg_mod",
+            "target_package": "ai.minecraft.generated.rpg",
+        },
+    )
+
+    res = assembler.assemble(
+        reused_donors=(donor,),
+        residual_files={
+            "src/main/java/IBossPhase.java": "package ai.minecraft.generated.rpg;\npublic interface IBossPhase {}",
+        },
+        fresh_files={
+            "src/main/java/QuestSystem.java": "package ai.minecraft.generated.rpg;\npublic class QuestSystem {}",
+        },
+        work_orders=(work_order,),
+    )
+
+    assert res.is_valid is True
+    assert res.reused_file_count == 1
+    assert res.residual_file_count == 1
+    assert res.fresh_file_count == 1
+    assert (tmp_path / "build.gradle").exists()
+    assert (tmp_path / "reuse-manifest.json").exists()
+    assert (tmp_path / "src/main/java/BossEntity.java").exists()
+    assert (tmp_path / "src/main/java/IBossPhase.java").exists()
+    assert (tmp_path / "src/main/java/QuestSystem.java").exists()
+
+
+
 
 
 

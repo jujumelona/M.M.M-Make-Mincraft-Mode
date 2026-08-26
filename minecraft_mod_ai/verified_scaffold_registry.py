@@ -27,12 +27,29 @@ class VerifiedScaffoldTemplate:
 
 
 SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
+    # Fabric targets
     ("fabric", "1.21.4"): {
         "gradle_version": "8.10.2",
         "loom_version": "1.9-SNAPSHOT",
         "loader_version": "0.16.9",
         "fabric_api": "0.110.0+1.21.4",
         "mappings": "net.fabricmc:yarn:1.21.4+build.1:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.21.3"): {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.8-SNAPSHOT",
+        "loader_version": "0.16.7",
+        "fabric_api": "0.108.0+1.21.3",
+        "mappings": "net.fabricmc:yarn:1.21.3+build.1:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.21.2"): {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.8-SNAPSHOT",
+        "loader_version": "0.16.7",
+        "fabric_api": "0.107.0+1.21.2",
+        "mappings": "net.fabricmc:yarn:1.21.2+build.1:v2",
         "java_release": 21,
     },
     ("fabric", "1.21.1"): {
@@ -43,6 +60,46 @@ SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
         "mappings": "net.fabricmc:yarn:1.21.1+build.1:v2",
         "java_release": 21,
     },
+    ("fabric", "1.21.0"): {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.7-SNAPSHOT",
+        "loader_version": "0.16.0",
+        "fabric_api": "0.100.0+1.21",
+        "mappings": "net.fabricmc:yarn:1.21+build.9:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.20.6"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.15.11",
+        "fabric_api": "0.99.1+1.20.6",
+        "mappings": "net.fabricmc:yarn:1.20.6+build.2:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.20.5"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.15.11",
+        "fabric_api": "0.97.8+1.20.5",
+        "mappings": "net.fabricmc:yarn:1.20.5+build.1:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.20.4"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.15.7",
+        "fabric_api": "0.96.11+1.20.4",
+        "mappings": "net.fabricmc:yarn:1.20.4+build.3:v2",
+        "java_release": 17,
+    },
+    ("fabric", "1.20.2"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.15.0",
+        "fabric_api": "0.91.6+1.20.2",
+        "mappings": "net.fabricmc:yarn:1.20.2+build.4:v2",
+        "java_release": 17,
+    },
     ("fabric", "1.20.1"): {
         "gradle_version": "8.8",
         "loom_version": "1.6-SNAPSHOT",
@@ -51,10 +108,58 @@ SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
         "mappings": "net.fabricmc:yarn:1.20.1+build.10:v2",
         "java_release": 17,
     },
+    ("fabric", "1.20.0"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.14.21",
+        "fabric_api": "0.83.0+1.20",
+        "mappings": "net.fabricmc:yarn:1.20+build.1:v2",
+        "java_release": 17,
+    },
+    ("fabric", "1.19.4"): {
+        "gradle_version": "8.5",
+        "loom_version": "1.5-SNAPSHOT",
+        "loader_version": "0.14.21",
+        "fabric_api": "0.87.0+1.19.4",
+        "mappings": "net.fabricmc:yarn:1.19.4+build.2:v2",
+        "java_release": 17,
+    },
+    ("fabric", "1.19.2"): {
+        "gradle_version": "8.5",
+        "loom_version": "1.5-SNAPSHOT",
+        "loader_version": "0.14.21",
+        "fabric_api": "0.76.0+1.19.2",
+        "mappings": "net.fabricmc:yarn:1.19.2+build.28:v2",
+        "java_release": 17,
+    },
+    ("fabric", "1.18.2"): {
+        "gradle_version": "8.1",
+        "loom_version": "1.4-SNAPSHOT",
+        "loader_version": "0.14.21",
+        "fabric_api": "0.76.0+1.18.2",
+        "mappings": "net.fabricmc:yarn:1.18.2+build.4:v2",
+        "java_release": 17,
+    },
+    ("fabric", "1.16.5"): {
+        "gradle_version": "7.6",
+        "loom_version": "1.0-SNAPSHOT",
+        "loader_version": "0.14.21",
+        "fabric_api": "0.42.0+1.16",
+        "mappings": "net.fabricmc:yarn:1.16.5+build.10:v2",
+        "java_release": 8,
+    },
+
+    # NeoForge targets
     ("neoforge", "1.21.4"): {
         "gradle_version": "8.10.2",
         "moddev_version": "2.0.80",
         "neoforge_version": "21.4.0",
+        "java_release": 21,
+    },
+    ("neoforge", "1.21.3"): {
+        "gradle_version": "8.10.2",
+        "moddev_version": "2.0.79",
+        "neoforge_version": "21.3.0",
         "java_release": 21,
     },
     ("neoforge", "1.21.1"): {
@@ -63,17 +168,79 @@ SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
         "neoforge_version": "1.21.1-21.1.0",
         "java_release": 21,
     },
+    ("neoforge", "1.21.0"): {
+        "gradle_version": "8.10.2",
+        "moddev_version": "2.0.78",
+        "neoforge_version": "21.0.167",
+        "java_release": 21,
+    },
+    ("neoforge", "1.20.6"): {
+        "gradle_version": "8.8",
+        "moddev_version": "2.0.74",
+        "neoforge_version": "20.6.119",
+        "java_release": 21,
+    },
+    ("neoforge", "1.20.4"): {
+        "gradle_version": "8.8",
+        "moddev_version": "2.0.70",
+        "neoforge_version": "20.4.237",
+        "java_release": 17,
+    },
+
+    # Forge targets
+    ("forge", "1.21.1"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "51.0.8",
+        "java_release": 21,
+    },
+    ("forge", "1.21.0"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "51.0.0",
+        "java_release": 21,
+    },
+    ("forge", "1.20.4"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "49.0.38",
+        "java_release": 17,
+    },
+    ("forge", "1.20.2"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "48.1.0",
+        "java_release": 17,
+    },
     ("forge", "1.20.1"): {
         "gradle_version": "8.8",
         "forgegradle_version": "6.0.29",
         "forge_version": "47.3.0",
         "java_release": 17,
     },
-    ("forge", "1.21.1"): {
-        "gradle_version": "8.8",
-        "forgegradle_version": "6.0.29",
-        "forge_version": "51.0.8",
-        "java_release": 21,
+    ("forge", "1.19.4"): {
+        "gradle_version": "8.5",
+        "forgegradle_version": "6.0.18",
+        "forge_version": "45.2.0",
+        "java_release": 17,
+    },
+    ("forge", "1.19.2"): {
+        "gradle_version": "8.5",
+        "forgegradle_version": "6.0.16",
+        "forge_version": "43.3.0",
+        "java_release": 17,
+    },
+    ("forge", "1.18.2"): {
+        "gradle_version": "8.1",
+        "forgegradle_version": "5.1.74",
+        "forge_version": "40.2.0",
+        "java_release": 17,
+    },
+    ("forge", "1.16.5"): {
+        "gradle_version": "7.6",
+        "forgegradle_version": "5.1.69",
+        "forge_version": "36.2.39",
+        "java_release": 8,
     },
 }
 
