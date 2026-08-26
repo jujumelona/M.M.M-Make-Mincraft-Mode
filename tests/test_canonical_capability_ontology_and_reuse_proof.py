@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from minecraft_mod_ai.canonical_capability_ontology import (
     canonical_domain_map,
     resolve_capabilities_from_phrase,
-    search_queries_for_capability,
-    atomic_capability_definitions,
 )
-from minecraft_mod_ai.evidence_first_planning import build_request_catalog, _DOMAIN_TERM_MAP
+from minecraft_mod_ai.evidence_first_planning import _DOMAIN_TERM_MAP
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph, _CAPABILITY_HINTS
 from minecraft_mod_ai import source_transplant
 
@@ -79,15 +76,6 @@ def test_multi_artifact_dependency_closure_and_adaptation_cost(monkeypatch) -> N
         "src/main/resources/data/modid/loot_tables/boss_drops.json": "blob-res-2",
         "fabric.mod.json": "blob-meta-1",
     }
-
-    mock_client = SimpleNamespace(
-        get=lambda url, **kwargs: SimpleNamespace(
-            raise_for_status=lambda: None,
-            content=b'{"mock": true}',
-            json=lambda: {"mock": True},
-        ),
-        close=lambda: None,
-    )
 
     def fake_fetch_blob(client, repo, blob_sha):
         if blob_sha == "blob-java-1":
