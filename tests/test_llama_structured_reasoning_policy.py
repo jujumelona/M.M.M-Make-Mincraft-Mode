@@ -23,7 +23,7 @@ def _request(*, response_format: str, tools=(), response_schema=None):
     )
 
 
-def test_structured_json_reserves_budget_for_visible_contract() -> None:
+def test_base_payload_leaves_structured_constraint_to_runtime_policy() -> None:
     payload = llama_server_hardware_policy._server_payload(
         _adapter(),
         _request(
@@ -44,9 +44,7 @@ def test_structured_json_reserves_budget_for_visible_contract() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_schema_less_json_uses_host_validated_fast_decode(monkeypatch) -> None:
-    # Bind against a tiny isolated module-shaped object so this test proves the
-    # policy itself and does not depend on package bootstrap import order.
+def test_schema_less_json_keeps_native_json_object_constraint() -> None:
     module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
     bind_structured_decode_policy(module)
 
@@ -55,13 +53,40 @@ def test_schema_less_json_uses_host_validated_fast_decode(monkeypatch) -> None:
         _request(response_format="json", response_schema=None),
     )
 
-    assert "response_format" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_explicit_schema_reaches_native_llama_payload() -> None:
+    module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
+    bind_structured_decode_policy(module)
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    }
+
+    payload = module._server_payload(
+        _adapter(),
+        _request(response_format="json", response_schema=schema),
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
 def test_freeform_text_keeps_model_default_reasoning() -> None:
-    payload = llama_server_hardware_policy._server_payload(
+    module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
+    bind_structured_decode_policy(module)
+    payload = module._server_payload(
         _adapter(), _request(response_format="text")
     )
 
@@ -82,8 +107,10 @@ def test_native_tool_transport_keeps_tools_visible_for_pure_content_parser() -> 
     request = _request(response_format="json", tools=(tool,))
     request.tool_choice = "auto"
     request.parallel_tool_calls = True
+    module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
+    bind_structured_decode_policy(module)
 
-    payload = llama_server_hardware_policy._server_payload(_adapter(), request)
+    payload = module._server_payload(_adapter(), request)
 
     assert payload["tools"] == [tool]
     assert payload["tool_choice"] == "auto"
