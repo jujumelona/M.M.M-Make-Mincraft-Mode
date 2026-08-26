@@ -361,7 +361,7 @@ def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_p
         seed_files=("src/main/java/com/donor/mod/RealItem.java",),
         source_symbols=("RealItem",),
         required_dependencies=(),
-        donor_tests=(),
+        donor_tests=("RealItemTest",),
         confidence=0.95,
         adaptation_cost=0.0,
         closure_complete=True,
@@ -371,7 +371,13 @@ def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_p
 
     def mock_compile(files, context):
         evaluated_files.update(files)
-        return {"compile_passed": True, "tests_passed": True}
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 1,
+            "tests_passed_count": 1,
+            "executed_test_ids": ["RealItemTest"],
+        }
 
     from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
     receipt = execute_reuse_proof(
@@ -738,7 +744,13 @@ def test_behavior_verified_requires_nonzero_tests_executed() -> None:
 
     # 2. >= 1 executed test and passed: Promotes to BEHAVIOR_VERIFIED
     def mock_has_tests(files, context):
-        return {"compile_passed": True, "tests_passed": True, "tests_executed": 2, "tests_passed_count": 2}
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 2,
+            "tests_passed_count": 2,
+            "executed_test_ids": ["ItemTest"],
+        }
 
     receipt_passed = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_has_tests)
     assert receipt_passed.proof_level == "BEHAVIOR_VERIFIED"
@@ -790,6 +802,8 @@ def test_artifact_level_partial_reuse_slicing(monkeypatch) -> None:
     )
 
     def mock_partial(files, context):
+        if len(files) == 1 and "src/main/java/CleanClass.java" in files:
+            return {"compile_passed": True, "tests_passed": False}
         return {"compile_passed": False, "unresolved_symbols": ["MissingSymbol"]}
 
     receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_partial)
@@ -899,6 +913,90 @@ dependencies {
 
     assert applied is True
     assert "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/" in updated_bg
+
+
+def test_donor_without_tests_capped_at_compile_verified() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="worldgen.ore",
+        repository="example/ores",
+        commit_sha="7777777777777777777777777777777777777777",
+        license_id="MIT",
+        source_url="https://github.com/example/ores",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=("OreFeature",),
+        required_dependencies=(),
+        donor_tests=(),  # NO DECLARED ACCEPTANCE TESTS
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    def mock_all_pass(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 3,
+            "tests_passed_count": 3,
+            "executed_test_ids": ["SomeTest", "OtherTest"],
+        }
+
+    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_all_pass)
+    # A donor with no declared capability acceptance tests MUST be capped at COMPILE_VERIFIED!
+    assert receipt.proof_level == "COMPILE_VERIFIED"
+    assert receipt.compile_passed is True
+    assert receipt.tests_passed is False
+
+
+def test_requirement_acceptance_contract_mapping() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="magic.spell",
+        repository="example/magic",
+        commit_sha="8888888888888888888888888888888888888888",
+        license_id="MIT",
+        source_url="https://github.com/example/magic",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=("SpellCast",),
+        required_dependencies=(),
+        donor_tests=("SpellCastAcceptanceTest", "ManaDrainAcceptanceTest"),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # 1. Partial acceptance pass (1 out of 2 tests passed) -> COMPILE_VERIFIED
+    def mock_partial_pass(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 1,
+            "tests_passed_count": 1,
+            "executed_test_ids": ["SpellCastAcceptanceTest"],
+        }
+
+    receipt_partial = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_partial_pass)
+    assert receipt_partial.proof_level == "COMPILE_VERIFIED"
+    assert ("magic.spell", "SpellCastAcceptanceTest", True) in receipt_partial.requirement_acceptance_map
+    assert ("magic.spell", "ManaDrainAcceptanceTest", False) in receipt_partial.requirement_acceptance_map
+
+    # 2. Complete acceptance pass (both tests passed) -> BEHAVIOR_VERIFIED
+    def mock_complete_pass(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 2,
+            "tests_passed_count": 2,
+            "executed_test_ids": ["SpellCastAcceptanceTest", "ManaDrainAcceptanceTest"],
+        }
+
+    receipt_complete = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_complete_pass)
+    assert receipt_complete.proof_level == "BEHAVIOR_VERIFIED"
+    assert ("magic.spell", "SpellCastAcceptanceTest", True) in receipt_complete.requirement_acceptance_map
+    assert ("magic.spell", "ManaDrainAcceptanceTest", True) in receipt_complete.requirement_acceptance_map
+
 
 
 

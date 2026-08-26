@@ -42,6 +42,7 @@ class ReuseProofReceipt:
     tests_passed_count: int = 0
     capability_acceptance_tests: tuple[str, ...] = ()
     matched_capability_tests: tuple[str, ...] = ()
+    requirement_acceptance_map: tuple[tuple[str, str, bool], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +67,7 @@ class ReuseProofReceipt:
             "tests_passed_count": self.tests_passed_count,
             "capability_acceptance_tests": list(self.capability_acceptance_tests),
             "matched_capability_tests": list(self.matched_capability_tests),
+            "requirement_acceptance_map": [list(item) for item in self.requirement_acceptance_map],
         }
 
 
@@ -355,48 +357,83 @@ def execute_reuse_proof(
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
 
-    # Capability Acceptance Test Matching
+    # Capability Acceptance Test Contract Mapping
     cap_tokens = {donor_slice.capability.casefold(), donor_slice.capability.split(".")[-1].casefold()}
-    req_tests = {t.casefold() for t in donor_slice.donor_tests}
+    req_tests = {t.casefold(): t for t in donor_slice.donor_tests}
     matched_tests = []
-    for tid in executed_test_ids:
-        tid_lower = tid.casefold()
-        if any(rt in tid_lower for rt in req_tests) or any(ct in tid_lower for ct in cap_tokens):
-            matched_tests.append(tid)
+    acceptance_map = []
+
+    for req_lower, req_orig in req_tests.items():
+        is_passed = any(req_lower in tid.casefold() for tid in executed_test_ids) and tests_passed
+        acceptance_map.append((donor_slice.capability, req_orig, is_passed))
+        if is_passed:
+            matched_tests.append(req_orig)
+
+    if not req_tests and executed_test_ids:
+        for tid in executed_test_ids:
+            if any(ct in tid.casefold() for ct in cap_tokens):
+                matched_tests.append(tid)
+                acceptance_map.append((donor_slice.capability, tid, tests_passed))
 
     matched_capability_tests = tuple(dict.fromkeys(matched_tests))
+    requirement_acceptance_map = tuple(acceptance_map)
 
-    # Granular Artifact Slicing
+    # Isolated Subgraph Compilation Slicing
     unresolved_set = set(unresolved_symbols)
     verified_art_list: list[str] = []
     residual_art_list: list[str] = []
 
-    for path, content in adapted_files.items():
-        text_content = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
-        df_match = next((df for df in donor_slice.files if df.path == path), None)
-        df_syms = set(df_match.symbols) if df_match else set()
+    if compile_passed:
+        verified_art_list.extend(adapted_files.keys())
+    else:
+        # Isolate and verify each individual file / closed subgraph
+        for path, content in adapted_files.items():
+            text_content = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
+            df_match = next((df for df in donor_slice.files if df.path == path), None)
+            df_syms = set(df_match.symbols) if df_match else set()
 
-        has_unresolved = (
-            any(sym in text_content for sym in unresolved_set if sym)
-            or any(sym in df_syms for sym in unresolved_set if sym)
-            or any(sym.casefold() in path.casefold() for sym in unresolved_set if sym)
-        )
+            has_error = (
+                any(sym in text_content for sym in unresolved_set if sym)
+                or any(sym in df_syms for sym in unresolved_set if sym)
+                or any(sym.casefold() in path.casefold() for sym in unresolved_set if sym)
+            )
 
-        if compile_passed:
-            verified_art_list.append(path)
-        elif has_unresolved:
-            residual_art_list.append(path)
-        else:
-            verified_art_list.append(path)
+            if not has_error:
+                # Perform isolated compilation test for this artifact subset
+                if callable(compile_checker):
+                    try:
+                        single_res = compile_checker({path: content}, target_context)
+                        if isinstance(single_res, Mapping):
+                            if bool(single_res.get("compile_passed")):
+                                verified_art_list.append(path)
+                            else:
+                                residual_art_list.append(path)
+                        elif bool(single_res):
+                            verified_art_list.append(path)
+                        else:
+                            residual_art_list.append(path)
+                    except Exception:
+                        residual_art_list.append(path)
+                else:
+                    verified_art_list.append(path)
+            else:
+                residual_art_list.append(path)
 
     verified_artifacts = tuple(verified_art_list)
     residual_artifacts = tuple(residual_art_list)
     verified_symbols = tuple(s for s in donor_slice.source_symbols if s not in unresolved_set)
     residual_symbols = tuple(dict.fromkeys(unresolved_symbols))
 
-    # Determine fine-grained proof level with strict test & closure gating
+    # Determine fine-grained proof level with strict capability acceptance contract gating
+    has_full_acceptance = (
+        bool(donor_slice.donor_tests)
+        and len(matched_capability_tests) == len(donor_slice.donor_tests)
+        and tests_executed > 0
+        and tests_passed
+    )
+
     if compile_passed and donor_slice.closure_complete:
-        if tests_passed and tests_executed > 0 and (len(matched_capability_tests) > 0 or not donor_slice.donor_tests):
+        if has_full_acceptance:
             proof_level = "BEHAVIOR_VERIFIED"
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
@@ -425,7 +462,7 @@ def execute_reuse_proof(
         closure_hash=closure_hash,
         proof_level=proof_level,
         compile_passed=compile_passed and donor_slice.closure_complete,
-        tests_passed=tests_passed and donor_slice.closure_complete and tests_executed > 0 and (len(matched_capability_tests) > 0 or not donor_slice.donor_tests),
+        tests_passed=has_full_acceptance,
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
         missing_resources=tuple(dict.fromkeys(missing_resources)),
         adaptations_applied=tuple(all_receipts),
@@ -439,6 +476,7 @@ def execute_reuse_proof(
         tests_passed_count=tests_passed_count,
         capability_acceptance_tests=donor_slice.donor_tests,
         matched_capability_tests=matched_capability_tests,
+        requirement_acceptance_map=requirement_acceptance_map,
     )
 
 
