@@ -13,10 +13,10 @@ check through the enhanced DependencyMonitor.
 
 import json
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Iterable, Mapping, Sequence
-
+from typing import Any
 
 _ACTIVE_MONITOR: ContextVar[Any | None] = ContextVar(
     "mmm_active_dependency_decode_monitor",
@@ -177,8 +177,8 @@ def _install_enhanced_monitor() -> None:
                     self._admit_java_text(text)
 
         def _admit_java_text(self, text: str) -> None:
-            package_re = getattr(research, "_PACKAGE")
-            import_re = getattr(research, "_IMPORT")
+            package_re = research._PACKAGE
+            import_re = research._IMPORT
             for package in package_re.findall(text):
                 value = str(package).strip()
                 if _JAVA_ROOT.fullmatch(value):
@@ -195,7 +195,7 @@ def _install_enhanced_monitor() -> None:
             if not code_owned:
                 return
             self._admit_java_text(text)
-            maven_re = getattr(research, "_MAVEN_COORD")
+            maven_re = research._MAVEN_COORD
             for group, _artifact, _version in maven_re.findall(text):
                 prefix = _maven_group_prefix(group)
                 if prefix:
@@ -211,7 +211,7 @@ def _install_enhanced_monitor() -> None:
         def _java_violations(self, text: str, *, path: str) -> tuple[Any, ...]:
             violation_cls = research.DependencyViolation
             result: list[Any] = []
-            for imported in getattr(research, "_IMPORT").findall(text):
+            for imported in research._IMPORT.findall(text):
                 value = str(imported).strip()
                 if value and not self._import_allowed(value):
                     result.append(violation_cls("java_import", value, path))

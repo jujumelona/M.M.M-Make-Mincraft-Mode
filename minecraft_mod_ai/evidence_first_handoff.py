@@ -7,13 +7,13 @@ and binds only ``fresh``/``adapt`` tasks to production or resource ownership anc
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from .evidence_first_planning import EvidencePlanError, validate_evidence_first_plan
-
 
 SCHEMA = "mmm/evidence-first-handoff-v1"
 _PRODUCTION_ANCHOR_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
@@ -427,11 +427,11 @@ def validate_evidence_first_handoff(
 
 
 __all__ = [
+    "SCHEMA",
     "AssetRequest",
     "EvidencePlanError",
     "ProductionModule",
     "RetainReceipt",
-    "SCHEMA",
     "WorkGraph",
     "build_evidence_first_handoff",
     "validate_evidence_first_handoff",

@@ -4,9 +4,10 @@ import argparse
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from minecraft_mod_ai.atomic_requirement_contract import compile_ir, validate_ir
 from minecraft_mod_ai.complete_orchestrator import (

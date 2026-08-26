@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
@@ -8,13 +9,20 @@ import re
 import shutil
 import uuid
 import zipfile
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Sequence, TypeVar
+from typing import Any, TypeVar
+
 from .complete_spec import CompleteProposal
-from .json_stream import StreamingJsonDecodeError, iter_canonical_json, parse_json_byte_chunks
+from .json_stream import (
+    StreamingJsonDecodeError,
+    iter_canonical_json,
+    parse_json_byte_chunks,
+)
 from .scale_policy import ScalePolicy
 from .spec import SpecValidationError, canonical_json
+
 INDEX_SCHEMA = 'mmm/complete-proposal-index-v3'
 CHUNKED_JSON_ENCODING = 'mmm/canonical-json-chunks-v1'
 COLLECTION_FORMAT = 'mmm/numbered-collection-manifests-v1'
@@ -366,7 +374,7 @@ def _decode_collection_manifest(path: str, data: bytes) -> dict[str, Any]:
 
 def _encode_page_cursor(*, proposal_hash: str, section: str, offset: int, manifest_index: int, shard_index: int, item_index: int, fragment_offset: int, cursor_key: bytes | None) -> str:
     payload = f'{proposal_hash}\x00{section}\x00{offset}\x00{manifest_index}\x00{shard_index}\x00{item_index}\x00{fragment_offset}'
-    key = cursor_key or hashlib.sha256(f'mmm-local-page-cursor\x00{proposal_hash}'.encode('utf-8')).digest()
+    key = cursor_key or hashlib.sha256(f'mmm-local-page-cursor\x00{proposal_hash}'.encode()).digest()
     checksum = hmac.new(key, payload.encode('utf-8'), hashlib.sha256).hexdigest()[:32]
     return f'p_{offset}_{manifest_index}_{shard_index}_{item_index}_{fragment_offset}_{checksum}'
 
@@ -623,7 +631,7 @@ def _read_file_part(root: Path, relative: str) -> bytes:
 
 def _safe_relative(value: str) -> PurePosixPath:
     normalized = PurePosixPath(value.replace('\\', '/'))
-    if not value or normalized.is_absolute() or any((part in {'', '.', '..'} for part in normalized.parts)):
+    if not value or normalized.is_absolute() or any(part in {'', '.', '..'} for part in normalized.parts):
         raise SpecValidationError(f'Unsafe proposal shard path: {value!r}')
     return normalized
 

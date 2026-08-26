@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from .project_write_lock import project_write_lock
 

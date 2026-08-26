@@ -11,7 +11,6 @@ from minecraft_mod_ai.structured_output import (
     validate_structured_output,
 )
 
-
 _SCHEMA = {
     "type": "object",
     "properties": {

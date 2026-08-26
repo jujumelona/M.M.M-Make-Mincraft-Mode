@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import base64
 import binascii
 import hashlib
@@ -6,13 +7,17 @@ import html
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
+
 import httpx
+
 from .central_research import external_discovery_routes
 from .platform_catalog import adapter_for_target
 from .spec import SpecValidationError, canonical_json
+
 _PROVIDERS = frozenset({'modrinth', 'github', 'openverse_images', 'wikipedia', 'huggingface_models', 'openalex_works', 'crossref_works'})
 _TARGET_PROFILES = frozenset({'minecraft_mod', 'ai_runtime', 'media', 'general_reference'})
 _MODRINTH_ID = re.compile('^[A-Za-z0-9_-]{3,64}$')
@@ -218,7 +223,7 @@ class EcosystemDiscoveryClient:
         normalized_repo_id = _normalize_hf_repo_id(repo_id)
         if not normalized_repo_id:
             raise SpecValidationError('Invalid Hugging Face model repository ID.')
-        encoded_repo_id = '/'.join((quote(part, safe='._-') for part in normalized_repo_id.split('/')))
+        encoded_repo_id = '/'.join(quote(part, safe='._-') for part in normalized_repo_id.split('/'))
         model_url = f'https://huggingface.co/api/models/{encoded_repo_id}'
         current = self._get_json(model_url, params={'full': 'true', 'cardData': 'true'}, provider='huggingface')
         normalized_current = _normalize_hf_model(current)
@@ -261,7 +266,7 @@ class EcosystemDiscoveryClient:
             if not project_id or not slug or (not license_id):
                 continue
             project_type = str(hit.get('project_type', 'mod'))
-            stable = {'project_id': project_id, 'slug': slug, 'title': str(hit.get('title', '')), 'description': str(hit.get('description', '')), 'license': license_id, 'versions': sorted((str(v) for v in hit.get('versions', []))), 'categories': sorted((str(v) for v in hit.get('categories', [])))}
+            stable = {'project_id': project_id, 'slug': slug, 'title': str(hit.get('title', '')), 'description': str(hit.get('description', '')), 'license': license_id, 'versions': sorted(str(v) for v in hit.get('versions', [])), 'categories': sorted(str(v) for v in hit.get('categories', []))}
             candidates.append(EcosystemCandidate(candidate_id=f'modrinth:{project_id}', provider='modrinth', resource_kind=project_type, title=stable['title'], summary=stable['description'], source_url=f'https://modrinth.com/{project_type}/{slug}', api_url=f'https://api.modrinth.com/v2/project/{project_id}', license_id=license_id, license_url='', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version, loader=target.loader, compatibility='search_metadata_exact; version_file_inspection_required' if target.exact else 'platform_neutral_metadata; target_hypothesis_required', attribution='', preview_urls=_safe_preview_urls([hit.get('icon_url'), *hit.get('gallery', [])], allowed_hosts={'cdn.modrinth.com'}), reuse_status='candidate_only_not_downloaded', evidence_sha256=_sha256_text(canonical_json(stable))))
         next_offset = offset + limit if offset + limit < total else None
         return (candidates, total, next_offset)
@@ -286,7 +291,7 @@ class EcosystemDiscoveryClient:
             source_url = _safe_https_url(item.get('html_url'))
             if not full_name or urlparse(source_url).hostname != 'github.com':
                 continue
-            stable = {'id': item.get('id'), 'full_name': full_name, 'description': str(item.get('description') or ''), 'default_branch': str(item.get('default_branch', '')), 'license': license_id, 'topics': sorted((str(value) for value in item.get('topics', [])))}
+            stable = {'id': item.get('id'), 'full_name': full_name, 'description': str(item.get('description') or ''), 'default_branch': str(item.get('default_branch', '')), 'license': license_id, 'topics': sorted(str(value) for value in item.get('topics', []))}
             is_minecraft = target_profile == 'minecraft_mod'
             candidates.append(EcosystemCandidate(candidate_id=f'github:{full_name.lower()}', provider='github', resource_kind='repository', title=full_name, summary=stable['description'], source_url=source_url, api_url=f'https://api.github.com/repos/{full_name}', license_id=license_id, license_url=f'https://api.github.com/repos/{full_name}/license', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version if is_minecraft else 'not_applicable', loader=target.loader if is_minecraft else 'not_applicable', compatibility='unverified; exact commit, platform metadata and build inspection required' if is_minecraft and target.exact else 'platform_neutral_metadata; target_hypothesis_required' if is_minecraft else 'unverified; pin commit, inspect license and benchmark runtime', attribution='', preview_urls=(), reuse_status='candidate_only_not_cloned', evidence_sha256=_sha256_text(canonical_json(stable))))
         next_page = page + 1 if page * limit < min(total, 1000) else None
@@ -310,7 +315,7 @@ class EcosystemDiscoveryClient:
             access_blocked = bool(normalized['private'] or normalized['gated'] or normalized['disabled'])
             license_blocked = license_policy.startswith('reject_')
             model_id = normalized['model_id']
-            encoded_model_id = '/'.join((quote(part, safe='._-') for part in model_id.split('/')))
+            encoded_model_id = '/'.join(quote(part, safe='._-') for part in model_id.split('/'))
             metadata = {**normalized, 'card': card, 'file_count': len(files), 'format_inventory': _hf_format_inventory(files)}
             stable = {'model': metadata, 'file_paths': [file['path'] for file in files]}
             if access_blocked:
@@ -518,7 +523,7 @@ def _serial_discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, re
             pages.append({**page, 'research_domain_id': route['domain_id'], 'route_query_sha256': _sha256_text(route['query'])})
         except EcosystemDiscoveryUnavailable as exc:
             errors.append({'domain_id': route['domain_id'], 'provider': provider, 'query_sha256': _sha256_text(route['query']), 'error_type': type(exc).__name__, 'message': str(exc)})
-    candidate_count = sum((int(page.get('returned', 0)) for page in pages if isinstance(page, dict)))
+    candidate_count = sum(int(page.get('returned', 0)) for page in pages if isinstance(page, dict))
     status = 'available' if candidate_count else 'empty' if pages else 'unavailable'
     if mode == 'on' and (not pages):
         raise EcosystemDiscoveryUnavailable('Required ecosystem discovery providers were unavailable.')
@@ -626,7 +631,7 @@ def _normalize_hf_repo_id(value: Any) -> str:
     parts = repo_id.split('/')
     if len(parts) not in {1, 2}:
         return ''
-    if any((_HF_MODEL_COMPONENT.fullmatch(part) is None for part in parts)):
+    if any(_HF_MODEL_COMPONENT.fullmatch(part) is None for part in parts):
         return ''
     return repo_id
 
@@ -700,13 +705,13 @@ def _hf_format_inventory(files: list[dict[str, Any]]) -> dict[str, Any]:
     safe_paths = [file['path'] for file in files if file['safe_data_format']]
     unsafe_paths = [file['path'] for file in files if file['unsafe_serialization']]
     code_paths = [file['path'] for file in files if file['is_repository_code']]
-    return {'has_safetensors': any((path.lower().endswith('.safetensors') for path in safe_paths)), 'has_gguf': any((path.lower().endswith('.gguf') for path in safe_paths)), 'has_onnx': any((path.lower().endswith('.onnx') for path in safe_paths)), 'safe_data_format_files': safe_paths, 'unsafe_serialization_files': unsafe_paths, 'repository_code_files': code_paths, 'safe_format_is_not_execution_authorization': True}
+    return {'has_safetensors': any(path.lower().endswith('.safetensors') for path in safe_paths), 'has_gguf': any(path.lower().endswith('.gguf') for path in safe_paths), 'has_onnx': any(path.lower().endswith('.onnx') for path in safe_paths), 'safe_data_format_files': safe_paths, 'unsafe_serialization_files': unsafe_paths, 'repository_code_files': code_paths, 'safe_format_is_not_execution_authorization': True}
 
 def _safe_repo_path(value: Any) -> str:
     if not isinstance(value, str):
         return ''
     path = value.strip().replace('\\', '/')
-    if not path or len(path.encode('utf-8')) > 1024 or path.startswith('/') or any((part in {'', '.', '..'} for part in path.split('/'))):
+    if not path or len(path.encode('utf-8')) > 1024 or path.startswith('/') or any(part in {'', '.', '..'} for part in path.split('/')):
         return ''
     return path
 
@@ -801,7 +806,7 @@ def _normalized_doi(value: Any) -> str:
             break
     if not doi or len(doi.encode('utf-8')) > 512 or (not doi.startswith('10.')):
         return ''
-    if any((character.isspace() or ord(character) < 32 for character in doi)):
+    if any(character.isspace() or ord(character) < 32 for character in doi):
         return ''
     return doi
 
@@ -823,7 +828,7 @@ def _crossref_authors(value: Any) -> list[str]:
     for author in value[:100]:
         if not isinstance(author, dict):
             continue
-        name = ' '.join((part.strip() for part in (str(author.get('given') or ''), str(author.get('family') or '')) if part.strip()))
+        name = ' '.join(part.strip() for part in (str(author.get('given') or ''), str(author.get('family') or '')) if part.strip())
         if name and name not in authors:
             authors.append(name[:256])
     return authors

@@ -57,9 +57,9 @@ from .production_tools import ProductionToolService
 from .project_index import ProjectIndex
 from .rag_index import ProjectRAGIndex
 from .routed_planner import RoutedPlanner
-from .scale_policy import ScalePolicy, ScalePolicyError
 from .scalable_generator import ScalableFabricProjectGenerator
 from .scalable_pipeline import ScalableMinecraftModPipeline
+from .scale_policy import ScalePolicy, ScalePolicyError
 from .spec import BossSpec, ContentSpec, ModSpec, PlatformLock, Proposal
 from .technology_radar import (
     assess_technology_compatibility,
@@ -90,13 +90,13 @@ __all__ = [
     "GameDesignPlanner",
     "HeuristicPlanner",
     "MinecraftModPipeline",
+    "ModAISession",
     "ModDevelopmentMethod",
+    "ModSpec",
     "ModelBackendError",
     "ModelConfigurationError",
     "ModelRegistry",
     "ModelRouter",
-    "ModAISession",
-    "ModSpec",
     "OpenAICompatiblePlanner",
     "PipelineResult",
     "PlatformLock",
@@ -110,10 +110,10 @@ __all__ = [
     "ProjectRAGIndex",
     "Proposal",
     "RoutedPlanner",
-    "ScalePolicy",
-    "ScalePolicyError",
     "ScalableFabricProjectGenerator",
     "ScalableMinecraftModPipeline",
+    "ScalePolicy",
+    "ScalePolicyError",
     "TrainingTraceStore",
     "assess_technology_compatibility",
     "build_technology_radar",

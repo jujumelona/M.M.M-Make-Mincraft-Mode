@@ -4,7 +4,6 @@ import threading
 from functools import wraps
 from typing import Any
 
-
 _RAG_THREAD_STATE = threading.local()
 
 

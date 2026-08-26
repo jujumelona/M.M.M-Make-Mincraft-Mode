@@ -6,7 +6,8 @@ The indexed SQLite/FTS hot path lives in trajectory_memory itself. This module m
 never install runtime replacements again.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 _MARKER = "_mmm_research_memory_performance_v1"
 

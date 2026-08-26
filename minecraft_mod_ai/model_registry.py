@@ -3,14 +3,14 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .config_paths import config_path
 from .model_adapters import AdapterConfig, ModelConfigurationError
 from .strict_yaml import safe_load_unique_keys
-
 
 LEGACY_REQUIRED_ROLES = frozenset(
     {"planner", "researcher", "coder", "visual_critic", "image_generator"}

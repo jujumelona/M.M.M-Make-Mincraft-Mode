@@ -7,14 +7,16 @@ import re
 import sys
 import tempfile
 import threading
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import AsyncExitStack
 from itertools import islice
 from pathlib import Path
-from typing import Any, Collection, Mapping, Sequence
+from typing import Any
 
 import anyio
 
-from .external_agent_bridge import ExternalAgentBridge, TOOL_NAMES as EXTERNAL_TOOL_NAMES
+from .external_agent_bridge import TOOL_NAMES as EXTERNAL_TOOL_NAMES
+from .external_agent_bridge import ExternalAgentBridge
 from .source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_SCHEMA,
     materialize_model_source_edit,

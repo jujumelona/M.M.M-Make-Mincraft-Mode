@@ -18,9 +18,10 @@ import json
 import os
 import re
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _INSTALLED = False
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"

@@ -4,12 +4,12 @@ import pytest
 
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
-    LlamaCompletionBoundaryError,
     OUTPUT_EXHAUSTED,
+    LlamaCompletionBoundaryError,
     completion_boundary_error,
 )
-from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter as adapter_module
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
 

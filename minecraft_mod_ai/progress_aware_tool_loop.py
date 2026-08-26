@@ -7,10 +7,11 @@ import json
 import re
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import (
@@ -254,7 +255,7 @@ class TargetMutationContext:
             return LocalizationStage.NEED_BODY
         return LocalizationStage.READY
 
-    def merge(self, other: "TargetMutationContext") -> "TargetMutationContext":
+    def merge(self, other: TargetMutationContext) -> TargetMutationContext:
         """Cumulatively accumulate localization discoveries across multiple retrieval turns."""
         return TargetMutationContext(
             target_path=other.target_path or self.target_path,
@@ -959,7 +960,10 @@ def generate_with_tools(
 ) -> str:
     """Unified single-owner retrieve/act/observe/verify execution loop."""
 
-    from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
+    from .agent_capability_context import (
+        reviewed_mcp_servers_for_model_role,
+        skills_for_tool,
+    )
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -1489,15 +1493,7 @@ def generate_with_tools(
 
                 ctx_progress = False
                 if after_ctx is not None:
-                    if before_ctx is None:
-                        ctx_progress = True
-                    elif after_ctx.localization_stage != before_ctx.localization_stage:
-                        ctx_progress = True
-                    elif after_ctx.target_path != before_ctx.target_path:
-                        ctx_progress = True
-                    elif after_ctx.target_symbol != before_ctx.target_symbol:
-                        ctx_progress = True
-                    elif after_ctx.source_body != before_ctx.source_body:
+                    if before_ctx is None or after_ctx.localization_stage != before_ctx.localization_stage or after_ctx.target_path != before_ctx.target_path or after_ctx.target_symbol != before_ctx.target_symbol or after_ctx.source_body != before_ctx.source_body:
                         ctx_progress = True
 
                 initial_evidence_progress = recorded and len(state.evidence_fingerprints) == 1
@@ -1594,6 +1590,10 @@ def _finalize_without_tools(
 
 
 __all__ = [
+    "_LOCALIZATION_EVIDENCE_TOOLS",
+    "_MUTATION_ACT_TOOLS",
+    "_READ_OBSERVE_TOOLS",
+    "_VERIFY_TOOLS",
     "ExecutionStepTrace",
     "HostRunState",
     "LocalizationStage",
@@ -1603,10 +1603,6 @@ __all__ = [
     "RetrievalObservation",
     "RetrievalProgress",
     "TargetMutationContext",
-    "_LOCALIZATION_EVIDENCE_TOOLS",
-    "_MUTATION_ACT_TOOLS",
-    "_READ_OBSERVE_TOOLS",
-    "_VERIFY_TOOLS",
     "evidence_fingerprint",
     "format_trajectory_summary",
     "generate_with_tools",

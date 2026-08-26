@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 _MARKER = "__mmm_legacy_temporary_skill_transport_v1__"
 _SKILL_ID = "_mmm_temporary_skill_id"

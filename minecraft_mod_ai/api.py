@@ -53,7 +53,11 @@ def _validate_requested_target(
     minecraft_version: str | None,
     loader: str | None,
 ) -> tuple[str | None, str | None]:
-    from .platform_catalog import adapter_for_target, adapters_for_version, provider_for_loader
+    from .platform_catalog import (
+        adapter_for_target,
+        adapters_for_version,
+        provider_for_loader,
+    )
 
     version = _normalize_target_value(minecraft_version)
     normalized_loader = _normalize_target_value(loader)
@@ -292,7 +296,7 @@ class ModAISession:
         existing_input: str | Path | None = None,
         profile: str = "t4_local",
         model_id: str | None = None,
-    ) -> "ModAISession":
+    ) -> ModAISession:
         if model_id is not None:
             raise SpecValidationError(
                 "Direct model_id overrides are disabled. Add the model to "
@@ -317,7 +321,7 @@ class ModAISession:
         minecraft_version: str | None = None,
         loader: str | None = None,
         existing_input: str | Path | None = None,
-    ) -> "ModAISession":
+    ) -> ModAISession:
         return cls(
             output_root=output_root,
             minecraft_version=minecraft_version,
@@ -341,7 +345,7 @@ class ModAISession:
         minecraft_version: str | None = None,
         loader: str | None = None,
         existing_input: str | Path | None = None,
-    ) -> "ModAISession":
+    ) -> ModAISession:
         api_key = os.environ.get(api_key_env, "")
         if not api_key:
             raise SpecValidationError(
@@ -433,7 +437,7 @@ class CompleteChatReply:
 
     message: str
     approval_hash: str = field(repr=False)
-    complete_proposal: "CompleteProposal" = field(repr=False)
+    complete_proposal: CompleteProposal = field(repr=False)
 
     @property
     def ready_to_build(self) -> bool:
@@ -490,7 +494,7 @@ class CompleteModAISession:
         )
         self.orchestrator._fast_mode = fast_mode
         self.brief = ""
-        self.complete_proposal: "CompleteProposal | None" = None
+        self.complete_proposal: CompleteProposal | None = None
 
     def plan(
         self,
@@ -609,10 +613,10 @@ class CompleteModAISession:
 
     def _persist_result_artifacts(
         self,
-        result: "CompletePipelineResult",
+        result: CompletePipelineResult,
         *,
         run_name: str,
-    ) -> "CompletePipelineResult":
+    ) -> CompletePipelineResult:
         if self.workspace_root == self.output_root.expanduser().resolve():
             return result
         run_label = Path(run_name).name
@@ -634,12 +638,12 @@ class CompleteModAISession:
 
     def build(
         self,
-        candidate: CompleteChatReply | "CompleteProposal | None" = None,
+        candidate: CompleteChatReply | CompleteProposal | None = None,
         *,
         run_name: str = "complete-run",
         source_only: bool = False,
-        options: "CompleteExecutionOptions | None" = None,
-    ) -> "CompletePipelineResult":
+        options: CompleteExecutionOptions | None = None,
+    ) -> CompletePipelineResult:
         from .complete_orchestrator import CompleteExecutionOptions
         from .complete_spec import CompleteProposal
 
@@ -671,10 +675,10 @@ class CompleteModAISession:
 
 
 __all__ = [
+    "SUPPORTED_MINECRAFT_VERSIONS",
     "ChatReply",
     "CompleteChatReply",
     "CompleteModAISession",
     "ModAISession",
-    "SUPPORTED_MINECRAFT_VERSIONS",
     "supported_minecraft_versions",
 ]

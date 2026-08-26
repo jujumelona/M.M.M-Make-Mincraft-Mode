@@ -9,7 +9,6 @@ from .model_concurrency import (
     active_llama_parallelism,
 )
 
-
 _ROUTER_CONTRACT_VERSION = 3
 _RESEARCH_DESIGN_CAPACITY_VERSION = 1
 

@@ -11,7 +11,8 @@ import hashlib
 import json
 import os
 import re
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ..model_tool_aliases import resolve_exposed_model_tool
 from ..source_edit_scalar_protocol_contract import SOURCE_EDIT_PARAMETER_ALIASES
@@ -239,7 +240,7 @@ def _parse_qwen_function(
 
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(
-        f"{call_index}\0{name}\0{raw_arguments}".encode("utf-8")
+        f"{call_index}\0{name}\0{raw_arguments}".encode()
     ).hexdigest()[:16]
     return ToolCall(
         id=f"call_{digest}",

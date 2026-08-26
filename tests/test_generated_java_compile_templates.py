@@ -5,7 +5,6 @@ from pathlib import Path
 from minecraft_mod_ai.geckolib_generator import _entity_java
 from minecraft_mod_ai.system_templates_quest import _quest_java
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

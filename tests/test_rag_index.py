@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai.rag_index import ProjectRAGIndex
 from minecraft_mod_ai.production_tools import ProductionToolService
+from minecraft_mod_ai.rag_index import ProjectRAGIndex
 
 
 def _metadata() -> dict:

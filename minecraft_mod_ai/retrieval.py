@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urlparse
 
 from .platform_catalog import adapter_for_target
@@ -372,7 +373,7 @@ class OfficialCorpusIndex:
     def close(self) -> None:
         return None
 
-    def __enter__(self) -> "OfficialCorpusIndex":
+    def __enter__(self) -> OfficialCorpusIndex:
         return self
 
     def __exit__(self, *_args: object) -> None:

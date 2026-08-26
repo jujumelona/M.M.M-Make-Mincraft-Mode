@@ -13,9 +13,10 @@ import json
 import math
 import sqlite3
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .research_perf_common import env_int, table_exists
 
@@ -968,4 +969,4 @@ def harden(rag_index_module: Any, centroid_module: Any) -> None:
         raise RuntimeError('Centroid native bounded search path is not installed.')
 
 
-__all__ = ["build_index", "sqlite_search_pass", "centroid_vector_search", "harden"]
+__all__ = ["build_index", "centroid_vector_search", "harden", "sqlite_search_pass"]

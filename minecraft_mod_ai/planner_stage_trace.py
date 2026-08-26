@@ -6,9 +6,9 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
-
+from typing import Any
 
 _TRACE_LOCK = threading.RLock()
 _TRACE_SCHEMA = "mmm/planner-stage-trace-v1"

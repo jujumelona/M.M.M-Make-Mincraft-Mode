@@ -3,11 +3,16 @@ from __future__ import annotations
 import heapq
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any
 
-from .json_stream import CanonicalJsonError, canonical_json_sha256, validate_canonical_json
+from .json_stream import (
+    CanonicalJsonError,
+    canonical_json_sha256,
+    validate_canonical_json,
+)
 from .scale_policy import ScalePolicy
 from .spec import Proposal, SpecValidationError
 
@@ -366,7 +371,7 @@ class CompleteProposal:
             }
         )
 
-    def with_hash(self) -> "CompleteProposal":
+    def with_hash(self) -> CompleteProposal:
         draft = CompleteProposal(
             **{
                 **self.__dict__,
@@ -383,7 +388,7 @@ class CompleteProposal:
         supplied_hash: str,
         *,
         policy: ScalePolicy | None = None,
-    ) -> "CompleteProposal":
+    ) -> CompleteProposal:
         self.validate(policy=policy)
         expected = self.calculate_hash()
         if supplied_hash != expected:
@@ -399,7 +404,7 @@ class CompleteProposal:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CompleteProposal":
+    def from_dict(cls, data: dict[str, Any]) -> CompleteProposal:
         required = {
             "schema_version",
             "proposal_version",

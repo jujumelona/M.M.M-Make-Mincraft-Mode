@@ -5,15 +5,15 @@ import threading
 from types import SimpleNamespace
 
 import minecraft_mod_ai.model_context_budget as compaction_adapter
+from minecraft_mod_ai.model_context_budget import (
+    _IMPLEMENTATION_SOURCE_SEED_BYTES,
+    _canonical_size,
+    _compact_implementation_seed,
+)
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.platform_custom_coder_contract import (
     _capture_agent_binding,
     _restore_agent_binding,
-)
-from minecraft_mod_ai.model_context_budget import (
-    _IMPLEMENTATION_SOURCE_SEED_BYTES,
-    _compact_implementation_seed,
-    _canonical_size,
 )
 
 

@@ -8,8 +8,9 @@ these declared capabilities instead of inferring a family from a model id or GGU
 filename.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from .model_adapters.base import ModelConfigurationError
 

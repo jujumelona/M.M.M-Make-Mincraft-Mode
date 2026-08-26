@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.qwen35_request_policy import install
 
-
 _SAMPLING_PROFILES = {
     "general_thinking": {
         "temperature": 1.0,

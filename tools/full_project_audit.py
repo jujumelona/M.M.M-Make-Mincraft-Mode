@@ -14,12 +14,13 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+import tomllib
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]

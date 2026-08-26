@@ -8,8 +8,9 @@ second JSON-schema/grammar contract into llama-server.
 """
 
 import os
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 from .model_context_budget import effective_context_tokens, tool_action_token_budget
 

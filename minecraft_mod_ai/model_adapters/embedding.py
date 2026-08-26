@@ -4,12 +4,17 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from ..model_runtime_performance import (
     _retrieval_cache_enabled as _cache_enabled,
+)
+from ..model_runtime_performance import (
     _retrieval_result_cache_limit as _result_cache_limit,
+)
+from ..model_runtime_performance import (
     _text_digest,
 )
 from ..retrieval_cpu_budget_contract import require_dense_retrieval_device

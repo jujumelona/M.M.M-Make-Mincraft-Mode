@@ -18,8 +18,9 @@ Install idempotence should normally use ``has_contract_marker``. Code that choos
 exact layer to unwrap or bypass must use ``owns_contract_marker``.
 """
 
+from collections.abc import Callable, Iterator
 from functools import wraps
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, TypeVar
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 

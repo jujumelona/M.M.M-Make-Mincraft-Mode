@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
-from minecraft_mod_ai.model_adapters import GenerationResponse, ModelConfigurationError, ToolCall
+from minecraft_mod_ai.model_adapters import (
+    GenerationResponse,
+    ModelConfigurationError,
+    ToolCall,
+)
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_qwen_tool_markup
 from minecraft_mod_ai.model_router import ModelRouter
 

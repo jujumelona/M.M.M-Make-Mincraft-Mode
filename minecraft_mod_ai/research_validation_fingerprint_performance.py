@@ -14,8 +14,9 @@ import os
 import stat
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 _MARKER = "_mmm_stat_validated_validation_fingerprint_v1"
 _CACHE_LOCK = threading.RLock()

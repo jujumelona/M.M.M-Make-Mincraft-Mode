@@ -3,7 +3,8 @@ from __future__ import annotations
 """Workflow -> subtask -> function procedural memory from verified action traces."""
 
 from collections import Counter
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from .procedure_trace import sequence_actions
 

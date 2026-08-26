@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import inspect
 
-from minecraft_mod_ai import central_research, ecosystem_discovery, game_design
-from minecraft_mod_ai import parallel_runtime_contract, small_model_agent_policy
+from minecraft_mod_ai import (
+    central_research,
+    ecosystem_discovery,
+    game_design,
+    parallel_runtime_contract,
+    small_model_agent_policy,
+)
 
 
 def _long_text() -> str:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import minecraft_mod_ai.model_adapters as model_adapters
+from minecraft_mod_ai import model_adapters
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
 

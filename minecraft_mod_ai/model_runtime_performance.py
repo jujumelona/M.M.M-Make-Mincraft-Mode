@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Iterator, Sequence
-
+from collections.abc import Iterator, Sequence
 
 _GIB = 1024**3
 _MAX_RERANK_MICROBATCH = 32

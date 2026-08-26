@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .procedure_trace import sequence_actions
 from .trajectory_memory import relevant_trajectories, synthesize_temporary_skill
@@ -63,7 +64,7 @@ def _install_generation_replay(search: Any) -> None:
                     "java": _java_target(messages),
                 }
                 cache[key] = build_generation_replay_context(
-                    getattr(self, "_project_root"),
+                    self._project_root,
                     query,
                     router=getattr(self, "_router", None),
                     target=target,

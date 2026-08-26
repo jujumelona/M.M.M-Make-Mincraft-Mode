@@ -1,6 +1,8 @@
 from __future__ import annotations
+
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 _ALLOWED = frozenset({'runtime', 'visual_3d', 'state_save_migration', 'multiplayer', 'performance', 'accessibility', 'research', 'build'})
 _MULTIPLAYER_KINDS = frozenset({'networking', 'party', 'guild'})
@@ -40,9 +42,7 @@ def _routes_for_atom(proposal: Any, atom: Mapping[str, Any], production_contract
 
     infrastructure_only = bool(routes) and routes <= {'research', 'build'}
     visual_asset_only = bool(routes) and routes <= {'visual_3d'} and not has_module
-    if has_module and not infrastructure_only:
-        routes.add('runtime')
-    elif not routes:
+    if has_module and not infrastructure_only or not routes:
         routes.add('runtime')
     elif visual_asset_only:
         routes.discard('runtime')

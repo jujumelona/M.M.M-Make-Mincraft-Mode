@@ -1,14 +1,21 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import math
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
-from .production_contract import ProductionContractError, bound_game_design, validate_production_contract
+from typing import Any
+
+from .production_contract import (
+    ProductionContractError,
+    bound_game_design,
+    validate_production_contract,
+)
+
 _SHA256 = re.compile('^(?:sha256:)?[0-9a-f]{64}$')
 _FORBIDDEN_COMPLETION_FIELDS = {'all_passed', 'complete', 'completion', 'overall_status'}
 _CONDITIONAL_KEYS = {'state_save_migration': 'state_validation', 'multiplayer': 'multiplayer_validation', 'performance': 'performance_validation', 'accessibility': 'accessibility_validation'}
@@ -88,7 +95,7 @@ def _source_validation_evidence(value: Mapping[str, Any] | None) -> EvidenceResu
     findings = value.get('findings')
     if checks is None or checks <= 0 or (not _is_sequence(findings)):
         return None
-    if any((isinstance(item, Mapping) and str(item.get('severity', '')).casefold() in {'error', 'fatal'} for item in findings)):
+    if any(isinstance(item, Mapping) and str(item.get('severity', '')).casefold() in {'error', 'fatal'} for item in findings):
         return None
     facts = {'status': 'PASS', 'checks_run': checks, 'finding_count': len(findings)}
     return ([_evidence_ref('source-validation', facts)], [value])
@@ -98,7 +105,7 @@ def _clean_build_evidence(value: Mapping[str, Any] | None) -> EvidenceResult | N
         return None
     commands = _commands(value)
     clean = [item for item in commands if item.get('name') == 'clean_build']
-    if not clean or not all((_command_passed(item) for item in clean)):
+    if not clean or not all(_command_passed(item) for item in clean):
         return None
     facts = {'status': 'PASS', 'gradle_version': str(value.get('gradle_version', '')), 'clean_build_count': len(clean), 'commands': [{'name': str(item.get('name', '')), 'exit_code': item.get('exit_code'), 'timed_out': item.get('timed_out', False)} for item in commands]}
     return ([_evidence_ref('gradle-clean-build', facts)], [value])
@@ -108,7 +115,7 @@ def _gametest_evidence(value: Mapping[str, Any] | None) -> EvidenceResult | None
         return None
     commands = _commands(value)
     runs = [item for item in commands if item.get('name') == 'gametest']
-    if not runs or not all((_command_passed(item) for item in runs)):
+    if not runs or not all(_command_passed(item) for item in runs):
         return None
     raw_path = value.get('gametest_report')
     if not isinstance(raw_path, str) or not raw_path.strip():
@@ -126,7 +133,7 @@ def _jar_evidence(build: Mapping[str, Any] | None, validation: Mapping[str, Any]
     findings = validation.get('findings')
     if checks is None or checks <= 0 or (not _is_sequence(findings)):
         return None
-    if any((isinstance(item, Mapping) and str(item.get('severity', '')).casefold() in {'error', 'fatal'} for item in findings)):
+    if any(isinstance(item, Mapping) and str(item.get('severity', '')).casefold() in {'error', 'fatal'} for item in findings):
         return None
     raw_path = build.get('jar_path')
     if not isinstance(raw_path, str) or not raw_path.strip():
@@ -141,7 +148,7 @@ def _research_evidence(game_design: Mapping[str, Any]) -> EvidenceResult | None:
     technology = game_design.get('_technology_radar')
     ecosystem = game_design.get('_ecosystem_discovery')
     technical = game_design.get('_technical_evidence')
-    if not all((isinstance(item, Mapping) for item in (technology, ecosystem, technical))):
+    if not all(isinstance(item, Mapping) for item in (technology, ecosystem, technical)):
         return None
     assert isinstance(technology, Mapping)
     assert isinstance(ecosystem, Mapping)
@@ -197,9 +204,9 @@ def _visual_evidence(contract: Mapping[str, Any], assets: Mapping[str, Any] | No
             return None
         screenshot_hashes.append(digest)
     expected_test = next((str(item['statement']) for item in contract['acceptance_catalog'] if isinstance(item, Mapping) and item.get('acceptance_ref') == 'acceptance:quality:visual_3d'), '')
-    if not expected_test or not any((isinstance(item, Mapping) and item.get('test') == expected_test and (item.get('status') == 'PASS') and isinstance(item.get('evidence'), str) and bool(item['evidence'].strip()) for item in results)):
+    if not expected_test or not any(isinstance(item, Mapping) and item.get('test') == expected_test and (item.get('status') == 'PASS') and isinstance(item.get('evidence'), str) and bool(item['evidence'].strip()) for item in results):
         return None
-    if any((not isinstance(item, Mapping) or item.get('status') != 'PASS' for item in results)):
+    if any(not isinstance(item, Mapping) or item.get('status') != 'PASS' for item in results):
         return None
     refs = [_evidence_ref('visual-review', {'screenshots': screenshot_hashes, 'acceptance_results': [{'test': item.get('test'), 'status': item.get('status'), 'evidence': item.get('evidence')} for item in results]})]
     sources: list[Mapping[str, Any]] = [visual]
@@ -248,7 +255,7 @@ def _asset_integrity_evidence(receipt: Mapping[str, Any] | None, expected_ids: s
 
 def _explicit_evidence(key: str, roots: Sequence[Any], validator: Callable[[Mapping[str, Any]], bool]) -> EvidenceResult | None:
     records = _named_mappings(roots, key)
-    if not records or any((not validator(record) for record in records)):
+    if not records or any(not validator(record) for record in records):
         return None
     refs = [_evidence_ref(key.replace('_', '-'), _stable_record(record)) for record in records]
     return (refs, list(records))
@@ -275,7 +282,7 @@ def _valid_accessibility_validation(value: Mapping[str, Any]) -> bool:
         return False
     paths = value.get('declared_paths')
     checks = value.get('checks')
-    if not _is_sequence(paths) or not paths or any((not isinstance(path, str) or not path.strip() for path in paths)) or (len(set(paths)) != len(paths)) or (not _is_sequence(checks)):
+    if not _is_sequence(paths) or not paths or any(not isinstance(path, str) or not path.strip() for path in paths) or (len(set(paths)) != len(paths)) or (not _is_sequence(checks)):
         return False
     covered: set[str] = set()
     for check in checks:
@@ -297,7 +304,7 @@ def _objective_pass(value: Mapping[str, Any] | None) -> bool:
     return not (isinstance(producer, str) and isinstance(verifier, str) and (producer.strip().casefold() == verifier.strip().casefold()))
 
 def _combine(*values: EvidenceResult | None) -> EvidenceResult | None:
-    if any((value is None for value in values)):
+    if any(value is None for value in values):
         return None
     refs: list[str] = []
     sources: list[Mapping[str, Any]] = []
@@ -358,7 +365,7 @@ def _passing_gametest_xml(path: Path) -> dict[str, Any] | None:
                         return None
             elif tag == 'testcase':
                 test_count += 1
-                if any((child.tag.rsplit('}', 1)[-1] in {'failure', 'error', 'skipped'} for child in element)):
+                if any(child.tag.rsplit('}', 1)[-1] in {'failure', 'error', 'skipped'} for child in element):
                     failed = True
             element.clear()
     except (ET.ParseError, OSError):
@@ -374,7 +381,7 @@ def _requires_blockbench(contract: Mapping[str, Any]) -> bool:
     module_kinds = {str(item.get('kind', '')).casefold() for item in contract['implementation_catalog'] if isinstance(item, Mapping) and item.get('source_kind') == 'module'}
     asset_kinds = {str(item.get('kind', '')).casefold() for item in contract['implementation_catalog'] if isinstance(item, Mapping) and item.get('source_kind') == 'asset'}
     text = ' ' + str(contract.get('requested_prompt', '')).casefold() + ' '
-    return bool(module_kinds & {'entity', 'boss', 'npc'}) or bool(asset_kinds & {'entity', 'model', 'animation'}) or any((term in text for term in (' 3d ', ' model ', ' animation ', ' 3차원 ', ' 모델 ', ' 애니메이션 ')))
+    return bool(module_kinds & {'entity', 'boss', 'npc'}) or bool(asset_kinds & {'entity', 'model', 'animation'}) or any(term in text for term in (' 3d ', ' model ', ' animation ', ' 3차원 ', ' 모델 ', ' 애니메이션 '))
 
 def _named_mappings(roots: Sequence[Any], key: str) -> list[Mapping[str, Any]]:
     result: list[Mapping[str, Any]] = []
@@ -420,7 +427,7 @@ def _named_list_mappings(root: Any, key: str) -> list[Mapping[str, Any]]:
             seen.add(identity)
             selected = value.get(key)
             if _is_sequence(selected):
-                result.extend((item for item in selected if isinstance(item, Mapping)))
+                result.extend(item for item in selected if isinstance(item, Mapping))
             stack.extend(reversed(list(value.values())))
         elif _is_sequence(value):
             identity = id(value)

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import central_research
+from minecraft_mod_ai import central_research, retrieval
 from minecraft_mod_ai import platform_live_rag_contract as live_rag
-from minecraft_mod_ai import retrieval
 
 
 def test_builtin_rag_index_is_constructed_once_per_thread(monkeypatch) -> None:

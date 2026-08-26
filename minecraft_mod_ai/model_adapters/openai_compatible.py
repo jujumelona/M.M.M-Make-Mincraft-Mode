@@ -6,8 +6,9 @@ import json
 import mimetypes
 import threading
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .base import (
     GenerationRequest,
@@ -17,7 +18,6 @@ from .base import (
     ModelConfigurationError,
     ToolCall,
 )
-
 
 _CLIENT_LOCK = threading.RLock()
 _CLIENTS: dict[tuple[str, str, Any], Any] = {}

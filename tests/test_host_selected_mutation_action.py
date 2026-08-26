@@ -12,10 +12,10 @@ from minecraft_mod_ai.model_adapters.base import (
     ToolCall,
 )
 from minecraft_mod_ai.progress_aware_tool_loop import (
-    LoopPhase,
     _MUTATION_ACT_TOOLS,
     _READ_OBSERVE_TOOLS,
     _VERIFY_TOOLS,
+    LoopPhase,
 )
 
 

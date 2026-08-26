@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import minecraft_mod_ai.importer as importer
+from minecraft_mod_ai import importer
 from minecraft_mod_ai.importer import (
     ExistingProjectImportError,
     inspect_existing_project_archive,

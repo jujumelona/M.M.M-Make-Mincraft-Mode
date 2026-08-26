@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlparse
 
 from .spec import PlatformLock, SpecValidationError, canonical_json
@@ -605,7 +606,7 @@ def _research_brief_sha(research_brief: Mapping[str, Any] | None) -> str:
 
 
 def _encode_cursor(offset: int, *, source_sha256: str, page_size: int) -> str:
-    signature = hashlib.sha256(f'{source_sha256}\x00{page_size}\x00{offset}'.encode('utf-8')).hexdigest()[:16]
+    signature = hashlib.sha256(f'{source_sha256}\x00{page_size}\x00{offset}'.encode()).hexdigest()[:16]
     return f'technology:{offset}:{signature}'
 
 
@@ -624,7 +625,7 @@ def _decode_cursor(cursor: str, *, source_sha256: str, page_size: int) -> int:
 
 
 def _latency_budget(value: str) -> float | None:
-    match = re.search(r'(?<!\d)(\d{1,7}(?:\.\d+)?)\s*(?:ms|milliseconds?|밀리초)', value, re.I)
+    match = re.search(r'(?<!\d)(\d{1,7}(?:\.\d+)?)\s*(?:ms|milliseconds?|밀리초)', value, re.IGNORECASE)
     return float(match.group(1)) if match else None
 
 
@@ -634,7 +635,7 @@ def _domain_text(domain: Mapping[str, Any]) -> str:
 
 def _matches(value: str, patterns: Iterable[str]) -> bool:
     folded = value.casefold()
-    return any(re.search(pattern, folded, re.I) is not None for pattern in patterns)
+    return any(re.search(pattern, folded, re.IGNORECASE) is not None for pattern in patterns)
 
 
 def _requirement_id(domain_id: str, capability: str) -> str:

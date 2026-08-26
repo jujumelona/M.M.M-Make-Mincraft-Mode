@@ -11,9 +11,10 @@ Executes actual compilation and static validation in isolated scratch target wor
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)

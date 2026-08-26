@@ -2,17 +2,33 @@ import hashlib
 import json
 import zipfile
 from pathlib import Path
+
 import pytest
-from minecraft_mod_ai.complete_orchestrator import CompleteExecutionOptions, CompleteProductionError, CompleteProductionOrchestrator
-from minecraft_mod_ai.complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule, complete_proposal_from_parts
-from minecraft_mod_ai.generator import FabricProjectGenerator
+
+from minecraft_mod_ai.complete_orchestrator import (
+    CompleteExecutionOptions,
+    CompleteProductionError,
+    CompleteProductionOrchestrator,
+)
+from minecraft_mod_ai.complete_spec import (
+    CompleteProposal,
+    CompleteProposalStatus,
+    ProductionModule,
+    complete_proposal_from_parts,
+)
 from minecraft_mod_ai.geckolib_generator import generate_geckolib_entity_assets
+from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_edit import inspect_fabric_project
-from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher, sha256_file
+from minecraft_mod_ai.source_patch import (
+    SourcePatchError,
+    TransactionalSourcePatcher,
+    sha256_file,
+)
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, SpecValidationError
+
 
 def _spec() -> ModSpec:
     return ModSpec(mod_id='complete_test', mod_name='Complete Test', package_name='ai.minecraft.complete_test', version='1.0.0', summary='complete production test', contents=(ContentSpec(content_id='core_item', kind=ContentKind.ITEM, display_name_en='Core Item', display_name_ko='핵심 아이템'),))
@@ -57,7 +73,7 @@ def test_geckolib_generator_accumulates_real_entity_bindings(tmp_path: Path) -> 
     assert 'FROST_GUARD' not in text and 'EMBER_GUARD' not in text
     server_units = sorted(project.rglob('*GeckoRegistration.java'))
     assert len(server_units) == 2
-    unit_text = '\n'.join((path.read_text(encoding='utf-8') for path in server_units))
+    unit_text = '\n'.join(path.read_text(encoding='utf-8') for path in server_units)
     assert 'FROST_GUARD' in unit_text and 'EMBER_GUARD' in unit_text
     assert 'FabricDefaultAttributeRegistry.register' in unit_text
     entity_java = project / 'src/main/java/ai/minecraft/complete_test/entity/FrostGuardEntity.java'
@@ -68,7 +84,7 @@ def test_geckolib_generator_accumulates_real_entity_bindings(tmp_path: Path) -> 
     assert 'forEachDescriptor' in client.read_text(encoding='utf-8')
     client_units = sorted(project.rglob('*GeckoClientRegistration.java'))
     assert len(client_units) == 2
-    assert sum((path.read_text(encoding='utf-8').count('EntityRendererRegistry.register') for path in client_units)) == 2
+    assert sum(path.read_text(encoding='utf-8').count('EntityRendererRegistry.register') for path in client_units) == 2
 
 def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
@@ -78,11 +94,11 @@ def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Pat
     project = Path(result.project_root)
     package_path = Path(*base.spec.package_name.split('.'))
     assert (project / 'src/main/java' / package_path / 'extended/GeneratedExtendedContent.java').is_file()
-    assert any((path.name == 'QuestSystem.java' for path in project.rglob('QuestSystem.java')))
-    assert any((path.name == 'GeneratedGeckoEntities.java' for path in project.rglob('GeneratedGeckoEntities.java')))
+    assert any(path.name == 'QuestSystem.java' for path in project.rglob('QuestSystem.java'))
+    assert any(path.name == 'GeneratedGeckoEntities.java' for path in project.rglob('GeneratedGeckoEntities.java'))
     assert not list(project.rglob('GeneratedWorldRuntime.java'))
     with zipfile.ZipFile(result.release_zip) as archive:
-        assert any((name.endswith('GeneratedExtendedContent.java') for name in archive.namelist()))
+        assert any(name.endswith('GeneratedExtendedContent.java') for name in archive.namelist())
 
 def test_v2_source_only_persists_fail_closed_quality_convergence(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
@@ -147,15 +163,15 @@ def test_prepare_project_archives_partial_deterministic_directory(tmp_path: Path
 def test_required_gate_matrix_is_receipt_backed_and_fail_closed(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
     proposal = complete_proposal_from_parts(requested_prompt='verified item', base_proposal=base, game_design={'title': 'Verified'}, modules=(ProductionModule('verified_item', 'item', required_gates=('JDT diagnostics', 'Gradle clean build', 'GameTest', 'JAR validation', 'runtime interaction tests', 'visual review')),), acceptance_tests=('item works',))
-    main_class = ''.join((part.capitalize() for part in base.spec.mod_id.split('_'))) + 'Mod'
+    main_class = ''.join(part.capitalize() for part in base.spec.mod_id.split('_')) + 'Mod'
     gametest_report = tmp_path / 'gametest-report.xml'
     gametest_report.write_text(f'<testsuite failures="0" errors="0" skipped="0"><testcase name="{main_class}GameTests.generatedRegistriesAreLive"/></testsuite>', encoding='utf-8')
     build = {'status': 'PASS', 'gametest_report': str(gametest_report), 'commands': [{'name': 'clean_build', 'exit_code': 0, 'timed_out': False}, {'name': 'gametest', 'exit_code': 0, 'timed_out': False}]}
     common = {'source_validation': {'status': 'PASS'}, 'jdt_receipt': {'files_opened': 4, 'error_count': 0}, 'build_report': build, 'jar_validation': {'status': 'PASS'}, 'blockbench_receipts': (), 'runtime_receipt': None, 'playtest_receipt': {'status': 'PASS', 'interaction_count': 1, 'assertion_count': 1}, 'visual_receipt': {'status': 'PASS'}}
     assert CompleteProductionOrchestrator._required_gate_failures(proposal, generated_receipts=(), **common) == []
     failures = CompleteProductionOrchestrator._required_gate_failures(proposal, generated_receipts=({'required_gates': ['restart persistence test']},), **{**common, 'build_report': {'status': 'PASS', 'commands': [build['commands'][0]]}})
-    assert any(('GameTest:missing-gametest' in item for item in failures))
-    assert any(('restart persistence test:unsupported' in item for item in failures))
+    assert any('GameTest:missing-gametest' in item for item in failures)
+    assert any('restart persistence test:unsupported' in item for item in failures)
 
 def test_prepare_project_recovers_one_nested_release_source_zip(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')

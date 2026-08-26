@@ -10,9 +10,10 @@ creating a second resource/datagen implementation.
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _TOOL_NAME = "apply_minecraft_content_spec"
 _PARTIAL_EDIT_TOOL = "apply_source_edit"
@@ -487,9 +488,9 @@ def install(extended_module: Any | None = None) -> None:
 
 
 __all__ = [
-    "install",
     "_compact_record",
     "_compile_modules",
     "_execute",
     "_tool_schema",
+    "install",
 ]

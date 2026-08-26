@@ -14,10 +14,10 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
-
+from typing import Any
 
 SCHEMA_VERSION = "mmm/project-inventory-v1"
 COMPONENT_CATALOG_SCHEMA = "mmm/component-catalog-v1"
@@ -364,7 +364,7 @@ class ProjectInventory:
         return _canonical_value(asdict(self))
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "ProjectInventory":
+    def from_dict(cls, value: Mapping[str, Any]) -> ProjectInventory:
         """Reconstruct and fully verify an untrusted serialized inventory."""
 
         return _project_inventory_from_mapping(value)

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.importer import inspect_existing_project_archive
+from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.spec import SpecValidationError
 
 

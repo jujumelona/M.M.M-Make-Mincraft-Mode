@@ -6,11 +6,12 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .knowledge import (
     AuthoritativeEvidenceRetriever,
@@ -18,7 +19,6 @@ from .knowledge import (
     target_neutral_evidence_catalog,
 )
 from .rag_index import ProjectRAGIndex
-
 
 _MARKER = "_mmm_forced_pre_design_rag_v3"
 _SLICE_OWNER_MARKER = "_mmm_forced_rag_slice_owner_v1"

@@ -20,10 +20,11 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _MARKER = "_mmm_long_run_resilience_v1"
 _CACHE_SCHEMA = "mmm/research-generation-checkpoint-v1"

@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 
 from .spec import EvidenceSource, SpecValidationError, canonical_json
 
-
 # Hosts are code-owned trust anchors. Target versions and dependency coordinates are
 # never code-owned defaults; they come from the selected live platform receipt.
 OFFICIAL_EVIDENCE_HOSTS = frozenset(

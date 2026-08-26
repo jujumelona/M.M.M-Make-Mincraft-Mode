@@ -1,18 +1,23 @@
 from __future__ import annotations
+
 import json
 import os
+from collections.abc import Callable
 from functools import lru_cache
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
+
 from mcp.server import MCPServer
+
+from .capabilities import capability_manifest
 from .capability_plugins import plugin_manifest
 from .config_paths import config_path
-from .capabilities import capability_manifest
 from .external_mcp import ExternalMCPRegistry
 from .mcp_tools import MMMToolService
 from .model_registry import ModelRegistry
 from .production_tools import ProductionToolService
 from .skill_catalog import validate_skill_catalog
 from .work_graph import DurableWorkLedger, WorkState
+
 MCP_STAGE = os.environ.get('MMM_MCP_STAGE', 'frontdoor').strip().lower()
 _VALID_STAGES = frozenset({'frontdoor', 'planning', 'research', 'generation', 'quality', 'runtime', 'release', 'training', 'all'})
 if MCP_STAGE not in _VALID_STAGES:
@@ -58,7 +63,7 @@ def _production() -> ProductionToolService:
     return ProductionToolService(workspace_root=os.environ.get('MMM_WORKSPACE', 'mmm-output'), profile=os.environ.get('MMM_MODEL_PROFILE', 't4_local'))
 
 def _ledger_for_run(run_name: str) -> DurableWorkLedger:
-    if not run_name or any((character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name)):
+    if not run_name or any(character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name):
         raise ValueError('run_name must use lowercase letters, numbers, underscore or hyphen.')
     workspace = _core().workspace_root
     path = (workspace / run_name / '.minecraft_ai/work-ledger.sqlite3').resolve()

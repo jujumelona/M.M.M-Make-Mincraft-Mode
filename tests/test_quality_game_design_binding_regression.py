@@ -8,7 +8,6 @@ from minecraft_mod_ai.production_contract import (
 )
 from minecraft_mod_ai.quality_evidence import compile_quality_evidence
 
-
 _PROPOSAL_HASH = "sha256:" + "a" * 64
 
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai import research_code_context as research
-from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
-from minecraft_mod_ai.dependency_decode_monitor import activate_dependency_decode_monitor
 from minecraft_mod_ai import custom_generation_search_contract as generation_search
 from minecraft_mod_ai import llama_server_hardware_policy as llama_hardware
-
+from minecraft_mod_ai import research_code_context as research
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.dependency_decode_monitor import (
+    activate_dependency_decode_monitor,
+)
 
 _TEST_MINECRAFT_VERSION = "mmm-test-target"
 _TEST_LOADER = "fabric"

@@ -5,9 +5,9 @@ import threading
 from contextlib import nullcontext
 from types import SimpleNamespace
 
-from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters import embedding as embedding_module
 from minecraft_mod_ai.model_adapters import reranker as reranker_module
+from minecraft_mod_ai.model_adapters.base import AdapterConfig
 
 
 def _config(*, adapter: str, dimensions: int = 2) -> AdapterConfig:

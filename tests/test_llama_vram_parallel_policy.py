@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_vram_parallel_policy as policy
 
-
 _MIB = 1024 * 1024
 
 

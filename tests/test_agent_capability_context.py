@@ -159,7 +159,7 @@ def test_role_filter_removes_unassigned_tools_but_keeps_external_bridge() -> Non
 
 def test_every_canonical_skill_is_reachable_in_at_least_one_stage_context() -> None:
     reachable: set[str] = set()
-    schemas = tuple(_schema(name) for name in {
+    schemas = tuple(_schema(name) for name in (
         "discover_mmm_capabilities",
         "plan_game",
         "plan_complete_game",
@@ -220,7 +220,7 @@ def test_every_canonical_skill_is_reachable_in_at_least_one_stage_context() -> N
         "external_mcp_capabilities",
         "external_mcp_schema",
         "external_mcp_call",
-    })
+    ))
     for stage in REVIEWED_STAGES:
         context = _decode_context(build_agent_capability_context(stage, schemas))
         reachable.update(item["name"] for item in context["eligible_skills"])

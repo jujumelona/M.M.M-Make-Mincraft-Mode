@@ -1,7 +1,11 @@
 from __future__ import annotations
-from typing import Any, Callable
+
+from collections.abc import Callable
+from typing import Any
+
 from .mod_development_methods import resolve_mod_development_methods
 from .spec import SpecValidationError
+
 _WORLDGEN_MODULE_KINDS = frozenset({'structure', 'biome', 'dimension', 'world_event'})
 _INSTALL_MARKER = '_mmm_mod_scope_contract_installed'
 
@@ -28,7 +32,7 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             raise SpecValidationError("Standalone map, world-save, schematic and Litematica outputs are outside M.M.M's mod project scope.")
         method_ids = frozenset(method_plan['method_ids'])
         worldgen_selected = 'fabric_worldgen' in method_ids
-        worldgen_modules = tuple((module.module_id for module in modules if module.kind in _WORLDGEN_MODULE_KINDS or (module.kind == 'custom_java' and module.config.get('requested_kind') in _WORLDGEN_MODULE_KINDS)))
+        worldgen_modules = tuple(module.module_id for module in modules if module.kind in _WORLDGEN_MODULE_KINDS or (module.kind == 'custom_java' and module.config.get('requested_kind') in _WORLDGEN_MODULE_KINDS))
         if not worldgen_selected and worldgen_modules:
             raise SpecValidationError('The planner attempted world or structure generation although the request did not select fabric_worldgen.')
         scoped_design = {**game_design, '_mod_development_methods': method_plan, '_product_scope': {'kind': 'minecraft_mod_project', 'standalone_map_generation': False, 'worldgen_selected': worldgen_selected, 'platform': game_design.get('_platform_selection', {})}}

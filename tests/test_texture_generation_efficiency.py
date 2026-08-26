@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import minecraft_mod_ai.extended_content_generator as extended
 import minecraft_mod_ai.extended_registration_contract as contract
-import minecraft_mod_ai.generator as generator
+from minecraft_mod_ai import generator
 
 
 def test_texture_cache_preserves_exact_original_bytes() -> None:

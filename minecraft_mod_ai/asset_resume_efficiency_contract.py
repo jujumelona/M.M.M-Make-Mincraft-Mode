@@ -11,7 +11,6 @@ from typing import Any
 
 from .project_write_lock import project_write_lock
 
-
 _VERSION = 1
 
 
@@ -228,7 +227,7 @@ def install(services_module: Any) -> None:
             staging_dir.mkdir(parents=True, exist_ok=True)
             suffix = target.suffix or ".asset"
             staging_key = hashlib.sha256(
-                f"{request.asset_id}\0{target}".encode("utf-8")
+                f"{request.asset_id}\0{target}".encode()
             ).hexdigest()[:16]
             staged = staging_dir / f"{request.asset_id}-{staging_key}{suffix}"
 
@@ -265,9 +264,9 @@ def install(services_module: Any) -> None:
 
 
 __all__ = [
-    "install",
     "_CachedImageRouter",
+    "_atomic_commit",
     "_project_root_for_target",
     "_target_state",
-    "_atomic_commit",
+    "install",
 ]

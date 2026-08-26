@@ -2,17 +2,33 @@ import json
 import os
 import zipfile
 from pathlib import Path
+
 import pytest
-from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
+
+from minecraft_mod_ai.complete_spec import (
+    ProductionModule,
+    complete_proposal_from_parts,
+)
+from minecraft_mod_ai.json_stream import (
+    CanonicalJsonError,
+    StreamingJsonDecodeError,
+    iter_canonical_json,
+    parse_json_byte_chunks,
+)
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
-from minecraft_mod_ai.json_stream import CanonicalJsonError, StreamingJsonDecodeError, iter_canonical_json, parse_json_byte_chunks
-from minecraft_mod_ai.proposal_store import load_sharded_complete_proposal, load_sharded_complete_proposal_from_zip, read_sharded_complete_proposal_section, write_sharded_complete_proposal
+from minecraft_mod_ai.proposal_store import (
+    load_sharded_complete_proposal,
+    load_sharded_complete_proposal_from_zip,
+    read_sharded_complete_proposal_section,
+    write_sharded_complete_proposal,
+)
 from minecraft_mod_ai.spec import SpecValidationError, canonical_json
+
 
 def _large_proposal(module_count: int=103, *, game_design: dict | None=None):
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create exactly one frost item.')
-    proposal = complete_proposal_from_parts(requested_prompt='Create a large deterministic content pack.', base_proposal=base, game_design=game_design or {'title': 'Sharded'}, modules=tuple((ProductionModule(f'module_{index:05d}', 'item') for index in range(module_count))), acceptance_tests=('Every requested module is registered.',))
+    proposal = complete_proposal_from_parts(requested_prompt='Create a large deterministic content pack.', base_proposal=base, game_design=game_design or {'title': 'Sharded'}, modules=tuple(ProductionModule(f'module_{index:05d}', 'item') for index in range(module_count)), acceptance_tests=('Every requested module is registered.',))
     return proposal.approve(proposal.calculate_hash())
 
 def test_complete_proposal_storage_scales_by_adding_bounded_shards(tmp_path: Path) -> None:
@@ -66,7 +82,7 @@ def test_large_game_design_uses_fixed_size_files_and_round_trips(tmp_path: Path)
     stored_files = [path for path in version_root.rglob('*') if path.is_file()]
     assert raw['game_design']['chunk_count'] > 8
     assert stored_files
-    assert max((path.stat().st_size for path in stored_files)) <= part_size
+    assert max(path.stat().st_size for path in stored_files) <= part_size
     assert index.stat().st_size <= part_size
     loaded = load_sharded_complete_proposal(index)
     assert loaded.game_design == proposal.game_design
@@ -88,7 +104,7 @@ def test_complete_proposal_collection_pages_resume_without_inline_monolith(tmp_p
     page_count = 0
     while True:
         page = read_sharded_complete_proposal_section(index, 'modules', cursor=cursor, limit=31)
-        observed.extend((item['module_id'] for item in page['items']))
+        observed.extend(item['module_id'] for item in page['items'])
         page_count += 1
         cursor = page['next_cursor']
         if not cursor:
@@ -130,7 +146,7 @@ def test_streaming_json_matches_canonical_json_across_byte_boundaries() -> None:
     value = {'emoji': '🐉', 'escaped': '"quote"\\path\nline', 'numbers': [-1, 0, 1.25, 6.02e+23], 'values': [True, False, None]}
     encoded = ''.join(iter_canonical_json(value)).encode('utf-8')
     assert encoded.decode('utf-8') == canonical_json(value)
-    assert parse_json_byte_chunks((bytes((byte,)) for byte in encoded)) == value
+    assert parse_json_byte_chunks(bytes((byte,)) for byte in encoded) == value
 
 def test_streaming_json_combines_surrogate_pairs_and_rejects_lone_values() -> None:
     assert parse_json_byte_chunks([b'"\\uD83D', b'\\uDC09"']) == '🐉'

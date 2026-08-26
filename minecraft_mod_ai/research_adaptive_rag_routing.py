@@ -9,11 +9,11 @@ corrective fallback when the authoritative catalog has no usable source.
 """
 
 import copy
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
-
+from typing import Any
 
 _MARKER = "_mmm_adaptive_pre_design_rag_v1"
 

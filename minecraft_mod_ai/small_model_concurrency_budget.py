@@ -6,7 +6,6 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
-
 _MARKER = "_mmm_central_model_capacity_v3"
 _ROUTER_CAPACITY_MARKER = "_mmm_router_owned_model_capacity_v1"
 _LEGACY_MARKERS = (

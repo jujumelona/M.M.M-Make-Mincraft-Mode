@@ -12,10 +12,11 @@ import queue
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from .research_perf_common import env_float, env_int
 

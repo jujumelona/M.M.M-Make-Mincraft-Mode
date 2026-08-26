@@ -10,8 +10,9 @@ context. The output remains evidence-only; it never authorizes code or assets.
 """
 
 import os
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Mapping
+from typing import Any
 
 
 def _env_workers(name: str = "MMM_RESEARCH_WORKERS", default: int = 8) -> int:

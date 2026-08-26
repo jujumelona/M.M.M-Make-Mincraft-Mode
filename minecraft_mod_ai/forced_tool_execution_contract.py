@@ -12,12 +12,16 @@ Other exact local actions use native ``required`` decoding after a live capabili
 import hashlib
 import json
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
-from .structured_output import StructuredOutputValidationError, validate_structured_output
+from .structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 
 _MARKER = "_mmm_forced_tool_execution"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
@@ -332,7 +336,7 @@ def _response_for_call(name: str, arguments: Mapping[str, Any], *, prefix: str) 
         sort_keys=True,
         separators=(",", ":"),
     )
-    digest = hashlib.sha256(f"{name}\0{raw_arguments}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(f"{name}\0{raw_arguments}".encode()).hexdigest()[:16]
     return GenerationResponse(
         tool_calls=(
             ToolCall(
@@ -433,7 +437,7 @@ def _argument_failure(
         reason = "; ".join(exc.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         reason = f"{type(exc).__name__}: {exc}"[:_MAX_ARGUMENT_ERROR_CHARS]
-    fingerprint = hashlib.sha256(f"{content}\0{reason}".encode("utf-8")).hexdigest()
+    fingerprint = hashlib.sha256(f"{content}\0{reason}".encode()).hexdigest()
     return None, reason, fingerprint
 
 
@@ -448,7 +452,7 @@ def _structured_exception_failure(
         return None
     reason = "; ".join(candidate.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
     fingerprint = hashlib.sha256(
-        f"{candidate.output}\0{reason}".encode("utf-8")
+        f"{candidate.output}\0{reason}".encode()
     ).hexdigest()
     return None, reason, fingerprint
 

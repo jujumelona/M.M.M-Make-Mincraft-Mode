@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 _LOCKS_GUARD = threading.RLock()
 _PROJECT_LOCKS: dict[str, threading.RLock] = {}

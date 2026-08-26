@@ -7,7 +7,6 @@ from typing import Any
 from .config_paths import config_path
 from .strict_yaml import safe_load_unique_keys
 
-
 _ALLOWED_STATUSES = frozenset(
     {
         "enabled",

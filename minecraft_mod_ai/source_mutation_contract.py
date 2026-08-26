@@ -8,7 +8,8 @@ single host-owned receipt decides whether the workspace was actually changed.
 """
 
 import json
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 SOURCE_MUTATION_NAMES = frozenset(
     {

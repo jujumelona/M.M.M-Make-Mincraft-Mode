@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass, replace
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
+
 SCHEMA = 'mmm/atomic-requirement-ir-v1'
 _MAX_ATOM_BYTES = 1024
 _MAX_IMPL_CANDIDATES = 48
@@ -89,9 +92,9 @@ def _features(text: str) -> set[str]:
         if len(token) <= 1 or token in _STOP:
             continue
         result.add('w:' + token)
-        if any(('㐀' <= ch <= '鿿' or '\u3040' <= ch <= 'ヿ' or '가' <= ch <= '힣' for ch in token)):
-            result.update(('b:' + token[i:i + 2] for i in range(max(0, len(token) - 1))))
-            result.update(('t:' + token[i:i + 3] for i in range(max(0, len(token) - 2))))
+        if any('㐀' <= ch <= '鿿' or '\u3040' <= ch <= 'ヿ' or '가' <= ch <= '힣' for ch in token):
+            result.update('b:' + token[i:i + 2] for i in range(max(0, len(token) - 1)))
+            result.update('t:' + token[i:i + 3] for i in range(max(0, len(token) - 2)))
     return result
 
 def _score(left: str, right: str) -> float:
@@ -101,7 +104,7 @@ def _score(left: str, right: str) -> float:
     common = a & b
     if not common:
         return 0.0
-    weight = sum((3.0 if item.startswith('w:') else 1.5 if item.startswith('t:') else 1.0 for item in common))
+    weight = sum(3.0 if item.startswith('w:') else 1.5 if item.startswith('t:') else 1.0 for item in common)
     return weight / math.sqrt(max(1.0, float(len(a) * len(b))))
 
 def _implementations(proposal: Any) -> dict[str, str]:
@@ -150,7 +153,7 @@ def _root_hints(proposal: Any, implementations: Mapping[str, str]) -> list[str]:
     for group in contract.get('coverage_groups', []):
         if not isinstance(group, dict) or str(group.get('requirement_ref')) not in root_requirements:
             continue
-        root_refs.update((str(ref) for ref in group.get('implementation_refs', []) if str(ref) in implementations))
+        root_refs.update(str(ref) for ref in group.get('implementation_refs', []) if str(ref) in implementations)
     return sorted(root_refs)
 
 def _candidate_refs(atom: Mapping[str, Any], implementations: Mapping[str, str], acceptances: Mapping[str, str], hints: list[str]) -> tuple[list[str], list[str]]:

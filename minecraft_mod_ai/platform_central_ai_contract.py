@@ -1,11 +1,15 @@
 from __future__ import annotations
+
 'Single planning owner for platform selection and live-target module lowering.'
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
+
 from .complete_spec import CompleteProposal, ProductionModule
 from .platform_catalog import PlatformAdapter
 from .platform_resolver import resolve_platform, retarget_proposal
+
 _LIVE_NON_SOURCE_KINDS = frozenset({'integration'})
 
 def install(*, game_design_module: Any, complete_planner_module: Any) -> None:
@@ -96,7 +100,7 @@ def _input_acceptance_tests(result: CompleteProposal) -> tuple[str, ...]:
     if isinstance(contract, dict):
         catalog = contract.get('acceptance_catalog')
         if isinstance(catalog, list):
-            values = tuple((str(item.get('statement', '')).strip() for item in catalog if isinstance(item, dict) and item.get('origin') == 'input' and str(item.get('statement', '')).strip()))
+            values = tuple(str(item.get('statement', '')).strip() for item in catalog if isinstance(item, dict) and item.get('origin') == 'input' and str(item.get('statement', '')).strip())
             if values:
                 return values
     return tuple(result.acceptance_tests)

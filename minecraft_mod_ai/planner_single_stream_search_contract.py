@@ -40,7 +40,7 @@ class _HostEvidenceRepairRouter:
         workspace_root: str | Path,
         *,
         require_fresh_evidence: bool = False,
-    ) -> "_HostEvidenceRepairRouter":
+    ) -> _HostEvidenceRepairRouter:
         del require_fresh_evidence
         self._router.bind_agent_workspace(
             workspace_root,

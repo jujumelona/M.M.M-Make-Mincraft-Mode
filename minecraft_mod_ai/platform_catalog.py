@@ -8,10 +8,11 @@ No Minecraft version, mappings, loader/API coordinate, Java version, Loom versio
 Gradle version, or resource-pack format is selected from an offline default here.
 """
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable
+from typing import Any
 
 from .platform_live_discovery import (
     PlatformDiscoveryError,

@@ -8,7 +8,6 @@ from typing import Any
 
 from .platform_catalog import adapter_from_project
 
-
 _SYSTEM_INCREMENTAL_STATE: ContextVar[tuple[frozenset[str], bool] | None] = ContextVar(
     "mmm_system_incremental_state",
     default=None,

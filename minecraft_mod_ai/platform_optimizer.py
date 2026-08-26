@@ -12,14 +12,14 @@ verified reuse before popularity or freshness.
 import math
 import os
 import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
-
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]{2,}")
 _DEPENDENCY_NODE_BUDGET = 64

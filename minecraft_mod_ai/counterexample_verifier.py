@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .generated_counterexample_tests import (
     build_generated_test_spec,

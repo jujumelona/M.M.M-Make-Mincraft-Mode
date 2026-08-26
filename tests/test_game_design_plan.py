@@ -5,7 +5,6 @@ from pathlib import Path
 
 from minecraft_mod_ai import HeuristicPlanner, ModAISession
 
-
 LARGE_PLAN_SECTIONS = (
     "프로젝트 정의",
     "핵심 게임플레이 루프",

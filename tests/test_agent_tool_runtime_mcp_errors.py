@@ -24,7 +24,6 @@ class _SessionContext:
 
     async def __aexit__(self, exc_type, exc, tb):
         del exc_type, exc, tb
-        return None
 
 
 class _Runtime(AgentToolRuntime):

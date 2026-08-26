@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import heapq
 import json
 from pathlib import Path
 from typing import Any
+
 from .complete_spec import CompleteProposal, ProductionModule
+
 
 class CompleteProductionError(RuntimeError):
     pass
@@ -12,7 +15,7 @@ def _locate_existing_fabric_root(extracted_root: Path) -> Path:
     direct = extracted_root / 'src/main/resources/fabric.mod.json'
     if direct.is_file() and (not direct.is_symlink()):
         return extracted_root
-    candidates = sorted((path.parent.parent.parent.parent for path in extracted_root.rglob('fabric.mod.json') if path.as_posix().endswith('src/main/resources/fabric.mod.json') and path.is_file() and (not path.is_symlink())))
+    candidates = sorted(path.parent.parent.parent.parent for path in extracted_root.rglob('fabric.mod.json') if path.as_posix().endswith('src/main/resources/fabric.mod.json') and path.is_file() and (not path.is_symlink()))
     unique: list[Path] = []
     seen: set[Path] = set()
     for candidate in candidates:
@@ -88,7 +91,7 @@ def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[lis
             receipts.append({'schema_version': 'mmm/bootstrap-dedup-v1', 'status': 'REUSED', 'module_id': module.module_id, 'kind': module.kind})
         else:
             raise CompleteProductionError(f'Module {module.module_id}/{module.kind} collides with bootstrap {existing}.')
-    kept = [ProductionModule(module_id=module.module_id, kind=module.kind, config=module.config, depends_on=tuple((dep for dep in module.depends_on if dep not in reused)), required_gates=module.required_gates) for module in staged]
+    kept = [ProductionModule(module_id=module.module_id, kind=module.kind, config=module.config, depends_on=tuple(dep for dep in module.depends_on if dep not in reused), required_gates=module.required_gates) for module in staged]
     return (_topological_modules(kept), receipts)
 
 def _system_groups(modules: list[ProductionModule]) -> dict[str, list[ProductionModule]]:
@@ -120,7 +123,7 @@ def _external_gates(proposal: CompleteProposal, options: Any) -> list[str]:
     gates = ['Gradle', 'GameTest', 'JAR validation']
     if proposal.external_runtime_required:
         gates.extend(['Minecraft server/client runtime', 'Mineflayer playtest', 'visual review'])
-    if any((module.kind in {'entity', 'boss', 'npc'} for module in proposal.modules)):
+    if any(module.kind in {'entity', 'boss', 'npc'} for module in proposal.modules):
         gates.append('Blockbench UV/render review')
     return gates
 

@@ -7,8 +7,9 @@ import pytest
 
 import minecraft_mod_ai.model_adapters.base as adapter_base
 import minecraft_mod_ai.model_adapters.transformers_multimodal as multimodal_adapter
-from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.base import (
+    AdapterConfig,
+    GenerationRequest,
     ModelBackendError,
     ModelConfigurationError,
 )
@@ -30,7 +31,7 @@ class _FakeInputs(dict):
 
 
 class _FakeProcessor:
-    instance: "_FakeProcessor | None" = None
+    instance: _FakeProcessor | None = None
     load_count = 0
 
     def __init__(self) -> None:

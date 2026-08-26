@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 _VALIDATION_CHECKPOINTS = frozenset({"validate-source", "validate-jdt"})
 
@@ -28,7 +29,13 @@ def validation_implementation_fingerprint(checkpoint_id: str) -> str:
     if checkpoint_id not in _VALIDATION_CHECKPOINTS:
         raise ValueError(f"Unsupported validation checkpoint: {checkpoint_id}")
 
-    from . import complete_orchestrator, java_lsp, scalable_validator, scale_policy, validator
+    from . import (
+        complete_orchestrator,
+        java_lsp,
+        scalable_validator,
+        scale_policy,
+        validator,
+    )
 
     modules = [complete_orchestrator]
     if checkpoint_id == "validate-source":

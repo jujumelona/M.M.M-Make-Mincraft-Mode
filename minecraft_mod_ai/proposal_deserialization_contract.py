@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from enum import Enum
 from functools import wraps
 from typing import Any
+
 
 def _require_dict(value: Any, field: str, error_type: type[Exception]) -> dict[str, Any]:
     if not isinstance(value, dict):

@@ -8,10 +8,10 @@ from minecraft_mod_ai.complete_spec import (
     complete_proposal_from_parts,
 )
 from minecraft_mod_ai.planner import HeuristicPlanner
-from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 from minecraft_mod_ai.scalable_pipeline import ScalableMinecraftModPipeline
 from minecraft_mod_ai.scalable_validator import ScalableProjectValidator
+from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, PlatformLock
 
 

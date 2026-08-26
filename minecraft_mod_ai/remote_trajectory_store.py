@@ -16,8 +16,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict, deque
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .remote_skill_store_consent import (
     remote_write_allowed,

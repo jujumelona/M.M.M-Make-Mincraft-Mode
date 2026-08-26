@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import os
 from functools import wraps
 from typing import Any
+
 
 def _release_native_llama_server() -> None:
     """Release the managed native text server before another exclusive GPU runtime."""

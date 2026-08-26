@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 
 import httpx
 
-
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _FACES = frozenset({"north", "south", "east", "west", "up", "down"})
 _INTERPOLATIONS = frozenset({"linear", "step", "catmullrom", "bezier"})

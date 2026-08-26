@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 from minecraft_mod_ai import component_registry
+from minecraft_mod_ai.project_inventory import inspect_project_inventory
 from minecraft_mod_ai.reuse_planner import (
     ReuseDecision,
     _declared_same_project_capabilities,
     decompose_capability_graph,
 )
 from minecraft_mod_ai.source_transplant import _target_compatibility
-from minecraft_mod_ai.project_inventory import inspect_project_inventory
 
 
 def test_capability_graph_uses_behavior_not_whole_mod_theme() -> None:

@@ -8,9 +8,9 @@ planning boundary to that same host-owned resolver so target-neutral semantic pl
 are never validated or approved before a complete executable provider receipt exists.
 """
 
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
-
+from typing import Any
 
 _PROMPT_REPLACEMENTS = (
     ("the host-selected Minecraft Java Fabric target", "the host-selected Minecraft Java target"),

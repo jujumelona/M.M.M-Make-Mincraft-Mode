@@ -9,8 +9,9 @@ it does not own Planner or repair search width.
 
 import json
 import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 _POLICY_VERSION = 3
 _MIB = 1024 * 1024

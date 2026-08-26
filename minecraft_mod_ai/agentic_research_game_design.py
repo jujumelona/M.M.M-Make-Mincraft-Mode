@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .central_research import normalize_research_brief, retrieve_domain_evidence
 from .ecosystem_discovery import discover_seed_bundle
 from .planner_stage_trace import PlannerStageTrace
-from .research_coordinator import collect_ecosystem_seed_bundle, collect_technology_radar
+from .research_coordinator import (
+    collect_ecosystem_seed_bundle,
+    collect_technology_radar,
+)
 from .spec import SpecValidationError
 from .technology_radar import build_technology_radar
-
 
 _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "type": "object",

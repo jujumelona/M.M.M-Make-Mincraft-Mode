@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from minecraft_mod_ai.preference_training import PreferenceCandidate, PreferenceTraceStore
+from minecraft_mod_ai.preference_training import (
+    PreferenceCandidate,
+    PreferenceTraceStore,
+)
 
 
 def test_preference_trace_records_winner_and_exports_dpo(tmp_path: Path) -> None:

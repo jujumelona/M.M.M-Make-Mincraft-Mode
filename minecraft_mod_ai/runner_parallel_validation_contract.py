@@ -7,9 +7,10 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 _PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
 _PROJECT_BUILD_LOCKS: dict[str, threading.RLock] = {}
@@ -27,7 +28,7 @@ def _path_lock(path: Path) -> threading.RLock:
 
 
 def _marker_path(cache_dir: Path, version: str, sha256: str) -> Path:
-    token = hashlib.sha256(f"{version}\0{sha256}".encode("utf-8")).hexdigest()[:16]
+    token = hashlib.sha256(f"{version}\0{sha256}".encode()).hexdigest()[:16]
     return cache_dir / f".mmm-gradle-{version}-{token}-verified.json"
 
 
@@ -85,7 +86,7 @@ def _base_ensure_gradle(method: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _wrapper_template_dir(cache_dir: Path, version: str, sha256: str) -> Path:
-    token = hashlib.sha256(f"{version}\0{sha256}".encode("utf-8")).hexdigest()[:12]
+    token = hashlib.sha256(f"{version}\0{sha256}".encode()).hexdigest()[:12]
     return cache_dir / f"wrapper-template-{version}-{token}"
 
 

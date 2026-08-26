@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import copy
 import hashlib
 import json
@@ -7,11 +8,14 @@ import re
 import shutil
 import time
 from collections import Counter, deque
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
+
 from .preference_training import PreferenceCandidate, PreferenceTraceStore
+
 _TOKEN = re.compile('[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}')
 _STRATEGIES = ('minimal_local_fix', 'api_contract_conservative_fix', 'dependency_and_version_conservative_fix')
 
@@ -171,7 +175,7 @@ def _diagnostic_paths(evidence: Mapping[str, Any]) -> set[str]:
 def _static_repair_score(operations: Sequence[Mapping[str, Any]], evidence: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     paths = [str(item.get('path', '')).replace('\\', '/') for item in operations]
     diagnostic_paths = _diagnostic_paths(evidence)
-    overlap = sum((1 for path in paths if path in diagnostic_paths or Path(path).name in diagnostic_paths))
+    overlap = sum(1 for path in paths if path in diagnostic_paths or Path(path).name in diagnostic_paths)
     size = _json_size(operations)
     score = 12.0 * overlap - 0.35 * len(paths) - size / (64 * 1024)
     return (score, {'path_overlap': overlap, 'operation_count': len(paths), 'patch_bytes': size, 'jdt_status': 'NOT_RUN', 'jdt_error_count': None})
@@ -190,7 +194,7 @@ def _verify_repair_candidate(self: Any, root: Path | None, operations: Sequence[
         from .source_patch import TransactionalSourcePatcher
         stage = _clone_source_snapshot(root)
         TransactionalSourcePatcher(stage).apply([copy.deepcopy(dict(item)) for item in operations])
-        java_paths = tuple(sorted((str(item.get('path', '')).replace('\\', '/') for item in operations if str(item.get('path', '')).lower().endswith('.java'))))
+        java_paths = tuple(sorted(str(item.get('path', '')).replace('\\', '/') for item in operations if str(item.get('path', '')).lower().endswith('.java')))
         service = self.diagnostics_factory()
         try:
             diagnostics = service.diagnostics(stage, relative_files=java_paths or None, timeout_seconds=60)
@@ -257,7 +261,7 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
                     print('active candidate discriminator skipped:', f'{type(exc).__name__}: {str(exc)[:500]}', flush=True)
             evaluations.sort(key=lambda item: (-item[0], _json_size(item[2]), item[1]))
             winner_score, winner_index, winner_ops, winner_verifier = evaluations[0]
-            self._mmm_last_java_paths = tuple(sorted((str(item.get('path', '')).replace('\\', '/') for item in winner_ops if str(item.get('path', '')).lower().endswith('.java'))))
+            self._mmm_last_java_paths = tuple(sorted(str(item.get('path', '')).replace('\\', '/') for item in winner_ops if str(item.get('path', '')).lower().endswith('.java')))
             trace = {'signature': signature, 'evidence': _compact_evidence(evidence), 'repair_pattern': _repair_pattern(winner_ops), 'winner_index': winner_index, 'winner_score': winner_score, 'winner_verifier': winner_verifier, 'candidate_count': len(evaluations)}
             self._mmm_agentic_last_search = trace
             if root is not None and len(evaluations) >= 2:
@@ -348,7 +352,7 @@ def _install_balanced_work_claims(work_graph_module: Any) -> None:
             stage_sql = ''
             params: list[Any] = [work_graph_module.WorkState.PENDING.value, work_graph_module.WorkState.SUCCEEDED.value]
             if stages:
-                placeholders = ','.join(('?' for _ in stages))
+                placeholders = ','.join('?' for _ in stages)
                 stage_sql = f' AND task.stage IN ({placeholders})'
                 params.extend(stages)
             rows = connection.execute(f'\n                SELECT task.node_id, task.payload_json\n                FROM tasks AS task\n                WHERE task.state = ?\n                  AND NOT EXISTS (\n                    SELECT 1\n                    FROM edges\n                    JOIN tasks AS dependency\n                      ON dependency.node_id = edges.dependency_id\n                    WHERE edges.node_id = task.node_id\n                      AND dependency.state != ?\n                  )\n                  {stage_sql}\n                ORDER BY task.node_id\n                LIMIT 256\n                ', tuple(params)).fetchall()

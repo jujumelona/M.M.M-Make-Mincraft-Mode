@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .custom_generation_research import _sanitized_messages
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker

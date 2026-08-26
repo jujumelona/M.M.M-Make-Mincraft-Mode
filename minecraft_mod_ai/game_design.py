@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .capability_plugins import plugin_manifest
 from .central_research import normalize_research_brief
@@ -199,7 +200,7 @@ class GameDesignPlanner:
 
         merged = _merge_game_design_pages(page_designs)
         chain = hashlib.sha256(
-            f"{_REQUEST_INGESTION_SCHEMA}:{prompt_sha256}".encode("utf-8")
+            f"{_REQUEST_INGESTION_SCHEMA}:{prompt_sha256}".encode()
         )
         for receipt in receipts:
             chain.update(

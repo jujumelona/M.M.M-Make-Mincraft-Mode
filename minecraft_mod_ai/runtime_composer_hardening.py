@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import dis
+from collections.abc import Callable
 from functools import partial, wraps
-from typing import Any, Callable
+from typing import Any
 
 _MARKER = "__mmm_static_runtime_composer_identity_v1__"
 

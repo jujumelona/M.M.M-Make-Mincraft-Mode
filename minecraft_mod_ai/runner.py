@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import time
 import urllib.request
 import zipfile
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 from .platform_catalog import adapter_from_project
 

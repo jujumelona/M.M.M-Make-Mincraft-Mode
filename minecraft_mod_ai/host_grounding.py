@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePosixPath
-from typing import Any, Mapping
+from typing import Any
 
 from .agent_capability_context import reviewed_mcp_servers_for_model_role
 from .agent_roles import skills_for_model_role

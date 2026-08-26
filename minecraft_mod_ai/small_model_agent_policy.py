@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 'Research-derived policy adaptation for the small local planner.\n\nThe policy combines observation-conditioned retry, failure reflection, reusable\nworkflow memory, and task-conditioned strategy composition. Candidate branching stays\nowned by agentic_optimization_contract so search-width policy has one owner.\n'
 import hashlib
 import json
@@ -6,9 +7,11 @@ import os
 import stat
 import threading
 from collections import deque
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+
 _LOCK = threading.RLock()
 _DISK_LOCK = threading.RLock()
 _SESSION: deque[dict[str, Any]] = deque(maxlen=128)
@@ -39,14 +42,14 @@ def _features(request: Mapping[str, Any] | str, contracts: Sequence[frozenset[st
     size = len(rendered.encode('utf-8'))
     result = {'stage:' + stage.casefold().strip(), 'size:' + ('large' if size >= 12 * 1024 else 'medium' if size >= 4 * 1024 else 'small')}
     for contract in contracts:
-        result.add('contract:' + ','.join(sorted((str(item) for item in contract))))
+        result.add('contract:' + ','.join(sorted(str(item) for item in contract)))
     if isinstance(request, Mapping):
-        result.update(('key:' + str(key) for key in request))
+        result.update('key:' + str(key) for key in request)
         remaining = request.get('remaining_deliverables')
         if isinstance(remaining, Sequence) and (not isinstance(remaining, (str, bytes))):
             count = len(remaining)
             result.add('remaining:' + ('many' if count >= 6 else 'several' if count >= 3 else 'few'))
-    result.update(('marker:' + marker for marker in _MARKERS if marker in lowered))
+    result.update('marker:' + marker for marker in _MARKERS if marker in lowered)
     return tuple(sorted(result))
 
 def _similarity(left: Sequence[str], right: Sequence[str]) -> float:
@@ -146,7 +149,7 @@ def _strategies(features: Sequence[str], memory: Sequence[Mapping[str, Any]]) ->
     for row in memory[:2]:
         modules = row.get('strategy_modules')
         if isinstance(modules, list):
-            chosen.extend((str(item).strip() for item in modules if str(item).strip()))
+            chosen.extend(str(item).strip() for item in modules if str(item).strip())
     return tuple(dict.fromkeys(chosen))[:12]
 
 def _failure(exc: BaseException) -> str:
@@ -181,14 +184,14 @@ def _outcome(page: Mapping[str, Any]) -> dict[str, Any]:
     def count(field: str) -> int:
         value = page.get(field)
         return len(value) if isinstance(value, list) else 0
-    return {'fields': sorted((str(key) for key in page)), 'modules': count('modules'), 'assets': count('assets'), 'tests': count('acceptance_tests'), 'completed': count('completed_deliverables'), 'complete': page.get('complete') if type(page.get('complete')) is bool else None}
+    return {'fields': sorted(str(key) for key in page), 'modules': count('modules'), 'assets': count('assets'), 'tests': count('acceptance_tests'), 'completed': count('completed_deliverables'), 'complete': page.get('complete') if type(page.get('complete')) is bool else None}
 
 def _record(features: Sequence[str], strategies: Sequence[str], failures: Sequence[str], page: Mapping[str, Any]) -> None:
     row: dict[str, Any] = {'schema_version': 'mmm/small-agent-workflow-v1', 'features': list(features), 'strategy_modules': list(strategies), 'recovered_from': list(dict.fromkeys(failures))[:8], 'outcome': _outcome(page), 'verified_success': True}
     encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     row['workflow_id'] = 'sha256:' + hashlib.sha256(encoded.encode('utf-8')).hexdigest()
     with _LOCK:
-        if any((item.get('workflow_id') == row['workflow_id'] for item in _SESSION)):
+        if any(item.get('workflow_id') == row['workflow_id'] for item in _SESSION):
             return
         _SESSION.append(row)
     path = _memory_path()

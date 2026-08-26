@@ -8,8 +8,8 @@ and retrieves again without changing model weights.
 """
 
 import math
-from collections.abc import Sequence
-from typing import Any, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 
 def _vector(value: Any) -> list[float]:

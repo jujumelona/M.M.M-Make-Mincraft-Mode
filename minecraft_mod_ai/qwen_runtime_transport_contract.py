@@ -17,12 +17,13 @@ quantization is interpreted by this module.
 import hashlib
 import json
 import os
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
 from types import SimpleNamespace
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 from .qwen_family_capabilities import qwen_family_capabilities
 

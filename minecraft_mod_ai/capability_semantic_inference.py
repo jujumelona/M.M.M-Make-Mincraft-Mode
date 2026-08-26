@@ -11,12 +11,13 @@ edges, and provenance. All provisional nodes remain distinct from canonical veri
 """
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .canonical_capability_ontology import (
-    CapabilityResolutionNode,
     CapabilityResolution,
+    CapabilityResolutionNode,
     romanize_korean_universal,
 )
 
@@ -110,6 +111,16 @@ def infer_provisional_capabilities(
                     description=f"Persistent state store for {clean}",
                     suggested_dependencies=("persistence.state_store",),
                     search_queries=(),
+                )
+            )
+            proposals.append(
+                ProvisionalCapabilityProposal(
+                    capability_id=logic_id,
+                    source_span=clean,
+                    category="logic",
+                    description=f"Execution logic and rules for {clean}",
+                    suggested_dependencies=(state_id,),
+                    search_queries=(f"{slug} logic",),
                 )
             )
 

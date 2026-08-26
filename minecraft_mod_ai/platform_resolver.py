@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Any, Iterable
+from typing import Any
 
 from .platform_catalog import (
     PlatformAdapter,
@@ -18,7 +19,6 @@ from .platform_optimizer import (
     optimize_platform,
 )
 from .spec import PlatformLock, Proposal, SpecValidationError
-
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
 _ASCII_WORD = r"A-Za-z0-9_"

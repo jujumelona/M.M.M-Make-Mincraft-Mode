@@ -10,6 +10,8 @@ from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
     _context_size,
     _install_measured_fast_base_args,
     _is_qwen35_mtp,
+)
+from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
     install as install_qwen35_hotpath,
 )
 

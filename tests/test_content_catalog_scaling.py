@@ -1,11 +1,19 @@
 import json
 from pathlib import Path
+
 from minecraft_mod_ai.complete_spec import ProductionModule
-from minecraft_mod_ai.extended_content_generator import generate_extended_content, iter_extended_module_records
+from minecraft_mod_ai.extended_content_generator import (
+    generate_extended_content,
+    iter_extended_module_records,
+)
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
-from minecraft_mod_ai.system_pack_generator import generate_system_pack, iter_system_module_records
+from minecraft_mod_ai.system_pack_generator import (
+    generate_system_pack,
+    iter_system_module_records,
+)
+
 
 def _project(root: Path) -> Path:
     spec = ModSpec(mod_id='catalog_test', mod_name='Catalog Test', package_name='ai.minecraft.catalog_test', version='1.0.0', summary='bounded catalog scaling test', contents=(ContentSpec(content_id='bootstrap_item', kind=ContentKind.ITEM, display_name_en='Bootstrap Item', display_name_ko='Bootstrap Item'),))
@@ -14,7 +22,7 @@ def _project(root: Path) -> Path:
 
 def _extended_metrics(root: Path, count: int) -> tuple[int, int]:
     project = _project(root)
-    modules = tuple((ProductionModule(module_id=f'command_{index:05d}', kind='command', config={'literal': f'catalog{index:05d}', 'message': f'Catalog command {index:05d}'}) for index in range(count)))
+    modules = tuple(ProductionModule(module_id=f'command_{index:05d}', kind='command', config={'literal': f'catalog{index:05d}', 'message': f'Catalog command {index:05d}'}) for index in range(count))
     result = generate_extended_content(project_root=project, mod_id='catalog_test', package_name='ai.minecraft.catalog_test', modules=modules, policy=ScalePolicy(java_shard_size=8))
     catalog_root = project / '.minecraft_ai/extended-modules.json'
     catalog = json.loads(catalog_root.read_text(encoding='utf-8'))
@@ -30,7 +38,7 @@ def _extended_metrics(root: Path, count: int) -> tuple[int, int]:
     assert 'GeneratedContentUnit' in registrar_text
     assert 'Files.list(directory)' in registrar_text
     assert result['shard_count'] == count
-    return (max((path.stat().st_size for path in metadata_files)), max((path.stat().st_size for path in java_files)))
+    return (max(path.stat().st_size for path in metadata_files), max(path.stat().st_size for path in java_files))
 
 def test_extended_catalog_and_registrar_files_stay_bounded_as_modules_grow(tmp_path: Path) -> None:
     small_metadata, small_java = _extended_metrics(tmp_path / 'small-extended', 64)
@@ -87,7 +95,7 @@ def _system_contract_metrics(root: Path, count: int) -> int:
     assert 'forEachModule' in quest
     assert 'getAsJsonArray("modules")' not in quest
     contract_files = [contract, *records]
-    return max((path.stat().st_size for path in contract_files))
+    return max(path.stat().st_size for path in contract_files)
 
 def test_system_contract_files_stay_bounded_as_modules_grow(tmp_path: Path) -> None:
     small = _system_contract_metrics(tmp_path / 'small-system', 64)

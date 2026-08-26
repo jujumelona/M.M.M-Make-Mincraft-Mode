@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
-
+from typing import Any
 
 _INSTALL_MARKER = "_mmm_agent_security_contract_v5"
 _SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"

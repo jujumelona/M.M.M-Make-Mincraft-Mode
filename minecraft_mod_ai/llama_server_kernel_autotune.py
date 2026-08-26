@@ -17,11 +17,12 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 _SCHEMA = "mmm/llama-kernel-autotune-v1"
 _LOCK = threading.RLock()

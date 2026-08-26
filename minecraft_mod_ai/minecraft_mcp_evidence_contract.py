@@ -17,11 +17,11 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from functools import wraps
-from typing import Any, Collection, Mapping
-
+from typing import Any
 
 _MARKER = "_mmm_minecraft_mcp_evidence_v3"
 _MAX_RESULT_CHARS = 6000

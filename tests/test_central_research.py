@@ -1,9 +1,16 @@
 from __future__ import annotations
+
 from copy import deepcopy
+
 import pytest
-from minecraft_mod_ai.central_research import normalize_research_brief, retrieve_domain_evidence
+
+from minecraft_mod_ai.central_research import (
+    normalize_research_brief,
+    retrieve_domain_evidence,
+)
 from minecraft_mod_ai.retrieval import RetrievalHit, RetrievalReceipt
 from minecraft_mod_ai.spec import SpecValidationError
+
 
 def _domain(domain_id: str, *, query: str | None=None, providers: list[str] | None=None, depends_on: list[str] | None=None) -> dict[str, object]:
     return {'domain_id': domain_id, 'objective': f'Research {domain_id} without assuming a genre template.', 'requirements': [f'Preserve the requested {domain_id} capability.'], 'evidence_kinds': ['dependency', 'compatibility', 'license'], 'queries': [query or f'{domain_id} implementation evidence'], 'providers': providers or ['official_docs', 'github'], 'depends_on': depends_on or []}
@@ -33,15 +40,15 @@ def test_normalize_research_brief_rejects_cycles_and_unknown_providers() -> None
 def test_fallback_is_request_derived_without_genre_content_injection(prompt: str, systems: tuple[str, ...]) -> None:
     design = {'core_loop': list(systems[:2]), 'progression': [systems[2]], 'combat': {}, 'world': {}, 'modules': [{'plugin_id': 'custom', 'reason': f'Implement {systems[-1]} exactly as requested.'}], 'assets': [], 'acceptance_tests': [f'Players can complete {systems[0]}.']}
     normalized = normalize_research_brief(prompt, design)
-    serialized = ' '.join((requirement for domain in normalized['domains'] for requirement in domain['requirements'])).casefold()
+    serialized = ' '.join(requirement for domain in normalized['domains'] for requirement in domain['requirements']).casefold()
     assert normalized['origin'] == 'deterministic_fallback'
     assert prompt.casefold() in serialized
-    assert all((system.casefold() in serialized for system in systems))
+    assert all(system.casefold() in serialized for system in systems)
     assert not {'boss', 'arena', 'village', 'dungeon'} & set(serialized.replace('.', '').replace(',', '').split())
 
 def test_generic_request_does_not_invent_visual_media_provider() -> None:
     brief = normalize_research_brief('Add a server command that reports the current tick count.', {'assets': []})
-    assert all(('openverse_images' not in domain['providers'] and 'visual_reference' not in domain['evidence_kinds'] for domain in brief['domains']))
+    assert all('openverse_images' not in domain['providers'] and 'visual_reference' not in domain['evidence_kinds'] for domain in brief['domains'])
 
 def _receipt(query: str, *, correction_queries: tuple[str, ...]=()) -> RetrievalReceipt:
     hit = RetrievalHit(evidence_id='sha256:' + '1' * 64, document_id='fabric-api-1201', title='Fabric API 1.20.1', url='https://maven.fabricmc.net/', excerpt=f'Evidence for {query}', content_sha256='sha256:' + '2' * 64, revision='fabric-api-0.92.11+1.20.1', minecraft_versions=('1.20.1',), score=1.0, channels=('test',))

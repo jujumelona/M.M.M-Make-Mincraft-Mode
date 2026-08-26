@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .dependency_decode_monitor import activate_dependency_decode_monitor
 from .platform_catalog import adapter_for_target
-
 
 _ACTIVE_CODER_TARGET: ContextVar[Any | None] = ContextVar(
     "mmm_custom_coder_platform_target",
@@ -198,7 +198,7 @@ def _install_gradle_metadata_scope(module_api: Any) -> None:
                     f"Custom module path is outside the allowed scope: {path}"
                 )
 
-    setattr(validate_operations, "_mmm_live_gradle_metadata_scope", True)
+    validate_operations._mmm_live_gradle_metadata_scope = True
     cls._validate_operations = validate_operations
 
 

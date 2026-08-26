@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import json
 import re
 import struct
@@ -6,11 +7,23 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
 from .complete_spec import CompleteProposal
-from .local_ai_sidecar_generator import INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE, LocalAiSidecarGenerationError, local_ai_sidecar_manifest_path, local_ai_sidecar_source_path, normalize_local_ai_sidecar_config, render_local_ai_sidecar_manifest, render_local_ai_sidecar_source
+from .local_ai_sidecar_generator import (
+    INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
+)
+from .local_ai_sidecar_generator import (
+    LocalAiSidecarGenerationError,
+    local_ai_sidecar_manifest_path,
+    local_ai_sidecar_source_path,
+    normalize_local_ai_sidecar_config,
+    render_local_ai_sidecar_manifest,
+    render_local_ai_sidecar_source,
+)
 from .scale_policy import ScalePolicy
 from .spec import ContentKind, ModSpec
 from .toolchain_contract import fabric_dependency_predicates
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -94,7 +107,7 @@ class ProjectValidator:
             checks += self._validate_no_unapproved_client_or_entity(root, spec, fabric, findings)
         if complete is not None:
             checks += self._validate_complete_sources(root, spec, complete, findings)
-        status = 'PASS' if not any((item.severity == 'error' for item in findings)) else 'FAIL'
+        status = 'PASS' if not any(item.severity == 'error' for item in findings) else 'FAIL'
         return ValidationReport(status=status, checks_run=checks, findings=tuple(findings))
 
     def _validate_content(self, root: Path, spec: ModSpec, content: Any, en: dict[str, Any], ko: dict[str, Any], en_path: Path, ko_path: Path, findings: list[Finding]) -> int:
@@ -208,7 +221,7 @@ class ProjectValidator:
         forbidden_roots = (root / f"src/main/java/{spec.package_name.replace('.', '/')}/entity", root / f'src/main/resources/assets/{spec.mod_id}/textures/entity', root / f'src/main/resources/data/{spec.mod_id}/loot_tables/entities')
         for forbidden_root in forbidden_roots:
             checks += 1
-            if forbidden_root.is_dir() and any((path.is_file() for path in forbidden_root.rglob('*'))):
+            if forbidden_root.is_dir() and any(path.is_file() for path in forbidden_root.rglob('*')):
                 findings.append(Finding('UNAPPROVED_ENTITY_ARTIFACT', 'error', self._rel(root, forbidden_root), 'Entity artifacts exist without an approved entity module.'))
         return checks
 
@@ -464,7 +477,7 @@ def _complete_entity_ids(proposal: CompleteProposal | None) -> set[str]:
 def _complete_client_required(proposal: CompleteProposal | None) -> bool:
     if proposal is None:
         return False
-    return bool(_complete_entity_ids(proposal)) or any((module.config.get('client_required') is True for module in proposal.modules))
+    return bool(_complete_entity_ids(proposal)) or any(module.config.get('client_required') is True for module in proposal.modules)
 
 def validate_jar(jar_path: Path, spec: ModSpec, *, policy: ScalePolicy | None=None) -> ValidationReport:
     policy = policy or ScalePolicy.from_environment()
@@ -563,7 +576,7 @@ def validate_jar(jar_path: Path, spec: ModSpec, *, policy: ScalePolicy | None=No
                 findings.append(Finding('JAR_RESOURCE_MISSING', 'error', required, 'Approved runtime resource is absent from JAR.'))
         if complete is not None:
             checks += _validate_complete_jar(archive, names, spec, complete, findings)
-    status = 'PASS' if not any((item.severity == 'error' for item in findings)) else 'FAIL'
+    status = 'PASS' if not any(item.severity == 'error' for item in findings) else 'FAIL'
     return ValidationReport(status=status, checks_run=checks, findings=tuple(findings))
 
 def _validate_complete_jar(archive: zipfile.ZipFile, names: set[str], spec: ModSpec, complete: CompleteProposal, findings: list[Finding]) -> int:
@@ -575,7 +588,7 @@ def _validate_complete_jar(archive: zipfile.ZipFile, names: set[str], spec: ModS
     if module_kinds & extended_kinds:
         expected_classes.add(f'{java_root}/extended/GeneratedExtendedContent.class')
     system_classes = {'quest': 'QuestSystem', 'class': 'ClassSkillSystem', 'skill': 'ClassSkillSystem', 'economy': 'EconomyShopSystem', 'shop': 'EconomyShopSystem', 'gui': 'GuiNetworkingSystem', 'networking': 'GuiNetworkingSystem', 'party': 'PartyGuildSystem', 'guild': 'PartyGuildSystem'}
-    expected_classes.update((f'{java_root}/system/{system_classes[kind]}.class' for kind in module_kinds if kind in system_classes))
+    expected_classes.update(f'{java_root}/system/{system_classes[kind]}.class' for kind in module_kinds if kind in system_classes)
     if module_kinds & set(system_classes):
         expected_classes.update({f'{java_root}/system/MmmPersistentStore.class', f'{java_root}/system/MmmSystemConfig.class'})
     for entity_id in _complete_entity_ids(complete):
@@ -601,4 +614,4 @@ def _entrypoint_values(value: Any) -> set[str]:
     return result
 
 def _class_name(value: str) -> str:
-    return ''.join((part.capitalize() for part in value.split('_')))
+    return ''.join(part.capitalize() for part in value.split('_'))

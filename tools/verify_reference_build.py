@@ -11,7 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from minecraft_mod_ai import MinecraftModPipeline
 
-
 REFERENCE_PROMPT = (
     "Create a frost boss with a 3D model, one item and one block"
 )

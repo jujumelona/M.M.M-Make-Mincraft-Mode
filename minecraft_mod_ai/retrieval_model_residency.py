@@ -11,8 +11,9 @@ must only score the already-ranked shortlist rather than hundreds of repository 
 
 import os
 import threading
+from collections.abc import Sequence
 from functools import wraps
-from typing import Any, Sequence
+from typing import Any
 
 _INIT_LOCK = threading.RLock()
 _DEFAULT_LOCAL_RERANK_DOCUMENTS = 8
@@ -30,10 +31,10 @@ def _cache_for(router: Any) -> tuple[threading.RLock, dict[tuple[str, str], Any]
         cache = getattr(router, "_mmm_retrieval_adapters", None)
         if lock is None:
             lock = threading.RLock()
-            setattr(router, "_mmm_retrieval_adapter_lock", lock)
+            router._mmm_retrieval_adapter_lock = lock
         if not isinstance(cache, dict):
             cache = {}
-            setattr(router, "_mmm_retrieval_adapters", cache)
+            router._mmm_retrieval_adapters = cache
         return lock, cache
 
 

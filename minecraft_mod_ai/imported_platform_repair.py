@@ -5,7 +5,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = "mmm/imported-platform-repair-v1"
 RELATIVE_PATH = Path(".minecraft_ai/imported-platform-repair.json")
 _SHA256 = re.compile(r"^(?:sha256:)?([0-9a-f]{64})$")

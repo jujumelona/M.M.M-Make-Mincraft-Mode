@@ -4,8 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
-from minecraft_mod_ai.model_adapters.base import GenerationRequest
+from minecraft_mod_ai.model_adapters.base import (
+    GenerationRequest,
+    ModelConfigurationError,
+)
 from minecraft_mod_ai.progress_aware_tool_loop import (
     RetrievalDecision,
     RetrievalObservation,

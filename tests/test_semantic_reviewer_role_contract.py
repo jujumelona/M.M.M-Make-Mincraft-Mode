@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import minecraft_mod_ai.atomic_requirement_contract as atomic_requirement_contract
+from minecraft_mod_ai import atomic_requirement_contract
 from minecraft_mod_ai.semantic_reviewer_role_contract import _SafeReviewerRouter
 
 

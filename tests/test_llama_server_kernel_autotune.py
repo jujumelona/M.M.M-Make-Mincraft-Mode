@@ -6,7 +6,6 @@ import pytest
 
 from minecraft_mod_ai import llama_server_kernel_autotune as kernel
 
-
 _ENV_NAMES = (
     "MMM_LLAMA_FLASH_ATTN",
     "MMM_LLAMA_FLASH_ATTN_CANDIDATES",

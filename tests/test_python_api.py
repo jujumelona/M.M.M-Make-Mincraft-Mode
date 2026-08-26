@@ -118,7 +118,7 @@ class _MockHTTPResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._body = json.dumps(payload).encode("utf-8")
 
-    def __enter__(self) -> "_MockHTTPResponse":
+    def __enter__(self) -> _MockHTTPResponse:
         return self
 
     def __exit__(self, *_args: object) -> None:

@@ -5,10 +5,11 @@ import hashlib
 import json
 import signal
 import time
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any
 
 from .model_adapters import AdapterConfig, ModelBackendError
 from .model_registry import ModelRegistry

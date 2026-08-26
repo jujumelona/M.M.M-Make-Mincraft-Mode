@@ -10,21 +10,24 @@ from minecraft_mod_ai import agent_tool_runtime
 from minecraft_mod_ai import custom_module_generator as generator_module
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import (
-    CustomModuleGenerator,
-    CustomModuleGenerationError,
     _CHECKPOINT_SCHEMA,
+    CustomModuleGenerationError,
+    CustomModuleGenerator,
     _checkpoint_router_scope,
     _generation_checkpoint_identity,
-    _prepare_generation_checkpoint,
     _persist_generation_checkpoint,
+    _prepare_generation_checkpoint,
     _remove_generation_checkpoint,
 )
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
-    LlamaCompletionBoundaryError,
     OUTPUT_EXHAUSTED,
+    LlamaCompletionBoundaryError,
 )
-from minecraft_mod_ai.model_adapters.base import ModelBackendError, ModelConfigurationError
+from minecraft_mod_ai.model_adapters.base import (
+    ModelBackendError,
+    ModelConfigurationError,
+)
 from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
 

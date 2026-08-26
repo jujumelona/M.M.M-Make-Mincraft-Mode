@@ -12,7 +12,8 @@ recovery never has to infer semantics from human-readable error strings.
 import copy
 import hashlib
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 _MARKER = "_mmm_llama_finish_reason_classifier"
 CONTEXT_PRESSURE = "context_pressure"
@@ -255,10 +256,10 @@ def install(llama_cpp_module: Any) -> None:
 
 __all__ = [
     "CONTEXT_PRESSURE",
-    "LlamaCompletionBoundaryError",
     "OUTPUT_EXHAUSTED",
     "_CONTEXT_ERROR",
     "_OUTPUT_ERROR",
+    "LlamaCompletionBoundaryError",
     "_http_context_pressure",
     "_length_error",
     "completion_boundary_error",

@@ -9,7 +9,10 @@ import pytest
 
 from minecraft_mod_ai.api import _attach_existing_target
 from minecraft_mod_ai.complete_orchestrator import _semantic_execution_observation
-from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
+from minecraft_mod_ai.complete_spec import (
+    ProductionModule,
+    complete_proposal_from_parts,
+)
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner

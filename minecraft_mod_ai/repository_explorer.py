@@ -4,9 +4,10 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from .project_index import ProjectIndex
 

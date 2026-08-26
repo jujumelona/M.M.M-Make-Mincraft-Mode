@@ -3,9 +3,10 @@ from __future__ import annotations
 import gc
 import importlib.metadata
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from packaging.version import Version
 
@@ -201,8 +202,8 @@ def quantization_config(config: AdapterConfig):
             f"Unsupported quantization for {config.role}: {config.quantization!r}."
         )
     require_package("bitsandbytes", minimum="0.45.0")
-    from transformers import BitsAndBytesConfig
     import torch
+    from transformers import BitsAndBytesConfig
 
     return BitsAndBytesConfig(
         load_in_4bit=True,

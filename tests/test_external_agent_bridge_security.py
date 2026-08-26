@@ -10,7 +10,6 @@ from minecraft_mod_ai.external_agent_bridge import (
     ExternalAgentBridgeError,
 )
 
-
 _INPUT_SCHEMA = {
     "type": "object",
     "properties": {"query": {"type": "string"}},

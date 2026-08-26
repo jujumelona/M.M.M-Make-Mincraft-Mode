@@ -5,12 +5,12 @@ import json
 import sys
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator
 from functools import wraps
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any
 
 from .project_write_lock import project_write_lock
-
 
 _TEXTURE_CACHE_LOCK = threading.RLock()
 _TEXTURE_CACHE: OrderedDict[tuple[str, str, int, int], bytes] = OrderedDict()

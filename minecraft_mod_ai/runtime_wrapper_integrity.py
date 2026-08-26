@@ -11,9 +11,9 @@ wrapper that would still fail at runtime.
 
 import inspect
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator
-
+from typing import Any
 
 _PACKAGE_PREFIX = "minecraft_mod_ai"
 _SENTINEL = object()

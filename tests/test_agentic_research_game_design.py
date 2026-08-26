@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections import Counter
 import json
+from collections import Counter
 from pathlib import Path
 
 import minecraft_mod_ai.agentic_pre_design_rag as paged_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
-import minecraft_mod_ai.game_design as game_design
+from minecraft_mod_ai import game_design
 
 
 class _SectionRouter:

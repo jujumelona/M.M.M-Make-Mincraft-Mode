@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 'Adaptive test-time compute for the frozen small central agent.\n\nThe central council/reviewer stack is valuable on hard requests, but paying the full\nensemble cost for every request wastes the limited local-model budget. This late\nhardener keeps existing planning/research authority intact and only changes when the\noptional advisory amplification is invoked:\n\n* clearly simple requests use the existing research/planner/verifier stack directly;\n* ordinary non-trivial requests keep the council, but a second adversarial reviewer\n  is requested only when the first review is uncertain or finds a material issue;\n* complex/high-risk requests retain the complete existing council and parallel reviews.\n\nNo model weights, schemas, validation rules, or execution authority are changed.\n'
 import hashlib
 import os
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from . import trajectory_memory
 from .trajectory_record_integrity import (
@@ -216,7 +218,7 @@ def _compute_policy(
     for domain in domains:
         kinds = domain.get('evidence_kinds', [])
         if isinstance(kinds, list):
-            evidence_kinds.update((str(value) for value in kinds))
+            evidence_kinds.update(str(value) for value in kinds)
         depends_on = domain.get('depends_on', [])
         if isinstance(depends_on, list):
             dependency_edges += len(depends_on)
@@ -228,7 +230,7 @@ def _compute_policy(
         score += 1
         reasons.append('research_dependencies')
     lowered = prompt.casefold()
-    marker_hits = sum((1 for marker in _COMPLEX_MARKERS if marker in lowered))
+    marker_hits = sum(1 for marker in _COMPLEX_MARKERS if marker in lowered)
     if marker_hits >= 2:
         score += 2
         reasons.append('cross_system_markers')
@@ -261,7 +263,7 @@ def _review_requires_expansion(review: Mapping[str, Any]) -> bool:
         confidence = float(review.get('confidence', 0.0))
     except (TypeError, ValueError):
         confidence = 0.0
-    material_issue = any((isinstance(review.get(field), list) and bool(review.get(field)) for field in ('missing_requirements', 'unsupported_additions', 'contradictions', 'research_gaps')))
+    material_issue = any(isinstance(review.get(field), list) and bool(review.get(field)) for field in ('missing_requirements', 'unsupported_additions', 'contradictions', 'research_gaps'))
     return severity >= _SEVERITY['medium'] or confidence < 0.72 or material_issue
 
 
@@ -356,4 +358,4 @@ def harden(agentic_module: Any, central_module: Any) -> None:
         agentic_module.generate_sectioned_game_design = generate
 
 
-__all__ = ['harden', '_compute_policy', '_review_requires_expansion']
+__all__ = ['_compute_policy', '_review_requires_expansion', 'harden']

@@ -4,20 +4,24 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from ..model_runtime_performance import (
     _length_bucketed_batches,
     _length_prefixed_digest,
     _rerank_microbatch_size,
-    _retrieval_cache_enabled as _cache_enabled,
-    _retrieval_result_cache_limit as _result_cache_limit,
     _text_digest,
+)
+from ..model_runtime_performance import (
+    _retrieval_cache_enabled as _cache_enabled,
+)
+from ..model_runtime_performance import (
+    _retrieval_result_cache_limit as _result_cache_limit,
 )
 from ..retrieval_cpu_budget_contract import require_dense_retrieval_device
 from .base import AdapterConfig, ModelBackendError, require_package, torch_dtype
-
 
 _SYSTEM = (
     "Judge whether the Document meets the requirements based on the Query and the "

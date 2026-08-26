@@ -5,12 +5,14 @@ import inspect
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
 from .research_code_context import ResearchCodeContext
+
 
 def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None=None) -> tuple[str, str, str]:
     version = str(kwargs.get('minecraft_version') or '').strip()
@@ -89,7 +91,7 @@ class _ResearchEvidenceRouter:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._router, name)
 
-    def bind_agent_workspace(self, workspace_root: str | Path, *, require_fresh_evidence: bool=False) -> '_ResearchEvidenceRouter':
+    def bind_agent_workspace(self, workspace_root: str | Path, *, require_fresh_evidence: bool=False) -> _ResearchEvidenceRouter:
         binder = getattr(self._router, 'bind_agent_workspace', None)
         if callable(binder):
             binder(workspace_root, require_fresh_evidence=require_fresh_evidence)
@@ -206,8 +208,8 @@ def _evolution_state_budget() -> int:
 
 
 def _contains_validation_failure(messages: Sequence[Mapping[str, Any]]) -> bool:
-    tail = ' '.join((str(message.get('content', '')) for message in messages[-4:] if isinstance(message.get('content'), str))).casefold()
-    return any((marker in tail for marker in ('validation failure', 'execution & validation failure', 'compile error', 'diagnostic', 'failed with reason')))
+    tail = ' '.join(str(message.get('content', '')) for message in messages[-4:] if isinstance(message.get('content'), str)).casefold()
+    return any(marker in tail for marker in ('validation failure', 'execution & validation failure', 'compile error', 'diagnostic', 'failed with reason'))
 
 
 def _research_state(text: str, bundle: Mapping[str, Any] | None, violations: Sequence[Mapping[str, Any]]) -> str:

@@ -5,8 +5,9 @@ import sys
 import threading
 import types
 import unittest
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
-from typing import Any, Mapping
+from typing import Any
 from unittest.mock import patch
 
 import anyio

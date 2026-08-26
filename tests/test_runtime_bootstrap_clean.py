@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import ast
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'minecraft_mod_ai'
 _BOOTSTRAP = PACKAGE / 'runtime_bootstrap.py'

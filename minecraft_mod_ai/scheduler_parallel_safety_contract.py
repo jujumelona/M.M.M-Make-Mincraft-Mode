@@ -4,10 +4,11 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from .project_write_lock import project_write_lock
 
@@ -64,7 +65,7 @@ def _orchestrator_owner(ledger: Any) -> str:
     if owner:
         return str(owner)
     owner = f"{_ORCHESTRATOR_WORKER}:{os.getpid()}:{uuid.uuid4().hex}"
-    setattr(ledger, "_mmm_parallel_lease_owner", owner)
+    ledger._mmm_parallel_lease_owner = owner
     return owner
 
 

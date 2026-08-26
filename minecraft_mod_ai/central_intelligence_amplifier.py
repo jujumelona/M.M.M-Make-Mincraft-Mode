@@ -4,11 +4,11 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from functools import wraps
-from typing import Any, Mapping, Sequence
-
+from typing import Any
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
 _PARALLEL_CORE_MARKER = "_mmm_parallel_research_design_core_v1"

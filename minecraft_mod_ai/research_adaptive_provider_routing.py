@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 'Late adaptive routing for pre-design research providers.\n\nThe normalized research brief is already the host-owned routing graph. Keep the\nplanning critical path small: avoid duplicate authoritative retrieval, skip the\ntechnology radar when the request has no technology capability, and defer external\necosystem discovery until a research-domain agent actually has an evidence gap.\n'
 import hashlib
 import json
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
+
 _PROVIDER_MARKER = '_mmm_adaptive_research_provider_routing_v1'
 _FORCED_ROUTE_MARKER = '_mmm_official_owner_forced_rag_route_v1'
 _EXTERNAL_PROVIDERS = frozenset({'modrinth', 'github', 'openverse_images', 'wikipedia', 'huggingface_models', 'openalex_works', 'crossref_works'})
@@ -13,7 +16,7 @@ _CODE_EVIDENCE_KINDS = frozenset({'source_code', 'local_project'})
 def _strings(value: Any) -> frozenset[str]:
     if not isinstance(value, (list, tuple, set, frozenset)):
         return frozenset()
-    return frozenset((str(item).strip() for item in value if str(item).strip()))
+    return frozenset(str(item).strip() for item in value if str(item).strip())
 
 def _domains(research_brief: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...]:
     if not isinstance(research_brief, Mapping):
@@ -21,10 +24,10 @@ def _domains(research_brief: Mapping[str, Any] | None) -> tuple[Mapping[str, Any
     raw = research_brief.get('domains')
     if not isinstance(raw, list):
         return ()
-    return tuple((item for item in raw if isinstance(item, Mapping)))
+    return tuple(item for item in raw if isinstance(item, Mapping))
 
 def _needs_technology_radar(research_brief: Mapping[str, Any] | None) -> bool:
-    return any((bool(_strings(domain.get('evidence_kinds')) & _TECHNOLOGY_EVIDENCE_KINDS) for domain in _domains(research_brief)))
+    return any(bool(_strings(domain.get('evidence_kinds')) & _TECHNOLOGY_EVIDENCE_KINDS) for domain in _domains(research_brief))
 
 def _external_route_count(research_brief: Mapping[str, Any] | None) -> int:
     seen: set[tuple[str, str, str]] = set()

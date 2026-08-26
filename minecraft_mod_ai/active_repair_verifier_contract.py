@@ -3,9 +3,10 @@ from __future__ import annotations
 """Install a pairwise active verifier used only for ambiguous repair candidates."""
 
 import os
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .counterexample_verifier import discriminate
 

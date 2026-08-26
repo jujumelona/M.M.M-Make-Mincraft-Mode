@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from threading import RLock
-from typing import Any, Sequence
+from typing import Any
 
 from .model_adapters.base import ModelBackendError, ModelConfigurationError
 from .runtime_contract_wrappers import (

@@ -8,7 +8,6 @@ import minecraft_mod_ai.work_graph as work_graph_module
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
-
 safety.install(
     work_graph_module=work_graph_module,
     orchestrator_module=orchestrator_module,

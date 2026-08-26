@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from minecraft_mod_ai.project_index import ProjectIndex
-from minecraft_mod_ai.repository_explorer import RepositoryExplorer, classify_exploration_route
+from minecraft_mod_ai.repository_explorer import (
+    RepositoryExplorer,
+    classify_exploration_route,
+)
 
 
 class _Router:

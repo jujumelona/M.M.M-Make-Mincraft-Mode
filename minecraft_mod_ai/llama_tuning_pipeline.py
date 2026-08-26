@@ -11,9 +11,10 @@ multiple installation.
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from .runtime_contract_composer import (
     ContractStage,
@@ -21,7 +22,6 @@ from .runtime_contract_composer import (
     callable_boundary,
     compose_contract_stages,
 )
-
 
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority"
 _RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
@@ -253,7 +253,9 @@ class NativeLlamaTuningPipeline:
 
     def stages(self) -> tuple[TuningStage, ...]:
         from . import agentic_optimization_contract, repair_engine
-        from .llama_cache_reuse_efficiency_contract import install as install_cache_reuse
+        from .llama_cache_reuse_efficiency_contract import (
+            install as install_cache_reuse,
+        )
         from .llama_decode_speed_contract import install as install_decode_speed
         from .llama_multimodal_contract import install as install_multimodal
         from .llama_server_efficiency_contract import install as install_efficiency
@@ -270,7 +272,9 @@ class NativeLlamaTuningPipeline:
         from .qwen35_runtime_efficiency_contract import (
             install as install_qwen35_runtime_efficiency,
         )
-        from .qwen_runtime_transport_contract import install as install_qwen_runtime_transport
+        from .qwen_runtime_transport_contract import (
+            install as install_qwen_runtime_transport,
+        )
 
         def install_hardware_stage() -> None:
             install_hardware(self.autotune)

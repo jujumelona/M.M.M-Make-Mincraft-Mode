@@ -8,7 +8,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-
 _PERSISTENT_KINDS = frozenset(
     {"quest", "class", "skill", "economy", "shop", "party", "guild"}
 )

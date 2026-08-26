@@ -1,14 +1,20 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
 import re
 import secrets
 import zipfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
+
 from .broker import LocalPolicyBroker, ToolAction, approved_request
-from .complete_orchestrator import CompleteExecutionOptions, CompleteProductionOrchestrator
+from .complete_orchestrator import (
+    CompleteExecutionOptions,
+    CompleteProductionOrchestrator,
+)
 from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
 from .conversation import merge_design_brief
@@ -18,8 +24,12 @@ from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
 from .plan_render import render_complete_plan
-from .proposal_store import load_sharded_complete_proposal, read_sharded_complete_proposal_section, write_sharded_complete_proposal
 from .production_contract import quality_contract_summary, quality_unresolved
+from .proposal_store import (
+    load_sharded_complete_proposal,
+    read_sharded_complete_proposal_section,
+    write_sharded_complete_proposal,
+)
 from .repair_engine import RepairEngine
 from .runner import GradleRunner
 from .scalable_pipeline import ScalableMinecraftModPipeline
@@ -27,8 +37,13 @@ from .scalable_validator import ScalableProjectValidator
 from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher
 from .spec import Proposal, ProposalStatus, SpecValidationError, canonical_json
-from .technology_radar import _assess_technology_candidate_with_receipt_key as assess_technology_candidate, _build_signed_official_target_evidence, build_technology_radar as create_technology_radar
+from .technology_radar import (
+    _assess_technology_candidate_with_receipt_key as assess_technology_candidate,
+)
+from .technology_radar import _build_signed_official_target_evidence
+from .technology_radar import build_technology_radar as create_technology_radar
 from .validator import validate_jar
+
 _SAFE_ID = re.compile('^[a-z][a-z0-9_]{1,63}$')
 _PROPOSAL_REF = re.compile('^plan_([0-9a-f]{64})_([0-9a-f]{64})$')
 _RUN_NAME = re.compile('^[a-z0-9][a-z0-9_-]{0,127}$')
@@ -104,7 +119,7 @@ class MMMToolService:
             raw_screenshots = scoped_options['screenshot_paths']
             if not isinstance(raw_screenshots, (list, tuple)):
                 raise SpecValidationError('screenshot_paths must be a list of workspace files.')
-            scoped_options['screenshot_paths'] = tuple((str(self._existing_file(str(value))) for value in raw_screenshots))
+            scoped_options['screenshot_paths'] = tuple(str(self._existing_file(str(value))) for value in raw_screenshots)
         parsed_options = CompleteExecutionOptions(**scoped_options)
         scoped_existing = str(self._existing_file(existing_input)) if existing_input is not None else None
         return CompleteProductionOrchestrator(workspace_root=self.workspace_root, profile=self.profile, router_factory=self.router_factory, policy=self.policy).execute(parsed, approval_hash=approval_hash, run_name=run_name, options=parsed_options, existing_input=scoped_existing).to_dict()
@@ -276,7 +291,7 @@ class MMMToolService:
                 if not path.is_file() or path.is_symlink():
                     continue
                 relative = path.relative_to(root)
-                if any((part in {'.gradle', '.cache', 'gradle-user-home', 'run'} for part in relative.parts)):
+                if any(part in {'.gradle', '.cache', 'gradle-user-home', 'run'} for part in relative.parts):
                     continue
                 zipped.write(path, Path('source') / relative)
             if jar is not None:
@@ -431,7 +446,7 @@ class MMMToolService:
     def _scoped_media_paths(self, values: Sequence[str]) -> tuple[str, ...]:
         if isinstance(values, (str, bytes)):
             raise SpecValidationError('media_paths must be a list of workspace files.')
-        return tuple((str(self._existing_file(str(value))) for value in values))
+        return tuple(str(self._existing_file(str(value))) for value in values)
 
     def _resolve_child(self, value: str, *, allow_root: bool = False) -> Path:
         candidate = Path(value).expanduser()

@@ -5,12 +5,12 @@ import json
 import os
 import re
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .scale_policy import ScalePolicy
-
 
 _TEXT_SUFFIXES = {
     ".java",

@@ -11,8 +11,9 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 import httpx
 

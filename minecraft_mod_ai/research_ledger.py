@@ -5,10 +5,12 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .complete_spec import ProductionModule
+
 INTEGRATION_TYPE = "mmm_research_shard"
 _SCHEMA_VERSION = "mmm/research-shard-v1"
 _ALLOWED_ROOT = Path(".minecraft_ai/research")

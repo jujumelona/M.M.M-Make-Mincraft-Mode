@@ -10,9 +10,10 @@ expensive source-transplant inspector.
 
 import os
 import re
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx

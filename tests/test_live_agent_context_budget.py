@@ -9,7 +9,9 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
 )
-from minecraft_mod_ai.llama_server_efficiency_contract import install as install_llama_efficiency
+from minecraft_mod_ai.llama_server_efficiency_contract import (
+    install as install_llama_efficiency,
+)
 from minecraft_mod_ai.model_adapters import GenerationRequest
 from minecraft_mod_ai.model_context_budget import (
     bounded_tool_message,
@@ -202,7 +204,6 @@ def test_installed_llama_efficiency_bounds_negative_tool_decode(monkeypatch) -> 
 
     def probe(*args, **kwargs):
         del args, kwargs
-        return None
 
     autotune = SimpleNamespace(
         _mmm_server_efficiency_installed=False,

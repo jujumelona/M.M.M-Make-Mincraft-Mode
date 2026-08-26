@@ -4,10 +4,10 @@ import hashlib
 import json
 import shutil
 import zipfile
+from collections.abc import Mapping
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
-
+from typing import Any
 
 SCHEMA = "mmm/clean-room-build-v1"
 

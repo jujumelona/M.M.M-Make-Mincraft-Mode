@@ -7,12 +7,12 @@ import os
 import re
 import sqlite3
 import uuid
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any
 
 from .model_router import ModelRouter
-
 
 _ALLOWED_SUFFIXES = frozenset(
     {

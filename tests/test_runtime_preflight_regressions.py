@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from minecraft_mod_ai.progress_aware_tool_loop import _stable_value, evidence_fingerprint
+from minecraft_mod_ai.progress_aware_tool_loop import (
+    _stable_value,
+    evidence_fingerprint,
+)
 from minecraft_mod_ai.runtime_preflight import run_runtime_preflight
 
 

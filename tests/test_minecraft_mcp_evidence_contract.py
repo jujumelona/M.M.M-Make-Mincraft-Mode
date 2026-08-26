@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import agentic_research_game_design
-from minecraft_mod_ai.central_research import normalize_research_brief
 from minecraft_mod_ai import minecraft_mcp_evidence_contract as mcp_contract
+from minecraft_mod_ai.central_research import normalize_research_brief
 from minecraft_mod_ai.minecraft_mcp_evidence_contract import (
     collect_external_minecraft_evidence,
 )
 from minecraft_mod_ai.skill_catalog import compile_skill_contract
-
 
 _EXTERNAL_AGENT_TOOLS = {
     "external_mcp_capabilities",

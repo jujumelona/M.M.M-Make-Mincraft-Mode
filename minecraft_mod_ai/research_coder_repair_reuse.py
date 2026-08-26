@@ -15,10 +15,11 @@ import json
 import os
 import re
 import threading
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any
 
 _MARKER = "_mmm_research_coder_repair_reuse_v1"
 _RECEIPT_PATH = Path(".minecraft_ai/research-code-context-receipts.json")
@@ -726,9 +727,7 @@ def _install_repair_context_reuse(repair_module: Any) -> None:
 def harden() -> None:
     """Apply only late, idempotent hardeners; package bootstrap owns composition."""
 
-    from . import custom_module_generator
-    from . import repair_engine
-    from . import research_code_context
+    from . import custom_module_generator, repair_engine, research_code_context
 
     _install_research_context_hardening(research_code_context)
     _install_generation_receipt_persistence(custom_module_generator)

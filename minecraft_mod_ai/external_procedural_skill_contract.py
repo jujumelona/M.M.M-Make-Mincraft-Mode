@@ -14,10 +14,11 @@ import os
 import re
 import stat
 import threading
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _INSTALLED = False
 _PATH_LOCKS_GUARD = threading.Lock()

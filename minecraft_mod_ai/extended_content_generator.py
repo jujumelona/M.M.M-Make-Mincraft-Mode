@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Iterator
 from functools import wraps
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from .complete_spec import ProductionModule
 from .generator import make_texture_png
-from .project_edit import ensure_main_initializer_call, inspect_fabric_project, write_text_files
+from .project_edit import (
+    ensure_main_initializer_call,
+    inspect_fabric_project,
+    write_text_files,
+)
 from .project_write_lock import project_write_lock
 from .scale_policy import ScalePolicy
 

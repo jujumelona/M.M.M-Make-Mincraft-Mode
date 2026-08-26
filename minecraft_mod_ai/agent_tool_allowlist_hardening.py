@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 _MARKER = "__mmm_preserve_generation_tool_allowlist_v1__"
 

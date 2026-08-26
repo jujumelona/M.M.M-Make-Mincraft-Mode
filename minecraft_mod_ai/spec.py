@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import json
 import math
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
+
 from .json_stream import canonical_json_sha256
+
 ID_PATTERN = re.compile('^[a-z][a-z0-9_]{1,63}$')
 PACKAGE_PATTERN = re.compile('^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$')
 HEX_COLOR_PATTERN = re.compile('^#[0-9a-fA-F]{6}$')
@@ -51,7 +54,7 @@ class PlatformLock:
         values = (self.edition, self.loader, self.minecraft_version, self.java_version, self.yarn_mappings, self.fabric_loader, self.fabric_api, self.fabric_loom, self.gradle)
         if not any(values):
             raise SpecValidationError('Platform target is unresolved. Resolve one executable provider receipt before approval or generation.')
-        if not all((str(value).strip() for value in values)):
+        if not all(str(value).strip() for value in values):
             raise SpecValidationError('Platform target is partial. A platform lock must be either fully unresolved during planning or a complete provider receipt.')
         from .platform_catalog import adapter_for_lock_values
         try:
@@ -223,13 +226,13 @@ class Proposal:
     def calculate_hash(self) -> str:
         return canonical_json_sha256(self._hash_payload())
 
-    def with_hash(self) -> 'Proposal':
+    def with_hash(self) -> Proposal:
         from .capabilities import capability_manifest_hash
         from .knowledge import evidence_snapshot_hash
         proposal = Proposal(schema_version=self.schema_version, proposal_version=self.proposal_version, status=ProposalStatus.AWAITING_APPROVAL, requested_prompt=self.requested_prompt, spec=self.spec, assumptions=self.assumptions, exclusions=self.exclusions, deferred_requests=self.deferred_requests, acceptance_tests=self.acceptance_tests, evidence_sources=self.evidence_sources, evidence_snapshot_hash=self.evidence_snapshot_hash or evidence_snapshot_hash(self.evidence_sources), capability_manifest_hash=self.capability_manifest_hash or capability_manifest_hash(), imported_source_snapshot_hash=self.imported_source_snapshot_hash, risk_approvals=self.risk_approvals, approval_hash='')
         return Proposal(**{**proposal.__dict__, 'approval_hash': proposal.calculate_hash()})
 
-    def approve(self, supplied_hash: str) -> 'Proposal':
+    def approve(self, supplied_hash: str) -> Proposal:
         self.validate()
         expected = self.calculate_hash()
         if supplied_hash != expected:
@@ -244,7 +247,7 @@ class Proposal:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Proposal':
+    def from_dict(cls, data: dict[str, Any]) -> Proposal:
         unknown = set(data) - cls._TOP_LEVEL_KEYS
         missing = cls._TOP_LEVEL_KEYS - cls._BACKWARD_COMPATIBLE_KEYS - set(data)
         if unknown:
@@ -259,12 +262,12 @@ class Proposal:
         if arena_data is not None:
             raise SpecValidationError()
         platform = PlatformLock(**platform_data)
-        contents = tuple((ContentSpec(content_id=item['content_id'], kind=ContentKind(item['kind']), display_name_en=item['display_name_en'], display_name_ko=item['display_name_ko'], color=item.get('color', '#74c7ec'), recipe=_json_bool(item.get('recipe', True), 'contents[].recipe')) for item in content_data))
+        contents = tuple(ContentSpec(content_id=item['content_id'], kind=ContentKind(item['kind']), display_name_en=item['display_name_en'], display_name_ko=item['display_name_ko'], color=item.get('color', '#74c7ec'), recipe=_json_bool(item.get('recipe', True), 'contents[].recipe')) for item in content_data)
         spec = ModSpec(contents=contents, boss=BossSpec(**boss_data) if boss_data else None, platform=platform, **spec_data)
-        evidence_sources = tuple((EvidenceSource(**item) for item in data['evidence_sources']))
+        evidence_sources = tuple(EvidenceSource(**item) for item in data['evidence_sources'])
         from .capabilities import capability_manifest_hash
         from .knowledge import evidence_snapshot_hash
-        proposal = cls(schema_version=data['schema_version'], proposal_version=data['proposal_version'], status=ProposalStatus(data['status']), requested_prompt=data['requested_prompt'], spec=spec, assumptions=tuple(data['assumptions']), exclusions=tuple(data['exclusions']), deferred_requests=tuple((DeferredRequest(**item) for item in data['deferred_requests'])), acceptance_tests=tuple(data['acceptance_tests']), evidence_sources=evidence_sources, evidence_snapshot_hash=data.get('evidence_snapshot_hash', evidence_snapshot_hash(evidence_sources)), capability_manifest_hash=data.get('capability_manifest_hash', capability_manifest_hash()), imported_source_snapshot_hash=data.get('imported_source_snapshot_hash', ''), risk_approvals=tuple(data['risk_approvals']), approval_hash=data['approval_hash'])
+        proposal = cls(schema_version=data['schema_version'], proposal_version=data['proposal_version'], status=ProposalStatus(data['status']), requested_prompt=data['requested_prompt'], spec=spec, assumptions=tuple(data['assumptions']), exclusions=tuple(data['exclusions']), deferred_requests=tuple(DeferredRequest(**item) for item in data['deferred_requests']), acceptance_tests=tuple(data['acceptance_tests']), evidence_sources=evidence_sources, evidence_snapshot_hash=data.get('evidence_snapshot_hash', evidence_snapshot_hash(evidence_sources)), capability_manifest_hash=data.get('capability_manifest_hash', capability_manifest_hash()), imported_source_snapshot_hash=data.get('imported_source_snapshot_hash', ''), risk_approvals=tuple(data['risk_approvals']), approval_hash=data['approval_hash'])
         proposal.validate()
         return proposal
 

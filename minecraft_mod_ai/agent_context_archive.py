@@ -13,8 +13,9 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _PATH = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z0-9_.@+-]+)(?![A-Za-z0-9_])")
 _SHA = re.compile(r"(?:sha256:)?\b[0-9a-fA-F]{64}\b")

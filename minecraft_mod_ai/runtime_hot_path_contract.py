@@ -20,8 +20,9 @@ import asyncio
 import concurrent.futures
 import sqlite3
 import threading
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import anyio
 

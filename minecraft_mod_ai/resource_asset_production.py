@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 'Minecraft pixel-resource planning and real binary production.\n\nQwen plans *which* resources change and emits multiple final prompts per asset while it\nis resident.  Production later runs only those persisted jobs through the fixed\nFLUX.2 Klein 9B Q4 + PixelArt Redmond LoRA backend, then performs deterministic\nMinecraft PNG/path/reference/pack validation.  No placeholder counts as success.\n'
 import hashlib
 import json
@@ -7,13 +8,16 @@ import os
 import re
 import shutil
 import zipfile
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any
+
 from .complete_spec import AssetRequest, CompleteProposal, ProductionModule
 from .model_adapters.base import ModelConfigurationError
 from .spec import SpecValidationError
+
 FLUX_MODEL_ID = 'black-forest-labs/FLUX.2-klein-9B'
 PIXEL_LORA_ID = 'artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B'
 PIXEL_LORA_WEIGHT = '[FLUX.2.Klein]PixelArt_Redmond.safetensors'
@@ -487,8 +491,7 @@ def _strict_string_refs(value: Any, label: str) -> tuple[str, ...]:
 
 def _canonical_evidence_capability(value: Any) -> str:
     capability = str(value or '').strip().casefold()
-    if capability.startswith('capability:'):
-        capability = capability[len('capability:'):]
+    capability = capability.removeprefix('capability:')
     if not capability:
         raise SpecValidationError('Evidence reuse binding encountered an empty capability ID.')
     return f'capability:{capability}'
@@ -506,7 +509,7 @@ def _assign_capability_owners(modules: Sequence[ProductionModule], decisions: Se
         scored = []
         for index in candidates:
             overlap = len(cap_tokens & module_tokens[index])
-            prefix = sum((token and any((word.startswith(token) or token.startswith(word) for word in module_tokens[index])) for token in cap_tokens))
+            prefix = sum(token and any(word.startswith(token) or token.startswith(word) for word in module_tokens[index]) for token in cap_tokens)
             scored.append((overlap * 4 + prefix, -index, index))
         score, _tie, owner = max(scored)
         if score <= 0:
@@ -529,8 +532,7 @@ def _semantic_words(value: str) -> set[str]:
 def install_prebootstrap_asset_runtime() -> None:
     """Install the raw producer/backend before existing GPU handoff wraps it."""
     global _LEGACY_GENERATE_ASSETS
-    from . import complete_orchestrator_services
-    from . import model_runtime_performance
+    from . import complete_orchestrator_services, model_runtime_performance
     from .model_adapters import base as base_module
     from .model_adapters.image_diffusion import ImageDiffusionAdapter
     current = complete_orchestrator_services.generate_assets
@@ -551,7 +553,7 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
     plan = proposal.game_design.get('_asset_generation_plan')
     if not _valid_plan(plan, proposal.assets):
         raise AssetProductionError('Asset generation requires the persisted multi-prompt plan; refusing placeholder/fallback output.')
-    prompt_map = {str(item['asset_id']): tuple((str(value) for value in item['prompts'])) for item in plan['assets']}
+    prompt_map = {str(item['asset_id']): tuple(str(value) for value in item['prompts']) for item in plan['assets']}
     candidate_root = run_root / '.minecraft_ai' / 'asset-candidates'
     candidate_root.mkdir(parents=True, exist_ok=True)
     receipts: list[dict[str, Any]] = []
@@ -616,7 +618,9 @@ def install_flux2_q4_image_adapter(image_adapter_cls: Any, model_runtime_module:
             from diffusers import BitsAndBytesConfig as DiffusersBitsAndBytesConfig
             from diffusers import Flux2KleinPipeline
             from diffusers.quantizers import PipelineQuantizationConfig
-            from transformers import BitsAndBytesConfig as TransformersBitsAndBytesConfig
+            from transformers import (
+                BitsAndBytesConfig as TransformersBitsAndBytesConfig,
+            )
             if not torch.cuda.is_available():
                 raise ModelConfigurationError('FLUX.2 Klein 9B Q4 asset production requires CUDA.')
             key = (FLUX_MODEL_ID, QUANTIZATION, PIXEL_LORA_ID, PIXEL_LORA_WEIGHT, 'float16', 'q4_auto_offload')
@@ -627,7 +631,7 @@ def install_flux2_q4_image_adapter(image_adapter_cls: Any, model_runtime_module:
                     previous = model_runtime_module._IMAGE_PIPELINE
                     model_runtime_module._IMAGE_PIPELINE = None
                     model_runtime_module._IMAGE_PIPELINE_KEY = None
-                    setattr(model_runtime_module, '_IMAGE_PIPELINE_ON_GPU', False)
+                    model_runtime_module._IMAGE_PIPELINE_ON_GPU = False
                     if previous is not None:
                         del previous
                         base_module._release_cuda()
@@ -647,7 +651,7 @@ def install_flux2_q4_image_adapter(image_adapter_cls: Any, model_runtime_module:
                         progress(disable=True)
                     model_runtime_module._IMAGE_PIPELINE = pipeline
                     model_runtime_module._IMAGE_PIPELINE_KEY = key
-                    setattr(model_runtime_module, '_IMAGE_PIPELINE_ON_GPU', False)
+                    model_runtime_module._IMAGE_PIPELINE_ON_GPU = False
                 generator = torch.Generator(device='cpu').manual_seed(int(seed))
                 with torch.inference_mode():
                     result = pipeline(prompt=_ensure_trigger(prompt), width=int(width), height=int(height), num_inference_steps=4, guidance_scale=1.0, generator=generator)
@@ -664,7 +668,7 @@ def install_flux2_q4_image_adapter(image_adapter_cls: Any, model_runtime_module:
             with model_runtime_module._IMAGE_LOCK:
                 model_runtime_module._IMAGE_PIPELINE = None
                 model_runtime_module._IMAGE_PIPELINE_KEY = None
-                setattr(model_runtime_module, '_IMAGE_PIPELINE_ON_GPU', False)
+                model_runtime_module._IMAGE_PIPELINE_ON_GPU = False
             base_module._release_cuda()
             raise base_module.ModelBackendError(role=cfg.role, model_id=cfg.model_id, cause=exc) from exc
     generate_image._mmm_flux2_klein9b_q4_pixelart = True
@@ -722,7 +726,7 @@ def _validate_prompt_page(value: Any, batch: Sequence[AssetRequest]) -> list[dic
             raise SpecValidationError('Asset prompt page contains unknown or duplicate asset_id.')
         if not isinstance(prompts, Sequence) or isinstance(prompts, (str, bytes)):
             raise SpecValidationError(f'Asset {asset_id} prompts must be an array.')
-        normalized = tuple((_ensure_trigger(str(prompt).strip()) for prompt in prompts if str(prompt).strip()))
+        normalized = tuple(_ensure_trigger(str(prompt).strip()) for prompt in prompts if str(prompt).strip())
         if len(normalized) != _PROMPTS_PER_ASSET or len(set(normalized)) != len(normalized):
             raise SpecValidationError(f'Asset {asset_id} must have exactly {_PROMPTS_PER_ASSET} distinct prompts.')
         asset = expected[asset_id]
@@ -753,7 +757,7 @@ def _valid_plan(value: Any, assets: Sequence[AssetRequest]) -> bool:
             return False
         if not isinstance(prompts, Sequence) or isinstance(prompts, (str, bytes)) or len(prompts) != _PROMPTS_PER_ASSET:
             return False
-        if any((not isinstance(prompt, str) or not prompt.strip() for prompt in prompts)):
+        if any(not isinstance(prompt, str) or not prompt.strip() for prompt in prompts):
             return False
         if len(set(prompts)) != _PROMPTS_PER_ASSET:
             return False
@@ -790,7 +794,7 @@ def _remove_corner_background(image: Any) -> Any:
     pixels = rgba.load()
     width, height = rgba.size
     corners = [pixels[0, 0], pixels[width - 1, 0], pixels[0, height - 1], pixels[width - 1, height - 1]]
-    bg = tuple((sum((color[channel] for color in corners)) // 4 for channel in range(3)))
+    bg = tuple(sum(color[channel] for color in corners) // 4 for channel in range(3))
     threshold_sq = 24 * 24 * 3
     queue = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
     visited: set[tuple[int, int]] = set()
@@ -800,7 +804,7 @@ def _remove_corner_background(image: Any) -> Any:
             continue
         visited.add((x, y))
         color = pixels[x, y]
-        distance = sum(((int(color[channel]) - bg[channel]) ** 2 for channel in range(3)))
+        distance = sum((int(color[channel]) - bg[channel]) ** 2 for channel in range(3))
         if distance > threshold_sq:
             continue
         pixels[x, y] = (color[0], color[1], color[2], 0)
@@ -812,7 +816,7 @@ def _technical_pixel_score(image: Any, kind: str) -> float:
     rgba = image.convert('RGBA')
     alpha = rgba.getchannel('A')
     alpha_values = list(alpha.getdata())
-    opaque_ratio = sum((value > 16 for value in alpha_values)) / max(1, len(alpha_values))
+    opaque_ratio = sum(value > 16 for value in alpha_values) / max(1, len(alpha_values))
     occupancy_target = 0.55 if kind in {'item', 'icon'} else 0.95
     occupancy = max(0.0, 1.0 - abs(opaque_ratio - occupancy_target))
     gray = rgba.convert('L')
@@ -963,4 +967,4 @@ def _asset_workers() -> int:
     except ValueError:
         value = 4
     return max(1, min(value, 8))
-__all__ = ['AssetProductionError', 'FLUX_MODEL_ID', 'PIXEL_LORA_ID', 'PIXEL_LORA_TRIGGER', 'PIXEL_LORA_WEIGHT', 'PLAN_SCHEMA', 'QUANTIZATION', 'attach_generation_plan', 'bind_reuse_plan', 'generate_assets', 'install_flux2_q4_image_adapter', 'install_prebootstrap_asset_runtime']
+__all__ = ['FLUX_MODEL_ID', 'PIXEL_LORA_ID', 'PIXEL_LORA_TRIGGER', 'PIXEL_LORA_WEIGHT', 'PLAN_SCHEMA', 'QUANTIZATION', 'AssetProductionError', 'attach_generation_plan', 'bind_reuse_plan', 'generate_assets', 'install_flux2_q4_image_adapter', 'install_prebootstrap_asset_runtime']

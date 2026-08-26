@@ -1,10 +1,17 @@
-import json
 import base64
 import hashlib
+import json
+
 import httpx
 import pytest
-from minecraft_mod_ai.ecosystem_discovery import EcosystemDiscoveryClient, EcosystemDiscoveryUnavailable, discover_seed_bundle
+
+from minecraft_mod_ai.ecosystem_discovery import (
+    EcosystemDiscoveryClient,
+    EcosystemDiscoveryUnavailable,
+    discover_seed_bundle,
+)
 from minecraft_mod_ai.spec import SpecValidationError
+
 
 def _client(handler, **kwargs) -> EcosystemDiscoveryClient:
     return EcosystemDiscoveryClient(transport=httpx.MockTransport(handler), **kwargs)

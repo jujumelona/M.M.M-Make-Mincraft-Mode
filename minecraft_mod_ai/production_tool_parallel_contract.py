@@ -92,13 +92,9 @@ def _install_custom_generator_router_compat() -> None:
         # path exists only for deliberately narrow routers used by isolated generator
         # tests/embedders. It does not bypass live code-RAG for production execution.
         if added_bind:
-            setattr(
-                router,
-                "bind_agent_workspace",
-                lambda _workspace, *, require_fresh_evidence=False: None,
-            )
+            router.bind_agent_workspace = lambda _workspace, *, require_fresh_evidence=False: None
         if added_profile:
-            setattr(router, "profile", "t4_local")
+            router.profile = "t4_local"
         try:
             return current(self, *args, **kwargs)
         finally:

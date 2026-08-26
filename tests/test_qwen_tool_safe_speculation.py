@@ -8,7 +8,6 @@ from minecraft_mod_ai import qwen_agent_family_contract as qwen
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 
-
 _TOOL = {
     "type": "function",
     "function": {

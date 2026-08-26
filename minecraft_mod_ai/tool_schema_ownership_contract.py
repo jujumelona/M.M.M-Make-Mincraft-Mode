@@ -8,8 +8,9 @@ let wrapper order decide which same-name schema wins, nor let a first-party MCP 
 shadow a reserved external-federation dispatch name.
 """
 
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _MARKER = "_mmm_tool_schema_ownership_v1"
 

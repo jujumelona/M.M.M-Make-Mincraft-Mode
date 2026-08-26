@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
-from minecraft_mod_ai.llama_structured_decode_policy import bind_structured_decode_policy
+from minecraft_mod_ai.llama_structured_decode_policy import (
+    bind_structured_decode_policy,
+)
 from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
     _disable_decode_slot_polling,
     _install_draft_kv_benchmark,

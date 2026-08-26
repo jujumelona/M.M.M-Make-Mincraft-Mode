@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .java_lsp import JavaLanguageService
 from .model_router import ModelRouter

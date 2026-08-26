@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
+from collections.abc import Sequence
 from dataclasses import asdict
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
 from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operations
 from .geckolib_generator import generate_geckolib_entity_assets
 from .java_lsp import JavaLanguageService
@@ -15,6 +18,7 @@ from .rag_index import ProjectRAGIndex
 from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
 from .training import TrainingTraceStore
+
 
 class ProductionToolService:
     """Additional production tools separated from the core proposal pipeline."""

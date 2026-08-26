@@ -24,14 +24,14 @@ import os
 import re
 import stat
 import threading
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import asdict, replace
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .agent_intent import is_implementation_intent, structured_user_intent
-
 
 _CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
@@ -534,7 +534,7 @@ def _install_repair_context(repair_module: Any, optimization_module: Any) -> Non
             if root_value:
                 root = Path(root_value).expanduser().resolve()
             else:
-                active = getattr(repair_module, "_ACTIVE_REPAIR_PROJECT_INDEX").get()
+                active = repair_module._ACTIVE_REPAIR_PROJECT_INDEX.get()
                 root = active[0] if active is not None else None
             signature = self._signature(evidence)
             failures = _read_verified_failures(root, signature) if root is not None else []
@@ -602,4 +602,4 @@ def install(
     _install_repair_context(repair_module, optimization_module)
 
 
-__all__ = ["install", "select_tool_schemas", "_exact_fact_ledger", "_request_query"]
+__all__ = ["_exact_fact_ledger", "_request_query", "install", "select_tool_schemas"]

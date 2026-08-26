@@ -18,11 +18,12 @@ production handoff, and one durable execution ledger.
 import hashlib
 import inspect
 import json
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .evidence_first_execution import impacted_task_ids_for_paths, refresh_project_index
 from .evidence_first_handoff import build_evidence_first_handoff

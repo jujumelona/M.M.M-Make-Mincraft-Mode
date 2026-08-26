@@ -4,6 +4,7 @@ import json
 from functools import wraps
 from typing import Any
 
+
 def _canonical_key(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 

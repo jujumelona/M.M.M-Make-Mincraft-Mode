@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai.complete_spec import AssetRequest
 from minecraft_mod_ai import resource_asset_production as assets
+from minecraft_mod_ai.complete_spec import AssetRequest
 
 
 def _request(*, path: str = "assets/example/textures/item/widget.png", width: int = 16, height: int = 16) -> AssetRequest:

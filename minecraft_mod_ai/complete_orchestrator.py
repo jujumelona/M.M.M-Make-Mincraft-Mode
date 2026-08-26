@@ -1,46 +1,89 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
 import shutil
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
+
+from .complete_orchestrator_services import (
+    blockbench_review,
+    generate_assets,
+    package_source_only,
+    run_playtest,
+    runtime_profile,
+    visual_review,
+)
+from .complete_orchestrator_support import (
+    CompleteProductionError,
+    _external_gates,
+    _jar_path,
+    _locate_existing_fabric_root,
+    _module_dict,
+    _normalize_modules,
+    _system_groups,
+)
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
-from .complete_orchestrator_support import CompleteProductionError, _external_gates, _jar_path, _locate_existing_fabric_root, _module_dict, _normalize_modules, _system_groups
 from .custom_module_generator import CustomModuleGenerator
 from .extended_content_generator import generate_extended_content
-from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
-from .local_ai_sidecar_generator import INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE, generate_local_ai_sidecar
 from .java_lsp import JavaLanguageService
+from .local_ai_sidecar_generator import (
+    INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
+)
+from .local_ai_sidecar_generator import generate_local_ai_sidecar
+from .model_router import ModelRouter
+from .production_contract import (
+    evaluate_quality_contract,
+    persist_quality_report,
+    quality_unresolved,
+)
+from .project_edit import ProjectEditError, inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
     execution_scoped,
     mark_post_generation,
-    project_index as execution_project_index,
     tune_gradle_resources,
 )
-from .model_router import ModelRouter
-from .project_edit import ProjectEditError, inspect_fabric_project
-from .research_ledger import is_research_shard, write_research_shard
-from .production_contract import evaluate_quality_contract, persist_quality_report, quality_unresolved
-from .quality_evidence import compile_quality_evidence
+from .project_index_execution_reuse_contract import (
+    project_index as execution_project_index,
+)
 from .proposal_store import write_sharded_complete_proposal
-from .publisher import build_distribution_metadata, package_distribution_bundle, publish_curseforge, publish_modrinth
+from .publisher import (
+    build_distribution_metadata,
+    package_distribution_bundle,
+    publish_curseforge,
+    publish_modrinth,
+)
+from .quality_evidence import compile_quality_evidence
 from .repair_engine import RepairEngine
+from .research_ledger import is_research_shard, write_research_shard
 from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
+from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
 from .scalable_validator import ScalableProjectValidator
 from .scale_policy import ScalePolicy
 from .spec import SpecValidationError
 from .system_pack_generator import generate_system_pack
-from .validation_checkpoint_policy import cached_validation_is_reusable, validation_checkpoint_input
+from .validation_checkpoint_policy import (
+    cached_validation_is_reusable,
+    validation_checkpoint_input,
+)
 from .validator import validate_jar
-from .complete_orchestrator_services import blockbench_review, generate_assets, package_source_only, run_playtest, runtime_profile, visual_review
-from .work_graph import DurableWorkLedger, WorkGraphError, WorkNode, WorkGraphPlan, build_production_work_plan, run_named_checkpoint
+from .work_graph import (
+    DurableWorkLedger,
+    WorkGraphError,
+    WorkGraphPlan,
+    WorkNode,
+    build_production_work_plan,
+    run_named_checkpoint,
+)
+
 _REQUIRED_GATE_TO_EVIDENCE = {'registry': 'source', 'resource': 'source', 'recipe': 'source', 'jdt': 'jdt', 'jdt diagnostics': 'jdt', 'gradle': 'gradle', 'gradle clean build': 'gradle', 'gametest': 'gametest', 'gametest spawn and attributes': 'gametest', 'jar validation': 'jar', 'blockbench uv and bone hierarchy review': 'blockbench', 'blockbench uv render review': 'blockbench', 'minecraft server client runtime': 'runtime_client', 'mineflayer playtest': 'playtest', 'runtime interaction tests': 'playtest', 'runtime animation review': 'runtime_visual', 'visual review': 'visual', 'client gui and validated network action test': 'playtest_visual', 'research ledger integrity': 'research_ledger'}
 
 
@@ -259,7 +302,7 @@ class CompleteProductionOrchestrator:
             unresolved.extend(_external_gates(approved, options))
             quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=None, jar_validation=None, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=None, playtest_receipt=None, visual_receipt=None)
             if quality_report is not None:
-                unresolved.extend((f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report)))
+                unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
                 self._record_quality_nodes(ledger, quality_report, allow_success=False)
             self._persist_work_evidence(project_root, ledger, work_plan)
             return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='SOURCE_READY', project_root=str(project_root), release_zip=release, jar_path=None, complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=None, jar_validation=None, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=None, playtest_receipt=None, visual_receipt=None, distribution_receipt=None, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=False, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
@@ -294,7 +337,7 @@ class CompleteProductionOrchestrator:
                     raise CompleteProductionError('server_launcher is required for complete runtime verification.')
                 if not options.eula_accepted:
                     raise CompleteProductionError('Explicit Minecraft EULA acceptance is required.')
-                memory = options.server_memory_mb or self.policy.runtime_heap_mb(module_count=len(ordered), entity_count=sum((1 for module in ordered if module.kind in {'entity', 'boss', 'npc'})), structure_count=sum((1 for module in ordered if module.kind == 'structure')))
+                memory = options.server_memory_mb or self.policy.runtime_heap_mb(module_count=len(ordered), entity_count=sum(1 for module in ordered if module.kind in {'entity', 'boss', 'npc'}), structure_count=sum(1 for module in ordered if module.kind == 'structure'))
                 runtime_config = self._runtime_profile(run_root, memory)
                 runtime_manager = MinecraftRuntimeManager(run_root, config_path=runtime_config)
                 launcher_source = Path(options.server_launcher).expanduser().resolve()
@@ -337,7 +380,7 @@ class CompleteProductionOrchestrator:
         quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt)
         quality_passed = quality_report is None or quality_report.get('overall_status') == 'PASS'
         if quality_report is not None:
-            unresolved.extend((f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report)))
+            unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
             self._record_quality_nodes(ledger, quality_report, allow_success=True)
         self._persist_work_evidence(project_root, ledger, work_plan)
         from .mcp_tools import MMMToolService
@@ -421,6 +464,7 @@ class CompleteProductionOrchestrator:
         import threading
         import time
         from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+
         from . import scheduler_parallel_safety_contract as scheduler_safety
         spec = approved.base_proposal.spec
         if spec.platform.minecraft_version:
@@ -447,9 +491,9 @@ class CompleteProductionOrchestrator:
                 affected.add(candidate)
                 pending.extend(direct_dependents.get(candidate, ()))
             return tuple(sorted(affected))
-        research_modules = tuple((module for module in ordered if is_research_shard(module)))
+        research_modules = tuple(module for module in ordered if is_research_shard(module))
         asset_lookup = {item.asset_id: item for item in approved.assets}
-        generation_nodes = tuple((node for node in work_plan.nodes if node.stage.startswith('generate:')))
+        generation_nodes = tuple(node for node in work_plan.nodes if node.stage.startswith('generate:'))
         node_by_id = {node.node_id: node for node in generation_nodes}
         generation_stages = tuple(sorted({node.stage for node in generation_nodes}))
         extended_kinds = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot'}
@@ -496,13 +540,13 @@ class CompleteProductionOrchestrator:
 
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
-                receipts.extend((write_research_shard(project_root, module=module) for module in research_shards))
+                receipts.extend(write_research_shard(project_root, module=module) for module in research_shards)
                 deterministic = [module for module in members if module.kind in extended_kinds and module not in research_shards]
                 if deterministic:
                     receipts.append(generate_extended_content(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, modules=deterministic, policy=self.policy))
                 sidecars = [module for module in members if module.kind == 'integration' and module.config.get('integration_type') == LOCAL_AI_SIDECAR_INTEGRATION_TYPE]
-                receipts.extend((generate_local_ai_sidecar(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, module=module, policy=self.policy) for module in sidecars))
-                receipts.extend((generate_custom(module) for module in members if module.kind not in extended_kinds and module not in sidecars and (module not in research_shards)))
+                receipts.extend(generate_local_ai_sidecar(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, module=module, policy=self.policy) for module in sidecars)
+                receipts.extend(generate_custom(module) for module in members if module.kind not in extended_kinds and module not in sidecars and (module not in research_shards))
             elif stage == 'system':
                 for pack_id, pack_modules in _system_groups(members).items():
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
@@ -512,7 +556,7 @@ class CompleteProductionOrchestrator:
                     behavior_default = 'npc' if module.kind == 'npc' else 'hostile_melee'
                     receipts.append(generate_geckolib_entity_assets(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, entity_id=module.module_id, texture_width=int(config.get('texture_width', 64)), texture_height=int(config.get('texture_height', 64)), max_health=float(config.get('max_health', 80.0)), attack_damage=float(config.get('attack_damage', 8.0)), movement_speed=float(config.get('movement_speed', 0.27)), follow_range=float(config.get('follow_range', 40.0)), archetype=str(config.get('archetype', 'biped')), behavior=str(config.get('behavior', behavior_default)), entity_width=float(config.get('entity_width', 0.8)), entity_height=float(config.get('entity_height', 2.0)), spawn_group=str(config['spawn_group']) if config.get('spawn_group') else None, custom_bones=config.get('custom_bones') if isinstance(config.get('custom_bones'), list) else None, policy=self.policy))
             elif stage == 'custom':
-                receipts.extend((generate_custom(module) for module in members))
+                receipts.extend(generate_custom(module) for module in members)
             else:
                 raise CompleteProductionError(f'Unsupported generation work stage: {stage}')
             semantic_observations = [
@@ -536,7 +580,7 @@ class CompleteProductionOrchestrator:
             kind = str(node.payload.get('kind', ''))
             if kind == 'module-shard':
                 member_ids = [str(item.get('module_id')) for item in node.payload.get('members', []) if isinstance(item, dict)]
-                if not member_ids or any((item not in module_lookup for item in member_ids)):
+                if not member_ids or any(item not in module_lookup for item in member_ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
                 members = [module_lookup[item] for item in member_ids]
                 receipt = self._run_work_node(ledger, node, action=lambda node=node, members=members: module_node_action(node, members), validate_cached=lambda value: self._receipt_outputs_exist(value, project_root=project_root), shared_index=shared_project_index)
@@ -554,10 +598,10 @@ class CompleteProductionOrchestrator:
                             unresolved.append(f'blockbench:{module.module_id}:not-run-in-source-only-mode')
             elif kind == 'asset-shard':
                 ids = [str(item.get('asset_id')) for item in node.payload.get('members', []) if isinstance(item, dict)]
-                if not ids or any((item not in asset_lookup for item in ids)):
+                if not ids or any(item not in asset_lookup for item in ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid assets.')
-                shard_proposal = replace(approved, assets=tuple((asset_lookup[item] for item in ids)), approval_hash='')
-                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=lambda cached: all((Path(str(item.get('target', ''))).is_file() for item in cached.get('assets', []))), shared_index=shared_project_index))
+                shard_proposal = replace(approved, assets=tuple(asset_lookup[item] for item in ids), approval_hash='')
+                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=lambda cached: all(Path(str(item.get('target', ''))).is_file() for item in cached.get('assets', [])), shared_index=shared_project_index))
             else:
                 raise CompleteProductionError(f'Unsupported work node payload kind: {kind}')
         capacities = scheduler_safety._capacities()
@@ -609,7 +653,7 @@ class CompleteProductionOrchestrator:
                 failed_ids = [node_id for node_id, state in states.items() if state in {'failed', 'cancelled', 'input_required'}]
                 if failed_ids:
                     raise CompleteProductionError(f'Pipeline generation failed on nodes: {failed_ids}')
-                if all((state in {'succeeded', 'completed'} for state in states.values())):
+                if all(state in {'succeeded', 'completed'} for state in states.values()):
                     break
                 running = [task for task in task_rows.values() if str(task['state']) == 'running']
                 if running:
@@ -628,7 +672,7 @@ class CompleteProductionOrchestrator:
             llm_pool.shutdown(wait=True, cancel_futures=True)
             image_pool.shutdown(wait=True, cancel_futures=True)
             commit_pool.shutdown(wait=True, cancel_futures=True)
-        asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum((len(item.get('assets', [])) for item in asset_shards)), 'shards': asset_shards} if asset_shards else None
+        asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
 
     @staticmethod
@@ -734,7 +778,7 @@ class CompleteProductionOrchestrator:
             info = inspect_fabric_project(project_root)
         except (OSError, ValueError, json.JSONDecodeError, ProjectEditError):
             return False
-        has_build = any(((project_root / name).is_file() and (not (project_root / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts')))
+        has_build = any((project_root / name).is_file() and (not (project_root / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts'))
         return has_build and info.main_java.is_file() and (not info.main_java.is_symlink()) and (info.mod_id == spec.mod_id) and (info.package_name == spec.package_name)
 
     @staticmethod
@@ -783,7 +827,7 @@ class CompleteProductionOrchestrator:
             write_sharded_complete_proposal(proposal, path, shard_size=max(1, self.policy.java_shard_size), policy=self.policy)
 
     def _open_run(self, run_name: str, plan: WorkGraphPlan, *, resume: bool) -> tuple[Path, DurableWorkLedger, bool]:
-        if not run_name or any((character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name)):
+        if not run_name or any(character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name):
             raise CompleteProductionError('run_name must use lowercase letters, numbers, underscore or hyphen.')
         revision = 1
         while True:
@@ -827,7 +871,7 @@ class CompleteProductionOrchestrator:
     def _valid_project_root(path: Path) -> bool:
         if not path.is_dir() or path.is_symlink():
             return False
-        if not any(((path / name).is_file() and (not (path / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts'))):
+        if not any((path / name).is_file() and (not (path / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts')):
             return False
         try:
             info = inspect_fabric_project(path)
@@ -848,7 +892,7 @@ class CompleteProductionOrchestrator:
                     research_outputs.append(value)
                 for key, nested in value.items():
                     if key in {'files', 'generated_files'} and isinstance(nested, list):
-                        raw_paths.extend((str(item) for item in nested if isinstance(item, str)))
+                        raw_paths.extend(str(item) for item in nested if isinstance(item, str))
                     elif isinstance(nested, (dict, list)):
                         collect(nested)
             elif isinstance(value, list):
@@ -917,7 +961,7 @@ class CompleteProductionOrchestrator:
                 local_owner = next((str(value[key]) for key in ('module_id', 'entity_id', 'pack_id', 'sound_id') if isinstance(value.get(key), str) and value[key]), owner)
                 gates = value.get('required_gates')
                 if isinstance(gates, (list, tuple)):
-                    requirements.update(((local_owner, gate.strip()) for gate in gates if isinstance(gate, str) and gate.strip()))
+                    requirements.update((local_owner, gate.strip()) for gate in gates if isinstance(gate, str) and gate.strip())
                 for key, nested in value.items():
                     if key != 'required_gates':
                         collect(nested, local_owner)
@@ -975,7 +1019,7 @@ class CompleteProductionOrchestrator:
     def _command_receipt_passed(build_report: dict[str, Any] | None, name: str) -> bool:
         if not isinstance(build_report, dict):
             return False
-        return any((isinstance(command, dict) and command.get('name') == name and (command.get('exit_code') == 0) and (command.get('timed_out') is not True) for command in build_report.get('commands', [])))
+        return any(isinstance(command, dict) and command.get('name') == name and (command.get('exit_code') == 0) and (command.get('timed_out') is not True) for command in build_report.get('commands', []))
 
     @staticmethod
     def _gametest_receipt_passed(build_report: dict[str, Any] | None, spec: Any) -> bool:
@@ -1004,11 +1048,11 @@ class CompleteProductionOrchestrator:
                         return False
                 except ValueError:
                     return False
-        if any((testcase.find('failure') is not None or testcase.find('error') is not None or testcase.find('skipped') is not None for testcase in testcases)):
+        if any(testcase.find('failure') is not None or testcase.find('error') is not None or testcase.find('skipped') is not None for testcase in testcases):
             return False
-        main_class = ''.join((part.capitalize() for part in spec.mod_id.split('_'))) + 'Mod'
+        main_class = ''.join(part.capitalize() for part in spec.mod_id.split('_')) + 'Mod'
         expected = f'{main_class}GameTests.generatedRegistriesAreLive'.lower()
-        return any((testcase.attrib.get('name', '').lower() == expected for testcase in testcases))
+        return any(testcase.attrib.get('name', '').lower() == expected for testcase in testcases)
 
     def _generate_assets(self, router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
         return generate_assets(router, proposal, project_root, run_root)
@@ -1041,4 +1085,4 @@ class CompleteProductionOrchestrator:
         return runtime_profile(run_root, memory_mb)
 
 def _normalize_required_gate(value: str) -> str:
-    return ' '.join(''.join((character.casefold() if character.isalnum() else ' ' for character in value)).split())
+    return ' '.join(''.join(character.casefold() if character.isalnum() else ' ' for character in value).split())

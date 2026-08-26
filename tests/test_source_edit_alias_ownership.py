@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import inspect
 
-import minecraft_mod_ai.model_adapters.qwen_tool_parser as qwen_tool_parser
 from minecraft_mod_ai import research_code_context
+from minecraft_mod_ai.model_adapters import qwen_tool_parser
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_PARAMETER_ALIASES,
     SOURCE_EDIT_SCHEMA,

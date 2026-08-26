@@ -9,7 +9,6 @@ from minecraft_mod_ai import api
 from minecraft_mod_ai.platform_catalog import adapter_for_target, provider_for_loader
 from minecraft_mod_ai.platform_optimizer import TargetEvidence
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "minecraft_mod_ai"
 

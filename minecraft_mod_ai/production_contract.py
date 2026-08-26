@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
+
 if TYPE_CHECKING:
     from .complete_spec import AssetRequest, ProductionModule
 CONTRACT_SCHEMA = 'mmm/production-contract-v1'
@@ -36,7 +39,7 @@ class ProductionContractCompilation:
     contract: dict[str, Any]
     acceptance_tests: tuple[str, ...]
 
-def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence['ProductionModule | Mapping[str, Any]']=(), assets: Sequence['AssetRequest | Mapping[str, Any]']=(), acceptance_tests: Sequence[str]=(), evidence_plan: Mapping[str, Any] | None=None) -> ProductionContractCompilation:
+def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence[ProductionModule | Mapping[str, Any]]=(), assets: Sequence[AssetRequest | Mapping[str, Any]]=(), acceptance_tests: Sequence[str]=(), evidence_plan: Mapping[str, Any] | None=None) -> ProductionContractCompilation:
     """Compile prompt-derived scope into a deterministic evidence contract."""
     if not isinstance(requested_prompt, str) or not requested_prompt.strip():
         raise ProductionContractError('requested_prompt must be a non-empty string')

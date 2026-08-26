@@ -14,8 +14,9 @@ requires an explicit schema refresh instead of silent failover.
 import copy
 import hashlib
 import json
+from collections.abc import Collection, Mapping
 from functools import wraps
-from typing import Any, Collection, Mapping
+from typing import Any
 
 from .mcp_schema_integrity_contract import validate_input_schema
 
@@ -262,7 +263,7 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
             bundle["bundle_sha256"] = external_mcp_router_module._sha256(bundle)
             return bundle
 
-        setattr(router_class, "invoke_bound", invoke_bound)
+        router_class.invoke_bound = invoke_bound
         setattr(router_class, _ROUTER_MARKER, True)
 
     bridge_class = external_agent_bridge_module.ExternalAgentBridge

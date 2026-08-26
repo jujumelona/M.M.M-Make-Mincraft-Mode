@@ -4,12 +4,12 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from minecraft_mod_ai import platform_validation_contract as live_validation
 from minecraft_mod_ai.fabric_official_template_provider import (
     _gradle_wrapper_version,
     _java_release,
 )
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
-from minecraft_mod_ai import platform_validation_contract as live_validation
 from minecraft_mod_ai.validator import ProjectValidator
 
 

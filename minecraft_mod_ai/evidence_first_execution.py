@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
-
+from typing import Any
 
 EXECUTION_SCHEMA = "mmm/evidence-first-execution-v1"
 ERROR_OBSERVATION_SCHEMA = "mmm/action-repair-observation-v1"
@@ -188,7 +188,7 @@ class EvidenceExecutionState:
     last_index_sha256: str = ""
 
     @classmethod
-    def load_or_create(cls, path: str | Path, *, plan_sha256: str) -> "EvidenceExecutionState":
+    def load_or_create(cls, path: str | Path, *, plan_sha256: str) -> EvidenceExecutionState:
         state_path = Path(path)
         plan_ref = _require_text(plan_sha256, "plan_sha256")
         if not state_path.exists():

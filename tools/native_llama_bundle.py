@@ -9,9 +9,8 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
 
 BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v3-max-t4"
 BUNDLE_RELEASE_TAG = "native-llama-1d2869c-cuda12.4-max-v3"

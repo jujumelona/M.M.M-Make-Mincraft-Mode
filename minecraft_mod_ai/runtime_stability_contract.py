@@ -19,7 +19,6 @@ from contextvars import copy_context
 from functools import wraps
 from typing import Any
 
-
 _SYNTHESIS_PROTOCOL_V4 = "mmm/research-hierarchical-synthesis-v4"
 _SYNTHESIS_NODE_BYTES = 1_400
 _MIN_SYNTHESIS_INPUT_BYTES = 10_240

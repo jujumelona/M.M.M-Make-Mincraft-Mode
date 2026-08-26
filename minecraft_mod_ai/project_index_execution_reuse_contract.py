@@ -6,10 +6,11 @@ The orchestrator calls these helpers directly; this module never replaces import
 classes or functions at runtime.
 """
 
+from collections.abc import Callable
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _POST_GENERATION: ContextVar[bool] = ContextVar(

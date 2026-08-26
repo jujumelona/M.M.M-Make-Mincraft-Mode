@@ -3,10 +3,11 @@ from __future__ import annotations
 import copy
 import json
 import re
+from collections.abc import Mapping
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Mapping
+from typing import Any
 
 from .centroid_vector_rag import direct_centroid_vector_search
 from .model_router import ModelRouter

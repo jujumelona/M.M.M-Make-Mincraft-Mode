@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
+
 from minecraft_mod_ai.model_context_budget import (
     fit_messages_to_context,
     request_message_budget,
@@ -31,7 +32,7 @@ def _create_large_mock_project(root: Path, file_count: int = 40) -> Path:
                 f"        return {i * 10};\n"
                 f"    }}\n"
                 f"}}\n"
-            ).encode("utf-8")
+            ).encode()
         )
 
         recipe_file = src_main_res / f"feature_{i}_recipe.json"

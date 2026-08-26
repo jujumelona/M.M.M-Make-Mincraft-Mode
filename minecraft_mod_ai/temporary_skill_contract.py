@@ -6,17 +6,18 @@ import json
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
+from . import trajectory_memory as _trajectory_memory
 from .remote_trajectory_store import (
     flush_remote_outbox,
     hydrate_remote_cache,
     queue_remote_record,
     remote_configured,
 )
-from . import trajectory_memory as _trajectory_memory
 from .trajectory_memory import (
     append_trajectory,
     build_work_trajectory,

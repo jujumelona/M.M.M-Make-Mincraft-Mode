@@ -4,16 +4,16 @@ import hashlib
 import json
 import os
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .blockbench_client import BlockbenchMCPClient
-from .complete_spec import CompleteProposal
 from .complete_orchestrator_support import CompleteProductionError, _extract_json
+from .complete_spec import CompleteProposal
 from .mineflayer_bridge import MineflayerBridge
 from .model_router import ModelRouter
 from .source_patch import sha256_file
-
 
 _MODEL_TILE_MIN = 256
 _MODEL_TILE_MAX = 1024
@@ -72,7 +72,7 @@ def _stable_asset_seed(
     y: int = 0,
 ) -> int:
     digest = hashlib.sha256(
-        f"{asset_id}\0{layer}\0{x}\0{y}".encode("utf-8")
+        f"{asset_id}\0{layer}\0{x}\0{y}".encode()
     ).digest()
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 

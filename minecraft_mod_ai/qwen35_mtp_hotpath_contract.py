@@ -5,10 +5,11 @@ import json
 import os
 import signal
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit
 
 _MAX_CTX = 2147483647

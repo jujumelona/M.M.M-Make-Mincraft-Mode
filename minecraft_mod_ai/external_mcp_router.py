@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, Collection, Mapping
+from typing import Any
 
 import anyio
 
@@ -36,7 +37,7 @@ class MCPRouteTarget:
     mapping: str
 
     @classmethod
-    def from_value(cls, value: Any) -> "MCPRouteTarget":
+    def from_value(cls, value: Any) -> MCPRouteTarget:
         if value is None:
             return cls("", "fabric", "", "")
         if isinstance(value, Mapping):
@@ -342,9 +343,8 @@ class ExternalMCPRouter:
                     read_stream,
                     write_stream,
                     _,
-                ):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        return await self._initialized_call(session, tool, arguments)
+                ), ClientSession(read_stream, write_stream) as session:
+                    return await self._initialized_call(session, tool, arguments)
         raise ExternalMCPError(
             f"Federation does not invoke transport {transport!r} for {server_name}."
         )
@@ -516,9 +516,7 @@ def _collect_target_values(
             for key, child in node.items():
                 if str(key) in field_names and isinstance(child, (str, int, float)):
                     found.add(str(child).strip())
-                elif str(key) in {"target", "platform", "metadata", "result", "structured", "parsed_text"}:
-                    walk(child, depth + 1)
-                elif isinstance(child, (Mapping, list, tuple)):
+                elif str(key) in {"target", "platform", "metadata", "result", "structured", "parsed_text"} or isinstance(child, (Mapping, list, tuple)):
                     walk(child, depth + 1)
         elif isinstance(node, (list, tuple)):
             for child in node[:100]:

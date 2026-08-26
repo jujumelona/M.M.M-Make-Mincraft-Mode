@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from .ecosystem_discovery import EcosystemDiscoveryClient, discover_seed_bundle
 from .spec import SpecValidationError, canonical_json

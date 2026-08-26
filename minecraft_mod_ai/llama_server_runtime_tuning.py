@@ -6,12 +6,13 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable
+from typing import Any
 
 _SCHEMA_VERSION = "mmm/llama-server-autotune-v9-bounded-validated-parallel-context"
 _INSTALL_LOCK = threading.RLock()
@@ -1442,15 +1443,15 @@ __all__ = [
     "_cache_ram_mib",
     "_cache_reuse_candidates",
     "_candidate_variants_for_config",
+    "_explicit_parallel",
     "_medium_prefill_request",
     "_model_supports_mtp",
-    "_explicit_parallel",
     "_parallel_candidates",
     "_parallel_resource_feasible",
     "_parallel_target",
     "_parse_int_candidates",
-    "_performance_mode",
     "_per_request_context",
+    "_performance_mode",
     "_replace_option",
     "_resource_bucket",
     "_runtime_resources",

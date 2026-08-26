@@ -1,5 +1,7 @@
 import pytest
+
 from minecraft_mod_ai.model_registry import ModelRegistry
+
 T4_QUANTIZED_QWEN_ROLES = {'planner', 'researcher', 'coder', 'coder_safe', 'visual_critic'}
 
 def test_t4_registry_has_role_specific_real_model_ids() -> None:

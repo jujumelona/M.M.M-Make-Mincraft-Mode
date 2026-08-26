@@ -8,7 +8,6 @@ from typing import Any
 
 from .platform_catalog import adapter_from_project
 
-
 _ACTIVE_REPAIR_TARGET: ContextVar[Any | None] = ContextVar(
     "mmm_repair_platform_target",
     default=None,

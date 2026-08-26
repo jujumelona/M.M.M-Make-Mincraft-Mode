@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 _VANILLA_WORLD_EDIT_ROOTS = frozenset(
     {
         "clone",

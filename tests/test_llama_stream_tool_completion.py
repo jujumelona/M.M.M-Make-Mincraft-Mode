@@ -15,7 +15,7 @@ class _FakeStreamResponse:
         self._lines = lines
         self._body = body
 
-    def __enter__(self) -> "_FakeStreamResponse":
+    def __enter__(self) -> _FakeStreamResponse:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:

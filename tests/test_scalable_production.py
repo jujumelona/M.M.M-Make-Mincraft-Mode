@@ -4,12 +4,18 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
+from minecraft_mod_ai.complete_spec import (
+    ProductionModule,
+    complete_proposal_from_parts,
+)
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.mineflayer_bridge import MineflayerBridge
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
-from minecraft_mod_ai.project_edit import ensure_main_initializer_call, inspect_fabric_project
+from minecraft_mod_ai.project_edit import (
+    ensure_main_initializer_call,
+    inspect_fabric_project,
+)
 from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 from minecraft_mod_ai.scalable_validator import ScalableProjectValidator

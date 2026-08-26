@@ -13,11 +13,12 @@ import re
 import sqlite3
 import threading
 from collections import Counter, deque
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
-from .procedure_trace import extract_procedure
 from .procedural_memory_hierarchy import build_hierarchy, compact_hierarchy
+from .procedure_trace import extract_procedure
 from .research_perf_common import env_int, table_exists
 from .trajectory_record_integrity import (
     derive_levels,

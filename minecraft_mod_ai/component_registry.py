@@ -12,9 +12,10 @@ import base64
 import hashlib
 import json
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 import httpx
 
@@ -39,7 +40,7 @@ class VerifiedComponent:
     artifact: Mapping[str, Any]
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "VerifiedComponent | None":
+    def from_dict(cls, value: Mapping[str, Any]) -> VerifiedComponent | None:
         if value.get("verified") is not True:
             return None
         component_id = str(value.get("component_id") or "").strip()

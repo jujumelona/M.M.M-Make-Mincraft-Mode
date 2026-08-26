@@ -5,9 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import minecraft_mod_ai.atomic_requirement_contract as atomic_requirement_contract
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
-from minecraft_mod_ai import quality_evidence
+from minecraft_mod_ai import atomic_requirement_contract, quality_evidence
 from minecraft_mod_ai.atomic_requirement_contract import (
     AtomicRequirementError,
     compile_ir,
@@ -16,6 +15,8 @@ from minecraft_mod_ai.atomic_requirement_contract import (
 )
 from minecraft_mod_ai.clean_room_verification_contract import (
     SCHEMA as CLEAN_ROOM_SCHEMA,
+)
+from minecraft_mod_ai.clean_room_verification_contract import (
     jar_content_sha256,
 )
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator

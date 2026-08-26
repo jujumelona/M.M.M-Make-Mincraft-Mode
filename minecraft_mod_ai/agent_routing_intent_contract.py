@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """One terminal-intent projection shared by small-model and causal tool routing."""
 
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _INSTALLED = False
 

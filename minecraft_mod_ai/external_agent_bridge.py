@@ -4,12 +4,12 @@ import asyncio
 import json
 import os
 import threading
-from typing import Any, Collection, Mapping
+from collections.abc import Collection, Mapping
+from typing import Any
 
 import anyio
 
 from .mcp_stdio_support import open_mcp_stdio_errlog
-
 
 CAPABILITIES_TOOL = "external_mcp_capabilities"
 SCHEMA_TOOL = "external_mcp_schema"

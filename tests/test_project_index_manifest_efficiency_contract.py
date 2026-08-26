@@ -10,7 +10,6 @@ import pytest
 
 from minecraft_mod_ai.project_index import ProjectIndex
 
-
 project_index_module = importlib.import_module("minecraft_mod_ai.project_index")
 
 

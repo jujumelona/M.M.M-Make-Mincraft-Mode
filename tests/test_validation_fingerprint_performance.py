@@ -4,8 +4,9 @@ import os
 from pathlib import Path
 
 import pytest
-from minecraft_mod_ai import validation_execution_contract as validation
+
 from minecraft_mod_ai import research_validation_fingerprint_performance as perf
+from minecraft_mod_ai import validation_execution_contract as validation
 
 
 def _project(root: Path) -> tuple[Path, Path]:

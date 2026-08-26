@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from minecraft_mod_ai.model_adapters.base import GenerationRequest, ToolDefinition
 from minecraft_mod_ai import temporary_skill_contract
+from minecraft_mod_ai.model_adapters.base import GenerationRequest, ToolDefinition
 
 
 def test_temporary_skill_preserves_native_tool_transport_contract() -> None:

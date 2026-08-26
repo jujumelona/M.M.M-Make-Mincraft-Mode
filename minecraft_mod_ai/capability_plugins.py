@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import asdict, dataclass
 from typing import Any
+
 
 @dataclass(frozen=True)
 class PluginStatus:
@@ -16,4 +18,4 @@ def plugin_manifest() -> dict[str, Any]:
     return {'schema_version': 'mmm/plugin-manifest-v4', 'product_scope': 'Minecraft Fabric mod projects', 'standalone_map_generation': False, 'plugins': [{**asdict(item), 'outputs': list(item.outputs), 'required_mcp': list(item.required_mcp), 'release_gates': list(item.release_gates)} for item in PLUGIN_STATUSES]}
 
 def buildable_plugin_ids() -> frozenset[str]:
-    return frozenset((item.plugin_id for item in PLUGIN_STATUSES if item.status == 'implemented'))
+    return frozenset(item.plugin_id for item in PLUGIN_STATUSES if item.status == 'implemented')

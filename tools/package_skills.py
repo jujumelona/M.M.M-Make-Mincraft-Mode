@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import minecraft_mod_ai.skill_catalog as skill_catalog
+from minecraft_mod_ai import skill_catalog
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / "skills"

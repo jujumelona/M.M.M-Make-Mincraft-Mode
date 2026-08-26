@@ -3,14 +3,14 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
 from .project_write_lock import project_write_lock
-
 
 _WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
 

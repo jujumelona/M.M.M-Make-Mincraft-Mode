@@ -33,7 +33,7 @@ class _Registry:
 
 
 class _SessionAdapter:
-    instances: list["_SessionAdapter"] = []
+    instances: list[_SessionAdapter] = []
 
     def __init__(self, config) -> None:
         self.config = config
@@ -111,14 +111,13 @@ def test_router_session_rejects_a_different_generation_role(
 ) -> None:
     router = _router(monkeypatch)
 
-    with router.generation_session("planner"):
-        with pytest.raises(
-            ModelConfigurationError,
-            match="cannot serve role 'coder'",
-        ):
-            router.generate_text(
-                "coder",
-                ({"role": "user", "content": "do not load coder"},),
-            )
+    with router.generation_session("planner"), pytest.raises(
+        ModelConfigurationError,
+        match="cannot serve role 'coder'",
+    ):
+        router.generate_text(
+            "coder",
+            ({"role": "user", "content": "do not load coder"},),
+        )
 
     assert len(_SessionAdapter.instances) == 1

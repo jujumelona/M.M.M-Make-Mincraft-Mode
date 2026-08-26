@@ -206,7 +206,6 @@ def test_receipt_lock_pool_uses_distinct_project_locks() -> None:
 
 def test_receipt_lock_pool_preserves_exceptions_and_cleans_up() -> None:
     pool = reuse._ProjectLockPool()
-    with pytest.raises(RuntimeError, match="boom"):
-        with pool.hold("project-a"):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), pool.hold("project-a"):
+        raise RuntimeError("boom")
     assert not pool._entries

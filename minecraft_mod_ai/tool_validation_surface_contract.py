@@ -18,8 +18,9 @@ last-writer-wins behavior is unsafe here: a duplicate name can otherwise select 
 schema according to wrapper/dict order rather than according to the causal frontier.
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .runtime_contract_wrappers import contract_wraps, has_contract_marker
 

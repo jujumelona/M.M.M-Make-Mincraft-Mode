@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.evidence_first_planning import build_request_catalog, romanize_korean_universal
-from minecraft_mod_ai.reuse_planner import decompose_capability_graph
 from minecraft_mod_ai import reuse_discovery
+from minecraft_mod_ai.evidence_first_planning import (
+    build_request_catalog,
+    romanize_korean_universal,
+)
+from minecraft_mod_ai.reuse_planner import decompose_capability_graph
 
 
 def test_korean_prompt_feature_decomposition_multi_capability() -> None:

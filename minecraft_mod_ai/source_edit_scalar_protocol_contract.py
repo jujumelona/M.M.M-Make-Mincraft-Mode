@@ -10,9 +10,9 @@ SHA-bound transactional patches. Non-Java resources may still be created directl
 
 import hashlib
 import re
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
-
+from typing import Any
 
 _CANONICAL_OPERATIONS = (
     "replace_exact",

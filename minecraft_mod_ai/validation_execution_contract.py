@@ -7,10 +7,10 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Iterable
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 _CACHE_LOCK = threading.RLock()
 _SUCCESSFUL_BUILDS: dict[tuple[str, str, bool], Any] = {}

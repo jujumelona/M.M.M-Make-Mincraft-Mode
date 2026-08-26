@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai.model_adapters import GenerationResponse, ModelConfigurationError, ToolCall
+from minecraft_mod_ai.model_adapters import (
+    GenerationResponse,
+    ModelConfigurationError,
+    ToolCall,
+)
 from minecraft_mod_ai.model_router import ModelRouter
 
 

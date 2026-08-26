@@ -1,6 +1,9 @@
 from __future__ import annotations
+
+from collections.abc import Iterable
 from functools import wraps
-from typing import Any, Iterable
+from typing import Any
+
 _LOCAL_AI_SIDECAR = 'mmm_local_ai_sidecar'
 _LLM_CAPABLE_STAGES = frozenset({'custom'})
 _CPU_GENERATION_STAGES = frozenset({'content', 'system', 'entity'})

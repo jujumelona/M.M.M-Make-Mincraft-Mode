@@ -13,8 +13,9 @@ Each adapter follows an immutable receipt contract recording pre/post file hashe
 
 import hashlib
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)

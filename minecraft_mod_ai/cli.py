@@ -20,7 +20,6 @@ from .routed_planner import RoutedPlanner
 from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import Proposal
 
-
 _HASH_CHUNK_SIZE = 1024 * 1024
 _SUCCESS_STATUSES = frozenset({"VERIFIED", "SOURCE_READY"})
 _COMPLETE_SCHEMA_VERSIONS = frozenset(

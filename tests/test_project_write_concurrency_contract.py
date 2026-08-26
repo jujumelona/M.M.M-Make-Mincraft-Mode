@@ -1,12 +1,19 @@
 from __future__ import annotations
+
 import json
 import threading
 import time
 from pathlib import Path
+
 import pytest
+
 import minecraft_mod_ai.source_patch as source_patch_module
-from minecraft_mod_ai.project_edit import FabricProjectInfo, ensure_main_initializer_call
+from minecraft_mod_ai.project_edit import (
+    FabricProjectInfo,
+    ensure_main_initializer_call,
+)
 from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher
+
 
 class _LedgerCursor:
 
@@ -19,7 +26,7 @@ class _LedgerCursor:
 
 class _LedgerConnection:
 
-    def __init__(self, ledger: '_Ledger') -> None:
+    def __init__(self, ledger: _Ledger) -> None:
         self._ledger = ledger
 
     def __enter__(self):
@@ -122,7 +129,7 @@ def test_transactional_patchers_serialize_same_project_root(monkeypatch, tmp_pat
         thread.start()
     for thread in threads:
         thread.join(timeout=2)
-    assert all((not thread.is_alive() for thread in threads))
+    assert all(not thread.is_alive() for thread in threads)
     assert len(results) == 2
     assert max_active == 1
 
@@ -152,7 +159,7 @@ def test_transactional_patchers_do_not_block_independent_projects(monkeypatch, t
         thread.start()
     for thread in threads:
         thread.join(timeout=2)
-    assert all((not thread.is_alive() for thread in threads))
+    assert all(not thread.is_alive() for thread in threads)
     assert max_active == 2
 
 def test_transactional_patch_commit_parallelizes_independent_paths(monkeypatch, tmp_path: Path) -> None:
@@ -211,7 +218,7 @@ def test_shared_initializer_edits_merge_atomically_under_parallel_generation(tmp
     for thread in threads:
         thread.join(timeout=2)
     assert not errors
-    assert all((not thread.is_alive() for thread in threads))
+    assert all(not thread.is_alive() for thread in threads)
     text = main_java.read_text(encoding='utf-8')
     assert 'import example.ext.GeneratedExtendedContent;' in text
     assert 'import example.geckolib.GeneratedGeckoEntities;' in text

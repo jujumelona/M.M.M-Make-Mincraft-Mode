@@ -10,8 +10,9 @@ trajectory corpus instead. New successful repairs continue to be recorded by
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _INSTALLED = False
 
@@ -84,7 +85,11 @@ def _repair_memory_rows(
 
 
 def _install_repair_memory_adapter() -> None:
-    from . import agentic_optimization_contract, temporary_skill_contract, trajectory_memory
+    from . import (
+        agentic_optimization_contract,
+        temporary_skill_contract,
+        trajectory_memory,
+    )
 
     current_read = agentic_optimization_contract._read_memory
     if getattr(current_read, "_mmm_v3_repair_memory", False):

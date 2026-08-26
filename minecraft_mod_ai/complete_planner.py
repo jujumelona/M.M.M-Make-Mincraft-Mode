@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from . import central_research
 from .complete_spec import (
@@ -12,10 +13,13 @@ from .complete_spec import (
     ProductionModule,
     complete_proposal_from_parts,
 )
+from .evidence_first_planning import compile_evidence_first_plan, task_batches
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
-from .evidence_first_planning import compile_evidence_first_plan, task_batches
-from .planner_template_schema import build_batch_skeleton, merge_model_output_into_skeleton
+from .planner_template_schema import (
+    build_batch_skeleton,
+    merge_model_output_into_skeleton,
+)
 from .production_contract import compile_production_contract
 from .spec import SpecValidationError
 

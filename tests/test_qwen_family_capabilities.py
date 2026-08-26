@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import llama_server_hardware_policy
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_registry import ModelRegistry
-from minecraft_mod_ai import llama_server_hardware_policy
 from minecraft_mod_ai.qwen_agent_family_contract import (
     _apply_family_payload_policy,
     _strip_reasoning_history,

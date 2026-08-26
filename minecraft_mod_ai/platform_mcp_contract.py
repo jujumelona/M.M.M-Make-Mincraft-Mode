@@ -3,8 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from .platform_catalog import adapter_for_lock_values, adapter_for_target
 

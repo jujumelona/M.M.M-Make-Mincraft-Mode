@@ -12,19 +12,20 @@ expected implementation + verification work and preserves donor provenance.
 import hashlib
 import os
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
+from . import platform_optimizer as _platform
 from .component_registry import (
     VerifiedComponent,
     find_verified_component,
     load_verified_components,
 )
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .reuse_discovery import discover_repositories_for_graph
 from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
-from . import platform_optimizer as _platform
+from .reuse_discovery import discover_repositories_for_graph
 from .source_transplant import (
     DonorSlice,
     inspect_repository_slice,
@@ -45,9 +46,11 @@ _CAPABILITY_KEYS = frozenset({
 })
 from .canonical_capability_ontology import (
     canonical_domain_map as _canonical_domain_map,
+)
+from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase,
-    search_queries_for_capability,
     romanize_korean_universal,
+    search_queries_for_capability,
 )
 
 _CAPABILITY_HINTS = _canonical_domain_map()
@@ -190,7 +193,9 @@ def decompose_capability_graph(
             add(kind, "module_kind")
 
     # Always resolve structured capabilities from prompt and enrich with semantic inference
-    from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
+    from .canonical_capability_ontology import (
+        resolve_capabilities_from_phrase_structured,
+    )
     from .capability_semantic_inference import enrich_resolution_with_semantic_inference
 
     prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
@@ -371,9 +376,9 @@ class TargetImplementationPlan:
                         "FRESH_REQUIRED"
                         if item.mode == "fresh"
                         else "VERIFIED_REUSE"
-                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}
+                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"}
                         else "PARTIAL_REUSE"
-                        if item.proof_level == "PARTIAL_REUSE"
+                        if item.proof_level in {"PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED"}
                         else "MATERIALIZED"
                         if item.proof_level == "MATERIALIZED"
                         else "READY_FOR_PROOF"
@@ -384,7 +389,7 @@ class TargetImplementationPlan:
                         if item.proof_level == "DISCOVERED"
                         else "PARTIAL_REUSE"
                         if item.mode == "adapt"
-                        else "VERIFIED_REUSE"
+                        else "FRESH_REQUIRED"
                     ),
                     "mode": item.mode,
                     "proof_level": item.proof_level,
@@ -799,10 +804,10 @@ def _plan_target(
             if best_donor is not None:
                 donor = best_donor
                 winning_receipt = next((r for r in receipts if r.candidate_id.startswith(donor.repository)), receipts[-1] if receipts else None)
-                proof_lvl = winning_receipt.proof_level if winning_receipt else ("COMPILE_VERIFIED" if donor.exact_target else "MATERIALIZED")
+                proof_lvl = winning_receipt.proof_level if winning_receipt else "UNVERIFIED"
 
                 closure_scale = max(1.0, len(donor.files) / 3.0)
-                if proof_lvl in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"}:
+                if proof_lvl in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"}:
                     decisions.append(
                         ReuseDecision(
                             capability=capability,
@@ -822,7 +827,7 @@ def _plan_target(
                         )
                     )
                     continue
-                else:
+                elif proof_lvl in {"PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED", "MATERIALIZED", "CLOSURE_COMPLETE"}:
                     decisions.append(
                         ReuseDecision(
                             capability=capability,

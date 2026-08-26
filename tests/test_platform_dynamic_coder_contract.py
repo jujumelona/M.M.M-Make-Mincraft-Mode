@@ -4,16 +4,16 @@ import json
 
 import pytest
 
+from minecraft_mod_ai import platform_resolver as resolver
+from minecraft_mod_ai import repair_engine
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
     CustomModuleGenerator,
 )
-from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
 from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import resolve_platform
-from minecraft_mod_ai import repair_engine
 
 
 def _future_adapter() -> PlatformAdapter:

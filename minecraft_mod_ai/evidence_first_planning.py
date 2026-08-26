@@ -12,8 +12,9 @@ import hashlib
 import heapq
 import json
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 SCHEMA = "mmm/evidence-first-implementation-plan-v1"
 _SHA_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -39,6 +40,8 @@ _BRANCHES = (
 
 from .canonical_capability_ontology import (
     canonical_domain_map as _canonical_domain_map,
+)
+from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase,
     resolve_capabilities_from_phrase_structured,
     romanize_korean_universal,
@@ -106,8 +109,7 @@ def _strings(value: Any) -> tuple[str, ...]:
 
 def _canonical_capability(value: Any) -> str:
     text = str(value or "").strip().casefold()
-    if text.startswith("capability:"):
-        text = text[len("capability:") :]
+    text = text.removeprefix("capability:")
     return "capability:" + text if text else ""
 
 

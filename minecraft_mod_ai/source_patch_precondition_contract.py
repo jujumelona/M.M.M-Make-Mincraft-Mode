@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from functools import wraps
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
-
+from typing import Any
 
 _MARKER = "_mmm_source_snapshot_preconditions_v1"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")

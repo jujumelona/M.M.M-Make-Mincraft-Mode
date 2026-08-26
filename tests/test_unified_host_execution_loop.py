@@ -264,7 +264,10 @@ def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
 
 def test_hierarchical_localization_file_symbol_function_body() -> None:
     """Agentless & AutoCodeRover style: File -> Symbol -> Function Body -> Mutation Ready."""
-    from minecraft_mod_ai.progress_aware_tool_loop import is_mutation_ready, TargetMutationContext
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        TargetMutationContext,
+        is_mutation_ready,
+    )
 
     state = HostRunState()
     base_messages = [{"role": "user", "content": '{"phase": "implement_module", "task": "fix drop logic"}'}]
@@ -448,7 +451,10 @@ def test_filter_tools_for_phase_hierarchical_localization_stages() -> None:
 
 def test_target_mutation_context_cumulative_merge() -> None:
     """TargetMutationContext merges step-by-step discoveries without losing prior fields."""
-    from minecraft_mod_ai.progress_aware_tool_loop import LocalizationStage, TargetMutationContext
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LocalizationStage,
+        TargetMutationContext,
+    )
 
     ctx1 = TargetMutationContext(target_path="src/Item.java", evidence_source="search_code_rag")
     assert ctx1.localization_stage == LocalizationStage.NEED_SYMBOL
@@ -664,7 +670,9 @@ def test_search_code_rag_on_raw_source_file_never_crashes(tmp_path: Path) -> Non
 
 def test_extract_mutation_context_unwraps_structured_content_and_sources() -> None:
     """_extract_mutation_context_from_payload unwraps structured_content and extracts sources."""
-    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        _extract_mutation_context_from_payload,
+    )
 
     payload = {
         "structured_content": {
@@ -718,7 +726,9 @@ def test_retrieval_query_signature_distinguishes_target_and_symbol() -> None:
 
 def test_extract_mutation_context_ignores_documentation_source_id() -> None:
     """_extract_mutation_context_from_payload does not treat documentation source_ids or URLs as target_path."""
-    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        _extract_mutation_context_from_payload,
+    )
 
     payload = {
         "sources": [
@@ -750,7 +760,10 @@ def test_search_code_rag_on_directory_via_production_service(tmp_path: Path) -> 
 
 def test_extract_mutation_context_from_rag_hit_source_path_and_text() -> None:
     """_extract_mutation_context_from_payload correctly extracts source_path and text from search_code_rag hits."""
-    from minecraft_mod_ai.progress_aware_tool_loop import _extract_mutation_context_from_payload, LocalizationStage
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LocalizationStage,
+        _extract_mutation_context_from_payload,
+    )
 
     payload = {
         "hits": [

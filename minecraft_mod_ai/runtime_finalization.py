@@ -37,54 +37,78 @@ def finalize_runtime() -> None:
             )
         _FINALIZING = True
 
-        from . import agent_capability_context
-        from . import agent_tool_runtime
-        from . import agentic_pre_design_rag
-        from . import external_agent_bridge
-        from . import external_mcp_router
-        from . import external_procedural_skill_contract
-        from . import llama_server_autotune
-        from . import llama_server_runtime_tuning
-        from . import mcp_transport_pool
-        from . import model_router
-        from . import model_tool_aliases
-        from . import parallel_runtime_contract
-        from . import repository_grounding
-        from . import research_rag_performance
-        from . import small_model_max_agent_contract
-        from .agent_observation_determinism import install as install_observation_determinism
+        from . import (
+            agent_capability_context,
+            agent_tool_runtime,
+            agentic_pre_design_rag,
+            external_agent_bridge,
+            external_mcp_router,
+            external_procedural_skill_contract,
+            llama_server_autotune,
+            llama_server_runtime_tuning,
+            mcp_transport_pool,
+            model_router,
+            model_tool_aliases,
+            parallel_runtime_contract,
+            repository_grounding,
+            research_rag_performance,
+            small_model_max_agent_contract,
+        )
+        from .agent_observation_determinism import (
+            install as install_observation_determinism,
+        )
         from .agent_routing_intent_contract import install as install_routing_intent
         from .context_budget_preflight import run_context_budget_preflight
-        from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
-        from .evidence_task_receipt_contract import install as install_evidence_task_receipts
+        from .evidence_first_pipeline_contract import (
+            install as install_evidence_first_pipeline,
+        )
+        from .evidence_task_receipt_contract import (
+            install as install_evidence_task_receipts,
+        )
         from .external_mcp_binding_concurrency_contract import (
             install as install_external_mcp_binding_concurrency,
         )
-        from .external_mcp_binding_contract import install as install_external_mcp_binding
+        from .external_mcp_binding_contract import (
+            install as install_external_mcp_binding,
+        )
         from .generation_concurrency_safety import install as install_generation_safety
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import (
             install as install_llama_server_response_resilience,
         )
-        from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
+        from .mcp_schema_integrity_contract import (
+            install as install_mcp_schema_integrity,
+        )
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter
         from .model_prefetch_resilience import install as install_prefetch_resilience
-        from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
-        from .procedural_skill_identity_contract import install as install_procedural_skill_identity
-        from .retrieval_cpu_budget_contract import install as install_retrieval_cpu_budget
+        from .model_tool_alias_permission_policy import (
+            install as install_model_tool_alias_permissions,
+        )
+        from .procedural_skill_identity_contract import (
+            install as install_procedural_skill_identity,
+        )
+        from .retrieval_cpu_budget_contract import (
+            install as install_retrieval_cpu_budget,
+        )
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import (
             assert_installed as assert_runtime_hot_paths,
+        )
+        from .runtime_hot_path_contract import (
             install as install_runtime_hot_paths,
         )
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
-        from .tool_schema_ownership_contract import install as install_tool_schema_ownership
-        from .tool_validation_surface_contract import install as install_tool_validation_surface
+        from .tool_schema_ownership_contract import (
+            install as install_tool_schema_ownership,
+        )
+        from .tool_validation_surface_contract import (
+            install as install_tool_validation_surface,
+        )
 
         install_agent_mcp_transport_pool()
         install_mcp_schema_integrity(

@@ -8,8 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai import api
-from minecraft_mod_ai import complete_orchestrator, complete_planner
+from minecraft_mod_ai import api, complete_orchestrator, complete_planner
 from minecraft_mod_ai import platform_central_ai_contract as central_contract
 from minecraft_mod_ai import reuse_planner as reuse
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
@@ -114,7 +113,7 @@ def test_existing_report_inventory_and_proposal_share_one_observed_archive_sha(
     session.brief = ""
     session.complete_proposal = None
     monkeypatch.setattr(api.CompleteModAISession, "save_plan", lambda self: archive)
-    import minecraft_mod_ai.plan_render as plan_render
+    from minecraft_mod_ai import plan_render
 
     monkeypatch.setattr(plan_render, "render_complete_plan", lambda **_kwargs: "plan")
     reply = session.chat("Keep the existing project.")

@@ -3,11 +3,12 @@ from __future__ import annotations
 import copy
 import json
 import os
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 
@@ -377,8 +378,8 @@ def install(agentic_module: Any) -> None:
 
 
 __all__ = [
-    "install",
     "_active_parallel_slots",
     "_parallel_workers",
     "_prime_native_repair_slots",
+    "install",
 ]

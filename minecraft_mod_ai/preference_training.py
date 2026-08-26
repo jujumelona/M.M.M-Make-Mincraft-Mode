@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 
 class PreferenceTraceError(ValueError):

@@ -19,7 +19,6 @@ from minecraft_mod_ai.colab_run_modes import (
     should_build,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOKS = (ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb",)
 LEGACY_NOTEBOOK = ROOT / "Minecraft_Multimodal_Mod_AI_Architecture_v6.ipynb"

@@ -15,10 +15,11 @@ import json
 import os
 import re
 from collections import deque
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx

@@ -5,7 +5,6 @@ from pathlib import Path
 
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "mmm-minecraft-mod-ai"
 

@@ -10,10 +10,9 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-
 
 JDTLS_VERSION = "1.60.0"
 JDTLS_BUILD = "202606262232"

@@ -9,11 +9,12 @@ The shared cache lock protects distribution installation; independent project bu
 keep the canonical exact-input cache while avoiding one process-wide outer build lock.
 """
 
+from collections.abc import Sequence
 from contextlib import nullcontext
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .research_perf_common import env_bool
 

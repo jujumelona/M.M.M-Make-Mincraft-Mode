@@ -13,11 +13,14 @@ to Candidate B before marking any residual capability as fresh.
 
 import hashlib
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from .reuse_adapters import apply_deterministic_adapters, AdapterReceipt
+from .artifact_dependency_graph import ArtifactDependencyGraph
+from .proof_level import ProofLevel
+from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
 from .source_transplant import DonorSlice
 
 
@@ -197,73 +200,12 @@ def _compute_dependency_closed_subgraphs(
     adapted_files: Mapping[str, Any],
     donor_slice: DonorSlice,
 ) -> list[list[str]]:
-    """Partition donor files into multi-layer dependency-closed connected subgraphs."""
-    paths = list(adapted_files.keys())
-    if not paths:
+    """Partition donor files into multi-layer dependency-closed connected subgraphs using typed graph."""
+    if not adapted_files:
         return []
-
-    # Layer 1: Java symbols and import statements
-    symbol_to_files: dict[str, list[str]] = {}
-    for df in donor_slice.files:
-        if df.path in adapted_files:
-            for sym in df.symbols:
-                symbol_to_files.setdefault(sym, []).append(df.path)
-
-    # Layer 2: Registry identifiers and resource stems
-    resource_stems: dict[str, list[str]] = {}
-    for p in paths:
-        stem = Path(p).stem.lower()
-        if stem and stem not in {"mod", "main", "init"}:
-            resource_stems.setdefault(stem, []).append(p)
-
-    # Build adjacency list across all 4 layers
-    adj: dict[str, set[str]] = {p: {p} for p in paths}
-
-    for p, content in adapted_files.items():
-        text = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
-
-        # Layer 1: Java imports & symbols
-        for sym, def_paths in symbol_to_files.items():
-            if sym and (sym in text or f"import " in text and sym in text):
-                for dp in def_paths:
-                    adj[p].add(dp)
-                    adj[dp].add(p)
-
-        # Layer 2 & 3: Resource stem / JSON texture / model links
-        # Extract quoted identifiers e.g. "mymod:boss", "boss", "textures": "..."
-        for token in re.findall(r'"([a-zA-Z0-9_/.-]+)"', text):
-            stem = token.split(":")[-1].split("/")[-1].lower()
-            if stem and stem in resource_stems:
-                for res_path in resource_stems.get(stem, ()):
-                    adj[p].add(res_path)
-                    adj[res_path].add(p)
-
-        # Layer 4: Entrypoints / Mixin config references
-        if p.endswith(".json") or p.endswith(".toml"):
-            for sym, def_paths in symbol_to_files.items():
-                if sym in text:
-                    for dp in def_paths:
-                        adj[p].add(dp)
-                        adj[dp].add(p)
-
-    # Compute connected components (closed subgraphs)
-    visited: set[str] = set()
-    components: list[list[str]] = []
-    for p in paths:
-        if p not in visited:
-            comp: list[str] = []
-            queue = [p]
-            visited.add(p)
-            while queue:
-                curr = queue.pop(0)
-                comp.append(curr)
-                for neighbor in adj.get(curr, ()):
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        queue.append(neighbor)
-            components.append(comp)
-
-    return components
+    sym_map = {df.path: df.symbols for df in donor_slice.files if df.path in adapted_files}
+    graph = ArtifactDependencyGraph.build_from_files(adapted_files, known_symbols=sym_map)
+    return graph.compute_directional_closures()
 
 
 
@@ -340,8 +282,9 @@ def execute_reuse_proof(
     adapted_files, adapter_receipts = apply_deterministic_adapters(in_memory_files, target_context)
 
     # 3. Static verification / compile proof inside isolated ephemeral sandbox
-    import tempfile
     import shutil
+    import tempfile
+
     from .reuse_adapters import DependencyAdaptationPlan
 
     compile_passed = False
@@ -435,9 +378,9 @@ def execute_reuse_proof(
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
 
-    # Capability Acceptance Test Contract Mapping
-    from .canonical_capability_ontology import capability_requirement_contracts
-    req_contracts = capability_requirement_contracts(donor_slice.capability)
+    # Host-Owned Capability Acceptance Test Contract Mapping
+    from .acceptance_contracts import get_host_acceptance_contracts
+    req_contracts = get_host_acceptance_contracts(donor_slice.capability)
     matched_tests = []
     acceptance_map = []
 
@@ -461,7 +404,7 @@ def execute_reuse_proof(
     if compile_passed:
         verified_art_list.extend(adapted_files.keys())
     else:
-        # Partition into dependency-closed subgraphs
+        # Partition into dependency-closed subgraphs using typed directional graph
         subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor_slice)
         for comp in subgraphs:
             # Check if any file in comp has obvious unresolvable error
@@ -520,8 +463,8 @@ def execute_reuse_proof(
             else:
                 residual_art_list.extend(comp)
 
-    verified_artifacts = tuple(verified_art_list)
-    residual_artifacts = tuple(residual_art_list)
+    verified_artifacts = tuple(dict.fromkeys(verified_art_list))
+    residual_artifacts = tuple(dict.fromkeys(residual_art_list))
     verified_symbols = tuple(s for s in donor_slice.source_symbols if s not in unresolved_set)
     residual_symbols = tuple(dict.fromkeys(unresolved_symbols))
 
@@ -536,24 +479,24 @@ def execute_reuse_proof(
 
     if compile_passed and donor_slice.closure_complete:
         if has_full_acceptance:
-            proof_level = "BEHAVIOR_VERIFIED"
+            proof_level = ProofLevel.BEHAVIOR_VERIFIED.value
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
         else:
-            proof_level = "COMPILE_VERIFIED"
+            proof_level = ProofLevel.COMPILE_VERIFIED.value
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
     elif len(verified_artifacts) > 0 and (residual_artifacts or unresolved_symbols or not donor_slice.closure_complete):
         # Proven partial compilation of individual artifacts -> PARTIAL_REUSE!
-        proof_level = "PARTIAL_REUSE"
+        proof_level = ProofLevel.PARTIAL_REUSE.value
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
     elif adapted_files:
-        proof_level = "MATERIALIZED"
+        proof_level = ProofLevel.MATERIALIZED.value
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
     else:
-        proof_level = "PINNED"
+        proof_level = ProofLevel.FRESH_REQUIRED.value
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
 

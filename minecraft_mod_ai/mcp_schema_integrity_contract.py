@@ -14,8 +14,9 @@ when feature/configuration environment variables change during a long-lived host
 
 import hashlib
 import json
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 import anyio
 
@@ -260,9 +261,8 @@ def install(
                         read_stream,
                         write_stream,
                         _,
-                    ):
-                        async with ClientSession(read_stream, write_stream) as session:
-                            return await read(session)
+                    ), ClientSession(read_stream, write_stream) as session:
+                        return await read(session)
             raise external_agent_bridge_module.ExternalAgentBridgeError(
                 "Unsupported external MCP transport for schema discovery: "
                 f"{transport!r}"

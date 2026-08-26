@@ -38,7 +38,9 @@ def test_host_only_failures_do_not_request_retrieval() -> None:
 
 
 def test_runtime_research_router_exposes_selective_repair_contract() -> None:
-    from minecraft_mod_ai.custom_generation_search_contract import _ResearchEvidenceRouter
+    from minecraft_mod_ai.custom_generation_search_contract import (
+        _ResearchEvidenceRouter,
+    )
 
     assert getattr(
         _ResearchEvidenceRouter.generate_text,

@@ -7,7 +7,6 @@ import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph_module
 from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
 
-
 safety.install(
     work_graph_module=work_graph_module,
     orchestrator_module=orchestrator_module,

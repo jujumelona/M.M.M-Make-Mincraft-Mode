@@ -9,11 +9,11 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable
-
+from typing import Any
 
 _AUTOTUNE_LOCK = threading.RLock()
 _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None

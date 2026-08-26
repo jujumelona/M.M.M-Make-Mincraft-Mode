@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import minecraft_mod_ai.game_design as game_design
+from minecraft_mod_ai import game_design
 
 
 def test_retired_parallel_request_page_helpers_are_absent() -> None:

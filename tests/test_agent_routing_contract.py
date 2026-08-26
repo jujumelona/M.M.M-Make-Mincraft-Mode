@@ -7,7 +7,6 @@ from minecraft_mod_ai.capability_plugins import PLUGIN_STATUSES
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 
-
 _STALE_MCP_ALIASES = frozenset(
     {
         "minecraft-runtime",

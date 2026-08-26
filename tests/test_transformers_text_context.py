@@ -15,7 +15,7 @@ from minecraft_mod_ai.model_adapters.base import (
 
 
 class _FakeTokenizer:
-    instance: "_FakeTokenizer | None" = None
+    instance: _FakeTokenizer | None = None
     token_count = 9
     load_count = 0
 

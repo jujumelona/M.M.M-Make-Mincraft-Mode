@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _NATIVE_CONTRACTS = (
     ("manifest_receipt", "_mmm_cached_manifest_receipt"),
     ("_ranked_files", "_mmm_cached_relevance_order"),

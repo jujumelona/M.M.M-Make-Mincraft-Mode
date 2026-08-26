@@ -9,10 +9,11 @@ This contract validates the complete receipt once, then presents the legacy vali
 with a compatibility view without mutating the approved proposal.
 """
 
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .evidence_first_handoff import (
     build_evidence_first_handoff,

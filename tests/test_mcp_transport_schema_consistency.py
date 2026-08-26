@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Mapping
+from typing import Any
 
 import pytest
 

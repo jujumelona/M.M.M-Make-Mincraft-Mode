@@ -7,11 +7,12 @@ import os
 import shutil
 import subprocess
 import sys
-from importlib.metadata import PackageNotFoundError, version as package_version
+from collections.abc import Mapping
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
-
 
 SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-max-native"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"

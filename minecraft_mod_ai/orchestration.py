@@ -10,13 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any
 
 from .spec import Proposal, SpecValidationError, canonical_json
-
 
 NODE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{2,127}$")
 RECEIPT_STATUS_VALUES = frozenset({"succeeded", "failed", "blocked", "skipped"})

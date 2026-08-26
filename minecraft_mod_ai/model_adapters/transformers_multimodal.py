@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .base import (
     AdapterConfig,
@@ -45,7 +46,7 @@ def _qwen35_fast_path() -> None:
             else:
                 all_bound = False
         if all_bound:
-            setattr(modeling, "is_fast_path_available", True)
+            modeling.is_fast_path_available = True
     except Exception:
         pass
 

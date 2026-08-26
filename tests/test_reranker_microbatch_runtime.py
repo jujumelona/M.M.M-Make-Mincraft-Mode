@@ -19,7 +19,7 @@ class _FakeBatch(dict):
 
 class _FakeTokenizer:
     load_count = 0
-    instance: "_FakeTokenizer | None" = None
+    instance: _FakeTokenizer | None = None
 
     def __init__(self) -> None:
         self.batches: list[list[str]] = []

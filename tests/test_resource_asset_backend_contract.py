@@ -3,9 +3,10 @@ from __future__ import annotations
 import copy
 from types import SimpleNamespace
 
-from PIL import Image
 import pytest
+from PIL import Image
 
+from minecraft_mod_ai import resource_asset_production as assets
 from minecraft_mod_ai.complete_spec import (
     AssetRequest,
     ProductionModule,
@@ -15,14 +16,15 @@ from minecraft_mod_ai.evidence_first_planning import (
     EvidencePlanError,
     compile_evidence_first_plan,
 )
-from minecraft_mod_ai.evidence_task_receipt_contract import build_task_receipt_extensions
+from minecraft_mod_ai.evidence_task_receipt_contract import (
+    build_task_receipt_extensions,
+)
 from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.spec import SpecValidationError
-from minecraft_mod_ai import resource_asset_production as assets
 
 
 def _asset() -> AssetRequest:

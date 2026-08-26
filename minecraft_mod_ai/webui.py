@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import html
 import logging
 import re
@@ -6,11 +7,13 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 from .importer import ExistingProjectReport, inspect_existing_project_archive
 from .intent import latest_intent_event
 from .pipeline import MinecraftModPipeline
 from .planner import HeuristicPlanner, LocalTransformersPlanner, OpenAICompatiblePlanner
 from .spec import Proposal
+
 LOGGER = logging.getLogger(__name__)
 _START_MESSAGE = '만들고 싶은 모드를 자유롭게 말해 주세요. 간단한 모드는 짧게, 대규모 모드는 게임플레이·모드 시스템·리소스·제작 단계까지 계획합니다. 말하지 않은 콘텐츠는 임의로 추가하지 않고, 부족한 내용은 질문하겠습니다.'
 _FOCUS_LABELS: tuple[tuple[tuple[str, ...], str], ...] = ((('스킬', 'skill', '마법', 'magic'), '스킬과 동작 표현'), (('퀘스트', 'quest'), '퀘스트'), (('직업', 'class', '클래스'), '직업'), (('npc', '엔피시'), 'NPC'), (('아이템', 'item', '도구', 'weapon', '무기'), '아이템'), (('블록', 'block', '광석', 'ore'), '블록'), (('3d', '모델', 'model', '모델링'), '3D 모델'), (('보스', 'boss'), '보스'), (('몹', 'mob', '엔티티', 'entity'), '몹과 엔티티'), (('gui', '메뉴', '화면'), '화면과 메뉴'), (('사운드', 'sound', '음악', 'music'), '사운드와 음악'), (('애니메이션', 'animation'), '애니메이션'), (('차원', 'dimension'), '차원'))
@@ -57,16 +60,16 @@ def _explicit_focus(brief: str) -> tuple[str, ...]:
 
 def _allows_defaults(brief: str) -> bool:
     lowered = brief.lower()
-    return any((phrase in lowered for phrase in ('알아서', '추천해', '네가 정해', 'ai가 정해', 'auto decide')))
+    return any(phrase in lowered for phrase in ('알아서', '추천해', '네가 정해', 'ai가 정해', 'auto decide'))
 
 def _has_skill_behavior(brief: str) -> bool:
     lowered = brief.lower()
-    return any((word in lowered for word in ('투사체', '광역', '버프', '회복', '이동기', '소환', '근접', '원거리', 'projectile', 'area', 'buff', 'heal', 'dash', 'summon', 'melee', 'ranged')))
+    return any(word in lowered for word in ('투사체', '광역', '버프', '회복', '이동기', '소환', '근접', '원거리', 'projectile', 'area', 'buff', 'heal', 'dash', 'summon', 'melee', 'ranged'))
 
 def _skill_behavior_summary(brief: str) -> str:
     lowered = brief.lower()
     behaviors = ((('근접', 'melee'), '근접'), (('원거리', 'ranged'), '원거리'), (('투사체', 'projectile'), '투사체'), (('광역', 'area'), '광역'), (('버프', 'buff'), '버프'), (('회복', 'heal'), '회복'), (('이동기', 'dash'), '이동'), (('소환', 'summon'), '소환'))
-    selected = [label for words, label in behaviors if any((word in lowered for word in words))]
+    selected = [label for words, label in behaviors if any(word in lowered for word in words)]
     return ' · '.join(selected)
 
 def _project_scope(brief: str, proposal: Proposal) -> tuple[str, bool]:
@@ -82,29 +85,29 @@ def _project_scope(brief: str, proposal: Proposal) -> tuple[str, bool]:
 
 def _has_core_loop(brief: str) -> bool:
     lowered = brief.lower()
-    return any((word in lowered for word in ('핵심 루프', '플레이 루프', '시작해서', '성장', '진행', '목표', '반복', '탐험하고', '준비하고', 'core loop', 'progression', 'starts by', 'goal is')))
+    return any(word in lowered for word in ('핵심 루프', '플레이 루프', '시작해서', '성장', '진행', '목표', '반복', '탐험하고', '준비하고', 'core loop', 'progression', 'starts by', 'goal is'))
 
 def _has_first_playable_scope(brief: str) -> bool:
     lowered = brief.lower()
-    return any((phrase in lowered for phrase in ('1차 범위', '첫 플레이', '첫 버전', '버티컬 슬라이스', 'mvp', 'first playable', 'vertical slice', 'first version')))
+    return any(phrase in lowered for phrase in ('1차 범위', '첫 플레이', '첫 버전', '버티컬 슬라이스', 'mvp', 'first playable', 'vertical slice', 'first version'))
 
 def _has_project_name(brief: str) -> bool:
     lowered = brief.lower()
-    return any((phrase in lowered for phrase in ('이름은', '이름:', '모드명', '프로젝트명', 'called ', 'named ', 'title:')))
+    return any(phrase in lowered for phrase in ('이름은', '이름:', '모드명', '프로젝트명', 'called ', 'named ', 'title:'))
 
 def _has_content_quantity(brief: str, *, kind: str) -> bool:
     lowered = brief.lower()
     nouns = ('아이템', 'item') if kind == 'item' else ('블록', 'block')
     number = '(?:\\d+|한|하나|두|둘|세|셋|네|넷|여러|one|two|three|four|five|six|seven|eight)'
-    return any((re.search(f'{number}(?:\\s+[\\w가-힣-]+){{0,4}}\\s+{noun}s?\\b', lowered) or re.search(f'{number}\\s*(?:개(?:의)?\\s*)?{noun}', lowered) or re.search(f'{noun}\\s*{number}\\s*개?', lowered) for noun in nouns))
+    return any(re.search(f'{number}(?:\\s+[\\w가-힣-]+){{0,4}}\\s+{noun}s?\\b', lowered) or re.search(f'{number}\\s*(?:개(?:의)?\\s*)?{noun}', lowered) or re.search(f'{noun}\\s*{number}\\s*개?', lowered) for noun in nouns)
 
 def _has_boss_shape(brief: str) -> bool:
     lowered = brief.lower()
-    return any((word in lowered for word in ('인간형', '휴머노이드', '언데드', '골렘', '드래곤', '용형', '짐승형', 'humanoid', 'biped', 'undead', 'golem', 'dragon', 'beast')))
+    return any(word in lowered for word in ('인간형', '휴머노이드', '언데드', '골렘', '드래곤', '용형', '짐승형', 'humanoid', 'biped', 'undead', 'golem', 'dragon', 'beast'))
 
 def _has_boss_combat(brief: str) -> bool:
     lowered = brief.lower()
-    return any((word in lowered for word in ('근접', '원거리', '투사체', '마법', '소환', '돌진', '광역', '단계', '패턴', 'melee', 'ranged', 'projectile', 'magic', 'summon', 'charge', 'phase', 'pattern')))
+    return any(word in lowered for word in ('근접', '원거리', '투사체', '마법', '소환', '돌진', '광역', '단계', '패턴', 'melee', 'ranged', 'projectile', 'magic', 'summon', 'charge', 'phase', 'pattern'))
 
 def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
     if _allows_defaults(brief):
@@ -114,7 +117,7 @@ def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
     if not focus:
         questions.append('모드에 반드시 들어가야 할 기능을 자유롭게 말해 주세요.')
     scope_label, scope_is_set = _project_scope(brief, proposal)
-    complex_request = scope_label == '대규모 프로젝트' or len(focus) >= 3 or any((label in focus for label in ('스킬과 동작 표현', '퀘스트', '직업', 'NPC')))
+    complex_request = scope_label == '대규모 프로젝트' or len(focus) >= 3 or any(label in focus for label in ('스킬과 동작 표현', '퀘스트', '직업', 'NPC'))
     if complex_request and (not scope_is_set):
         questions.append('프로젝트 규모가 간단한 모드인지 중·대규모 프로젝트인지와 첫 플레이 가능 범위에 어디까지 넣을지 말해 주세요.')
     elif scope_label == '대규모 프로젝트' and (not _has_first_playable_scope(brief)):
@@ -123,7 +126,7 @@ def _clarification_questions(brief: str, proposal: Proposal) -> tuple[str, ...]:
         questions.append('플레이어가 시작해서 성장하고 목표를 달성하는 핵심 플레이 흐름을 말해 주세요.')
     if '스킬과 동작 표현' in focus and (not _has_skill_behavior(brief)):
         questions.append('스킬이 실제 게임에서 어떻게 동작해야 하는지 말해 주세요.')
-    if '3D 모델' in focus and (not any((label in focus for label in ('아이템', '블록', '몹과 엔티티', '보스', 'NPC')))):
+    if '3D 모델' in focus and (not any(label in focus for label in ('아이템', '블록', '몹과 엔티티', '보스', 'NPC'))):
         questions.append('어떤 대상을 3D로 만들지 말해 주세요.')
     if '아이템' in focus and (not _has_content_quantity(brief, kind='item')):
         questions.append('아이템의 수와 각각의 플레이 역할을 말해 주세요.')
@@ -146,7 +149,7 @@ def _buildable(proposal: Proposal, questions: tuple[str, ...]) -> bool:
 
 def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
     brief_lines = [html.escape(line.strip()) for line in proposal.requested_prompt.splitlines() if line.strip()]
-    quoted_brief = '\n'.join((f'> {line}' for line in brief_lines))
+    quoted_brief = '\n'.join(f'> {line}' for line in brief_lines)
     focus = _explicit_focus(proposal.requested_prompt)
     scope_label, _ = _project_scope(proposal.requested_prompt, proposal)
     lines = ['# 게임 개발 계획서', '', '## 프로젝트 정의', '', '- 프로젝트 이름: ' + ('요청에서 지정됨' if _has_project_name(proposal.requested_prompt) else '아직 정하지 않음'), f'- 제작 규모: {scope_label}', '- 실행 대상: 승인된 PlatformLock의 Minecraft Java · loader · Java target', '- 원문 요구:', quoted_brief, '', '요청하지 않은 콘텐츠는 계획에 추가하지 않았습니다.']
@@ -161,8 +164,8 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
     if focus:
         lines.extend(('| 작업 영역 | 기획 상태 | 현재 구현 연결 |', '|---|---|---|'))
         deferred_focus = {_CAPABILITY_FOCUS_LABELS.get(request.capability, request.capability) for request in proposal.deferred_requests}
-        item_count = sum((content.kind.value == 'item' for content in proposal.spec.contents))
-        block_count = sum((content.kind.value == 'block' for content in proposal.spec.contents))
+        item_count = sum(content.kind.value == 'item' for content in proposal.spec.contents)
+        block_count = sum(content.kind.value == 'block' for content in proposal.spec.contents)
         for label in focus:
             if label == '아이템':
                 detail = f'{item_count}개' if item_count else '수량·역할 미정'
@@ -182,8 +185,8 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
             lines.append(f'| {label} | {detail} | {implementation} |')
     else:
         lines.append('- 반드시 들어갈 시스템이나 콘텐츠가 아직 정해지지 않았습니다.')
-    if '3D 모델' in focus or any((label in focus for label in ('화면과 메뉴',))):
-        lines.extend(('', '## 아트/3D/사용자 경험', '', '- 3D 제작 대상: ' + ('요청에서 확인됨' if '3D 모델' in focus and any((label in focus for label in ('아이템', '블록', '몹과 엔티티', '보스', 'NPC'))) else '아직 정하지 않음'), '- 모델·텍스처·애니메이션은 각각 게임 내 동작 검증 항목과 연결합니다.'))
+    if '3D 모델' in focus or any(label in focus for label in ('화면과 메뉴',)):
+        lines.extend(('', '## 아트/3D/사용자 경험', '', '- 3D 제작 대상: ' + ('요청에서 확인됨' if '3D 모델' in focus and any(label in focus for label in ('아이템', '블록', '몹과 엔티티', '보스', 'NPC')) else '아직 정하지 않음'), '- 모델·텍스처·애니메이션은 각각 게임 내 동작 검증 항목과 연결합니다.'))
     lines.extend(('', '## 제작 마일스톤', ''))
     if scope_label == '대규모 프로젝트':
         lines.extend(('1. 프리프로덕션: 핵심 루프, 전체 범위, 기술 제약 확정', '2. 버티컬 슬라이스: 대표 구역과 대표 시스템을 끝까지 플레이 가능하게 제작', '3. 시스템·월드 생산: 승인된 구역과 기능을 작업 단위별로 구현', '4. 콘텐츠·3D 통합: 모델, 텍스처, 동작, 데이터 연결', '5. 멀티플레이·성능·회귀 검증', '6. 릴리스 후보 빌드와 설치 검증'))
@@ -196,7 +199,7 @@ def _render_plan(proposal: Proposal, questions: tuple[str, ...]) -> str:
         lines.append('- 버티컬 슬라이스 합격 후 다음 제작 범위를 엽니다.')
     if questions:
         lines.extend(('', '## 기획 확정을 위해 더 필요한 답'))
-        lines.extend((f'- {question}' for question in questions))
+        lines.extend(f'- {question}' for question in questions)
         lines.extend(('', '아래 입력창에서 답하거나 다른 수정 내용을 말해 주세요.'))
     elif _buildable(proposal, questions):
         lines.extend(('', '## 제작 확인', '', '**이 계획으로 첫 구현을 만들까요?**', '바꿀 내용은 계속 말해 주세요. 괜찮으면 `이대로 만들기`를 누르거나 `진행해`라고 입력하세요.'))

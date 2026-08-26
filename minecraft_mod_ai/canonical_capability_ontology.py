@@ -10,8 +10,9 @@ Single source of truth for:
 """
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # 1. Atomic Canonical Capabilities

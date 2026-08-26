@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 import anyio
-
 
 _BRIDGE_STATE_LOCK = threading.RLock()
 _ORPHANED_BRIDGE: threading.Thread | None = None

@@ -10,8 +10,9 @@ from lexical similarity.
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _INSTALLED = False
 _MAX_COMPOSED_SKILLS = 12
@@ -430,4 +431,4 @@ def install() -> None:
     _INSTALLED = True
 
 
-__all__ = ["install", "_compose_skills"]
+__all__ = ["_compose_skills", "install"]

@@ -8,7 +8,8 @@ call ``require_remote_write_consent`` immediately before a network write.
 """
 
 import os
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .remote_store_defaults import apply_remote_store_defaults
 

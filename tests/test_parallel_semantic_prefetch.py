@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from minecraft_mod_ai import central_research
-from minecraft_mod_ai import ecosystem_discovery
+from minecraft_mod_ai import central_research, ecosystem_discovery
 from minecraft_mod_ai import parallel_runtime_contract as parallel
 
 

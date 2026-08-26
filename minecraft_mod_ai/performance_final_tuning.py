@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 _STAGE_TEXT_SUFFIXES = frozenset(
     {
         ".java",

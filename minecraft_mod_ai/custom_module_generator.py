@@ -8,10 +8,11 @@ import shutil
 import stat
 import tempfile
 import threading
+from collections.abc import Iterable
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any
 
 from .complete_spec import ProductionModule
 from .host_grounding import build_coder_grounding, custom_module_path_protected

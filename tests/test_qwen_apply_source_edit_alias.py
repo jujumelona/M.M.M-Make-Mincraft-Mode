@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_qwen_tool_markup
-from minecraft_mod_ai.model_tool_aliases import canonical_model_tool, is_model_tool_alias
+from minecraft_mod_ai.model_tool_aliases import (
+    canonical_model_tool,
+    is_model_tool_alias,
+)
 
 
 def _schemas() -> dict[str, dict[str, object]]:

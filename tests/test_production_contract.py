@@ -1,8 +1,20 @@
 from __future__ import annotations
+
 import copy
 import json
+
 import pytest
-from minecraft_mod_ai.production_contract import ProductionContractError, compile_production_contract, evaluate_quality_contract, persist_quality_report, quality_contract_summary, quality_unresolved, validate_production_contract
+
+from minecraft_mod_ai.production_contract import (
+    ProductionContractError,
+    compile_production_contract,
+    evaluate_quality_contract,
+    persist_quality_report,
+    quality_contract_summary,
+    quality_unresolved,
+    validate_production_contract,
+)
+
 PROPOSAL_HASH = 'sha256:' + 'a' * 64
 
 def _module(module_id: str, kind: str='custom_java', **config: object) -> dict:
@@ -31,9 +43,9 @@ def test_compile_is_deterministic_and_traces_every_source_item() -> None:
     assert requirements[0]['source'] == 'requested_prompt'
     assert requirements[0]['statement'] == 'Add a weather compass with a configurable display.'
     assert {item['source'] for item in requirements} == {'requested_prompt', 'game_design', 'research_brief'}
-    assert all((item['coverage_group_ref'] for item in requirements))
-    assert all((group['implementation_catalog_ref'] == 'catalog:implementations' and group['acceptance_refs'] and group['evidence_route_refs'] for group in first.contract['coverage_groups']))
-    assert not any(('example.invalid' in item['statement'] for item in requirements))
+    assert all(item['coverage_group_ref'] for item in requirements)
+    assert all(group['implementation_catalog_ref'] == 'catalog:implementations' and group['acceptance_refs'] and group['evidence_route_refs'] for group in first.contract['coverage_groups'])
+    assert not any('example.invalid' in item['statement'] for item in requirements)
     validate_production_contract(first.contract, ['weather_compass'], first.acceptance_tests)
 
 def test_hash_binding_rejects_mutation_and_external_binding_mismatch() -> None:
@@ -98,8 +110,8 @@ def test_evaluation_requires_fresh_independent_receipts() -> None:
     assert quality_unresolved(passed) == ()
     stale = evaluate_quality_contract(compiled.contract, _all_receipts(compiled.contract, 1), PROPOSAL_HASH, previous=passed)
     assert stale['overall_status'] == 'MISSING'
-    assert all((item['status'] == 'MISSING' for item in stale['dimensions']))
-    assert all(('stale receipt' in item['reason'] for item in stale['dimensions']))
+    assert all(item['status'] == 'MISSING' for item in stale['dimensions'])
+    assert all('stale receipt' in item['reason'] for item in stale['dimensions'])
 
 def test_three_fresh_identical_failures_detect_a_plateau() -> None:
     compiled = _compile()
@@ -110,7 +122,7 @@ def test_three_fresh_identical_failures_detect_a_plateau() -> None:
     first = evaluate_quality_contract(compiled.contract, evidence(1), PROPOSAL_HASH)
     second = evaluate_quality_contract(compiled.contract, evidence(2), PROPOSAL_HASH, previous=first)
     third = evaluate_quality_contract(compiled.contract, evidence(3), PROPOSAL_HASH, previous=second)
-    runtime = next((item for item in third['dimensions'] if item['dimension_id'] == 'runtime'))
+    runtime = next(item for item in third['dimensions'] if item['dimension_id'] == 'runtime')
     assert runtime['status'] == 'FAIL'
     assert runtime['failure_streak'] == 3
     assert runtime['plateau'] is True
@@ -139,7 +151,7 @@ def test_thousands_of_requirements_and_modules_have_linear_bounded_links() -> No
     assert contract['catalog_stats']['requirements'] == count + 1
     assert contract['catalog_stats']['implementations'] == count
     assert len(contract['coverage_groups']) == count + 1
-    assert max((len(group['implementation_refs']) for group in contract['coverage_groups'])) <= 8
-    assert all((group['implementation_catalog_ref'] == 'catalog:implementations' for group in contract['coverage_groups']))
+    assert max(len(group['implementation_refs']) for group in contract['coverage_groups']) <= 8
+    assert all(group['implementation_catalog_ref'] == 'catalog:implementations' for group in contract['coverage_groups'])
     assert {item['implementation_id'] for item in contract['implementation_catalog']} == {f'system_{index:05d}' for index in range(count)}
     validate_production_contract(contract, [f'system_{index:05d}' for index in range(count)], compiled.acceptance_tests)

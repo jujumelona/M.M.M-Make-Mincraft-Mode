@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import replace
 from functools import wraps
 from typing import Any
+
 _LOCAL_GPU_TEXT_ADAPTERS = frozenset({'llama_cpp', 'vllm', 'transformers_text', 'transformers_multimodal'})
 
 def install(model_registry_module: Any) -> None:

@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai.complete_spec import ProductionModule, complete_proposal_from_parts
+from minecraft_mod_ai.complete_spec import (
+    ProductionModule,
+    complete_proposal_from_parts,
+)
 from minecraft_mod_ai.mcp_tools import MMMToolService
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner

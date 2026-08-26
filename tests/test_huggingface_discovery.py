@@ -1,7 +1,12 @@
 import httpx
 import pytest
-from minecraft_mod_ai.ecosystem_discovery import EcosystemDiscoveryClient, EcosystemDiscoveryUnavailable
+
+from minecraft_mod_ai.ecosystem_discovery import (
+    EcosystemDiscoveryClient,
+    EcosystemDiscoveryUnavailable,
+)
 from minecraft_mod_ai.spec import SpecValidationError
+
 
 def _client(handler) -> EcosystemDiscoveryClient:
     return EcosystemDiscoveryClient(transport=httpx.MockTransport(handler))

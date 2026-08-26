@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai import mcp_transport_pool
-from minecraft_mod_ai import runtime_finalization
+from minecraft_mod_ai import mcp_transport_pool, runtime_finalization
 
 
 def test_failed_late_finalization_is_process_poisoned(monkeypatch) -> None:

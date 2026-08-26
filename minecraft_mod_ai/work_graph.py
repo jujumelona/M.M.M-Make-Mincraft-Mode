@@ -1,18 +1,22 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import os
 import sqlite3
 import threading
 import time
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Sequence, TypeVar
+from typing import Any, TypeVar
+
 from .complete_spec import CompleteProposal, ProductionModule
 from .research_ledger import is_research_shard
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
+
 
 class WorkGraphError(RuntimeError):
     pass
@@ -91,7 +95,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         member_ids = {module.module_id for module in members}
         dependencies = {'prepare-project'}
         for module in members:
-            dependencies.update((module_node[dependency] for dependency in module.depends_on if dependency not in member_ids))
+            dependencies.update(module_node[dependency] for dependency in module.depends_on if dependency not in member_ids)
             dependencies.update(
                 exclusive_anchor_node[anchor]
                 for anchor in _exclusive_anchor_keys(module)
@@ -136,7 +140,7 @@ class DurableWorkLedger:
     _sync_plan_temp_tables = ('affected_nodes', 'changed_nodes', 'desired_edges', 'desired_tasks')
 
     @classmethod
-    def open_existing(cls, path: str | Path) -> 'DurableWorkLedger':
+    def open_existing(cls, path: str | Path) -> DurableWorkLedger:
         resolved = Path(path).expanduser().resolve()
         if not resolved.is_file() or resolved.is_symlink():
             raise FileNotFoundError(f'Work ledger not found: {resolved}')
@@ -185,8 +189,8 @@ class DurableWorkLedger:
                 connection.executemany('\n                    INSERT INTO desired_tasks(node_id, stage, input_hash, payload_json)\n                    VALUES (?, ?, ?, ?)\n                    ', ((node.node_id, node.stage, node.input_hash, canonical_json(node.payload)) for node in plan.nodes))
                 connection.executemany('\n                    INSERT INTO desired_edges(node_id, dependency_id)\n                    VALUES (?, ?)\n                    ', ((node.node_id, dependency) for node in plan.nodes for dependency in node.dependencies))
                 connection.execute('\n                    INSERT INTO changed_nodes(node_id)\n                    SELECT desired.node_id\n                    FROM desired_tasks AS desired\n                    JOIN tasks AS current USING(node_id)\n                    WHERE current.input_hash != desired.input_hash\n                    ')
-                changed = tuple((str(row[0]) for row in connection.execute('SELECT node_id FROM changed_nodes ORDER BY node_id')))
-                pruned = tuple((str(row[0]) for row in connection.execute('\n                        SELECT current.node_id\n                        FROM tasks AS current\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM desired_tasks AS desired\n                            WHERE desired.node_id = current.node_id\n                        )\n                        ORDER BY current.node_id\n                        ')))
+                changed = tuple(str(row[0]) for row in connection.execute('SELECT node_id FROM changed_nodes ORDER BY node_id'))
+                pruned = tuple(str(row[0]) for row in connection.execute('\n                        SELECT current.node_id\n                        FROM tasks AS current\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM desired_tasks AS desired\n                            WHERE desired.node_id = current.node_id\n                        )\n                        ORDER BY current.node_id\n                        '))
                 connection.execute('DELETE FROM edges')
                 connection.execute('\n                    DELETE FROM tasks\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    )\n                    ')
                 connection.execute('\n                    INSERT INTO tasks(\n                        node_id, stage, input_hash, payload_json, state, updated_at\n                    )\n                    SELECT desired.node_id, desired.stage, desired.input_hash,\n                           desired.payload_json, ?, ?\n                    FROM desired_tasks AS desired\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM tasks AS current\n                        WHERE current.node_id = desired.node_id\n                    )\n                    ', (WorkState.PENDING.value, now))
@@ -216,7 +220,7 @@ class DurableWorkLedger:
             stage_sql = ''
             params: list[Any] = [WorkState.PENDING.value, WorkState.SUCCEEDED.value]
             if stages:
-                placeholders = ','.join(('?' for _ in stages))
+                placeholders = ','.join('?' for _ in stages)
                 stage_sql = f' AND task.stage IN ({placeholders})'
                 params.extend(stages)
             row = connection.execute(f'\n                SELECT task.node_id\n                FROM tasks AS task\n                WHERE task.state = ?\n                  AND NOT EXISTS (\n                    SELECT 1\n                    FROM edges\n                    JOIN tasks AS dependency\n                      ON dependency.node_id = edges.dependency_id\n                    WHERE edges.node_id = task.node_id\n                      AND dependency.state != ?\n                  )\n                  {stage_sql}\n                ORDER BY task.node_id\n                LIMIT 1\n                ', tuple(params)).fetchone()
@@ -462,7 +466,7 @@ class DurableWorkLedger:
         local = getattr(self, '_mmm_sqlite_local', None)
         if local is None:
             local = threading.local()
-            setattr(self, '_mmm_sqlite_local', local)
+            self._mmm_sqlite_local = local
 
         connection = getattr(local, 'connection', None)
         pid = getattr(local, 'pid', None)
@@ -497,12 +501,12 @@ class DurableWorkLedger:
     def _invalidate_many(connection: sqlite3.Connection, node_ids: Sequence[str]) -> tuple[str, ...]:
         if not node_ids:
             return ()
-        placeholders = ','.join(('?' for _ in node_ids))
+        placeholders = ','.join('?' for _ in node_ids)
         rows = connection.execute(f'\n            WITH RECURSIVE affected(node_id) AS (\n                SELECT node_id FROM tasks WHERE node_id IN ({placeholders})\n                UNION\n                SELECT edges.node_id\n                FROM edges JOIN affected\n                  ON edges.dependency_id = affected.node_id\n            )\n            SELECT node_id FROM affected ORDER BY node_id\n            ', tuple(node_ids)).fetchall()
-        affected = tuple((str(row[0]) for row in rows))
+        affected = tuple(str(row[0]) for row in rows)
         if not affected:
             return ()
-        update_placeholders = ','.join(('?' for _ in affected))
+        update_placeholders = ','.join('?' for _ in affected)
         connection.execute(f'\n            UPDATE tasks\n            SET state = ?, output_hash = NULL, receipt_json = NULL,\n                error = NULL, lease_owner = NULL, lease_until = NULL,\n                updated_at = ?\n            WHERE node_id IN ({update_placeholders})\n            ', (WorkState.PENDING.value, time.time(), *affected))
         return affected
 T = TypeVar('T')

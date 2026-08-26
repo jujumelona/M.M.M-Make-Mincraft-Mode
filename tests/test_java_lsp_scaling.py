@@ -6,12 +6,12 @@ from typing import Any
 
 import pytest
 
-import minecraft_mod_ai.java_lsp as java_lsp
+from minecraft_mod_ai import java_lsp
 from minecraft_mod_ai.java_lsp import JavaLanguageService
 
 
 class _FakeJsonRpcProcess:
-    instances: list["_FakeJsonRpcProcess"] = []
+    instances: list[_FakeJsonRpcProcess] = []
 
     def __init__(self, command: list[str], cwd: Path) -> None:
         self.command = command

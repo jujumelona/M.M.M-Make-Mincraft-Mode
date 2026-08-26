@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .platform_catalog import adapter_from_project

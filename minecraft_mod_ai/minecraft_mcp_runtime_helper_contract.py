@@ -13,7 +13,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-
 _GITHUB_RELEASES = (
     "https://api.github.com/repos/chapmanjw/"
     "minecraft-java-fabric-mcp-server/releases?per_page=10"

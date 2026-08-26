@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import project_manifest_hash_efficiency_contract as contract
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, TypeVar
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")

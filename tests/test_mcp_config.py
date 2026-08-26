@@ -3,7 +3,6 @@ from pathlib import Path
 
 import yaml
 
-
 _STDIO_ENTRYPOINT = "minecraft_mod_ai.mcp_stdio_entrypoint"
 _STAGE_MODULE = "minecraft_mod_ai.mcp_server"
 _GENERATION_MODULE = "minecraft_mod_ai.mod_generation_mcp_server"

@@ -16,10 +16,10 @@ import json
 import mimetypes
 import os
 import threading
+from collections.abc import Mapping
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any, Mapping
-
+from typing import Any
 
 _BASE_ARGS_MARKER = "_mmm_llama_multimodal_base_args_v2"
 _BENCHMARK_MARKER = "_mmm_llama_multimodal_text_benchmark_v1"

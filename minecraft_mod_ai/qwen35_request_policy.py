@@ -9,9 +9,10 @@ instead of being identified from repository names or GGUF filenames.
 import hashlib
 import json
 import os
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Iterator, Literal, Mapping
+from typing import Any, Literal
 
 from .qwen_family_capabilities import qwen_family_capabilities, qwen_family_name
 

@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 import minecraft_mod_ai.asset_resume_efficiency_contract as asset_contract
-from minecraft_mod_ai.asset_resume_efficiency_contract import _CachedImageRouter, install
+from minecraft_mod_ai.asset_resume_efficiency_contract import (
+    _CachedImageRouter,
+    install,
+)
 from minecraft_mod_ai.project_write_lock import project_write_lock
 
 
@@ -27,7 +30,7 @@ class _Router:
         self.calls += 1
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"{role}|{prompt}|{width}|{height}|{seed}".encode("utf-8"))
+        path.write_bytes(f"{role}|{prompt}|{width}|{height}|{seed}".encode())
         return path
 
 

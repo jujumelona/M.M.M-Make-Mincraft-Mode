@@ -12,8 +12,9 @@ only byte-equivalent committed identities before any composition dict can collap
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _MARKER = "_mmm_persistent_skill_identity_v1"
 _SHA256_ID = re.compile(r"^sha256:[0-9a-f]{64}$")

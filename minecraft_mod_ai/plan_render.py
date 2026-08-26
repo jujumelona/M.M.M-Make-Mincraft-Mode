@@ -1,7 +1,11 @@
 from __future__ import annotations
+
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
+
 from .complete_spec import ProductionModule
+
 _VISIBLE_SECTION_ITEMS = 24
 _VISIBLE_TEXT_CHARS = 2000
 _KIND_LABELS_KO = {'item': '아이템', 'block': '블록', 'tool': '도구', 'weapon': '무기와 전투 장비', 'armor': '방어구', 'food': '음식과 요리', 'crop': '작물과 재배', 'fluid': '유체', 'machine': '기계와 자동화', 'recipe': '제작법', 'effect': '상태 효과', 'enchantment': '마법 부여', 'entity': '생물과 캐릭터', 'boss': '보스 전투', 'npc': 'NPC와 상호작용', 'quest': '퀘스트', 'class': '직업', 'skill': '스킬', 'economy': '경제', 'shop': '상점', 'gui': '게임 화면과 메뉴', 'networking': '멀티플레이 동기화', 'party': '파티', 'guild': '길드', 'command': '게임 명령', 'structure': '건축물과 장소', 'biome': '생태 지역', 'dimension': '차원', 'world_event': '월드 이벤트', 'advancement': '도전 과제', 'loot': '보상과 전리품', 'integration': '다른 모드와의 연동', 'custom_java': '요청에 맞춘 전용 게임 로직'}
@@ -16,7 +20,7 @@ def render_complete_plan(*, requested_prompt: str, game_design: dict[str, Any], 
     progression = _bounded_list(_strings(game_design.get('progression')), korean=korean)
     art_direction_lines = _bounded_list(_art_direction_lines(game_design.get('art_direction'), korean=korean), korean=korean)
     tests = _bounded_list(_strings(acceptance_tests), korean=korean)
-    module_values = tuple((module for module in modules if not (module.kind == 'integration' and module.config.get('integration_type') == 'mmm_research_shard')))
+    module_values = tuple(module for module in modules if not (module.kind == 'integration' and module.config.get('integration_type') == 'mmm_research_shard'))
     integration_lines = _bounded_list(_mod_context_lines(game_design.get('mod_context'), korean=korean), korean=korean)
     system_lines = _bounded_list(list(dict.fromkeys([*_production_outline_lines(game_design.get('production_outline')), *_system_lines(game_design.get('modules'), (module.kind for module in module_values), korean=korean)])), korean=korean)
     research_lines = _bounded_list(_research_lines(game_design.get('_research_brief')), korean=korean)
@@ -32,23 +36,23 @@ def render_complete_plan(*, requested_prompt: str, game_design: dict[str, Any], 
         lines.extend(_numbered(progression, empty='별도 성장 시스템은 요청하지 않은 상태입니다.'))
         if art_direction_lines:
             lines.extend(('', '시각·연출 방향'))
-            lines.extend((f'- {value}' for value in art_direction_lines))
+            lines.extend(f'- {value}' for value in art_direction_lines)
         if integration_lines:
             lines.extend(('', '마인크래프트 연동 범위'))
-            lines.extend((f'- {value}' for value in integration_lines))
+            lines.extend(f'- {value}' for value in integration_lines)
         lines.extend(('', '제작 범위'))
-        lines.extend((f'- {value}' for value in system_lines))
+        lines.extend(f'- {value}' for value in system_lines)
         if research_lines:
             lines.extend(('', '조사와 근거 확인'))
-            lines.extend((f'- {value}' for value in research_lines))
+            lines.extend(f'- {value}' for value in research_lines)
         if technology_lines:
             lines.extend(('', 'AI·음성 기술 설계'))
-            lines.extend((f'- {value}' for value in technology_lines))
+            lines.extend(f'- {value}' for value in technology_lines)
         if quality_lines:
             lines.extend(('', '완성 기준'))
-            lines.extend((f'- {value}' for value in quality_lines))
+            lines.extend(f'- {value}' for value in quality_lines)
         lines.extend(('', '완성 확인'))
-        lines.extend((f'- {value}' for value in tests or ['요청한 기능을 게임 안에서 직접 확인합니다.']))
+        lines.extend(f'- {value}' for value in tests or ['요청한 기능을 게임 안에서 직접 확인합니다.'])
         lines.extend(('', '이 방향으로 만들까요? 규모, 분위기, 시스템, 장소를 바꾸고 싶으면 원하는 대로 말해 주세요.'))
     else:
         lines = [f'I will build “{title}” as the following game.']
@@ -60,22 +64,22 @@ def render_complete_plan(*, requested_prompt: str, game_design: dict[str, Any], 
         lines.extend(_numbered(progression, empty='No separate progression system was requested.'))
         if art_direction_lines:
             lines.extend(('', 'Visual direction'))
-            lines.extend((f'- {value}' for value in art_direction_lines))
+            lines.extend(f'- {value}' for value in art_direction_lines)
         if integration_lines:
             lines.extend(('', 'Minecraft integration scope'))
-            lines.extend((f'- {value}' for value in integration_lines))
+            lines.extend(f'- {value}' for value in integration_lines)
         lines.extend(('', 'Production scope'))
-        lines.extend((f'- {value}' for value in system_lines))
+        lines.extend(f'- {value}' for value in system_lines)
         if research_lines:
             lines.extend(('', 'Research and evidence'))
-            lines.extend((f'- {value}' for value in research_lines))
+            lines.extend(f'- {value}' for value in research_lines)
         if technology_lines:
-            lines.extend((f'- {value}' for value in technology_lines))
+            lines.extend(f'- {value}' for value in technology_lines)
         if quality_lines:
             lines.extend(('', 'Completion standard'))
-            lines.extend((f'- {value}' for value in quality_lines))
+            lines.extend(f'- {value}' for value in quality_lines)
         lines.extend(('', 'Acceptance'))
-        lines.extend((f'- {value}' for value in tests or ['Verify every requested feature in game.']))
+        lines.extend(f'- {value}' for value in tests or ['Verify every requested feature in game.'])
         lines.extend(('', 'Should I build this direction? Tell me any change in scale, tone, systems, or places.'))
     return '\n'.join(lines).strip()
 
@@ -128,7 +132,7 @@ def _mod_context_lines(value: Any, *, korean: bool) -> list[str]:
     for key in ('vanilla_integration', 'compatibility_targets'):
         values = value.get(key)
         if isinstance(values, list):
-            result.extend((str(item).strip() for item in values if str(item).strip()))
+            result.extend(str(item).strip() for item in values if str(item).strip())
     return list(dict.fromkeys(result))
 
 def _system_lines(design_modules: Any, kinds: Iterable[str], *, korean: bool) -> list[str]:
@@ -144,7 +148,7 @@ def _system_lines(design_modules: Any, kinds: Iterable[str], *, korean: bool) ->
             elif name:
                 result.append(name)
     labels = _KIND_LABELS_KO if korean else _KIND_LABELS_EN
-    result.extend((labels[kind] for kind in sorted(set(kinds)) if kind in labels))
+    result.extend(labels[kind] for kind in sorted(set(kinds)) if kind in labels)
     result = list(dict.fromkeys(result))
     if result:
         return result
@@ -176,7 +180,7 @@ def _research_lines(value: Any) -> list[str]:
         requirements = domain.get('requirements')
         requirement = ''
         if isinstance(requirements, list):
-            requirement = '; '.join((str(item).strip() for item in requirements if str(item).strip()))
+            requirement = '; '.join(str(item).strip() for item in requirements if str(item).strip())
         if objective and requirement:
             result.append(f'{objective}: {requirement}')
         elif objective or requirement:

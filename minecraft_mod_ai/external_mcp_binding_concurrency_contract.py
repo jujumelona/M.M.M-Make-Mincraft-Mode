@@ -11,8 +11,9 @@ and reuses the first live reviewed owner until that owner drifts or becomes unav
 
 import copy
 import threading
+from collections.abc import Collection, Mapping
 from functools import wraps
-from typing import Any, Collection, Mapping
+from typing import Any
 
 from . import external_mcp_binding_contract as binding_contract
 from .mcp_schema_integrity_contract import validate_input_schema

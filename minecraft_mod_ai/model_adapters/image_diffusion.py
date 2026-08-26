@@ -14,7 +14,6 @@ from .base import (
     torch_dtype,
 )
 
-
 _IMAGE_LOCK = threading.RLock()
 _IMAGE_PIPELINE: Any | None = None
 _IMAGE_PIPELINE_KEY: tuple[str, str, str] | None = None

@@ -11,10 +11,11 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .component_registry import persist_promotions, promotion_records
 from .resource_asset_production import (
@@ -45,9 +46,7 @@ _TRANSPORT_CONFIG_KEYS = frozenset(
 def install_prebootstrap() -> None:
     """Upgrade owner boundaries before runtime contracts capture/wrap them."""
 
-    from . import complete_planner
-    from . import custom_module_generator
-    from . import platform_resolver
+    from . import complete_planner, custom_module_generator, platform_resolver
 
     _install_joint_platform_optimizer(platform_resolver)
     _install_reuse_aware_resolver(platform_resolver)

@@ -7,8 +7,9 @@ always bound to the host-selected executable platform provider. No historical ta
 is injected when the caller omitted platform selection.
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any, Mapping
+from typing import Any
 
 from .platform_catalog import adapter_for_target
 

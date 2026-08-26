@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .model_adapters import (
     EmbeddingAdapter,
@@ -24,7 +25,6 @@ from .model_concurrency import (
 )
 from .model_registry import ModelRegistry
 from .structured_output import validate_structured_output
-
 
 _GPU_EXCLUSIVE_LOCK = ReentrantReadWriteLock()
 _LLAMA_INFERENCE_SLOTS = ReentrantCapacityGate(active_llama_parallelism)
@@ -181,9 +181,8 @@ class ModelRouter:
     @contextmanager
     def _generation_scope(self, config: Any):
         if self._shared_native_llama(config):
-            with _LLAMA_INFERENCE_SLOTS:
-                with _GPU_EXCLUSIVE_LOCK.shared():
-                    yield
+            with _LLAMA_INFERENCE_SLOTS, _GPU_EXCLUSIVE_LOCK.shared():
+                yield
             return
         with self._gpu_scope(config.exclusive_gpu):
             yield

@@ -13,9 +13,10 @@ import json
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .model_adapters.base import GenerationRequest, GenerationResponse
 from .qwen_family_capabilities import qwen_family_capabilities
@@ -238,7 +239,7 @@ def _trace_store(adapter: Any) -> OrderedDict[str, str]:
     if isinstance(current, OrderedDict):
         return current
     store: OrderedDict[str, str] = OrderedDict()
-    setattr(adapter, "_mmm_qwen_reasoning_traces", store)
+    adapter._mmm_qwen_reasoning_traces = store
     return store
 
 

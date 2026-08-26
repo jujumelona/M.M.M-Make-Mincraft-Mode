@@ -3,10 +3,11 @@ from __future__ import annotations
 import copy
 import shutil
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
 

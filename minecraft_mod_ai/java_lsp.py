@@ -8,9 +8,9 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024

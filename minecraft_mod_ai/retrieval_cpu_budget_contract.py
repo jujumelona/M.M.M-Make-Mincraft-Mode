@@ -14,8 +14,9 @@ behind.
 """
 
 import os
+from collections.abc import Sequence
 from functools import wraps
-from typing import Any, Sequence
+from typing import Any
 
 _MARKER = "_mmm_retrieval_cpu_budget_v2"
 _HYBRID_MARKER = "_mmm_small_model_hybrid_code_rag"

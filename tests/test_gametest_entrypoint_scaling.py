@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 from minecraft_mod_ai.generator import FabricProjectGenerator
-from minecraft_mod_ai.production_hardener import _gametest_files
-from minecraft_mod_ai.production_hardener import harden_generated_project
+from minecraft_mod_ai.production_hardener import (
+    _gametest_files,
+    harden_generated_project,
+)
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 
 

@@ -9,8 +9,8 @@ from minecraft_mod_ai.complete_spec import (
     complete_proposal_from_parts,
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
-from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.planner import HeuristicPlanner
+from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.work_graph import (
     DurableWorkLedger,

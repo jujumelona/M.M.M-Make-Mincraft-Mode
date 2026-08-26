@@ -8,7 +8,6 @@ from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
     _qwen_tool_generation_response,
 )
 
-
 _QWEN_PRECISE_PROFILE = {
     "temperature": 0.6,
     "top_p": 0.95,

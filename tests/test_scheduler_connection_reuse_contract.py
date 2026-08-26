@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import work_graph
-from minecraft_mod_ai.scheduler_parallel_safety_contract import install as install_scheduler
+from minecraft_mod_ai.scheduler_parallel_safety_contract import (
+    install as install_scheduler,
+)
 
 
 def _plan() -> work_graph.WorkGraphPlan:

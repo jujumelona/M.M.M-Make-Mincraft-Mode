@@ -4,7 +4,8 @@ import hashlib
 import json
 import math
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .model_adapters import ModelConfigurationError
 from .procedural_retrieval import decompose_task_procedure, procedural_region_score

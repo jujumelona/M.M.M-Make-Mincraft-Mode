@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import wraps
-from typing import Any, Mapping
+from typing import Any
 
 
 def _index_from_ref(value: str) -> int | None:

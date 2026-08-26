@@ -9,12 +9,12 @@ import sys
 import tempfile
 import threading
 import weakref
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncContextManager, Callable, Mapping
+from typing import Any, AsyncContextManager
 
 import anyio
-
 
 _MIN_WORKERS = 1
 _MAX_WORKERS = 16
@@ -550,7 +550,7 @@ class _PooledSession:
         self._env = dict(env)
         self._timeout_seconds = float(timeout_seconds)
 
-    async def __aenter__(self) -> "_PooledSession":
+    async def __aenter__(self) -> _PooledSession:
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

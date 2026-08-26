@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from pathlib import Path
-import sys
 
 import pytest
-
 
 _TEST_MINECRAFT_VERSION = "mmm-test-target"
 _TEST_LOADER = "fabric"
@@ -120,7 +119,8 @@ def _isolate_test_runtime_state(
     # Runtime-manager unit tests receive a synthetic run-scoped profile instead of
     # reviving a repository-level production default target.
     import json
-    import minecraft_mod_ai.runtime_manager as runtime_manager
+
+    from minecraft_mod_ai import runtime_manager
 
     # Runtime helpers must live outside a project root that generator tests expect empty.
     fake_java = tmp_path.parent / f"{tmp_path.name}-fake-java-21"
@@ -242,7 +242,7 @@ def _isolate_test_runtime_state(
     # local to the legacy test module; production retrieval continues to use live
     # provider receipts and has no historical mapping fallback.
     if request.module.__name__ == "test_central_research":
-        import minecraft_mod_ai.central_research as central_research
+        from minecraft_mod_ai import central_research
 
         original_adapter_for_target = central_research.adapter_for_target
 

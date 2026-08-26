@@ -3,7 +3,8 @@ from __future__ import annotations
 """Pure user-intent projection shared by tool retrieval and execution policy."""
 
 import json
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 _INTENT_FIELDS = (
     "phase",

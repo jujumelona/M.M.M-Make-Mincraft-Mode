@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,127}")
 _CALL = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _CONTROL = re.compile(r"\b(if|else|for|while|switch|try|catch|finally|return|throw)\b")
-_REGISTER = re.compile(r"\b(register\w*|registry\w*|bootstrap\w*|initialize\w*)\b", re.I)
-_PERSIST = re.compile(r"\b(load\w*|save\w*|persist\w*|serialize\w*|deserialize\w*|codec\w*)\b", re.I)
-_NETWORK = re.compile(r"\b(send\w*|receive\w*|packet\w*|payload\w*|encode\w*|decode\w*|sync\w*)\b", re.I)
-_EVENT = re.compile(r"\b(event\w*|callback\w*|listener\w*|tick\w*|subscribe\w*)\b", re.I)
-_VERIFY = re.compile(r"\b(assert\w*|verify\w*|check\w*|validate\w*|test\w*)\b", re.I)
+_REGISTER = re.compile(r"\b(register\w*|registry\w*|bootstrap\w*|initialize\w*)\b", re.IGNORECASE)
+_PERSIST = re.compile(r"\b(load\w*|save\w*|persist\w*|serialize\w*|deserialize\w*|codec\w*)\b", re.IGNORECASE)
+_NETWORK = re.compile(r"\b(send\w*|receive\w*|packet\w*|payload\w*|encode\w*|decode\w*|sync\w*)\b", re.IGNORECASE)
+_EVENT = re.compile(r"\b(event\w*|callback\w*|listener\w*|tick\w*|subscribe\w*)\b", re.IGNORECASE)
+_VERIFY = re.compile(r"\b(assert\w*|verify\w*|check\w*|validate\w*|test\w*)\b", re.IGNORECASE)
 _IGNORE_CALLS = frozenset({
     "if", "for", "while", "switch", "catch", "return", "new", "super", "this",
     "println", "print", "format", "valueof", "tostring", "hashcode", "equals",
@@ -230,6 +231,6 @@ __all__ = [
     "ProcedurePlan",
     "decompose_task_procedure",
     "extract_code_procedure",
-    "procedure_similarity",
     "procedural_region_score",
+    "procedure_similarity",
 ]

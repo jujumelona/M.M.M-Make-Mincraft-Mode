@@ -3,8 +3,9 @@ from __future__ import annotations
 """Thread-safety boundaries for stateful generation helpers shared by the DAG runner."""
 
 import threading
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 _INSTALLED = False
 _INIT_LOCK = threading.RLock()

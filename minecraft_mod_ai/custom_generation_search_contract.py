@@ -6,17 +6,18 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .custom_generation_research import (
-    _ResearchEvidenceRouter,
-    _StrategyRouter,
     _fork_router_for_candidate,
     _public_signature_without_target_defaults,
+    _ResearchEvidenceRouter,
     _run_single_with_research,
+    _StrategyRouter,
     _target_values,
 )
 
@@ -241,7 +242,7 @@ def _capture_candidate(
 
 def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     touched = [str(value).replace('\\', '/') for value in result.get('touched_paths', []) if isinstance(value, str)]
-    java_paths = tuple(sorted((path for path in touched if path.lower().endswith('.java'))))
+    java_paths = tuple(sorted(path for path in touched if path.lower().endswith('.java')))
     operation_count = int(result.get('operation_count', 0) or 0)
     runtime_tests = result.get('runtime_tests', [])
     runtime_tests = runtime_tests if isinstance(runtime_tests, list) else []
@@ -456,12 +457,12 @@ def install(custom_module_generator_module: Any) -> None:
 
 
 __all__ = [
+    "_STRATEGIES",
     "_ResearchEvidenceRouter",
     "_StrategyRouter",
-    "_STRATEGIES",
     "_active_native_slots",
-    "_capture_candidate",
     "_candidate_patch_capture",
+    "_capture_candidate",
     "_fork_router_for_candidate",
     "_target_values",
     "_verify_candidate",

@@ -15,11 +15,11 @@ boundaries must preserve their declared production call shapes.
 import hashlib
 import inspect
 import marshal
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
 from threading import RLock
-from typing import Any, Callable, Iterable
-
+from typing import Any
 
 _COMPOSITION_LOCK = RLock()
 _STATE_ATTR = "_mmm_contract_composition_state"

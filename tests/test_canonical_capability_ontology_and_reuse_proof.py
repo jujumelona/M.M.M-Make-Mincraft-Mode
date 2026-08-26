@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from minecraft_mod_ai import source_transplant
 from minecraft_mod_ai.canonical_capability_ontology import (
     canonical_domain_map,
     resolve_capabilities_from_phrase,
@@ -11,13 +12,12 @@ from minecraft_mod_ai.capability_semantic_inference import (
     enrich_resolution_with_semantic_inference,
 )
 from minecraft_mod_ai.evidence_first_planning import _DOMAIN_TERM_MAP
-from minecraft_mod_ai.reuse_planner import decompose_capability_graph, _CAPABILITY_HINTS
 from minecraft_mod_ai.reuse_adapters import apply_deterministic_adapters
+from minecraft_mod_ai.reuse_planner import _CAPABILITY_HINTS, decompose_capability_graph
 from minecraft_mod_ai.reuse_proof_executor import (
     execute_candidate_fallback_loop,
     execute_reuse_proof,
 )
-from minecraft_mod_ai import source_transplant
 
 
 def test_unified_ontology_zero_drift() -> None:
@@ -401,8 +401,8 @@ def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_p
 
 
 def test_reuse_ledger_status_strictly_maps_proof_level() -> None:
-    from minecraft_mod_ai.reuse_planner import ReuseDecision, TargetImplementationPlan
     from minecraft_mod_ai.platform_catalog import adapter_for_target
+    from minecraft_mod_ai.reuse_planner import ReuseDecision, TargetImplementationPlan
 
     adapter = adapter_for_target("1.21.1", "fabric")
 
@@ -653,7 +653,9 @@ def test_closure_incomplete_capped_at_partial_reuse() -> None:
 
 
 def test_loader_aware_scaffold_neoforge_and_wrapper(tmp_path) -> None:
-    from minecraft_mod_ai.reuse_proof_executor import scaffold_minimal_ephemeral_workspace
+    from minecraft_mod_ai.reuse_proof_executor import (
+        scaffold_minimal_ephemeral_workspace,
+    )
 
     scaffold_minimal_ephemeral_workspace(
         tmp_path,
@@ -998,7 +1000,9 @@ def test_requirement_acceptance_contract_mapping() -> None:
 
 
 def test_multi_layer_typed_artifact_closure_slicing() -> None:
-    from minecraft_mod_ai.reuse_proof_executor import _compute_dependency_closed_subgraphs
+    from minecraft_mod_ai.reuse_proof_executor import (
+        _compute_dependency_closed_subgraphs,
+    )
 
     adapted_files = {
         "src/main/java/BossEntity.java": "package com.mod;\npublic class BossEntity {\n    Identifier ID = Identifier.of(\"modid\", \"boss\");\n}",
@@ -1082,6 +1086,179 @@ def test_individual_requirement_test_verification() -> None:
     assert any(item[0] == "REQ-BOSS-002" and item[3] is True for item in receipt.requirement_acceptance_map)
     assert any(item[0] == "REQ-BOSS-003" and item[3] is False for item in receipt.requirement_acceptance_map)
     assert any(item[0] == "REQ-BOSS-004" and item[3] is True for item in receipt.requirement_acceptance_map)
+
+
+def test_proof_level_fail_closed_validation() -> None:
+    from minecraft_mod_ai.proof_level import ProofLevel
+
+    # 1. Valid conversions
+    assert ProofLevel.from_value("COMPILE_VERIFIED") == ProofLevel.COMPILE_VERIFIED
+    assert ProofLevel.from_value("BEHAVIOR_VERIFIED") == ProofLevel.BEHAVIOR_VERIFIED
+    assert ProofLevel.from_value("PARTIAL_REUSE") == ProofLevel.PARTIAL_REUSE
+
+    # 2. Unknown/invalid values evaluate strictly to UNVERIFIED (fail-closed)
+    assert ProofLevel.from_value("UNKNOWN_PROOF_STATE") == ProofLevel.UNVERIFIED
+    assert ProofLevel.from_value(None) == ProofLevel.UNVERIFIED
+    assert ProofLevel.from_value(123) == ProofLevel.UNVERIFIED
+
+    # 3. Method checks
+    assert ProofLevel.COMPILE_VERIFIED.is_verified() is True
+    assert ProofLevel.PARTIAL_REUSE.is_verified() is False
+    assert ProofLevel.PARTIAL_REUSE.is_partial() is True
+    assert ProofLevel.UNVERIFIED.allows_reuse() is False
+
+
+def test_requirement_catalog_and_capability_specs() -> None:
+    from minecraft_mod_ai.requirement_catalog import build_requirement_catalog
+    from minecraft_mod_ai.canonical_capability_ontology import resolve_capabilities_from_phrase_structured
+
+    prompt = "잡몹부터 보스까지 레벨에 따라 강해져야 한다\n처치 시 전용 보스 전리품을 드롭한다"
+    resolution = resolve_capabilities_from_phrase_structured(prompt)
+    catalog = build_requirement_catalog(prompt, resolution)
+
+    assert len(catalog.requirements) == 2
+    assert catalog.requirements[0].id == "REQ-001"
+    assert "잡몹부터 보스까지" in catalog.requirements[0].statement
+    assert catalog.requirements[0].mandatory is True
+
+    assert len(catalog.capabilities) >= 2
+    for cap in catalog.capabilities:
+        assert cap.id != ""
+        assert len(cap.source_requirement_ids) > 0
+
+
+def test_artifact_dependency_graph_scc_and_directional_closure() -> None:
+    from minecraft_mod_ai.artifact_dependency_graph import ArtifactDependencyGraph
+
+    # Cyclical dependency between BossEntity and BossGoal (they reference each other)
+    files = {
+        "src/main/java/BossEntity.java": "package com.mod;\nimport com.mod.BossGoal;\npublic class BossEntity { BossGoal goal; }",
+        "src/main/java/BossGoal.java": "package com.mod;\nimport com.mod.BossEntity;\npublic class BossGoal { BossEntity boss; }",
+        "src/main/java/StandaloneUtil.java": "package com.mod;\npublic class StandaloneUtil {}",
+    }
+
+    graph = ArtifactDependencyGraph.build_from_files(files)
+    sccs = graph.compute_scc()
+
+    # BossEntity and BossGoal must form a single strongly connected component (SCC)
+    boss_scc = next((scc for scc in sccs if "src/main/java/BossEntity.java" in scc), None)
+    assert boss_scc is not None
+    assert "src/main/java/BossGoal.java" in boss_scc
+    assert "src/main/java/StandaloneUtil.java" not in boss_scc
+
+
+def test_dependency_resolver_cross_loader_matrix() -> None:
+    from minecraft_mod_ai.dependency_resolver import resolve_dependency_for_target
+
+    receipt_fabric = resolve_dependency_for_target("geckolib", target_loader="fabric", target_minecraft="1.21.1")
+    assert receipt_fabric.is_resolved is True
+    assert "geckolib-fabric" in receipt_fabric.resolved_coordinate
+    assert receipt_fabric.selected_version == "4.6.0"
+
+    receipt_neoforge = resolve_dependency_for_target("geckolib", target_loader="neoforge", target_minecraft="1.21.1")
+    assert receipt_neoforge.is_resolved is True
+    assert "geckolib-neoforge" in receipt_neoforge.resolved_coordinate
+
+
+def test_host_acceptance_contracts_and_test_case_receipts() -> None:
+    from minecraft_mod_ai.acceptance_contracts import (
+        TestCaseReceipt,
+        get_host_acceptance_contracts,
+    )
+
+    contracts = get_host_acceptance_contracts("boss.entity")
+    assert len(contracts) == 4
+    assert any(c.requirement_id == "REQ-BOSS-001" for c in contracts)
+    assert any(c.host_test_class == "MMM_BossSpawnAcceptanceTest" for c in contracts)
+
+    tc = TestCaseReceipt(
+        test_id="MMM_BossSpawnAcceptanceTest.testSpawn",
+        requirement_id="REQ-BOSS-001",
+        executed=True,
+        passed=True,
+        duration_ms=12.5,
+    )
+    assert tc.passed is True
+    assert tc.requirement_id == "REQ-BOSS-001"
+
+
+def test_multi_donor_joint_composition_solver_and_sbom() -> None:
+    from minecraft_mod_ai.composition_solver import (
+        generate_reuse_manifest,
+        solve_multi_donor_composition,
+    )
+
+    donor_a = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss-a",
+        commit_sha="1111111111111111111111111111111111111111",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-a",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/Boss.java", "b1", "sha:1", 100, ("Boss",)),
+        ),
+        seed_files=("src/main/java/Boss.java",),
+        source_symbols=("Boss",),
+        required_dependencies=("geckolib",),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # 1. Compatible composition with unique files
+    donor_b = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/item-b",
+        commit_sha="2222222222222222222222222222222222222222",
+        license_id="MIT",
+        source_url="https://github.com/example/item-b",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/Item.java", "i1", "sha:2", 100, ("Item",)),
+        ),
+        seed_files=("src/main/java/Item.java",),
+        source_symbols=("Item",),
+        required_dependencies=("geckolib",),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    res_valid = solve_multi_donor_composition([donor_a, donor_b], target_loader="fabric", target_minecraft="1.21.1")
+    assert res_valid.is_valid is True
+    assert len(res_valid.conflicts) == 0
+
+    manifest = generate_reuse_manifest([donor_a, donor_b], project_name="my_rpg_mod")
+    assert manifest["total_reused_files"] == 2
+    assert manifest["files"][0]["origin_repo"] == "example/boss-a"
+
+    # 2. Conflicting composition with duplicate class definition
+    donor_collision = source_transplant.DonorSlice(
+        capability="boss.variant",
+        repository="example/boss-collision",
+        commit_sha="3333333333333333333333333333333333333333",
+        license_id="MIT",
+        source_url="https://github.com/example/boss-collision",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile("src/main/java/Boss.java", "b2", "sha:3", 100, ("Boss",)),
+        ),
+        seed_files=("src/main/java/Boss.java",),
+        source_symbols=("Boss",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    res_conflict = solve_multi_donor_composition([donor_a, donor_collision])
+    assert res_conflict.is_valid is False
+    assert any(c.conflict_type == "class_collision" for c in res_conflict.conflicts)
+
 
 
 

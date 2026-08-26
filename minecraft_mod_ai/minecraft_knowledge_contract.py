@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Mapping, Sequence
+from typing import Any
+
 SCHEMA_VERSION = 'mmm/minecraft-knowledge-plan-v2'
 COVERAGE_SCHEMA_VERSION = 'mmm/minecraft-knowledge-route-coverage-v2'
 _MARKER = '_mmm_minecraft_knowledge_contract_v2'
@@ -201,19 +204,19 @@ def _flatten(value: Any) -> str:
     if isinstance(value, Mapping):
         return ' '.join((_flatten(v) for k, v in value.items() if not str(k).startswith('_')))
     if isinstance(value, Sequence) and (not isinstance(value, (str, bytes, bytearray))):
-        return ' '.join((_flatten(v) for v in value))
+        return ' '.join(_flatten(v) for v in value)
     return ''
 
 def detect_features(prompt: str, game_design: Mapping[str, Any] | None=None) -> tuple[str, ...]:
     text = f'{prompt}\n{_flatten(game_design or {})}'
     features = {'base_mod'}
     for feature, terms in FEATURE_TERMS.items():
-        if any((_contains(text, term) for term in terms)):
+        if any(_contains(text, term) for term in terms):
             features.add(feature)
     folded = text.casefold()
     if re.search('\\b(?:add|create|make|new|custom)\\b.{0,40}\\bitem\\b', folded) or re.search('\\bitem\\b.{0,40}\\b(?:add|create|make|register)\\b', folded) or re.search('(?:새|신규|커스텀).{0,20}아이템', text) or re.search('아이템(?:을|를)?\\s*(?:추가|등록|만들|제작)', text):
         features.add('custom_item')
-    if any((_contains(text, x) for x in ('machine', '기계', '장치', '설비'))) and (any((_contains(text, x) for x in ('inventory', 'container', '인벤토리', '보관함'))) or 'gui' in features or 'networking' in features):
+    if any(_contains(text, x) for x in ('machine', '기계', '장치', '설비')) and (any(_contains(text, x) for x in ('inventory', 'container', '인벤토리', '보관함')) or 'gui' in features or 'networking' in features):
         features.add('machine_with_gui')
     if 'custom_boss' in features:
         features.update(('custom_mob', 'custom_entity'))
@@ -286,7 +289,7 @@ def compile_minecraft_knowledge_plan(prompt: str, game_design: Mapping[str, Any]
     research_domains = []
     for domain, items in sorted(grouped.items()):
         mcp = sorted({cap for item in items for cap in item['evidence']['mcp_capabilities']})
-        research_domains.append({'domain_id': 'mk_' + re.sub('[^a-z0-9_]+', '_', domain.casefold()), 'objective': f'Resolve mandatory Minecraft/Fabric {domain} knowledge. ' + (f"If RAG is insufficient use exact research MCP: {', '.join(mcp)}." if mcp else 'Do not guess APIs.'), 'requirements': [str(item['requirement_id']) for item in items], 'evidence_kinds': list(dict.fromkeys((k for item in items for k in item['evidence']['evidence_kinds']))), 'queries': list(dict.fromkeys((q for item in items for q in item['evidence']['rag_queries']))), 'providers': list(dict.fromkeys((p for item in items for p in item['evidence']['providers']))), 'depends_on': []})
+        research_domains.append({'domain_id': 'mk_' + re.sub('[^a-z0-9_]+', '_', domain.casefold()), 'objective': f'Resolve mandatory Minecraft/Fabric {domain} knowledge. ' + (f"If RAG is insufficient use exact research MCP: {', '.join(mcp)}." if mcp else 'Do not guess APIs.'), 'requirements': [str(item['requirement_id']) for item in items], 'evidence_kinds': list(dict.fromkeys(k for item in items for k in item['evidence']['evidence_kinds'])), 'queries': list(dict.fromkeys(q for item in items for q in item['evidence']['rag_queries'])), 'providers': list(dict.fromkeys(p for item in items for p in item['evidence']['providers'])), 'depends_on': []})
     all_mcp = sorted({cap for item in requirements for cap in item['evidence']['mcp_capabilities']})
     branch_predicates = _compile_branch_predicates(
         prompt=prompt,
@@ -343,7 +346,7 @@ def validate_plan(plan: Mapping[str, Any]) -> None:
         evidence = item.get('evidence')
         if not isinstance(evidence, Mapping) or not evidence.get('rag_queries') or (not item.get('validations')):
             raise ValueError(f"Incomplete Minecraft knowledge contract: {item.get('requirement_id')}")
-        if any((dep not in known for dep in item.get('depends_on', []))):
+        if any(dep not in known for dep in item.get('depends_on', [])):
             raise ValueError(f"Unknown Minecraft knowledge dependency: {item.get('requirement_id')}")
     predicates = plan.get('branch_predicates')
     if not isinstance(predicates, list):
@@ -450,9 +453,9 @@ def evaluate_route_coverage(plan: Mapping[str, Any], research: Mapping[str, Any]
         else:
             status = 'RESEARCH_UNRESOLVED'
         if status in {'MISSING_RESEARCH_DOMAIN', 'MISSING_ACTIVE_ROUTE_RECEIPT', 'MISSING_ACTIVE_ROUTE_QUERY', 'MISSING_RESEARCH_AGENT_NOTE', 'RESEARCH_UNRESOLVED'}:
-            blocking.extend((str(ref) for ref in domain['requirements']))
+            blocking.extend(str(ref) for ref in domain['requirements'])
         elif status in {'ROUTES_EXECUTED_WITH_GAPS', 'DEFERRED_UNTIL_TARGET_FREEZE'}:
-            deferred.extend((str(ref) for ref in domain['requirements']))
+            deferred.extend(str(ref) for ref in domain['requirements'])
         route_evidence = {
             'plan_sha256': plan['plan_sha256'],
             'requirement_refs': list(domain['requirements']),
@@ -553,7 +556,7 @@ def install(agentic_module: Any, complete_planner_module: Any | None=None) -> No
             if coverage['status'] != 'PASS':
                 error = getattr(agentic_module, 'SpecValidationError', RuntimeError)
                 blocked_domains = [item for item in coverage.get('domains', []) if isinstance(item, Mapping) and str(item.get('status', '')) not in {'ROUTES_EXECUTED', 'ROUTES_EXECUTED_WITH_GAPS'}]
-                domain_detail = '; '.join((f"{item.get('domain_id', 'unknown')}={item.get('status', 'unknown')}" for item in blocked_domains[:12]))
+                domain_detail = '; '.join(f"{item.get('domain_id', 'unknown')}={item.get('status', 'unknown')}" for item in blocked_domains[:12])
                 notes = {str(item.get('domain_id', '')): item for item in result.get('domain_notes', []) if isinstance(item, Mapping)}
                 failures = []
                 for item in blocked_domains[:4]:
@@ -605,4 +608,4 @@ def install(agentic_module: Any, complete_planner_module: Any | None=None) -> No
             setattr(outline, _MARKER, True)
             outline.__wrapped__ = current_outline
             complete_planner_module._implementation_research_outline = outline
-__all__ = ['FEATURE_ROOTS', 'NODES', 'SCHEMA_VERSION', 'COVERAGE_SCHEMA_VERSION', 'compile_minecraft_knowledge_plan', 'detect_features', 'evaluate_route_coverage', 'expand_features', 'install', 'validate_plan']
+__all__ = ['COVERAGE_SCHEMA_VERSION', 'FEATURE_ROOTS', 'NODES', 'SCHEMA_VERSION', 'compile_minecraft_knowledge_plan', 'detect_features', 'evaluate_route_coverage', 'expand_features', 'install', 'validate_plan']

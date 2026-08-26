@@ -13,8 +13,9 @@ import json
 import os
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import httpx
 
@@ -27,9 +28,10 @@ from .base import (
 )
 from .qwen_tool_parser import (
     ToolCallValidationError,
+)
+from .qwen_tool_parser import (
     parse_qwen_tool_markup as _parse_qwen_tool_markup,
 )
-
 
 _DEFAULT_HTTPX_POST = httpx.post
 _DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
@@ -371,11 +373,11 @@ def _completion_message_with_prefill(
     payload: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     from ..llama_finish_reason_contract import (
-        CONTEXT_PRESSURE,
-        LlamaCompletionBoundaryError,
-        OUTPUT_EXHAUSTED,
         _CONTEXT_ERROR,
         _OUTPUT_ERROR,
+        CONTEXT_PRESSURE,
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
         completion_boundary_error,
         partial_message_receipt,
     )
@@ -602,7 +604,7 @@ def _parse_native_tool_calls(
         call_id = str(raw_call.get("id", "")).strip()
         if not call_id:
             digest = hashlib.sha256(
-                f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
+                f"{index}\0{name}\0{raw_arguments}".encode()
             ).hexdigest()[:16]
             call_id = f"call_{digest}"
         calls.append(

@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from .imported_platform_repair import clear_marker, write_marker
-from .platform_catalog import adapter_for_lock_values, adapter_for_target, adapter_from_project
-
+from .platform_catalog import (
+    adapter_for_lock_values,
+    adapter_for_target,
+    adapter_from_project,
+)
 
 _ACTIVE_ADAPTER: ContextVar[Any | None] = ContextVar(
     "mmm_runtime_platform_adapter", default=None
@@ -42,6 +45,7 @@ def _install_runtime_manager(module: Any) -> None:
         config_path: str | Path | None = None,
     ) -> None:
         import threading
+
         import yaml
 
         self.workspace_root = Path(workspace_root).expanduser().resolve()

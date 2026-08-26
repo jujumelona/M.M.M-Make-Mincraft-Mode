@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable, Mapping
-
+from typing import Any
 
 _MEMORY_CONTEXT_BYTES = 12 * 1024
 _PATTERN_LIMIT = 8

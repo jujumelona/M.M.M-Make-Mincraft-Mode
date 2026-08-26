@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import re
+from collections.abc import Iterator
 from functools import lru_cache
-from typing import Any, Iterator
+from typing import Any
+
 _PREVIEW_BYTES = 2048
 _SENTENCE_PUNCTUATION = frozenset('.!?。！？;')
 _CONJUNCTION = re.compile('(?<!\\S)(?:and|then|plus|그리고|또한|및)(?=\\s)', re.IGNORECASE)

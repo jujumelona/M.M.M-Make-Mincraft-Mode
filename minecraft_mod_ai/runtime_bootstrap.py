@@ -26,7 +26,10 @@ def runtime_initialized() -> bool:
 
 
 def _install_runtime_contracts() -> None:
-    from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
+    from .reuse_asset_upgrade_contract import (
+        install_postbootstrap,
+        install_prebootstrap,
+    )
     from .runtime_wrapper_integrity import verify_installed_wrappers
 
     _contract_composer.compose_contract_stages(
@@ -85,8 +88,12 @@ def _install_model_runtime_contracts() -> None:
     from .forced_tool_execution_contract import install as install_forced_tool_execution
     from .gpu_resource_contract import install as install_gpu_resource
     from .llama_generation_budget import install as install_llama_generation_budget
-    from .llama_prefill_telemetry_contract import install as install_llama_prefill_telemetry
-    from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
+    from .llama_prefill_telemetry_contract import (
+        install as install_llama_prefill_telemetry,
+    )
+    from .llama_stream_efficiency_contract import (
+        install as install_llama_stream_efficiency,
+    )
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -114,9 +121,15 @@ def _install_model_runtime_contracts() -> None:
 
 def _install_validation_contracts() -> None:
     from . import java_lsp, repair_engine, runner, validation_execution_contract
-    from .java_lsp_process_safety_contract import install as install_java_lsp_process_safety
-    from .research_validation_fingerprint_performance import harden as harden_validation_fingerprints
-    from .validation_diagnostic_contract import install as install_validation_diagnostics
+    from .java_lsp_process_safety_contract import (
+        install as install_java_lsp_process_safety,
+    )
+    from .research_validation_fingerprint_performance import (
+        harden as harden_validation_fingerprints,
+    )
+    from .validation_diagnostic_contract import (
+        install as install_validation_diagnostics,
+    )
     from .validation_execution_contract import install as install_validation_execution
 
     install_validation_execution(runner, java_lsp, repair_engine)
@@ -172,8 +185,8 @@ def _install_platform_contracts() -> None:
         game_design,
         geckolib_generator,
         generator,
-        mineflayer_bridge,
         minecraft_knowledge_contract,
+        mineflayer_bridge,
         production_contract,
         repair_engine,
         retrieval,
@@ -198,7 +211,9 @@ def _install_platform_contracts() -> None:
     )
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
-    from .proposal_deserialization_contract import install as install_proposal_deserialization
+    from .proposal_deserialization_contract import (
+        install as install_proposal_deserialization,
+    )
     from .source_patch_precondition_contract import (
         install as install_source_patch_preconditions,
     )
@@ -253,7 +268,9 @@ def _install_planner_contracts() -> None:
     from .agentic_search_efficiency_contract import (
         install as install_agentic_search_efficiency,
     )
-    from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
+    from .asset_resume_efficiency_contract import (
+        install as install_asset_resume_efficiency,
+    )
 
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(complete_orchestrator_services)
@@ -279,11 +296,15 @@ def _install_architecture_contracts() -> None:
     from .build_input_scope_contract import install as install_build_input_scope
     from .clean_room_verification_contract import install as install_clean_room
     from .coder_max_efficiency_contract import install_coder_max_efficiency
-    from .custom_generation_search_contract import install as install_custom_generation_search
+    from .custom_generation_search_contract import (
+        install as install_custom_generation_search,
+    )
     from .orchestrator_jdt_gate_contract import install as install_orchestrator_jdt_gate
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
-    from .required_gate_compatibility_contract import install as install_gate_compatibility
+    from .required_gate_compatibility_contract import (
+        install as install_gate_compatibility,
+    )
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
     from .work_graph_state_transition_contract import (
@@ -334,7 +355,9 @@ def _install_late_safety_contracts() -> None:
         validation_execution_contract,
         work_graph,
     )
-    from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
+    from .llama_parallel_runtime_contract import (
+        install as install_llama_parallel_runtime,
+    )
     from .parallel_result_determinism_contract import (
         install as install_parallel_result_determinism,
     )
@@ -344,7 +367,9 @@ def _install_late_safety_contracts() -> None:
     from .runner_parallel_validation_contract import (
         install as install_runner_parallel_validation,
     )
-    from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
+    from .scheduler_claim_fencing_contract import (
+        install as install_scheduler_claim_fencing,
+    )
     from .scheduler_parallel_safety_contract import (
         install as install_scheduler_parallel_safety,
     )
@@ -387,22 +412,32 @@ def _install_post_bootstrap_contracts() -> None:
         repair_engine,
         work_graph,
     )
-    from .active_repair_verifier_contract import install as install_active_repair_verifier
+    from .active_repair_verifier_contract import (
+        install as install_active_repair_verifier,
+    )
     from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
     from .external_procedural_skill_contract import (
         install as install_external_procedural_skill,
     )
     from .long_run_resilience_contract import install as install_long_run_resilience
-    from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
-    from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
+    from .minecraft_mcp_evidence_contract import (
+        install as install_minecraft_mcp_evidence,
+    )
+    from .research_bottleneck_runtime import (
+        install as install_research_bottleneck_runtime,
+    )
     from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_execution_extensions_contract import (
         install as install_small_model_execution_extensions,
     )
-    from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
+    from .small_model_hybrid_search_contract import (
+        install as install_small_model_hybrid_search,
+    )
     from .small_model_max_agent_contract import install as install_small_model_max_agent
-    from .small_model_relation_index_contract import install as install_small_model_relation_index
+    from .small_model_relation_index_contract import (
+        install as install_small_model_relation_index,
+    )
     from .small_model_research_extensions_contract import (
         install as install_small_model_research_extensions,
     )

@@ -3,8 +3,8 @@ from __future__ import annotations
 from minecraft_mod_ai.procedural_retrieval import (
     decompose_task_procedure,
     extract_code_procedure,
-    procedure_similarity,
     procedural_region_score,
+    procedure_similarity,
 )
 
 

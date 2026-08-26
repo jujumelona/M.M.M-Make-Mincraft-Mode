@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import hashlib
 from dataclasses import asdict, dataclass
 from typing import Any
+
 from .spec import canonical_json
+
 
 @dataclass(frozen=True)
 class CapabilityRecord:
@@ -27,4 +30,4 @@ def capability_manifest_hash() -> str:
     return f'sha256:{hashlib.sha256(encoded).hexdigest()}'
 
 def capability_names() -> frozenset[str]:
-    return frozenset((record.name for record in CAPABILITY_RECORDS))
+    return frozenset(record.name for record in CAPABILITY_RECORDS)

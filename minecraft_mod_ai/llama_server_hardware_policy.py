@@ -6,11 +6,11 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
-
+from typing import Any
 
 _TELEMETRY_LOCK = threading.Lock()
 _TELEMETRY_TOTALS = {
@@ -195,7 +195,7 @@ def _request_content_chars(payload: dict[str, Any]) -> int:
 
 def _server_origin(server_url: str) -> str:
     value = server_url.rstrip("/")
-    return value[:-3] if value.endswith("/v1") else value
+    return value.removesuffix("/v1")
 
 
 def _parse_prometheus_metrics(text: str) -> dict[str, float]:
@@ -663,7 +663,7 @@ def install(autotune_module: Any) -> None:
                 variant=variant,
             )
             combined = hashlib.sha256(
-                f"{measured.output_sha256}:{sentinel.output_sha256}".encode("utf-8")
+                f"{measured.output_sha256}:{sentinel.output_sha256}".encode()
             ).hexdigest()
             return autotune_module.ProbeResult(
                 variant=measured.variant,

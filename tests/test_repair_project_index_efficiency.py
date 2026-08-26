@@ -7,7 +7,6 @@ from minecraft_mod_ai.project_index import ProjectIndex as RealProjectIndex
 from minecraft_mod_ai.repair_engine import RepairEngine
 from minecraft_mod_ai.source_patch import sha256_file
 
-
 repair_module = importlib.import_module("minecraft_mod_ai.repair_engine")
 
 

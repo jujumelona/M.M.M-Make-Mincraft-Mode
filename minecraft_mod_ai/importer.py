@@ -1055,13 +1055,9 @@ def _select_primary_metadata(
         container = lowered.split("!/", 1)[0] if "!/" in lowered else ""
         nested_path = lowered.split("!/", 1)[1] if "!/" in lowered else lowered
         is_nested_source = container.endswith(".zip")
-        if nested_path == "src/main/resources/fabric.mod.json" and is_nested_source:
+        if nested_path == "src/main/resources/fabric.mod.json" and is_nested_source or lowered == "src/main/resources/fabric.mod.json":
             priority = 0
-        elif lowered == "src/main/resources/fabric.mod.json":
-            priority = 0
-        elif nested_path == "fabric.mod.json" and is_nested_source:
-            priority = 1
-        elif lowered == "fabric.mod.json":
+        elif nested_path == "fabric.mod.json" and is_nested_source or lowered == "fabric.mod.json":
             priority = 1
         elif "!/" not in lowered:
             priority = 2

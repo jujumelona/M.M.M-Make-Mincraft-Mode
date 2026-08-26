@@ -21,9 +21,9 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
 from minecraft_mod_ai.llama_generation_budget import apply_generation_budget
 from minecraft_mod_ai.llama_stream_efficiency_contract import (
     LlamaToolLivenessTimeout,
-    _StreamingCompletionClient,
     _bounded_timeout,
     _stream_idle_timeout_seconds,
+    _StreamingCompletionClient,
     _tool_idle_timeout_seconds,
 )
 from minecraft_mod_ai.model_adapters import AdapterConfig, GenerationRequest

@@ -14,11 +14,12 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Mapping
 from concurrent.futures import Future
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 _INSTALL_LOCK = threading.RLock()
 _MCP_REQUEST_LANE: ContextVar[int | None] = ContextVar(
@@ -74,7 +75,7 @@ class _ProjectScopedRLock:
             raise
         return key, entry
 
-    def __enter__(self) -> "_ProjectScopedRLock":
+    def __enter__(self) -> _ProjectScopedRLock:
         key, entry = self._claim()
         stack = getattr(self._local, "stack", None)
         if stack is None:

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
+import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
-import minecraft_mod_ai.work_graph as work_graph
+from minecraft_mod_ai import work_graph
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
     CompleteProductionOrchestrator,

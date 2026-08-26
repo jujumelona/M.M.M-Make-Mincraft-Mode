@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from . import model_tool_aliases as _model_tool_aliases
 from .agent_roles import (
@@ -18,7 +19,6 @@ from .skill_catalog import (
     compile_skill_catalog,
 )
 from .tool_validation_surface_contract import _assert_unique_schema_names
-
 
 _EXTERNAL_AGENT_TOOLS = frozenset(
     {

@@ -6,8 +6,11 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import model_router
-from minecraft_mod_ai.model_adapters import GenerationRequest, ModelConfigurationError
-from minecraft_mod_ai.model_adapters import llama_cpp_adapter
+from minecraft_mod_ai.model_adapters import (
+    GenerationRequest,
+    ModelConfigurationError,
+    llama_cpp_adapter,
+)
 
 
 def _schema(name: str) -> dict[str, object]:

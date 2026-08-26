@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.qwen_agent_family_contract import _apply_family_payload_policy
 
-
 _TOOL = {
     "type": "function",
     "function": {

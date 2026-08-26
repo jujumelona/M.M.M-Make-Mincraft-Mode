@@ -35,10 +35,11 @@ import os
 import re
 import threading
 from collections import Counter, deque
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from .platform_catalog import adapter_for_target
 from .project_index import ProjectIndex
@@ -90,7 +91,7 @@ _DANGEROUS = (
 )
 
 _CACHE_LOCK = threading.RLock()
-_STRUCTURE_CACHE: dict[str, tuple[dict[str, "_JavaUnit"], dict[str, list["SourceSymbol"]]]] = {}
+_STRUCTURE_CACHE: dict[str, tuple[dict[str, _JavaUnit], dict[str, list[SourceSymbol]]]] = {}
 _INITIAL_RESEARCH_CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_LIMIT = 8
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass
+
 
 class ScalePolicyError(ValueError):
     pass
@@ -52,7 +54,7 @@ class ScalePolicy:
             raise ScalePolicyError('nbt_piece_axis creates pieces larger than nbt_piece_volume; lower the axis or raise volume')
 
     @classmethod
-    def from_environment(cls) -> 'ScalePolicy':
+    def from_environment(cls) -> ScalePolicy:
         policy = cls(java_shard_size=_env_int('MMM_JAVA_SHARD_SIZE', 48), entity_shard_size=_env_int('MMM_ENTITY_SHARD_SIZE', 24), function_shard_size=_env_int('MMM_FUNCTION_SHARD_SIZE', 128), world_placements_per_tick=_env_int('MMM_WORLD_PLACEMENTS_PER_TICK', 4), model_context_bytes=_env_int('MMM_MODEL_CONTEXT_BYTES', 1500000), mcp_page_bytes=_env_int('MMM_MCP_PAGE_BYTES', 256 * 1024), max_patch_bytes=_env_int('MMM_MAX_PATCH_BYTES', 32 * 1024 * 1024), max_single_file_bytes=_env_int('MMM_MAX_SINGLE_FILE_BYTES', 64 * 1024 * 1024), max_texture_dimension=_env_int('MMM_MAX_TEXTURE_DIMENSION', 8192), repair_attempts=_env_int('MMM_REPAIR_ATTEMPTS', 8), nbt_piece_axis=_env_int('MMM_NBT_PIECE_AXIS', 32), nbt_piece_volume=_env_int('MMM_NBT_PIECE_VOLUME', 32768), gradle_min_heap_mb=_env_int('MMM_GRADLE_MIN_HEAP_MB', 2048), gradle_max_heap_mb=_env_int('MMM_GRADLE_MAX_HEAP_MB', 12288), runtime_min_heap_mb=_env_int('MMM_RUNTIME_MIN_HEAP_MB', 3072), runtime_max_heap_mb=_env_int('MMM_RUNTIME_MAX_HEAP_MB', 16384))
         policy.validate()
         return policy

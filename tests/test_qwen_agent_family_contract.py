@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_hardware_policy as hardware
+from minecraft_mod_ai.forced_tool_execution_contract import _single_tool_request
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
@@ -12,8 +13,6 @@ from minecraft_mod_ai.qwen_agent_family_contract import (
     _inject_reasoning_history,
     _remember_reasoning,
 )
-from minecraft_mod_ai.forced_tool_execution_contract import _single_tool_request
-
 
 _TOOL = {
     "type": "function",

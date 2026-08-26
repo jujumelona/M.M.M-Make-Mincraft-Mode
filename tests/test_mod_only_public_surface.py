@@ -7,7 +7,6 @@ from minecraft_mod_ai import mcp_server
 from minecraft_mod_ai.mcp_tools import MMMToolService
 from minecraft_mod_ai.skill_catalog import MUTATING_TOOLS, REVIEWED_TOOL_STAGES
 
-
 ROOT = Path(__file__).resolve().parents[1]
 REMOVED = {"generate_world_ir", "compile_world_ir"}
 

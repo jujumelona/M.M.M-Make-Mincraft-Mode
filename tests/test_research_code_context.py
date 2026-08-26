@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai import research_code_context as research
-
+from minecraft_mod_ai.project_index import ProjectIndex
 
 _TEST_MINECRAFT_VERSION = "mmm-test-target"
 _TEST_LOADER = "fabric"

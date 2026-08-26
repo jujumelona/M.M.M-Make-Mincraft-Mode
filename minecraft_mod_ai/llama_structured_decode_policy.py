@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from functools import wraps
-from typing import Any, Mapping
-
+from typing import Any
 
 _MARKER = "_mmm_server_constrained_structured_decode_v1"
 _RETRY_MARKER = "_mmm_structured_generation_retry_v1"

@@ -1,15 +1,19 @@
 from __future__ import annotations
+
 import copy
 import json
 import os
 import shutil
 import tempfile
 import threading
+from collections.abc import Iterable
 from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
 from .project_write_lock import project_write_lock
+
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _SNAPSHOT_WAVE_LOCK = threading.RLock()
 _SNAPSHOT_WAVES: dict[Path, dict[str, Any]] = {}
@@ -418,7 +422,7 @@ def _rewrite_root_paths(value: Any, stage: Path, live: Path) -> Any:
     if isinstance(value, list):
         return [_rewrite_root_paths(item, stage, live) for item in value]
     if isinstance(value, tuple):
-        return tuple((_rewrite_root_paths(item, stage, live) for item in value))
+        return tuple(_rewrite_root_paths(item, stage, live) for item in value)
     if isinstance(value, dict):
         return {key: _rewrite_root_paths(item, stage, live) for key, item in value.items()}
     return value
