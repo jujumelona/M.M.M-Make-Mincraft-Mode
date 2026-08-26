@@ -5,7 +5,7 @@ from functools import wraps
 from typing import Any, Mapping
 
 
-_MARKER = "_mmm_host_validated_json_fastpath_v5"
+_MARKER = "_mmm_server_constrained_structured_decode_v1"
 
 
 def _bounded_section_output_tokens(adapter: Any) -> int:
@@ -20,30 +20,30 @@ def _bounded_section_output_tokens(adapter: Any) -> int:
     return min(configured, requested)
 
 
-def _is_qwen35(adapter: Any) -> bool:
-    config = getattr(adapter, "config", None)
-    model_id = str(getattr(config, "model_id", "")).casefold()
-    extra = getattr(config, "extra", {})
-    filename = (
-        str(extra.get("gguf_filename", "")).casefold()
-        if isinstance(extra, Mapping)
-        else ""
-    )
-    return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
-
-
-def _force_server_schema() -> bool:
-    raw = os.environ.get("MMM_QWEN35_FORCE_SERVER_JSON_SCHEMA", "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+def _structured_response_format(request: Any) -> dict[str, Any]:
+    schema = getattr(request, "response_schema", None)
+    if schema is None:
+        return {"type": "json_object"}
+    if not isinstance(schema, Mapping):
+        raise TypeError("structured response_schema must be a mapping")
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mmm_structured_response",
+            "strict": True,
+            "schema": dict(schema),
+        },
+    }
 
 
 def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Keep validated planner serialization off the constrained decode hot path.
+    """Preserve structured constraints on the native llama-server wire boundary.
 
-    Schema-less JSON is parsed and contract-validated by MMM on the host. The Qwen
-    game-design stage has the same explicit host validator/repair loop, so its large
-    schema also defaults to ordinary decoding instead of a llama.cpp grammar. Other
-    explicit schemas remain constrained until their host validation paths are proven.
+    Host validation remains authoritative after generation, but it is defense in depth:
+    it must not replace constrained decoding. Every tool-free JSON request therefore
+    carries the same OpenAI-compatible ``response_format`` contract used by the remote
+    adapter. This prevents syntactically malformed JSON from being produced merely
+    because a downstream host validator exists.
     """
 
     current = hardware_module._server_payload
@@ -58,49 +58,28 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
         if getattr(request, "response_format", None) != "json":
             return result
 
+        result["response_format"] = _structured_response_format(request)
+        result["reasoning_effort"] = "none"
+        result["chat_template_kwargs"] = {"enable_thinking": False}
+        result.pop("thinking_budget_tokens", None)
+
         schema = getattr(request, "response_schema", None)
-        if schema is None:
-            # Host-validated planner pages do not need llama.cpp's JSON grammar.
-            result.pop("response_format", None)
-            result["reasoning_effort"] = "none"
-            result["chat_template_kwargs"] = {"enable_thinking": False}
-            result.pop("thinking_budget_tokens", None)
-            return result
-
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
-        if (
-            isinstance(properties, Mapping)
-            and "game_design" in properties
-            and _is_qwen35(adapter)
-            and not _force_server_schema()
-        ):
-            # GameDesignPlanner validates every candidate after generation and
-            # repairs invalid output until success or a proven no-progress cycle.
-            # Avoid converting this large schema to a sampler grammar on the T4
-            # speculative-decode path; the host validator remains authoritative.
-            result.pop("response_format", None)
-            result["reasoning_effort"] = "none"
-            result["chat_template_kwargs"] = {"enable_thinking": False}
-            result.pop("thinking_budget_tokens", None)
-            return result
-
         if isinstance(properties, Mapping) and "section" in properties:
             # This is a transport budget for one explicitly bounded serialization
-            # call, not a project/plan-size or input-context limit. Large/schema-less
-            # paginated JSON retains the model profile's full output budget.
+            # call, not a project/plan-size or input-context limit.
             current_max = max(1, int(result.get("max_tokens", 1) or 1))
             result["max_tokens"] = min(
                 current_max,
                 _bounded_section_output_tokens(adapter),
             )
             result["thinking_budget_tokens"] = 0
-            result["reasoning_effort"] = "none"
         return result
 
     setattr(payload, _MARKER, True)
+    payload._mmm_server_constrained_structured_decode = True  # type: ignore[attr-defined]
     payload._mmm_bounded_section_thinking_budget_v2 = True  # type: ignore[attr-defined]
     payload._mmm_bounded_section_thinking_budget_v1 = True  # type: ignore[attr-defined]
-    payload._mmm_qwen35_game_design_host_validation = True  # type: ignore[attr-defined]
     hardware_module._server_payload = payload
 
 
