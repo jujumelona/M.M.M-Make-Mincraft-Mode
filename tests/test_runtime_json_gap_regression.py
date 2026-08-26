@@ -29,7 +29,7 @@ def _tool_request(tool: dict) -> GenerationRequest:
     )
 
 
-def test_json_requests_never_enable_native_llama_grammar():
+def test_json_requests_use_native_json_constraint_without_grammar():
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
     request = SimpleNamespace(
         messages=({"role": "user", "content": "return JSON"},),
@@ -37,7 +37,7 @@ def test_json_requests_never_enable_native_llama_grammar():
         response_format="json",
     )
     payload = _server_payload(adapter, request)
-    assert "response_format" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
     assert "json_schema" not in payload
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
