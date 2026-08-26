@@ -43,152 +43,15 @@ _CAPABILITY_KEYS = frozenset({
     "capabilities", "systems", "features", "requirements", "behaviors", "services",
     "subsystems", "modules", "actions", "operations",
 })
-_CAPABILITY_HINTS = {
-    # Boss / Entity / Mob
-    "boss": ("boss.entity", "combat.boss"),
-    "bosses": ("boss.entity", "combat.boss"),
-    "보스": ("boss.entity", "combat.boss"),
-    "mob": ("mob.spawning", "entity.lifecycle"),
-    "mobs": ("mob.spawning", "entity.lifecycle"),
-    "잡몹": ("mob.spawning", "entity.lifecycle"),
-    "몹": ("mob.spawning", "entity.lifecycle"),
-    "몬스터": ("mob.spawning", "entity.lifecycle"),
-    "monster": ("mob.spawning", "entity.lifecycle"),
-    "monsters": ("mob.spawning", "entity.lifecycle"),
-    "entity": ("entity.lifecycle", "entity.state_sync"),
-    "entities": ("entity.lifecycle", "entity.state_sync"),
-    "엔티티": ("entity.lifecycle", "entity.state_sync"),
+from .canonical_capability_ontology import (
+    canonical_domain_map as _canonical_domain_map,
+    resolve_capabilities_from_phrase,
+    search_queries_for_capability,
+    romanize_korean_universal,
+)
 
-    # Item / Equipment / Weapon / Armor
-    "item": ("item.equipment", "inventory.transfer"),
-    "items": ("item.equipment", "inventory.transfer"),
-    "아이템": ("item.equipment", "inventory.transfer"),
-    "weapon": ("item.weapon", "combat.damage"),
-    "weapons": ("item.weapon", "combat.damage"),
-    "무기": ("item.weapon", "combat.damage"),
-    "armor": ("item.armor", "inventory.transfer"),
-    "armors": ("item.armor", "inventory.transfer"),
-    "방어구": ("item.armor", "inventory.transfer"),
-    "장비": ("item.equipment", "inventory.transfer"),
-    "equipment": ("item.equipment", "inventory.transfer"),
-
-    # Level / Progression / Stat / EXP
-    "level": ("progression.level", "stat.growth"),
-    "levels": ("progression.level", "stat.growth"),
-    "leveling": ("progression.level", "stat.growth"),
-    "레벨": ("progression.level", "stat.growth"),
-    "성장": ("progression.level", "stat.growth"),
-    "progression": ("progression.level", "stat.growth"),
-    "경험치": ("progression.exp", "progression.level"),
-    "exp": ("progression.exp", "progression.level"),
-    "stat": ("stat.attribute", "stat.growth"),
-    "stats": ("stat.attribute", "stat.growth"),
-    "스탯": ("stat.attribute", "stat.growth"),
-    "능력치": ("stat.attribute", "stat.growth"),
-
-    # Enhancement / Upgrade / Forge / Scroll
-    "upgrade": ("item.upgrade", "crafting.upgrade"),
-    "upgrades": ("item.upgrade", "crafting.upgrade"),
-    "enhance": ("item.upgrade", "crafting.upgrade"),
-    "enhancement": ("item.upgrade", "crafting.upgrade"),
-    "강화": ("item.upgrade", "crafting.upgrade"),
-    "제련": ("item.upgrade", "crafting.upgrade"),
-    "주문서": ("item.upgrade", "crafting.upgrade"),
-    "scroll": ("item.upgrade", "crafting.upgrade"),
-    "scrolls": ("item.upgrade", "crafting.upgrade"),
-    "forge": ("item.upgrade", "crafting.upgrade"),
-
-    # Drop / Loot
-    "drop": ("loot.drop_table", "inventory.transfer"),
-    "drops": ("loot.drop_table", "inventory.transfer"),
-    "loot": ("loot.drop_table", "inventory.transfer"),
-    "드롭": ("loot.drop_table", "inventory.transfer"),
-    "드랍": ("loot.drop_table", "inventory.transfer"),
-    "전리품": ("loot.drop_table", "inventory.transfer"),
-
-    # Skill / Magic / Combat
-    "skill": ("skill.ability", "combat.skill"),
-    "skills": ("skill.ability", "combat.skill"),
-    "스킬": ("skill.ability", "combat.skill"),
-    "magic": ("skill.magic", "combat.skill"),
-    "마법": ("skill.magic", "combat.skill"),
-    "ability": ("skill.ability", "combat.skill"),
-    "abilities": ("skill.ability", "combat.skill"),
-    "combat": ("combat.damage", "combat.validation", "network.combat_sync"),
-    "전투": ("combat.damage", "combat.validation"),
-
-    # Trade / Shop / Economy / Currency
-    "trade": ("trade.offer_model", "trade.transaction", "trade.validation", "inventory.transfer", "network.trade_sync", "persistence.trade_state"),
-    "trading": ("trade.offer_model", "trade.transaction"),
-    "거래": ("trade.offer_model", "trade.transaction"),
-    "shop": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu", "permission.shop_owner"),
-    "상점": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu"),
-    "economy": ("economy.currency", "economy.balance_store", "economy.transaction"),
-    "currency": ("economy.currency", "economy.balance_store"),
-    "화폐": ("economy.currency", "economy.balance_store"),
-    "돈": ("economy.currency", "economy.balance_store"),
-
-    # Quest / Story / Dungeon / Structure
-    "quest": ("quest.state", "quest.progression", "quest.reward"),
-    "quests": ("quest.state", "quest.progression", "quest.reward"),
-    "퀘스트": ("quest.state", "quest.progression", "quest.reward"),
-    "dungeon": ("worldgen.dungeon", "worldgen.structure"),
-    "dungeons": ("worldgen.dungeon", "worldgen.structure"),
-    "던전": ("worldgen.dungeon", "worldgen.structure"),
-    "structure": ("worldgen.structure", "worldgen.placement"),
-    "structures": ("worldgen.structure", "worldgen.placement"),
-    "구조물": ("worldgen.structure", "worldgen.placement"),
-
-    # UI / GUI / Menu
-    "gui": ("ui.menu", "ui.action_validation"),
-    "ui": ("ui.menu", "ui.action_validation"),
-    "hud": ("ui.menu", "ui.action_validation"),
-    "menu": ("ui.menu", "ui.action_validation"),
-    "메뉴": ("ui.menu", "ui.action_validation"),
-    "창": ("ui.menu", "ui.action_validation"),
-
-    # Other systems
-    "inventory": ("inventory.transfer", "inventory.validation"),
-    "network": ("network.action_sync", "network.server_validation"),
-    "sync": ("network.action_sync", "network.server_validation"),
-    "persistence": ("persistence.state_store", "persistence.serialization"),
-    "storage": ("persistence.state_store", "persistence.serialization"),
-    "permission": ("permission.access_control",),
-    "recipe": ("crafting.recipe",),
-    "crafting": ("crafting.recipe", "crafting.validation"),
-    "command": ("command.registration", "command.permission"),
-    "worldgen": ("worldgen.placement", "worldgen.configuration"),
-    "config": ("config.schema", "config.persistence"),
-    "audit": ("audit.event_log",),
-}
+_CAPABILITY_HINTS = _canonical_domain_map()
 _PROMPT_CAPABILITY_WORDS = frozenset(_CAPABILITY_HINTS)
-
-_CAPABILITY_SEARCH_TERMS: dict[str, tuple[str, ...]] = {
-    "boss.entity": ("minecraft boss entity", "boss fight mod", "custom boss", "rpg boss"),
-    "combat.boss": ("minecraft boss fight", "boss combat mod", "rpg boss battle"),
-    "mob.spawning": ("custom mob entity", "mob spawning mod", "custom monsters", "rpg mobs"),
-    "entity.lifecycle": ("custom entity minecraft", "mob lifecycle", "custom mob entity"),
-    "item.equipment": ("custom item weapon", "custom equipment mod", "rpg items", "tools weapons"),
-    "item.weapon": ("custom weapon mod", "rpg weapons", "combat weapon"),
-    "item.armor": ("custom armor mod", "rpg armor set", "armor equipment"),
-    "progression.level": ("player leveling mod", "rpg level progression", "player stats exp", "level system"),
-    "progression.exp": ("player experience mod", "exp system", "rpg leveling"),
-    "stat.growth": ("player stat growth", "attribute stats mod", "rpg player attributes"),
-    "item.upgrade": ("item upgrade mod", "blacksmith enhancement", "equipment upgrade", "weapon refine"),
-    "crafting.upgrade": ("crafting upgrade mod", "item enhancement table", "anvil upgrade"),
-    "loot.drop_table": ("custom loot drop table", "mob drop table mod", "rpg loot drops"),
-    "skill.ability": ("magic ability skills mod", "player skill system", "rpg skills abilities"),
-    "skill.magic": ("magic spells mod", "wizard magic ability", "spellcasting"),
-    "combat.skill": ("combat skill mod", "weapon abilities", "combat mechanics"),
-    "trade.offer_model": ("player shop trading mod", "npc trade offer", "custom villager trade"),
-    "trade.shop_registry": ("custom shop registry", "player shop mod", "economy shop"),
-    "economy.currency": ("minecraft economy currency", "coin economy mod", "money system"),
-    "quest.state": ("quest system mod", "custom quests", "rpg quest progression"),
-    "quest.progression": ("quest progression mod", "story questing", "quest reward"),
-    "worldgen.dungeon": ("custom dungeon mod", "dungeon worldgen", "dungeon structures"),
-    "worldgen.structure": ("custom structure mod", "structure worldgen", "prefab structure"),
-    "ui.menu": ("custom gui menu mod", "hud screen", "ui container"),
-}
 
 
 def _capability_graph_limit() -> int:
@@ -269,7 +132,7 @@ def decompose_capability_graph(
         if not capability:
             return
         bucket = search_terms.setdefault(capability, [])
-        for predefined in _CAPABILITY_SEARCH_TERMS.get(capability, ()):
+        for predefined in search_queries_for_capability(capability):
             if predefined.casefold() not in {item.casefold() for item in bucket}:
                 bucket.append(predefined)
         for raw in values:
@@ -352,9 +215,7 @@ def _capability_id(raw: Any) -> str:
     if not text:
         return ""
     if text in _CAPABILITY_HINTS:
-        return _CAPABILITY_HINTS[text][0]
-    from .evidence_first_planning import romanize_korean_universal
-
+        return text
     romanized = romanize_korean_universal(text)
     clean = re.sub(r"[^a-z0-9_.-]+", "_", romanized.casefold()).strip("_.-")
     clean = re.sub(r"_+", "_", clean)
@@ -364,19 +225,7 @@ def _capability_id(raw: Any) -> str:
 
 
 def _expand_capability(value: str) -> tuple[str, ...]:
-    if value in _CAPABILITY_HINTS:
-        return _CAPABILITY_HINTS[value]
-    if "." in value:
-        return (value,)
-    tokens = tuple(token.casefold() for token in _TOKEN.findall(value.replace("-", "_")))
-    expanded: list[str] = []
-    for token in tokens:
-        for capability in _CAPABILITY_HINTS.get(token, ()):
-            if capability not in expanded:
-                expanded.append(capability)
-    if expanded:
-        return tuple(expanded)
-    return (value,)
+    return resolve_capabilities_from_phrase(value)
 
 
 @dataclass(frozen=True)

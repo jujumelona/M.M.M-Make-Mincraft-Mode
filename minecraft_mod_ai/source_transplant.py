@@ -81,6 +81,7 @@ class DonorSlice:
     required_dependencies: tuple[str, ...]
     donor_tests: tuple[str, ...]
     confidence: float
+    adaptation_cost: float = 0.0
 
     @property
     def exact_target(self) -> bool:
@@ -101,6 +102,7 @@ class DonorSlice:
             "required_dependencies": list(self.required_dependencies),
             "donor_tests": list(self.donor_tests),
             "confidence": self.confidence,
+            "adaptation_cost": self.adaptation_cost,
         }
 
 
@@ -214,6 +216,27 @@ def inspect_repository_slice(
                 if dep_path and dep_path not in selected_set:
                     pending.append(dep_path)
 
+        # Multi-Artifact Resource Closure: collect referenced JSON models, textures, loot tables, recipes
+        resource_paths = tuple(
+            path for path in blobs
+            if any(path.endswith(ext) for ext in (".json", ".png", ".mcmeta", ".accesswidener"))
+            and "/src/main/resources/" in f"/{path}"
+        )
+        if resource_paths:
+            selected_stems = {Path(p).stem.casefold() for p in selected}
+            for res_path in resource_paths:
+                if len(selected) >= _MAX_CLOSURE_FILES or total_bytes >= _MAX_SLICE_BYTES:
+                    break
+                res_stem = Path(res_path).stem.casefold()
+                if res_stem in selected_stems or any(stem in res_path.casefold() for stem in selected_stems):
+                    if res_path not in selected_set:
+                        raw = _fetch_blob_bytes(client, repository, blobs[res_path])
+                        if raw and total_bytes + len(raw) <= _MAX_SLICE_BYTES:
+                            selected.append(res_path)
+                            selected_set.add(res_path)
+                            contents[res_path] = raw
+                            total_bytes += len(raw)
+
         if not selected:
             return None
         files: list[DonorFile] = []
@@ -240,6 +263,13 @@ def inspect_repository_slice(
             + min(0.15, 0.03 * overlap)
             + min(0.04, 0.01 * len(files)),
         )
+        adaptation_cost = round(
+            10.0 * len(required_dependencies)
+            + (0.0 if compatibility == "exact" else 25.0)
+            + (5.0 if "mixin" in metadata_text.casefold() else 0.0)
+            + 0.002 * (total_bytes / 1024.0),
+            2,
+        )
         return DonorSlice(
             capability=capability,
             repository=repository,
@@ -253,6 +283,7 @@ def inspect_repository_slice(
             required_dependencies=required_dependencies,
             donor_tests=donor_tests,
             confidence=round(confidence, 4),
+            adaptation_cost=adaptation_cost,
         )
     except Exception:
         return None

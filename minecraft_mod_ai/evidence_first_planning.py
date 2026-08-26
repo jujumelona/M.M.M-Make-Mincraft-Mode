@@ -12,10 +12,8 @@ import hashlib
 import heapq
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
-
 
 SCHEMA = "mmm/evidence-first-implementation-plan-v1"
 _SHA_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -39,110 +37,13 @@ _BRANCHES = (
     "needs_loader_leaf",
 )
 
-_DOMAIN_TERM_MAP: dict[str, tuple[str, ...]] = {
-    # Boss / Entity / Mob
-    "boss": ("boss.entity", "combat.boss"),
-    "bosses": ("boss.entity", "combat.boss"),
-    "보스": ("boss.entity", "combat.boss"),
-    "mob": ("mob.spawning", "entity.lifecycle"),
-    "mobs": ("mob.spawning", "entity.lifecycle"),
-    "잡몹": ("mob.spawning", "entity.lifecycle"),
-    "몹": ("mob.spawning", "entity.lifecycle"),
-    "몬스터": ("mob.spawning", "entity.lifecycle"),
-    "monster": ("mob.spawning", "entity.lifecycle"),
-    "monsters": ("mob.spawning", "entity.lifecycle"),
-    "entity": ("entity.lifecycle", "entity.state_sync"),
-    "entities": ("entity.lifecycle", "entity.state_sync"),
-    "엔티티": ("entity.lifecycle", "entity.state_sync"),
+from .canonical_capability_ontology import (
+    canonical_domain_map as _canonical_domain_map,
+    resolve_capabilities_from_phrase,
+    romanize_korean_universal,
+)
 
-    # Item / Equipment / Weapon / Armor
-    "item": ("item.equipment", "inventory.transfer"),
-    "items": ("item.equipment", "inventory.transfer"),
-    "아이템": ("item.equipment", "inventory.transfer"),
-    "weapon": ("item.weapon", "combat.damage"),
-    "weapons": ("item.weapon", "combat.damage"),
-    "무기": ("item.weapon", "combat.damage"),
-    "armor": ("item.armor", "inventory.transfer"),
-    "armors": ("item.armor", "inventory.transfer"),
-    "방어구": ("item.armor", "inventory.transfer"),
-    "장비": ("item.equipment", "inventory.transfer"),
-    "equipment": ("item.equipment", "inventory.transfer"),
-
-    # Level / Progression / Stat / EXP
-    "level": ("progression.level", "stat.growth"),
-    "levels": ("progression.level", "stat.growth"),
-    "leveling": ("progression.level", "stat.growth"),
-    "레벨": ("progression.level", "stat.growth"),
-    "성장": ("progression.level", "stat.growth"),
-    "progression": ("progression.level", "stat.growth"),
-    "경험치": ("progression.exp", "progression.level"),
-    "exp": ("progression.exp", "progression.level"),
-    "stat": ("stat.attribute", "stat.growth"),
-    "stats": ("stat.attribute", "stat.growth"),
-    "스탯": ("stat.attribute", "stat.growth"),
-    "능력치": ("stat.attribute", "stat.growth"),
-
-    # Enhancement / Upgrade / Forge / Scroll
-    "upgrade": ("item.upgrade", "crafting.upgrade"),
-    "upgrades": ("item.upgrade", "crafting.upgrade"),
-    "enhance": ("item.upgrade", "crafting.upgrade"),
-    "enhancement": ("item.upgrade", "crafting.upgrade"),
-    "강화": ("item.upgrade", "crafting.upgrade"),
-    "제련": ("item.upgrade", "crafting.upgrade"),
-    "주문서": ("item.upgrade", "crafting.upgrade"),
-    "scroll": ("item.upgrade", "crafting.upgrade"),
-    "scrolls": ("item.upgrade", "crafting.upgrade"),
-    "forge": ("item.upgrade", "crafting.upgrade"),
-
-    # Drop / Loot
-    "drop": ("loot.drop_table", "inventory.transfer"),
-    "drops": ("loot.drop_table", "inventory.transfer"),
-    "loot": ("loot.drop_table", "inventory.transfer"),
-    "드롭": ("loot.drop_table", "inventory.transfer"),
-    "드랍": ("loot.drop_table", "inventory.transfer"),
-    "전리품": ("loot.drop_table", "inventory.transfer"),
-
-    # Skill / Magic / Combat
-    "skill": ("skill.ability", "combat.skill"),
-    "skills": ("skill.ability", "combat.skill"),
-    "스킬": ("skill.ability", "combat.skill"),
-    "magic": ("skill.magic", "combat.skill"),
-    "마법": ("skill.magic", "combat.skill"),
-    "ability": ("skill.ability", "combat.skill"),
-    "abilities": ("skill.ability", "combat.skill"),
-    "combat": ("combat.damage", "combat.validation"),
-    "전투": ("combat.damage", "combat.validation"),
-
-    # Trade / Shop / Economy / Currency
-    "trade": ("trade.offer_model", "trade.transaction", "inventory.transfer"),
-    "trading": ("trade.offer_model", "trade.transaction"),
-    "거래": ("trade.offer_model", "trade.transaction"),
-    "shop": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu"),
-    "상점": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu"),
-    "economy": ("economy.currency", "economy.balance_store"),
-    "currency": ("economy.currency", "economy.balance_store"),
-    "화폐": ("economy.currency", "economy.balance_store"),
-    "돈": ("economy.currency", "economy.balance_store"),
-
-    # Quest / Story / Dungeon / Structure
-    "quest": ("quest.state", "quest.progression", "quest.reward"),
-    "quests": ("quest.state", "quest.progression", "quest.reward"),
-    "퀘스트": ("quest.state", "quest.progression", "quest.reward"),
-    "dungeon": ("worldgen.dungeon", "worldgen.structure"),
-    "dungeons": ("worldgen.dungeon", "worldgen.structure"),
-    "던전": ("worldgen.dungeon", "worldgen.structure"),
-    "structure": ("worldgen.structure", "worldgen.placement"),
-    "structures": ("worldgen.structure", "worldgen.placement"),
-    "구조물": ("worldgen.structure", "worldgen.placement"),
-
-    # UI / GUI / Menu
-    "gui": ("ui.menu", "ui.action_validation"),
-    "ui": ("ui.menu", "ui.action_validation"),
-    "hud": ("ui.menu", "ui.action_validation"),
-    "menu": ("ui.menu", "ui.action_validation"),
-    "메뉴": ("ui.menu", "ui.action_validation"),
-    "창": ("ui.menu", "ui.action_validation"),
-}
+_DOMAIN_TERM_MAP = _canonical_domain_map()
 
 
 class EvidencePlanError(ValueError):
@@ -168,38 +69,6 @@ def _hash_without(value: Mapping[str, Any], field: str) -> str:
     payload = dict(value)
     payload[field] = ""
     return _sha(payload)
-
-
-_CHOSUNG = (
-    "g", "gg", "n", "d", "dd", "r", "m", "b", "bb", "s",
-    "ss", "", "j", "jj", "c", "k", "t", "p", "h"
-)
-_JUNGSUNG = (
-    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa",
-    "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"
-)
-_JONGSUNG = (
-    "", "g", "gg", "gs", "n", "nj", "nh", "d", "l", "lg",
-    "lm", "lb", "ls", "lt", "lp", "lh", "m", "b", "bs", "s",
-    "ss", "ng", "j", "c", "k", "t", "p", "h"
-)
-
-
-def romanize_korean_universal(text: str) -> str:
-    """Universal dependency-free Romanization of Korean hangul and Unicode normalization."""
-    result = []
-    for char in str(text or ""):
-        code = ord(char)
-        if 0xAC00 <= code <= 0xD7A3:
-            offset = code - 0xAC00
-            cho = offset // 588
-            jung = (offset % 588) // 28
-            jong = offset % 28
-            result.append(_CHOSUNG[cho] + _JUNGSUNG[jung] + _JONGSUNG[jong])
-        else:
-            result.append(char)
-    normalized = unicodedata.normalize("NFKD", "".join(result))
-    return normalized.encode("ascii", "ignore").decode("ascii")
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
@@ -286,21 +155,8 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
 
 
 def _capability_from_statement(statement: str) -> str:
-    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", statement)
-    for word in words:
-        low = word.casefold()
-        if low in _DOMAIN_TERM_MAP:
-            return _DOMAIN_TERM_MAP[low][0]
-
-    ignored = {
-        "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "and", "or",
-        "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템",
-    }
-    meaningful = [item for item in words if item.casefold() not in ignored]
-    raw_phrase = "_".join(meaningful) if meaningful else statement
-    slug = _slug(raw_phrase, fallback="core")
-    return slug or "gameplay.core"
+    caps = resolve_capabilities_from_phrase(statement)
+    return caps[0] if caps else "gameplay.core"
 
 
 def _source_span(prompt: str, statement: str) -> dict[str, Any]:
