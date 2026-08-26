@@ -246,14 +246,21 @@ def verify_joint_composition_sandbox(
         raw_files: dict[str, str | bytes] = {}
         try:
             raw_map = materialize_pinned_donor(d)
+            if not raw_map and d.files:
+                return False, {
+                    "compile_passed": False,
+                    "error": f"DONOR_MATERIALIZATION_FAILED: {d.repository}@{d.commit_sha}",
+                }
             for rel_path, raw_bytes in raw_map.items():
                 try:
                     raw_files[rel_path] = raw_bytes.decode("utf-8")
                 except UnicodeDecodeError:
                     raw_files[rel_path] = raw_bytes
-        except Exception:
-            for df in d.files:
-                raw_files[df.path] = f"// Mock Reused {df.path}\n"
+        except Exception as exc:
+            return False, {
+                "compile_passed": False,
+                "error": f"DONOR_MATERIALIZATION_ERROR: {d.repository}@{d.commit_sha} - {exc}",
+            }
 
         files, _ = apply_deterministic_adapters(raw_files, target_context)
         for rel_path, content in files.items():

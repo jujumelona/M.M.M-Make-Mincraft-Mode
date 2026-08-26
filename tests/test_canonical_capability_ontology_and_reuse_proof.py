@@ -1437,7 +1437,9 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
     )
 
     res = assembler.assemble(
-        reused_donors=(donor,),
+        reused_adapted_files={
+            "src/main/java/BossEntity.java": "package ai.minecraft.generated.rpg;\npublic class BossEntity {}",
+        },
         residual_files={
             "src/main/java/IBossPhase.java": "package ai.minecraft.generated.rpg;\npublic interface IBossPhase {}",
         },
@@ -1456,6 +1458,47 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
     assert (tmp_path / "src/main/java/BossEntity.java").exists()
     assert (tmp_path / "src/main/java/IBossPhase.java").exists()
     assert (tmp_path / "src/main/java/QuestSystem.java").exists()
+
+    # Test assemble_plan with TargetImplementationPlan
+    from minecraft_mod_ai.reuse_planner import ReuseDecision, TargetImplementationPlan
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+
+    adapter = adapter_for_target("1.21.1", "fabric")
+    plan = TargetImplementationPlan(
+        adapter=adapter,
+        capabilities=(
+            ReuseDecision(
+                capability="boss.entity",
+                mode="source_transplant",
+                confidence=0.95,
+                fresh_implementation_cost=10.0,
+                fresh_verification_cost=5.0,
+                donor=donor.to_dict(),
+                donor_slice=donor,
+                proof_level="COMPILE_VERIFIED",
+            ),
+        ),
+        platform_evidence=None,
+        cross_component_integration_cost=0.0,
+        platform_verification_cost=0.0,
+        maintenance_risk=0.0,
+        total_expected_cost=2.0,
+        weighted_verified_reuse=0.95,
+        fresh_work=0.0,
+        adaptation_work=0.0,
+        verification_work=0.0,
+        uncertainty=0.0,
+        reusable_registry_candidates=0,
+    )
+
+    plan_res = assembler.assemble_plan(
+        plan,
+        residual_files={"src/main/java/IBossPhase.java": "public interface IBossPhase {}"},
+        fresh_files={"src/main/java/QuestSystem.java": "public class QuestSystem {}"},
+    )
+    assert plan_res.target_loader == "fabric"
+    assert plan_res.target_minecraft == "1.21.1"
+
 
 
 

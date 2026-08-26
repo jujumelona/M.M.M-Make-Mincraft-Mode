@@ -271,6 +271,7 @@ class ReuseDecision:
     uncertainty_penalty: float = 0.0
     source_id: str = ""
     donor: Mapping[str, Any] | None = None
+    donor_slice: Any | None = None
     rationale: str = ""
     proof_level: str = "DISCOVERED"
     proof_receipt: Any | None = None
@@ -882,6 +883,7 @@ def _plan_target(
                             uncertainty_penalty=(1.0 - donor.confidence) * fresh_impl,
                             source_id=f"{donor.repository}@{donor.commit_sha}",
                             donor=donor.to_dict(),
+                            donor_slice=donor,
                             rationale="Pinned permissive donor slice passed compilation verification in isolated target sandbox.",
                             proof_level=proof_lvl,
                             proof_receipt=winning_receipt,
@@ -903,6 +905,7 @@ def _plan_target(
                             uncertainty_penalty=0.18 * fresh_impl,
                             source_id=f"{donor.repository}@{donor.commit_sha}",
                             donor=donor.to_dict(),
+                            donor_slice=donor,
                             rationale="Pinned donor slice is structurally useful but requires adaptation or residual fresh generation.",
                             proof_level=proof_lvl,
                             proof_receipt=winning_receipt,
