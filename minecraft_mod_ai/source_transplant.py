@@ -717,6 +717,38 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
                 pending.set()
 
 
+def materialize_pinned_donor(
+    donor_slice: DonorSlice,
+    discovery_client: Any = None,
+) -> dict[str, bytes]:
+    """Fetch and verify all files in a donor slice using immutable blob SHAs.
+
+    Validates SHA-256 integrity against donor file manifests. If any blob fails to
+    fetch or hash does not match, raises SourceTransplantError (no placeholders allowed).
+    """
+    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    client = getattr(discovery_client, "_client", None)
+    own_client = False
+    if client is None:
+        client = _github_client(token)
+        own_client = True
+
+    try:
+        materialized: dict[str, bytes] = {}
+        for df in donor_slice.files:
+            raw = _fetch_blob_bytes(client, donor_slice.repository, df.blob_sha)
+            if not raw:
+                raise SourceTransplantError(f"Failed to fetch blob for {df.path}")
+            actual_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
+            if actual_sha.casefold() != df.sha256.casefold():
+                raise SourceTransplantError(f"SHA-256 hash mismatch for {df.path}: expected {df.sha256}, got {actual_sha}")
+            materialized[df.path] = raw
+        return materialized
+    finally:
+        if own_client:
+            client.close()
+
+
 def _build_metadata_text(
     client: httpx.Client,
     *,

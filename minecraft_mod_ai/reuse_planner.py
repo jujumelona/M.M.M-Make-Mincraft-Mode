@@ -291,7 +291,7 @@ class ReuseDecision:
     def verified_reuse(self) -> bool:
         if self.mode == "fresh":
             return False
-        return self.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"} or self.mode in {"same_project", "mmm_verified"}
+        return self.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or self.mode in {"same_project", "mmm_verified"}
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -336,7 +336,7 @@ class TargetImplementationPlan:
 
     @property
     def unresolved_capabilities(self) -> int:
-        return sum(item.mode == "fresh" for item in self.capabilities)
+        return sum(not item.verified_reuse for item in self.capabilities)
 
     @property
     def rank_key(self) -> tuple[float | int, ...]:
@@ -370,7 +370,7 @@ class TargetImplementationPlan:
                         "FRESH_REQUIRED"
                         if item.mode == "fresh"
                         else "VERIFIED_REUSE"
-                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}
+                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}
                         else "MATERIALIZED"
                         if item.proof_level == "MATERIALIZED"
                         else "READY_FOR_PROOF"
@@ -387,7 +387,11 @@ class TargetImplementationPlan:
                     "proof_level": item.proof_level,
                     "source_id": item.source_id,
                     "fresh_generation_scope": (
-                        "full" if item.mode == "fresh" else "residual_only" if item.mode == "adapt" else "forbidden"
+                        "forbidden"
+                        if (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}) and item.mode != "adapt"
+                        else "residual_only"
+                        if item.mode == "adapt" and (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"})
+                        else "full"
                     ),
                 }
                 for item in self.capabilities
@@ -751,6 +755,7 @@ def _plan_target(
                     reuse_verification_cost=0.15 * fresh_verify,
                     source_id=f"host-api:{adapter.source_api_family}",
                     rationale="Executable provider exposes a host-verified deterministic API/generator path.",
+                    proof_level="HOST_VERIFIED",
                 )
             )
             continue
@@ -766,62 +771,69 @@ def _plan_target(
         if candidates:
             from .reuse_proof_executor import execute_candidate_fallback_loop
 
+            design_map = design if isinstance(design, Mapping) else {}
+            target_ws = str(design_map.get("_target_workspace") or os.environ.get("MMM_TARGET_WORKSPACE") or "").strip()
             target_ctx = {
-                "target_package": "ai.minecraft.generated.mod",
-                "target_modid": "generated_mod",
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
+                "target_package": str(design_map.get("package") or "ai.minecraft.generated.mod").strip(),
+                "target_modid": str(design_map.get("mod_id") or "generated_mod").strip(),
+                "minecraft_version": adapter.minecraft_version,
+                "loader": adapter.loader,
+                "java_version": adapter.java_version,
             }
             best_donor, receipts = execute_candidate_fallback_loop(
                 candidates=candidates,
                 capability=capability,
-                target_workspace="",
+                target_workspace=target_ws,
                 target_context=target_ctx,
             )
-            donor = best_donor or candidates[0]
-            winning_receipt = next((r for r in receipts if r.candidate_id.startswith(donor.repository)), receipts[-1] if receipts else None)
-            proof_lvl = winning_receipt.proof_level if winning_receipt else ("COMPILE_VERIFIED" if donor.exact_target else "MATERIALIZED")
+            if best_donor is not None:
+                donor = best_donor
+                winning_receipt = next((r for r in receipts if r.candidate_id.startswith(donor.repository)), receipts[-1] if receipts else None)
+                proof_lvl = winning_receipt.proof_level if winning_receipt else ("COMPILE_VERIFIED" if donor.exact_target else "MATERIALIZED")
 
-            closure_scale = max(1.0, len(donor.files) / 3.0)
-            if donor.exact_target or proof_lvl in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"}:
-                decisions.append(
-                    ReuseDecision(
-                        capability=capability,
-                        mode="source_transplant",
-                        confidence=donor.confidence,
-                        fresh_implementation_cost=fresh_impl,
-                        fresh_verification_cost=fresh_verify,
-                        adaptation_cost=min(0.35 * fresh_impl, 0.10 * fresh_impl * closure_scale),
-                        integration_cost=min(0.25 * fresh_impl, 0.07 * fresh_impl * closure_scale),
-                        dependency_cost=0.04 * fresh_impl * max(0, len(donor.required_dependencies)) + 0.02 * fresh_impl * max(0, len(donor.files) - 1),
-                        reuse_verification_cost=0.30 * fresh_verify,
-                        uncertainty_penalty=(1.0 - donor.confidence) * fresh_impl,
-                        source_id=f"{donor.repository}@{donor.commit_sha}",
-                        donor=donor.to_dict(),
-                        rationale="Pinned permissive donor slice matches target metadata and has a bounded source closure.",
-                        proof_level=proof_lvl,
+                closure_scale = max(1.0, len(donor.files) / 3.0)
+                if proof_lvl in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED"}:
+                    decisions.append(
+                        ReuseDecision(
+                            capability=capability,
+                            mode="source_transplant",
+                            confidence=donor.confidence,
+                            fresh_implementation_cost=fresh_impl,
+                            fresh_verification_cost=fresh_verify,
+                            adaptation_cost=min(0.35 * fresh_impl, 0.10 * fresh_impl * closure_scale),
+                            integration_cost=min(0.25 * fresh_impl, 0.07 * fresh_impl * closure_scale),
+                            dependency_cost=0.04 * fresh_impl * max(0, len(donor.required_dependencies)) + 0.02 * fresh_impl * max(0, len(donor.files) - 1),
+                            reuse_verification_cost=0.30 * fresh_verify,
+                            uncertainty_penalty=(1.0 - donor.confidence) * fresh_impl,
+                            source_id=f"{donor.repository}@{donor.commit_sha}",
+                            donor=donor.to_dict(),
+                            rationale="Pinned permissive donor slice passed compilation verification in isolated target sandbox.",
+                            proof_level=proof_lvl,
+                        )
                     )
-                )
-            else:
-                decisions.append(
-                    ReuseDecision(
-                        capability=capability,
-                        mode="adapt",
-                        confidence=max(0.5, donor.confidence - 0.15),
-                        fresh_implementation_cost=fresh_impl,
-                        fresh_verification_cost=fresh_verify,
-                        adaptation_cost=0.45 * fresh_impl,
-                        integration_cost=0.18 * fresh_impl,
-                        dependency_cost=0.06 * fresh_impl * max(0, len(donor.required_dependencies)) + 0.03 * fresh_impl * max(0, len(donor.files) - 1),
-                        reuse_verification_cost=0.45 * fresh_verify,
-                        uncertainty_penalty=0.18 * fresh_impl,
-                        source_id=f"{donor.repository}@{donor.commit_sha}",
-                        donor=donor.to_dict(),
-                        rationale="Pinned donor slice is structurally useful but target metadata requires adaptation.",
-                        proof_level=proof_lvl,
+                    continue
+                else:
+                    decisions.append(
+                        ReuseDecision(
+                            capability=capability,
+                            mode="adapt",
+                            confidence=max(0.5, donor.confidence - 0.15),
+                            fresh_implementation_cost=fresh_impl,
+                            fresh_verification_cost=fresh_verify,
+                            adaptation_cost=0.45 * fresh_impl,
+                            integration_cost=0.18 * fresh_impl,
+                            dependency_cost=0.06 * fresh_impl * max(0, len(donor.required_dependencies)) + 0.03 * fresh_impl * max(0, len(donor.files) - 1),
+                            reuse_verification_cost=0.45 * fresh_verify,
+                            uncertainty_penalty=0.18 * fresh_impl,
+                            source_id=f"{donor.repository}@{donor.commit_sha}",
+                            donor=donor.to_dict(),
+                            rationale="Pinned donor slice is structurally useful but target metadata requires adaptation.",
+                            proof_level=proof_lvl,
+                        )
                     )
-                )
-            continue
+                    continue
+            # If all candidates failed compilation (best_donor is None), fall through to fresh implementation!
+
         decisions.append(
             ReuseDecision(
                 capability=capability,

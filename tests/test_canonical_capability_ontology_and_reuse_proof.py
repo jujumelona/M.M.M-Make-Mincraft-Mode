@@ -285,7 +285,16 @@ def test_package_prefix_relocation_preserves_subpackages() -> None:
     assert "import ai.minecraft.generated.maple.common.BossEntity;" in client_code
 
 
-def test_strict_materialized_proof_level_without_compile() -> None:
+def test_strict_materialized_proof_level_without_compile(monkeypatch) -> None:
+    fake_code = b"package com.donor.mod;\npublic class Item {}"
+    import hashlib
+    fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
+
+    def mock_fetch(client, repo, blob_sha):
+        return fake_code
+
+    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", mock_fetch)
+
     donor = source_transplant.DonorSlice(
         capability="item.equipment",
         repository="example/mod",
@@ -296,9 +305,9 @@ def test_strict_materialized_proof_level_without_compile() -> None:
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/Item.java",
-                blob_sha="b3",
-                sha256="sha256:3333",
-                size_bytes=50,
+                blob_sha="3333333333333333333333333333333333333333",
+                sha256=fake_sha,
+                size_bytes=len(fake_code),
                 symbols=("Item",),
             ),
         ),
@@ -311,7 +320,7 @@ def test_strict_materialized_proof_level_without_compile() -> None:
         closure_complete=True,
     )
 
-    # When no compile_checker and no local workspace build runs, proof level MUST be MATERIALIZED (no fake compile verification)
+    # When materialization succeeds but no compiler is executed, proof level MUST be MATERIALIZED (no fake compile verification)
     from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
     receipt = execute_reuse_proof(donor, target_workspace="", target_context={})
 
@@ -322,7 +331,8 @@ def test_strict_materialized_proof_level_without_compile() -> None:
 
 def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_path) -> None:
     fake_code = b"package com.donor.mod;\npublic class RealItem {\n    public static void test() {}\n}"
-    fake_sha = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    import hashlib
+    fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
 
     def mock_fetch(client, repo, blob_sha):
         if blob_sha == "blob-real-1":
@@ -431,8 +441,124 @@ def test_reuse_ledger_status_strictly_maps_proof_level() -> None:
     )
 
     ledger = {item["capability"]: item["status"] for item in plan.to_dict()["reuse_ledger"]}
+    scope = {item["capability"]: item["fresh_generation_scope"] for item in plan.to_dict()["reuse_ledger"]}
 
     assert ledger["boss.entity"] == "VERIFIED_REUSE"
+    assert scope["boss.entity"] == "forbidden"
+
     assert ledger["item.upgrade"] == "MATERIALIZED"
+    assert scope["item.upgrade"] == "full"  # Unverified donor must not block fresh implementation!
+
     assert ledger["magic.spell"] == "FRESH_REQUIRED"
+    assert scope["magic.spell"] == "full"
+
+    assert plan.unresolved_capabilities == 2  # boss.entity is verified, item.upgrade and magic.spell are unresolved!
+
+
+def test_hard_fallback_to_fresh_when_all_candidates_fail_compile() -> None:
+    donor_fail_1 = source_transplant.DonorSlice(
+        capability="combat.damage",
+        repository="example/fail1",
+        commit_sha="5555555555555555555555555555555555555555",
+        license_id="MIT",
+        source_url="https://github.com/example/fail1",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=(),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+    donor_fail_2 = source_transplant.DonorSlice(
+        capability="combat.damage",
+        repository="example/fail2",
+        commit_sha="6666666666666666666666666666666666666666",
+        license_id="MIT",
+        source_url="https://github.com/example/fail2",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=(),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.8,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    def always_fail(files, context):
+        return {"compile_passed": False}
+
+    selected_donor, receipts = execute_candidate_fallback_loop(
+        candidates=[donor_fail_1, donor_fail_2],
+        capability="combat.damage",
+        target_workspace="/tmp/sandbox",
+        target_context={},
+        compile_checker=always_fail,
+    )
+
+    # When all candidates fail, best_donor MUST be None!
+    assert selected_donor is None
+    assert len(receipts) == 2
+    assert receipts[0].compile_passed is False
+    assert receipts[1].compile_passed is False
+
+
+def test_materialize_pinned_donor_rejects_hash_mismatch(monkeypatch) -> None:
+    fake_code = b"corrupted content"
+    expected_sha = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+
+    def mock_fetch(client, repo, blob_sha):
+        return fake_code
+
+    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", mock_fetch)
+
+    donor = source_transplant.DonorSlice(
+        capability="item.equipment",
+        repository="example/mismatch",
+        commit_sha="7777777777777777777777777777777777777777",
+        license_id="MIT",
+        source_url="https://github.com/example/mismatch",
+        target_compatibility="metadata_exact",
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/Item.java",
+                blob_sha="7777777777777777777777777777777777777777",
+                sha256=expected_sha,
+                size_bytes=len(fake_code),
+                symbols=("Item",),
+            ),
+        ),
+        seed_files=("src/main/java/Item.java",),
+        source_symbols=("Item",),
+        required_dependencies=(),
+        donor_tests=(),
+        confidence=0.95,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # Must raise SourceTransplantError on hash mismatch without using corrupted bytes
+    import pytest
+    with pytest.raises(source_transplant.SourceTransplantError):
+        source_transplant.materialize_pinned_donor(donor)
+
+
+def test_host_verified_library_state() -> None:
+    from minecraft_mod_ai.reuse_planner import ReuseDecision
+    d_lib = ReuseDecision(
+        capability="block.basic",
+        mode="library",
+        confidence=0.95,
+        fresh_implementation_cost=10.0,
+        fresh_verification_cost=4.0,
+        proof_level="HOST_VERIFIED",
+    )
+
+    assert d_lib.verified_reuse is True
+    assert d_lib.proof_level == "HOST_VERIFIED"
+
 
