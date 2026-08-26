@@ -150,8 +150,12 @@ class DonorSlice:
     compatibility_evidence: CompatibilityEvidence | None = None
 
     @property
-    def exact_target(self) -> bool:
+    def metadata_match(self) -> bool:
         return self.target_compatibility in {"exact", "metadata_exact"} and self.closure_complete
+
+    @property
+    def exact_target(self) -> bool:
+        return self.metadata_match
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -276,8 +280,10 @@ def inspect_repository_slice(
         truncation_reason = ""
         closure_complete = True
 
-        # Index resource files in repo using typed canonical identifiers
+        # Index resource files in repo using typed canonical identifiers and detect collisions
         resource_index: dict[str, str] = {}
+        ambiguous_stems: set[str] = set()
+
         for path in blobs:
             clean_path = path.casefold()
             resource_index[clean_path] = path
@@ -286,8 +292,14 @@ def inspect_repository_slice(
                 _area, ns, category, subpath = m.group(1).casefold(), m.group(2).casefold(), m.group(3).casefold(), m.group(4).casefold()
                 subpath_stem = Path(subpath).stem.casefold()
                 resource_index[f"{ns}:{category}/{subpath}"] = path
-                resource_index[f"{ns}:{subpath_stem}"] = path
                 resource_index[f"{ns}:{subpath}"] = path
+
+                for shorthand in (f"{ns}:{subpath_stem}", subpath_stem):
+                    if shorthand in resource_index and resource_index[shorthand] != path:
+                        ambiguous_stems.add(shorthand)
+                    else:
+                        resource_index[shorthand] = path
+
                 if category in {"models", "model"}:
                     resource_index[f"model:{ns}:{subpath_stem}"] = path
                     resource_index[f"model:{ns}:{subpath}"] = path
@@ -299,7 +311,9 @@ def inspect_repository_slice(
                     resource_index[f"{ns}:textures/{subpath_stem}"] = path
             else:
                 stem = Path(path).stem.casefold()
-                if stem not in resource_index:
+                if stem in resource_index and resource_index[stem] != path:
+                    ambiguous_stems.add(stem)
+                else:
                     resource_index[stem] = path
 
         while pending:
@@ -385,20 +399,26 @@ def inspect_repository_slice(
                     if ns not in {"minecraft", "builtin"}:
                         sub = parts[1] if len(parts) == 2 else parent_match
                         parent_stem = sub.split("/")[-1].casefold()
-                        matched_parent = (
-                            resource_index.get(f"model:{ns}:{parent_stem}")
-                            or resource_index.get(f"{ns}:{sub.casefold()}")
-                            or resource_index.get(parent_stem)
-                        )
-                        if matched_parent:
-                            if matched_parent not in selected_set:
-                                artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
-                                pending.append(matched_parent)
-                        elif ns:
-                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="missing_model_parent"))
+                        if parent_stem in ambiguous_stems or f"{ns}:{parent_stem}" in ambiguous_stems:
+                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="ambiguous_model_parent"))
                             closure_complete = False
                             if not truncation_reason:
-                                truncation_reason = f"Missing parent model: {parent_match}"
+                                truncation_reason = f"Ambiguous parent model reference: {parent_match}"
+                        else:
+                            matched_parent = (
+                                resource_index.get(f"model:{ns}:{parent_stem}")
+                                or resource_index.get(f"{ns}:{sub.casefold()}")
+                                or resource_index.get(parent_stem)
+                            )
+                            if matched_parent:
+                                if matched_parent not in selected_set:
+                                    artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
+                                    pending.append(matched_parent)
+                            elif ns:
+                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="missing_model_parent"))
+                                closure_complete = False
+                                if not truncation_reason:
+                                    truncation_reason = f"Missing parent model: {parent_match}"
 
                 # 2. Textures in Model JSON
                 for tex_match in re.findall(r'"(?:layer[0-9]|texture|particle|all|top|bottom|side)"\s*:\s*"([^"]+)"', text):
@@ -407,14 +427,20 @@ def inspect_repository_slice(
                     if ns not in {"minecraft"}:
                         sub = parts[1] if len(parts) == 2 else tex_match
                         tex_stem = sub.split("/")[-1].casefold()
-                        matched_tex = (
-                            resource_index.get(f"texture:{ns}:{tex_stem}")
-                            or resource_index.get(f"{ns}:{sub.casefold()}")
-                            or resource_index.get(tex_stem)
-                        )
-                        if matched_tex and matched_tex not in selected_set:
-                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_tex, relation="texture_ref"))
-                            pending.append(matched_tex)
+                        if tex_stem in ambiguous_stems or f"{ns}:{tex_stem}" in ambiguous_stems:
+                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=tex_match, relation="ambiguous_texture_ref"))
+                            closure_complete = False
+                            if not truncation_reason:
+                                truncation_reason = f"Ambiguous texture reference: {tex_match}"
+                        else:
+                            matched_tex = (
+                                resource_index.get(f"texture:{ns}:{tex_stem}")
+                                or resource_index.get(f"{ns}:{sub.casefold()}")
+                                or resource_index.get(tex_stem)
+                            )
+                            if matched_tex and matched_tex not in selected_set:
+                                artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_tex, relation="texture_ref"))
+                                pending.append(matched_tex)
 
                 # 3. Mixin JSON target classes with package resolution
                 if "mixin" in path.casefold():

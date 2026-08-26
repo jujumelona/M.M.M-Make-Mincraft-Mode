@@ -562,3 +562,68 @@ def test_host_verified_library_state() -> None:
     assert d_lib.proof_level == "HOST_VERIFIED"
 
 
+def test_dependency_adaptation_plan_injection() -> None:
+    from minecraft_mod_ai.reuse_adapters import DependencyAdaptationPlan
+
+    sample_bg = """plugins {
+    id 'fabric-loom' version '1.7-SNAPSHOT'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft 'com.mojang:minecraft:1.21.1'
+}
+"""
+    updated_bg, applied = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
+        sample_bg,
+        required_dependencies=["cloth-config", "geckolib"],
+    )
+
+    assert applied is True
+    assert "https://maven.shedaniel.me/" in updated_bg
+    assert "me.shedaniel.cloth:cloth-config-fabric" in updated_bg
+    assert "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/" in updated_bg
+    assert "software.bernie.geckolib:geckolib-fabric" in updated_bg
+
+
+def test_diagnostic_repair_adapter_generates_stubs() -> None:
+    from minecraft_mod_ai.reuse_adapters import DiagnosticRepairAdapter
+
+    files = {"src/main/java/ai/mod/Main.java": "package ai.mod;\npublic class Main {}"}
+    repaired = DiagnosticRepairAdapter.repair_unresolved_symbols(
+        files,
+        unresolved_symbols=["CustomBossEntity", "SpecialWeaponItem"],
+        target_context={"target_package": "ai.mod"},
+    )
+
+    assert len(repaired) == 2
+    assert "src/main/java/ai/mod/CustomBossEntity.java" in files
+    assert "src/main/java/ai/mod/SpecialWeaponItem.java" in files
+    assert "public class CustomBossEntity" in files["src/main/java/ai/mod/CustomBossEntity.java"]
+
+
+def test_scaffold_minimal_ephemeral_workspace(tmp_path) -> None:
+    from minecraft_mod_ai.reuse_proof_executor import scaffold_minimal_ephemeral_workspace
+
+    scaffold_minimal_ephemeral_workspace(
+        tmp_path,
+        target_context={
+            "minecraft_version": "1.21.1",
+            "target_modid": "maple_mod",
+            "java_version": "21",
+        },
+    )
+
+    assert (tmp_path / "build.gradle").exists()
+    assert (tmp_path / "settings.gradle").exists()
+    assert (tmp_path / "gradle.properties").exists()
+
+    bg_text = (tmp_path / "build.gradle").read_text(encoding="utf-8")
+    assert "archivesName = 'maple_mod'" in bg_text
+    assert "com.mojang:minecraft:1.21.1" in bg_text
+
+
+

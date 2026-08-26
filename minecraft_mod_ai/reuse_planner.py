@@ -371,6 +371,8 @@ class TargetImplementationPlan:
                         if item.mode == "fresh"
                         else "VERIFIED_REUSE"
                         if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}
+                        else "PARTIAL_REUSE"
+                        if item.proof_level == "PARTIAL_REUSE"
                         else "MATERIALIZED"
                         if item.proof_level == "MATERIALIZED"
                         else "READY_FOR_PROOF"
@@ -390,7 +392,7 @@ class TargetImplementationPlan:
                         "forbidden"
                         if (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}) and item.mode != "adapt"
                         else "residual_only"
-                        if item.mode == "adapt" and (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"})
+                        if (item.mode == "adapt" or item.proof_level == "PARTIAL_REUSE") and (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "PARTIAL_REUSE", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"})
                         else "full"
                     ),
                 }
@@ -785,6 +787,7 @@ def _plan_target(
                 capability=capability,
                 target_workspace=target_ws,
                 target_context=target_ctx,
+                discovery_client=discovery_client,
             )
             if best_donor is not None:
                 donor = best_donor
@@ -827,7 +830,7 @@ def _plan_target(
                             uncertainty_penalty=0.18 * fresh_impl,
                             source_id=f"{donor.repository}@{donor.commit_sha}",
                             donor=donor.to_dict(),
-                            rationale="Pinned donor slice is structurally useful but target metadata requires adaptation.",
+                            rationale="Pinned donor slice is structurally useful but requires adaptation or residual fresh generation.",
                             proof_level=proof_lvl,
                         )
                     )
