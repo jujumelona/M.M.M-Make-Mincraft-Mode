@@ -26,31 +26,97 @@ class VerifiedScaffoldTemplate:
     settings_gradle: str
 
 
+SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
+    ("fabric", "1.21.4"): {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.9-SNAPSHOT",
+        "loader_version": "0.16.9",
+        "fabric_api": "0.110.0+1.21.4",
+        "mappings": "net.fabricmc:yarn:1.21.4+build.1:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.21.1"): {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.7-SNAPSHOT",
+        "loader_version": "0.16.5",
+        "fabric_api": "0.104.0+1.21.1",
+        "mappings": "net.fabricmc:yarn:1.21.1+build.1:v2",
+        "java_release": 21,
+    },
+    ("fabric", "1.20.1"): {
+        "gradle_version": "8.8",
+        "loom_version": "1.6-SNAPSHOT",
+        "loader_version": "0.15.11",
+        "fabric_api": "0.92.2+1.20.1",
+        "mappings": "net.fabricmc:yarn:1.20.1+build.10:v2",
+        "java_release": 17,
+    },
+    ("neoforge", "1.21.4"): {
+        "gradle_version": "8.10.2",
+        "moddev_version": "2.0.80",
+        "neoforge_version": "21.4.0",
+        "java_release": 21,
+    },
+    ("neoforge", "1.21.1"): {
+        "gradle_version": "8.10.2",
+        "moddev_version": "2.0.78",
+        "neoforge_version": "1.21.1-21.1.0",
+        "java_release": 21,
+    },
+    ("forge", "1.20.1"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "47.3.0",
+        "java_release": 17,
+    },
+    ("forge", "1.21.1"): {
+        "gradle_version": "8.8",
+        "forgegradle_version": "6.0.29",
+        "forge_version": "51.0.8",
+        "java_release": 21,
+    },
+}
+
+
 def get_verified_scaffold_template(
     loader: str = "fabric",
     minecraft_version: str = "1.21.1",
 ) -> VerifiedScaffoldTemplate:
     norm_loader = loader.lower().strip()
+    spec = SUPPORTED_TARGET_SPECS.get((norm_loader, minecraft_version)) or {
+        "gradle_version": "8.10.2",
+        "loom_version": "1.7-SNAPSHOT",
+        "loader_version": "0.16.5",
+        "fabric_api": f"0.104.0+{minecraft_version}",
+        "mappings": f"net.fabricmc:yarn:{minecraft_version}+build.1:v2",
+        "java_release": 21,
+    }
+    gradle_ver = spec.get("gradle_version", "8.10.2")
+    java_rel = spec.get("java_release", 21)
+
     if norm_loader == "neoforge":
+        moddev_ver = spec.get("moddev_version", "2.0.78")
+        neo_ver = spec.get("neoforge_version", f"{minecraft_version}-21.1.0")
         bg = f"""plugins {{
-    id 'net.neoforged.moddev' version '2.0.78'
+    id 'net.neoforged.moddev' version '{moddev_ver}'
 }}
 
 version = '1.0.0'
 group = 'ai.minecraft.generated'
 
 neoForge {{
-    version = '{minecraft_version}-21.1.0'
+    version = '{neo_ver}'
 }}
 
 tasks.withType(JavaCompile).configureEach {{
-    it.options.release = 21
+    it.options.release = {java_rel}
 }}
 """
         settings = "pluginManagement {\n    repositories {\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n"
     elif norm_loader == "forge":
+        fg_ver = spec.get("forgegradle_version", "6.0.29")
         bg = f"""plugins {{
-    id 'net.minecraftforge.gradle' version '6.0.29'
+    id 'net.minecraftforge.gradle' version '{fg_ver}'
 }}
 
 version = '1.0.0'
@@ -61,13 +127,17 @@ minecraft {{
 }}
 
 tasks.withType(JavaCompile).configureEach {{
-    it.options.release = 21
+    it.options.release = {java_rel}
 }}
 """
         settings = "pluginManagement {\n    repositories {\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n"
     else:
+        loom_ver = spec.get("loom_version", "1.7-SNAPSHOT")
+        mappings_coord = spec.get("mappings", f"net.fabricmc:yarn:{minecraft_version}+build.1:v2")
+        loader_ver = spec.get("loader_version", "0.16.5")
+        fapi_ver = spec.get("fabric_api", f"0.104.0+{minecraft_version}")
         bg = f"""plugins {{
-    id 'fabric-loom' version '1.7-SNAPSHOT'
+    id 'fabric-loom' version '{loom_ver}'
     id 'maven-publish'
     id 'java'
 }}
@@ -82,9 +152,9 @@ repositories {{
 
 dependencies {{
     minecraft 'com.mojang:minecraft:{minecraft_version}'
-    mappings 'net.fabricmc:yarn:{minecraft_version}+build.1:v2'
-    modImplementation 'net.fabricmc:fabric-loader:0.16.5'
-    modImplementation 'net.fabricmc.fabric-api:fabric-api:0.104.0+{minecraft_version}'
+    mappings '{mappings_coord}'
+    modImplementation 'net.fabricmc:fabric-loader:{loader_ver}'
+    modImplementation 'net.fabricmc.fabric-api:fabric-api:{fapi_ver}'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
 }}
 """
@@ -100,7 +170,7 @@ dependencies {{
     return VerifiedScaffoldTemplate(
         loader=norm_loader,
         minecraft_version=minecraft_version,
-        gradle_version="8.10.2",
+        gradle_version=gradle_ver,
         distribution_sha256="31c55713e40233a8303fa52234559868c3447fb6e0ef5ad1114b0b147313028d",
         build_gradle=bg,
         settings_gradle=settings,

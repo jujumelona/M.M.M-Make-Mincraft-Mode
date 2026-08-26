@@ -243,7 +243,13 @@ def verify_joint_composition_sandbox(
     all_adapted_files: dict[str, str | bytes] = {}
     for d in donors:
         files = adapt_donor_slice_for_target(d, target_context)
-        all_adapted_files.update(files)
+        for rel_path, content in files.items():
+            if rel_path in all_adapted_files:
+                return False, {
+                    "compile_passed": False,
+                    "error": f"JOINT_MERGE_FILE_COLLISION: Duplicate path '{rel_path}' across donors",
+                }
+            all_adapted_files[rel_path] = content
 
     if callable(compile_checker):
         res = compile_checker(all_adapted_files, target_context)

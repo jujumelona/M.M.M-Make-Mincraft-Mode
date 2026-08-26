@@ -25,6 +25,28 @@ from .source_transplant import DonorSlice
 
 
 @dataclass(frozen=True)
+class ResidualWorkOrder:
+    capability: str
+    reused_classes: tuple[str, ...] = ()
+    reused_symbols: tuple[str, ...] = ()
+    missing_interfaces: tuple[str, ...] = ()
+    missing_resources: tuple[str, ...] = ()
+    unbound_registries: tuple[str, ...] = ()
+    glue_code_requirements: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "capability": self.capability,
+            "reused_classes": list(self.reused_classes),
+            "reused_symbols": list(self.reused_symbols),
+            "missing_interfaces": list(self.missing_interfaces),
+            "missing_resources": list(self.missing_resources),
+            "unbound_registries": list(self.unbound_registries),
+            "glue_code_requirements": list(self.glue_code_requirements),
+        }
+
+
+@dataclass(frozen=True)
 class ReuseProofReceipt:
     candidate_id: str
     capability: str
@@ -47,6 +69,7 @@ class ReuseProofReceipt:
     capability_acceptance_tests: tuple[str, ...] = ()
     matched_capability_tests: tuple[str, ...] = ()
     requirement_acceptance_map: tuple[tuple[str, str, str, bool], ...] = ()
+    work_order: ResidualWorkOrder | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +95,7 @@ class ReuseProofReceipt:
             "capability_acceptance_tests": list(self.capability_acceptance_tests),
             "matched_capability_tests": list(self.matched_capability_tests),
             "requirement_acceptance_map": [list(item) for item in self.requirement_acceptance_map],
+            "work_order": self.work_order.to_dict() if self.work_order else None,
         }
 
 
@@ -448,6 +472,22 @@ def execute_reuse_proof(
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
 
+    reused_cls = tuple(p for p in verified_artifacts if p.endswith(".java") or p.endswith(".kt"))
+    missing_res = tuple(dict.fromkeys(missing_resources))
+    unbound_reg = tuple(s for s in unresolved_symbols if ":" in s)
+    missing_ifaces = tuple(s for s in unresolved_symbols if ":" not in s and (s.startswith("I") or "Interface" in s or "Handler" in s))
+    glue_reqs = (f"Integrate {len(verified_artifacts)} reused artifacts with host {donor_slice.capability} lifecycle",) if verified_artifacts else ()
+
+    work_order = ResidualWorkOrder(
+        capability=donor_slice.capability,
+        reused_classes=reused_cls,
+        reused_symbols=verified_symbols,
+        missing_interfaces=missing_ifaces,
+        missing_resources=missing_res,
+        unbound_registries=unbound_reg,
+        glue_code_requirements=glue_reqs,
+    )
+
     return ReuseProofReceipt(
         candidate_id=candidate_id,
         capability=donor_slice.capability,
@@ -457,7 +497,7 @@ def execute_reuse_proof(
         compile_passed=compile_passed and donor_slice.closure_complete and not unresolved_mandatory_deps,
         tests_passed=has_full_acceptance,
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
-        missing_resources=tuple(dict.fromkeys(missing_resources)),
+        missing_resources=missing_res,
         adaptations_applied=tuple(all_receipts),
         verified_capabilities=verified_caps,
         residual_capabilities=residual_caps,
@@ -470,6 +510,7 @@ def execute_reuse_proof(
         capability_acceptance_tests=donor_slice.donor_tests,
         matched_capability_tests=matched_capability_tests,
         requirement_acceptance_map=requirement_acceptance_map,
+        work_order=work_order,
     )
 
 

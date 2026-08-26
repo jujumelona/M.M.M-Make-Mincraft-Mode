@@ -763,9 +763,10 @@ def _plan_target(
                 comp_res.selected_donors,
                 target_context=target_ctx,
             )
-            for d in comp_res.selected_donors:
-                selected_composition_donors[d.capability] = d
-                joint_composition_receipts[d.capability] = joint_build_receipt
+            if joint_passed:
+                for d in comp_res.selected_donors:
+                    selected_composition_donors[d.capability] = d
+                    joint_composition_receipts[d.capability] = joint_build_receipt
 
     decisions: list[ReuseDecision] = []
     for capability in capabilities:
