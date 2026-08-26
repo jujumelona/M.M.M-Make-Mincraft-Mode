@@ -24,7 +24,7 @@ _COMPONENT_ID_RE = re.compile(
 )
 _SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
 _CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s)\s*",
+    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\|)\s*",
     re.IGNORECASE | re.UNICODE,
 )
 _BRANCHES = (
@@ -37,6 +37,111 @@ _BRANCHES = (
     "needs_mixin",
     "needs_loader_leaf",
 )
+
+_DOMAIN_TERM_MAP: dict[str, tuple[str, ...]] = {
+    # Boss / Entity / Mob
+    "boss": ("boss.entity", "combat.boss"),
+    "bosses": ("boss.entity", "combat.boss"),
+    "보스": ("boss.entity", "combat.boss"),
+    "mob": ("mob.spawning", "entity.lifecycle"),
+    "mobs": ("mob.spawning", "entity.lifecycle"),
+    "잡몹": ("mob.spawning", "entity.lifecycle"),
+    "몹": ("mob.spawning", "entity.lifecycle"),
+    "몬스터": ("mob.spawning", "entity.lifecycle"),
+    "monster": ("mob.spawning", "entity.lifecycle"),
+    "monsters": ("mob.spawning", "entity.lifecycle"),
+    "entity": ("entity.lifecycle", "entity.state_sync"),
+    "entities": ("entity.lifecycle", "entity.state_sync"),
+    "엔티티": ("entity.lifecycle", "entity.state_sync"),
+
+    # Item / Equipment / Weapon / Armor
+    "item": ("item.equipment", "inventory.transfer"),
+    "items": ("item.equipment", "inventory.transfer"),
+    "아이템": ("item.equipment", "inventory.transfer"),
+    "weapon": ("item.weapon", "combat.damage"),
+    "weapons": ("item.weapon", "combat.damage"),
+    "무기": ("item.weapon", "combat.damage"),
+    "armor": ("item.armor", "inventory.transfer"),
+    "armors": ("item.armor", "inventory.transfer"),
+    "방어구": ("item.armor", "inventory.transfer"),
+    "장비": ("item.equipment", "inventory.transfer"),
+    "equipment": ("item.equipment", "inventory.transfer"),
+
+    # Level / Progression / Stat / EXP
+    "level": ("progression.level", "stat.growth"),
+    "levels": ("progression.level", "stat.growth"),
+    "leveling": ("progression.level", "stat.growth"),
+    "레벨": ("progression.level", "stat.growth"),
+    "성장": ("progression.level", "stat.growth"),
+    "progression": ("progression.level", "stat.growth"),
+    "경험치": ("progression.exp", "progression.level"),
+    "exp": ("progression.exp", "progression.level"),
+    "stat": ("stat.attribute", "stat.growth"),
+    "stats": ("stat.attribute", "stat.growth"),
+    "스탯": ("stat.attribute", "stat.growth"),
+    "능력치": ("stat.attribute", "stat.growth"),
+
+    # Enhancement / Upgrade / Forge / Scroll
+    "upgrade": ("item.upgrade", "crafting.upgrade"),
+    "upgrades": ("item.upgrade", "crafting.upgrade"),
+    "enhance": ("item.upgrade", "crafting.upgrade"),
+    "enhancement": ("item.upgrade", "crafting.upgrade"),
+    "강화": ("item.upgrade", "crafting.upgrade"),
+    "제련": ("item.upgrade", "crafting.upgrade"),
+    "주문서": ("item.upgrade", "crafting.upgrade"),
+    "scroll": ("item.upgrade", "crafting.upgrade"),
+    "scrolls": ("item.upgrade", "crafting.upgrade"),
+    "forge": ("item.upgrade", "crafting.upgrade"),
+
+    # Drop / Loot
+    "drop": ("loot.drop_table", "inventory.transfer"),
+    "drops": ("loot.drop_table", "inventory.transfer"),
+    "loot": ("loot.drop_table", "inventory.transfer"),
+    "드롭": ("loot.drop_table", "inventory.transfer"),
+    "드랍": ("loot.drop_table", "inventory.transfer"),
+    "전리품": ("loot.drop_table", "inventory.transfer"),
+
+    # Skill / Magic / Combat
+    "skill": ("skill.ability", "combat.skill"),
+    "skills": ("skill.ability", "combat.skill"),
+    "스킬": ("skill.ability", "combat.skill"),
+    "magic": ("skill.magic", "combat.skill"),
+    "마법": ("skill.magic", "combat.skill"),
+    "ability": ("skill.ability", "combat.skill"),
+    "abilities": ("skill.ability", "combat.skill"),
+    "combat": ("combat.damage", "combat.validation"),
+    "전투": ("combat.damage", "combat.validation"),
+
+    # Trade / Shop / Economy / Currency
+    "trade": ("trade.offer_model", "trade.transaction", "inventory.transfer"),
+    "trading": ("trade.offer_model", "trade.transaction"),
+    "거래": ("trade.offer_model", "trade.transaction"),
+    "shop": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu"),
+    "상점": ("trade.shop_registry", "trade.player_shop", "ui.shop_menu"),
+    "economy": ("economy.currency", "economy.balance_store"),
+    "currency": ("economy.currency", "economy.balance_store"),
+    "화폐": ("economy.currency", "economy.balance_store"),
+    "돈": ("economy.currency", "economy.balance_store"),
+
+    # Quest / Story / Dungeon / Structure
+    "quest": ("quest.state", "quest.progression", "quest.reward"),
+    "quests": ("quest.state", "quest.progression", "quest.reward"),
+    "퀘스트": ("quest.state", "quest.progression", "quest.reward"),
+    "dungeon": ("worldgen.dungeon", "worldgen.structure"),
+    "dungeons": ("worldgen.dungeon", "worldgen.structure"),
+    "던전": ("worldgen.dungeon", "worldgen.structure"),
+    "structure": ("worldgen.structure", "worldgen.placement"),
+    "structures": ("worldgen.structure", "worldgen.placement"),
+    "구조물": ("worldgen.structure", "worldgen.placement"),
+
+    # UI / GUI / Menu
+    "gui": ("ui.menu", "ui.action_validation"),
+    "ui": ("ui.menu", "ui.action_validation"),
+    "hud": ("ui.menu", "ui.action_validation"),
+    "menu": ("ui.menu", "ui.action_validation"),
+    "메뉴": ("ui.menu", "ui.action_validation"),
+    "창": ("ui.menu", "ui.action_validation"),
+}
 
 
 class EvidencePlanError(ValueError):
@@ -147,6 +252,11 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
 
 def _capability_from_statement(statement: str) -> str:
     words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", statement)
+    for word in words:
+        low = word.casefold()
+        if low in _DOMAIN_TERM_MAP:
+            return _DOMAIN_TERM_MAP[low][0]
+
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
         "minecraft", "mod", "with", "to", "for", "that", "그리고", "추가", "만들어",
@@ -157,7 +267,7 @@ def _capability_from_statement(statement: str) -> str:
     # host-generated task IDs use the bounded slug plus a content digest.
     value = "_".join(semantic) or statement
     normalized = re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_")
-    return re.sub(r"_+", "_", normalized) or "semantic"
+    return re.sub(r"_+", "_", normalized) or "gameplay.core"
 
 
 def _source_span(prompt: str, statement: str) -> dict[str, Any]:
@@ -288,26 +398,19 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         return catalog
     records = _capability_records(game_design)
     if not records:
-        records = tuple(
-            (_capability_from_statement(prompt[start:end]), prompt[start:end])
-            for start, end in _semantic_spans(prompt)
-        )
+        clause_spans = _semantic_clause_spans(prompt)
+        if len(clause_spans) > 1:
+            records = tuple(
+                (_capability_from_statement(prompt[start:end]), prompt[start:end])
+                for start, end in clause_spans
+            )
+        else:
+            records = tuple(
+                (_capability_from_statement(prompt[start:end]), prompt[start:end])
+                for start, end in _semantic_spans(prompt)
+            )
     if not records:
         raise EvidencePlanError("The request did not yield any semantic requirement.")
-
-    covered_spans = {
-        (span["char_start"], span["char_end"])
-        for capability, statement in records
-        for span in (_source_span(prompt, statement),)
-    }
-    records = tuple(
-        [*records]
-        + [
-            (_capability_from_statement(prompt[start:end]), prompt[start:end])
-            for start, end in _semantic_clause_spans(prompt)
-            if (start, end) not in covered_spans
-        ]
-    )
 
     acceptance_source = _strings(game_design.get("acceptance_tests"))
     requirements: list[dict[str, Any]] = []

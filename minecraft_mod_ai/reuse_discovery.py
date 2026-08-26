@@ -64,10 +64,18 @@ def _minimum_candidates() -> int:
 def _curseforge_api_key() -> str:
     """Return the optional host-owned CurseForge credential without exposing it."""
 
-    return (
+    key = (
         os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()
         or os.environ.get("CURSEFORGE_API_KEY", "").strip()
     )
+    if not key:
+        try:
+            import google.colab.userdata as _colab_userdata  # type: ignore
+
+            key = str(_colab_userdata.get("CURSEFORGE_API_KEY") or "").strip()
+        except Exception:
+            key = ""
+    return key
 
 
 def _graph_search_terms(
@@ -142,7 +150,12 @@ def _github_repository(value: Any) -> str:
 
 
 def _candidate_repository(candidate: Mapping[str, Any]) -> str:
-    return _github_repository(candidate.get("source_url")) or _github_repository(candidate.get("title"))
+    return (
+        _github_repository(candidate.get("repository"))
+        or _github_repository(candidate.get("source_url"))
+        or _github_repository(candidate.get("url"))
+        or _github_repository(candidate.get("title"))
+    )
 
 
 def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> list[tuple[str, float]]:
@@ -189,9 +202,16 @@ def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
+    clean_query = query.strip()
+    if any(ord(c) > 127 for c in clean_query):
+        clean_tokens = [tok for tok in re.findall(r"[A-Za-z0-9_]+", clean_query) if len(tok) > 1]
+        if clean_tokens:
+            clean_query = " ".join(clean_tokens)
+        else:
+            clean_query = "minecraft mod"
     params = {
         "gameId": str(_MINECRAFT_GAME_ID),
-        "searchFilter": query,
+        "searchFilter": clean_query,
         "sortField": "2",
         "sortOrder": "desc",
         "pageSize": str(min(limit, 50)),
