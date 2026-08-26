@@ -30,6 +30,7 @@ class BuildVerificationReceipt:
     tests_executed: int = 0
     tests_passed_count: int = 0
     tests_failed_count: int = 0
+    executed_test_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,25 +47,33 @@ class BuildVerificationReceipt:
             "tests_executed": self.tests_executed,
             "tests_passed_count": self.tests_passed_count,
             "tests_failed_count": self.tests_failed_count,
+            "executed_test_ids": list(self.executed_test_ids),
         }
 
 
-def _find_gradle_wrapper(workspace_root: Path) -> Path | None:
+def _find_gradle_wrapper(workspace_root: Path) -> tuple[Path | None, str]:
     gradlew = workspace_root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+    wrapper_jar = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.jar"
+    tool_name = "gradle_wrapper" if wrapper_jar.exists() else "system_gradle"
+
     if gradlew.exists() and os.access(gradlew, os.X_OK if os.name != "nt" else os.R_OK):
-        return gradlew
+        return gradlew, tool_name
+
     # Check parent directories up to 2 levels
     for parent in (workspace_root.parent, workspace_root.parent.parent):
         candidate = parent / ("gradlew.bat" if os.name == "nt" else "gradlew")
         if candidate.exists():
-            return candidate
-    return None
+            cand_jar = parent / "gradle" / "wrapper" / "gradle-wrapper.jar"
+            return candidate, "gradle_wrapper" if cand_jar.exists() else "system_gradle"
+
+    return None, "none"
 
 
-def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int]:
-    """Extract (tests_executed, tests_passed_count, tests_failed_count) from test XMLs or output."""
+def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int, tuple[str, ...]]:
+    """Extract (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids)."""
     executed = 0
     failed = 0
+    test_ids: list[str] = []
 
     test_results_dir = workspace_root / "build" / "test-results" / "test"
     if test_results_dir.is_dir():
@@ -74,10 +83,16 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
                 tree = ET.parse(xml_file)
                 root = tree.getroot()
                 if root.tag == "testsuite":
+                    suite_name = str(root.attrib.get("name") or xml_file.stem)
                     suite_tests = int(root.attrib.get("tests", 0))
                     suite_failures = int(root.attrib.get("failures", 0)) + int(root.attrib.get("errors", 0))
                     executed += suite_tests
                     failed += suite_failures
+                    test_ids.append(suite_name)
+                    for case in root.findall("testcase"):
+                        case_name = case.attrib.get("name")
+                        if case_name:
+                            test_ids.append(f"{suite_name}.{case_name}")
             except Exception:
                 pass
 
@@ -87,9 +102,11 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
         if match:
             executed = int(match.group(1))
             failed = int(match.group(2))
+        for t_match in re.findall(r"> Task :test\s+([A-Za-z0-9_.]+)", stdout):
+            test_ids.append(t_match)
 
     passed = max(0, executed - failed)
-    return executed, passed, failed
+    return executed, passed, failed, tuple(dict.fromkeys(test_ids))
 
 
 def verify_scratch_workspace_build(
@@ -98,43 +115,60 @@ def verify_scratch_workspace_build(
     run_tests: bool = False,
     timeout_seconds: float = 60.0,
 ) -> BuildVerificationReceipt:
-    """Execute real build compilation verification in the target scratch workspace."""
+    """Execute two-stage (compileJava -> test) verification in the target scratch workspace."""
     ws = Path(workspace_root).resolve()
-    gradlew = _find_gradle_wrapper(ws)
+    gradlew, tool_name = _find_gradle_wrapper(ws)
 
     if gradlew:
-        cmd = [str(gradlew), "compileJava", "--no-daemon", "-q"]
-        if run_tests:
-            cmd.append("test")
+        # Stage 1: Compile verification
+        compile_cmd = [str(gradlew), "compileJava", "--no-daemon", "-q"]
         try:
-            res = subprocess.run(
-                cmd,
+            res_compile = subprocess.run(
+                compile_cmd,
                 cwd=str(ws),
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
             )
-            stdout, stderr = res.stdout, res.stderr
-            exit_code = res.returncode
-            compile_passed = (exit_code == 0)
+            compile_stdout, compile_stderr = res_compile.stdout, res_compile.stderr
+            compile_exit = res_compile.returncode
+            compile_passed = (compile_exit == 0)
 
+            unresolved = tuple(re.findall(r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)", compile_stderr + compile_stdout))
+
+            # Stage 2: Test verification (only if compilation passed and run_tests requested)
             tests_executed = 0
             tests_passed_count = 0
             tests_failed_count = 0
+            executed_test_ids: tuple[str, ...] = ()
             tests_passed = False
+            combined_stdout = compile_stdout
+            combined_stderr = compile_stderr
 
-            if run_tests:
-                tests_executed, tests_passed_count, tests_failed_count = _parse_test_results(ws, stdout)
-                # Strict: BEHAVIOR_VERIFIED requires at least 1 executed test and 0 failures
-                tests_passed = compile_passed and (tests_executed > 0) and (tests_failed_count == 0)
+            if compile_passed and run_tests:
+                test_cmd = [str(gradlew), "test", "--no-daemon", "-q"]
+                try:
+                    res_test = subprocess.run(
+                        test_cmd,
+                        cwd=str(ws),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                    )
+                    combined_stdout += "\n" + res_test.stdout
+                    combined_stderr += "\n" + res_test.stderr
+                    tests_executed, tests_passed_count, tests_failed_count, executed_test_ids = _parse_test_results(ws, res_test.stdout)
+                    tests_passed = (tests_executed > 0) and (tests_failed_count == 0) and (res_test.returncode == 0)
+                except Exception as test_err:
+                    combined_stderr += f"\nTest execution failed: {test_err}"
+                    tests_passed = False
 
-            unresolved = tuple(re.findall(r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)", stderr + stdout))
             return BuildVerificationReceipt(
-                build_tool="gradle",
-                command=tuple(cmd),
-                exit_code=exit_code,
-                stdout=stdout,
-                stderr=stderr,
+                build_tool=tool_name,
+                command=tuple(compile_cmd),
+                exit_code=compile_exit,
+                stdout=combined_stdout,
+                stderr=combined_stderr,
                 compile_passed=compile_passed,
                 tests_passed=tests_passed,
                 unresolved_symbols=unresolved,
@@ -142,11 +176,12 @@ def verify_scratch_workspace_build(
                 tests_executed=tests_executed,
                 tests_passed_count=tests_passed_count,
                 tests_failed_count=tests_failed_count,
+                executed_test_ids=executed_test_ids,
             )
         except Exception as e:
             return BuildVerificationReceipt(
-                build_tool="gradle",
-                command=tuple(cmd),
+                build_tool=tool_name,
+                command=tuple(compile_cmd),
                 exit_code=1,
                 stdout="",
                 stderr=str(e),
@@ -157,6 +192,7 @@ def verify_scratch_workspace_build(
                 tests_executed=0,
                 tests_passed_count=0,
                 tests_failed_count=0,
+                executed_test_ids=(),
             )
 
     # Without a verified build environment (e.g. Gradle wrapper), compilation proof cannot be attested.
@@ -173,4 +209,5 @@ def verify_scratch_workspace_build(
         tests_executed=0,
         tests_passed_count=0,
         tests_failed_count=0,
+        executed_test_ids=(),
     )

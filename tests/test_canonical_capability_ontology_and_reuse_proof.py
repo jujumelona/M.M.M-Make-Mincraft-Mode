@@ -801,6 +801,107 @@ def test_artifact_level_partial_reuse_slicing(monkeypatch) -> None:
     assert "MissingSymbol" in receipt.residual_symbols
 
 
+def test_two_stage_compile_and_test_separation() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss",
+        commit_sha="6666666666666666666666666666666666666666",
+        license_id="MIT",
+        source_url="https://github.com/example/boss",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=("BossEntity",),
+        required_dependencies=(),
+        donor_tests=("BossEntityTest",),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # When compile passes but test fails: Must be COMPILE_VERIFIED (not rejected or error)
+    def mock_test_fail(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": False,
+            "tests_executed": 1,
+            "tests_passed_count": 0,
+            "executed_test_ids": ["BossEntityTest"],
+        }
+
+    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_test_fail)
+    assert receipt.compile_passed is True
+    assert receipt.tests_passed is False
+    assert receipt.proof_level == "COMPILE_VERIFIED"
+
+
+def test_capability_acceptance_test_matching() -> None:
+    donor = source_transplant.DonorSlice(
+        capability="boss.entity",
+        repository="example/boss",
+        commit_sha="6666666666666666666666666666666666666666",
+        license_id="MIT",
+        source_url="https://github.com/example/boss",
+        target_compatibility="metadata_exact",
+        files=(),
+        seed_files=(),
+        source_symbols=("BossEntity",),
+        required_dependencies=(),
+        donor_tests=("BossEntityTest",),
+        confidence=0.9,
+        adaptation_cost=0.0,
+        closure_complete=True,
+    )
+
+    # 1. Unrelated test passed: MathUtilTest should NOT yield BEHAVIOR_VERIFIED
+    def mock_unrelated_test(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 1,
+            "tests_passed_count": 1,
+            "executed_test_ids": ["MathUtilTest"],
+        }
+
+    receipt_unrelated = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_unrelated_test)
+    assert receipt_unrelated.proof_level == "COMPILE_VERIFIED"
+    assert len(receipt_unrelated.matched_capability_tests) == 0
+
+    # 2. Matching capability test passed: BossEntityTest yields BEHAVIOR_VERIFIED
+    def mock_matching_test(files, context):
+        return {
+            "compile_passed": True,
+            "tests_passed": True,
+            "tests_executed": 1,
+            "tests_passed_count": 1,
+            "executed_test_ids": ["BossEntityTest"],
+        }
+
+    receipt_matching = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_matching_test)
+    assert receipt_matching.proof_level == "BEHAVIOR_VERIFIED"
+    assert receipt_matching.matched_capability_tests == ("BossEntityTest",)
+
+
+def test_dynamic_minecraft_version_dependency_injection() -> None:
+    from minecraft_mod_ai.reuse_adapters import DependencyAdaptationPlan
+
+    sample_bg = """repositories {
+}
+dependencies {
+}
+"""
+    updated_bg, applied = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
+        sample_bg,
+        required_dependencies=["geckolib"],
+        loader="fabric",
+        minecraft_version="1.20.1",
+    )
+
+    assert applied is True
+    assert "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/" in updated_bg
+
+
+
 
 
 

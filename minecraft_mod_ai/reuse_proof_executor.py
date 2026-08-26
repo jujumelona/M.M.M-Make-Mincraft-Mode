@@ -41,6 +41,7 @@ class ReuseProofReceipt:
     tests_executed: int = 0
     tests_passed_count: int = 0
     capability_acceptance_tests: tuple[str, ...] = ()
+    matched_capability_tests: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class ReuseProofReceipt:
             "tests_executed": self.tests_executed,
             "tests_passed_count": self.tests_passed_count,
             "capability_acceptance_tests": list(self.capability_acceptance_tests),
+            "matched_capability_tests": list(self.matched_capability_tests),
         }
 
 
@@ -290,6 +292,7 @@ def execute_reuse_proof(
 
         # Inject donor external dependencies into sandbox build script
         loader = str(target_context.get("loader") or "fabric")
+        mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
         kts_file = sandbox_path / "build.gradle.kts"
         groovy_file = sandbox_path / "build.gradle"
         build_target = kts_file if kts_file.exists() else groovy_file
@@ -302,6 +305,7 @@ def execute_reuse_proof(
                     bg_content,
                     donor_slice.required_dependencies,
                     loader=loader,
+                    minecraft_version=mc_ver,
                     is_kotlin_dsl=is_kts,
                 )
                 if was_injected:
@@ -321,6 +325,7 @@ def execute_reuse_proof(
         # Compile and verify
         tests_executed = 0
         tests_passed_count = 0
+        executed_test_ids: tuple[str, ...] = ()
 
         if callable(compile_checker):
             try:
@@ -330,6 +335,7 @@ def execute_reuse_proof(
                     tests_passed = bool(check_result.get("tests_passed"))
                     tests_executed = int(check_result.get("tests_executed", 1 if tests_passed else 0))
                     tests_passed_count = int(check_result.get("tests_passed_count", 1 if tests_passed else 0))
+                    executed_test_ids = tuple(check_result.get("executed_test_ids") or (donor_slice.donor_tests if tests_passed else ()))
                     unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
                     missing_resources.extend(check_result.get("missing_resources") or [])
                 else:
@@ -345,8 +351,20 @@ def execute_reuse_proof(
             tests_passed = receipt.tests_passed
             tests_executed = receipt.tests_executed
             tests_passed_count = receipt.tests_passed_count
+            executed_test_ids = receipt.executed_test_ids
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
+
+    # Capability Acceptance Test Matching
+    cap_tokens = {donor_slice.capability.casefold(), donor_slice.capability.split(".")[-1].casefold()}
+    req_tests = {t.casefold() for t in donor_slice.donor_tests}
+    matched_tests = []
+    for tid in executed_test_ids:
+        tid_lower = tid.casefold()
+        if any(rt in tid_lower for rt in req_tests) or any(ct in tid_lower for ct in cap_tokens):
+            matched_tests.append(tid)
+
+    matched_capability_tests = tuple(dict.fromkeys(matched_tests))
 
     # Granular Artifact Slicing
     unresolved_set = set(unresolved_symbols)
@@ -378,7 +396,7 @@ def execute_reuse_proof(
 
     # Determine fine-grained proof level with strict test & closure gating
     if compile_passed and donor_slice.closure_complete:
-        if tests_passed and tests_executed > 0:
+        if tests_passed and tests_executed > 0 and (len(matched_capability_tests) > 0 or not donor_slice.donor_tests):
             proof_level = "BEHAVIOR_VERIFIED"
             verified_caps = (donor_slice.capability,)
             residual_caps = ()
@@ -407,7 +425,7 @@ def execute_reuse_proof(
         closure_hash=closure_hash,
         proof_level=proof_level,
         compile_passed=compile_passed and donor_slice.closure_complete,
-        tests_passed=tests_passed and donor_slice.closure_complete and tests_executed > 0,
+        tests_passed=tests_passed and donor_slice.closure_complete and tests_executed > 0 and (len(matched_capability_tests) > 0 or not donor_slice.donor_tests),
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
         missing_resources=tuple(dict.fromkeys(missing_resources)),
         adaptations_applied=tuple(all_receipts),
@@ -420,6 +438,7 @@ def execute_reuse_proof(
         tests_executed=tests_executed,
         tests_passed_count=tests_passed_count,
         capability_acceptance_tests=donor_slice.donor_tests,
+        matched_capability_tests=matched_capability_tests,
     )
 
 
