@@ -52,14 +52,14 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
         return
 
     @wraps(current)
-    def generate(adapter: Any, request: Any) -> str:
+    def generate(self: Any, request: Any) -> str:
         if (
             getattr(request, "response_format", None) != "json"
             or bool(getattr(request, "tools", ()))
         ):
-            return current(adapter, request)
+            return current(self, request)
 
-        output = current(adapter, request)
+        output = current(self, request)
         try:
             return validate_structured_output(
                 output,
@@ -74,7 +74,7 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
                 flush=True,
             )
 
-        regenerated = current(adapter, request)
+        regenerated = current(self, request)
         return validate_structured_output(
             regenerated,
             response_format=request.response_format,
