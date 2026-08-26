@@ -253,7 +253,6 @@ def execute_reuse_proof(
                 tests_passed = receipt.tests_passed
                 unresolved_symbols.extend(receipt.unresolved_symbols)
                 missing_resources.extend(receipt.missing_resources)
->>>>>>> 2c1664be (feat(proof): add minimal scaffold synthesizer, dependency wiring, multi-pass candidate repair loop, and partial reuse scope)
 
             if compile_passed:
                 break
