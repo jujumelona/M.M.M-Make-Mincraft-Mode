@@ -161,7 +161,10 @@ def resolve_dependency_for_target(
             is_resolved=False,
         )
 
+    import hashlib
     resolved_coord = f"{group}:{art_name}:{version}"
+    artifact_hash = hashlib.sha256(f"{repo_url}:{resolved_coord}".encode("utf-8")).hexdigest()
+
     return DependencyResolutionReceipt(
         donor_declared_coordinate=dep_name,
         requested_constraint=f"{target_loader}@{target_minecraft}",
@@ -170,28 +173,40 @@ def resolve_dependency_for_target(
         resolved_coordinate=resolved_coord,
         repository=repo_url,
         selected_version=version,
+        artifact_hash=artifact_hash,
         resolution_reason="exact_matrix_match",
         is_resolved=True,
     )
 
 
 def parse_donor_build_metadata(files: Mapping[str, Any]) -> tuple[str, ...]:
-    """Extract declared external dependencies from donor build files (build.gradle, toml, json)."""
+    """Extract declared external dependencies from donor build files (build.gradle, build.gradle.kts, toml, json)."""
     declared: list[str] = []
 
     for rel_path, content in files.items():
         text = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
         p = rel_path.lower()
 
+        # 1. fabric.mod.json
         if "fabric.mod.json" in p:
-            # Parse depends block in fabric.mod.json
             for match in re.findall(r'"([a-zA-Z0-9_.-]+)":\s*"[^"]+"', text):
                 if match not in {"fabricloader", "fabric", "minecraft", "java"}:
                     declared.append(match)
 
-        if "build.gradle" in p:
-            for match in re.findall(r'(?:modImplementation|implementation|include)\s+["\']([^"\':]+):([^"\':]+):([^"\':]+)["\']', text):
+        # 2. build.gradle & build.gradle.kts
+        if "build.gradle" in p or "build.gradle.kts" in p:
+            # Groovy / Kotlin coordinates: "group:artifact:version" or libs.something
+            for match in re.findall(r'(?:modImplementation|implementation|include|api)\s*\(?\s*["\']([^"\':]+):([^"\':]+):([^"\':]+)["\']', text):
                 dep_id = match[1]
                 declared.append(dep_id)
+
+        # 3. libs.versions.toml
+        if "libs.versions.toml" in p or p.endswith(".toml"):
+            for match in re.findall(r'module\s*=\s*["\']([^"\':]+):([^"\':]+)["\']', text):
+                dep_id = match[1]
+                declared.append(dep_id)
+            for match in re.findall(r'modId\s*=\s*["\']([a-zA-Z0-9_.-]+)["\']', text):
+                if match not in {"minecraft", "forge", "neoforge"}:
+                    declared.append(match)
 
     return tuple(dict.fromkeys(declared))

@@ -164,36 +164,34 @@ def decompose_capability_graph(
                 walk(item, source, parent, depth + 1)
 
     catalog_used = False
-    if isinstance(design, Mapping):
-        catalog = design.get("_evidence_request_catalog")
-        requirements = catalog.get("requirements") if isinstance(catalog, Mapping) else None
-        if isinstance(requirements, Sequence) and not isinstance(requirements, (str, bytes)):
-            for requirement in requirements:
-                if not isinstance(requirement, Mapping):
-                    continue
-                capability = requirement.get("capability")
-                if not str(capability or "").strip():
-                    provides = requirement.get("provides")
-                    if isinstance(provides, Sequence) and not isinstance(provides, (str, bytes)):
-                        capability = next((item for item in provides if str(item or "").strip()), "")
-                source = f"evidence_request_catalog.{requirement.get('requirement_id') or 'requirement'}"
-                anchor = add(capability, source)
+    from .requirement_catalog import build_requirement_catalog
+    ev_catalog = design.get("_evidence_request_catalog") if isinstance(design, Mapping) else None
+    if ev_catalog and isinstance(ev_catalog.get("requirements"), Sequence):
+        req_catalog = build_requirement_catalog(prompt, evidence_request_catalog=ev_catalog)
+        for req in req_catalog.requirements:
+            source = f"evidence_request_catalog.{req.id}"
+            for cap in req.provides:
+                anchor = add(cap, source)
                 if anchor:
-                    register_search_terms(
-                        anchor,
-                        (capability, requirement.get("statement")),
-                    )
+                    register_search_terms(anchor, (cap, req.statement))
                     catalog_used = True
-        if not catalog_used:
-            for key, value in design.items():
-                if str(key).casefold() in _CAPABILITY_KEYS:
-                    walk(value, f"design.{key}")
+        if not catalog_used and req_catalog.capabilities:
+            for c_spec in req_catalog.capabilities:
+                anchor = add(c_spec.id, "evidence_request_catalog.capability")
+                if anchor:
+                    register_search_terms(anchor, (c_spec.id,))
+                    catalog_used = True
+
+    if not catalog_used and isinstance(design, Mapping):
+        for key, value in design.items():
+            if str(key).casefold() in _CAPABILITY_KEYS:
+                walk(value, f"design.{key}")
     if not catalog_used:
         for kind in module_kinds:
             add(kind, "module_kind")
 
     if not ordered:
-        # Prompt fallback resolution
+        # Prompt fallback resolution for uncovered prompt spans
         from .canonical_capability_ontology import (
             resolve_capabilities_from_phrase_structured,
         )
@@ -249,7 +247,7 @@ def _capability_id(raw: Any) -> str:
     clean = re.sub(r"_+", "_", clean)
     if not clean or clean in {"minecraft", "mod", "module", "system", "feature"}:
         return ""
-    return clean[:128]
+    return clean
 
 
 def _expand_capability(value: str) -> tuple[str, ...]:
@@ -275,6 +273,7 @@ class ReuseDecision:
     donor: Mapping[str, Any] | None = None
     rationale: str = ""
     proof_level: str = "DISCOVERED"
+    proof_receipt: Any | None = None
 
     @property
     def fresh_total(self) -> float:
@@ -301,7 +300,9 @@ class ReuseDecision:
     def verified_reuse(self) -> bool:
         if self.mode == "fresh":
             return False
-        return self.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or self.mode in {"same_project", "mmm_verified"}
+        from .proof_level import ProofLevel
+        lvl = ProofLevel.from_value(self.proof_level)
+        return lvl.is_verified()
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -318,12 +319,15 @@ class ReuseDecision:
             "fresh_total_cost": round(self.fresh_total, 4),
             "expected_cost": round(self.expected_cost, 4),
             "actual_reuse_gain": round(self.actual_reuse_gain, 4),
+            "verified_reuse": self.verified_reuse,
             "source_id": self.source_id,
             "rationale": self.rationale,
             "proof_level": self.proof_level,
         }
         if self.donor is not None:
             value["donor"] = dict(self.donor)
+        if self.proof_receipt is not None:
+            value["proof_receipt"] = self.proof_receipt.to_dict() if hasattr(self.proof_receipt, "to_dict") else self.proof_receipt
         return value
 
 

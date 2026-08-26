@@ -1130,8 +1130,13 @@ def test_requirement_catalog_and_capability_specs() -> None:
 def test_artifact_dependency_graph_scc_and_directional_closure() -> None:
     from minecraft_mod_ai.artifact_dependency_graph import ArtifactDependencyGraph
 
-    # Cyclical dependency between BossEntity and BossGoal (they reference each other)
+    # Directed dependency chain: UI -> TradeCore -> PersistenceStore
+    # Plus a cycle: BossEntity <-> BossGoal
+    # Plus an isolated StandaloneUtil
     files = {
+        "src/main/java/UI.java": "package com.mod;\nimport com.mod.TradeCore;\npublic class UI { TradeCore core; }",
+        "src/main/java/TradeCore.java": "package com.mod;\nimport com.mod.PersistenceStore;\npublic class TradeCore { PersistenceStore store; }",
+        "src/main/java/PersistenceStore.java": "package com.mod;\npublic class PersistenceStore {}",
         "src/main/java/BossEntity.java": "package com.mod;\nimport com.mod.BossGoal;\npublic class BossEntity { BossGoal goal; }",
         "src/main/java/BossGoal.java": "package com.mod;\nimport com.mod.BossEntity;\npublic class BossGoal { BossEntity boss; }",
         "src/main/java/StandaloneUtil.java": "package com.mod;\npublic class StandaloneUtil {}",
@@ -1140,11 +1145,35 @@ def test_artifact_dependency_graph_scc_and_directional_closure() -> None:
     graph = ArtifactDependencyGraph.build_from_files(files)
     sccs = graph.compute_scc()
 
-    # BossEntity and BossGoal must form a single strongly connected component (SCC)
+    # 1. BossEntity and BossGoal must form a single cyclic SCC
     boss_scc = next((scc for scc in sccs if "src/main/java/BossEntity.java" in scc), None)
     assert boss_scc is not None
     assert "src/main/java/BossGoal.java" in boss_scc
     assert "src/main/java/StandaloneUtil.java" not in boss_scc
+
+    # 2. Strict Directional Transitive Closure:
+    # Seed TradeCore must pull in TradeCore + PersistenceStore only (NEVER the reverse dependent UI!)
+    trade_closures = graph.compute_directional_closures(seed_nodes=["src/main/java/TradeCore.java"])
+    assert len(trade_closures) == 1
+    trade_comp = trade_closures[0]
+    assert "src/main/java/TradeCore.java" in trade_comp
+    assert "src/main/java/PersistenceStore.java" in trade_comp
+    assert "src/main/java/UI.java" not in trade_comp  # Reverse dependent must NOT be pulled in!
+
+    # Seed UI pulls in UI + TradeCore + PersistenceStore
+    ui_closures = graph.compute_directional_closures(seed_nodes=["src/main/java/UI.java"])
+    assert len(ui_closures) == 1
+    ui_comp = ui_closures[0]
+    assert set(ui_comp) == {"src/main/java/UI.java", "src/main/java/TradeCore.java", "src/main/java/PersistenceStore.java"}
+
+    # Seed PersistenceStore pulls in only PersistenceStore
+    persistence_closures = graph.compute_directional_closures(seed_nodes=["src/main/java/PersistenceStore.java"])
+    assert len(persistence_closures) == 1
+    assert persistence_closures[0] == ["src/main/java/PersistenceStore.java"]
+
+    # 3. Independent graphs do not mix
+    assert "src/main/java/StandaloneUtil.java" not in trade_comp
+    assert "src/main/java/BossEntity.java" not in trade_comp
 
 
 def test_dependency_resolver_cross_loader_matrix() -> None:

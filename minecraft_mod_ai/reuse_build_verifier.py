@@ -18,6 +18,26 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class BuildToolchainReceipt:
+    gradle_version: str = "8.8"
+    distribution_sha256: str = ""
+    java_version: str = "21"
+    loader: str = "fabric"
+    minecraft_version: str = "1.21.1"
+    toolchain_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "gradle_version": self.gradle_version,
+            "distribution_sha256": self.distribution_sha256,
+            "java_version": self.java_version,
+            "loader": self.loader,
+            "minecraft_version": self.minecraft_version,
+            "toolchain_hash": self.toolchain_hash,
+        }
+
+
+@dataclass(frozen=True)
 class BuildVerificationReceipt:
     build_tool: str
     command: tuple[str, ...]
@@ -33,6 +53,7 @@ class BuildVerificationReceipt:
     tests_failed_count: int = 0
     executed_test_ids: tuple[str, ...] = ()
     individual_test_results: Mapping[str, bool] = field(default_factory=dict)
+    toolchain: BuildToolchainReceipt | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,29 +72,23 @@ class BuildVerificationReceipt:
             "tests_failed_count": self.tests_failed_count,
             "executed_test_ids": list(self.executed_test_ids),
             "individual_test_results": dict(self.individual_test_results),
+            "toolchain": self.toolchain.to_dict() if self.toolchain else None,
         }
 
 
 def _find_gradle_wrapper(workspace_root: Path) -> tuple[Path | None, str]:
     gradlew = workspace_root / ("gradlew.bat" if os.name == "nt" else "gradlew")
     wrapper_jar = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.jar"
-    tool_name = "gradle_wrapper" if wrapper_jar.exists() else "system_gradle"
+    props = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.properties"
 
-    if gradlew.exists() and os.access(gradlew, os.X_OK if os.name != "nt" else os.R_OK):
-        return gradlew, tool_name
-
-    # Check parent directories up to 2 levels
-    for parent in (workspace_root.parent, workspace_root.parent.parent):
-        candidate = parent / ("gradlew.bat" if os.name == "nt" else "gradlew")
-        if candidate.exists():
-            cand_jar = parent / "gradle" / "wrapper" / "gradle-wrapper.jar"
-            return candidate, "gradle_wrapper" if cand_jar.exists() else "system_gradle"
+    if gradlew.exists() and wrapper_jar.exists() and props.exists():
+        return gradlew, "gradle_wrapper"
 
     return None, "none"
 
 
 def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int, tuple[str, ...], dict[str, bool]]:
-    """Extract (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results)."""
+    """Extract individual testcase results (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results)."""
     executed = 0
     failed = 0
     test_ids: list[str] = []
@@ -88,22 +103,19 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
                 root = tree.getroot()
                 if root.tag == "testsuite":
                     suite_name = str(root.attrib.get("name") or xml_file.stem)
-                    suite_tests = int(root.attrib.get("tests", 0))
-                    suite_failures = int(root.attrib.get("failures", 0)) + int(root.attrib.get("errors", 0))
-                    executed += suite_tests
-                    failed += suite_failures
-                    test_ids.append(suite_name)
-                    individual_results[suite_name] = (suite_failures == 0)
-
                     for case in root.findall("testcase"):
-                        case_name = case.attrib.get("name")
-                        if case_name:
-                            full_id = f"{suite_name}.{case_name}"
-                            has_fail = bool(case.findall("failure") or case.findall("error"))
-                            test_ids.append(full_id)
-                            test_ids.append(case_name)
-                            individual_results[full_id] = not has_fail
-                            individual_results[case_name] = not has_fail
+                        case_name = case.attrib.get("name") or "unknownTest"
+                        full_test_id = f"{suite_name}.{case_name}"
+                        executed += 1
+                        has_failure = (case.find("failure") is not None) or (case.find("error") is not None)
+                        if has_failure:
+                            failed += 1
+                            individual_results[full_test_id] = False
+                        else:
+                            individual_results[full_test_id] = True
+                        test_ids.append(full_test_id)
+                        test_ids.append(case_name)
+                        individual_results[case_name] = not has_failure
             except Exception:
                 pass
 

@@ -15,8 +15,8 @@ from typing import Any
 class TestCaseReceipt:
     test_id: str
     requirement_id: str
-    executed: bool = True
-    passed: bool = True
+    executed: bool = False
+    passed: bool = False
     failure_message: str = ""
     duration_ms: float = 0.0
 

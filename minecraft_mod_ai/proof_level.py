@@ -20,6 +20,8 @@ class ProofLevel(str, Enum):
     SUBGRAPH_COMPILE_VERIFIED = "SUBGRAPH_COMPILE_VERIFIED"
     PARTIAL_REUSE = "PARTIAL_REUSE"
     COMPILE_VERIFIED = "COMPILE_VERIFIED"
+    INTEGRATION_VERIFIED = "INTEGRATION_VERIFIED"
+    RUNTIME_BOOT_VERIFIED = "RUNTIME_BOOT_VERIFIED"
     BEHAVIOR_VERIFIED = "BEHAVIOR_VERIFIED"
     HOST_VERIFIED = "HOST_VERIFIED"
     FRESH_REQUIRED = "FRESH_REQUIRED"
@@ -40,6 +42,8 @@ class ProofLevel(str, Enum):
         """Return True only if the proof level represents an attested build/test proof."""
         return self in {
             ProofLevel.COMPILE_VERIFIED,
+            ProofLevel.INTEGRATION_VERIFIED,
+            ProofLevel.RUNTIME_BOOT_VERIFIED,
             ProofLevel.BEHAVIOR_VERIFIED,
             ProofLevel.HOST_VERIFIED,
         }
@@ -68,8 +72,28 @@ _LEGAL_TRANSITIONS: dict[ProofLevel, set[ProofLevel]] = {
         ProofLevel.FRESH_REQUIRED,
     },
     ProofLevel.SUBGRAPH_COMPILE_VERIFIED: {ProofLevel.PARTIAL_REUSE, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
-    ProofLevel.PARTIAL_REUSE: {ProofLevel.HOST_VERIFIED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.PARTIAL_REUSE: {
+        ProofLevel.INTEGRATION_VERIFIED,
+        ProofLevel.HOST_VERIFIED,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
     ProofLevel.COMPILE_VERIFIED: {
+        ProofLevel.INTEGRATION_VERIFIED,
+        ProofLevel.RUNTIME_BOOT_VERIFIED,
+        ProofLevel.BEHAVIOR_VERIFIED,
+        ProofLevel.HOST_VERIFIED,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
+    ProofLevel.INTEGRATION_VERIFIED: {
+        ProofLevel.RUNTIME_BOOT_VERIFIED,
+        ProofLevel.BEHAVIOR_VERIFIED,
+        ProofLevel.HOST_VERIFIED,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
+    ProofLevel.RUNTIME_BOOT_VERIFIED: {
         ProofLevel.BEHAVIOR_VERIFIED,
         ProofLevel.HOST_VERIFIED,
         ProofLevel.UNVERIFIED,

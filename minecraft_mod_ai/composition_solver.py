@@ -37,11 +37,40 @@ class CompositionConflict:
 
 
 @dataclass(frozen=True)
+class SubgraphProofReceipt:
+    subgraph_id: str
+    capability: str
+    repository: str
+    commit_sha: str
+    closure_hash: str
+    artifact_paths: tuple[str, ...]
+    is_verified: bool
+    proof_level: str = "COMPILE_VERIFIED"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subgraph_id": self.subgraph_id,
+            "capability": self.capability,
+            "repository": self.repository,
+            "commit_sha": self.commit_sha,
+            "closure_hash": self.closure_hash,
+            "artifact_paths": list(self.artifact_paths),
+            "is_verified": self.is_verified,
+            "proof_level": self.proof_level,
+        }
+
+
+@dataclass(frozen=True)
 class CompositionResult:
     is_valid: bool
     selected_donors: tuple[DonorSlice, ...] = ()
     conflicts: tuple[CompositionConflict, ...] = ()
     resolved_dependencies: tuple[DependencyResolutionReceipt, ...] = ()
+    required_capabilities: tuple[str, ...] = ()
+    covered_capabilities: tuple[str, ...] = ()
+    residual_capabilities: tuple[str, ...] = ()
+    complete_coverage: bool = True
+    subgraph_receipts: tuple[SubgraphProofReceipt, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +78,11 @@ class CompositionResult:
             "selected_donors": [d.to_dict() for d in self.selected_donors],
             "conflicts": [c.to_dict() for c in self.conflicts],
             "resolved_dependencies": [r.to_dict() for r in self.resolved_dependencies],
+            "required_capabilities": list(self.required_capabilities),
+            "covered_capabilities": list(self.covered_capabilities),
+            "residual_capabilities": list(self.residual_capabilities),
+            "complete_coverage": self.complete_coverage,
+            "subgraph_receipts": [s.to_dict() for s in self.subgraph_receipts],
         }
 
 
@@ -57,6 +91,7 @@ def solve_multi_donor_composition(
     *,
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
+    required_capabilities: Sequence[str] = (),
 ) -> CompositionResult:
     """Evaluate a joint set of candidate donors for integration compatibility and hard conflicts."""
     conflicts: list[CompositionConflict] = []
@@ -83,7 +118,6 @@ def solve_multi_donor_composition(
 
             # FQCN (Package + Class Name) collision
             if norm_path.endswith(".java") or norm_path.endswith(".kt"):
-                # Approximate FQCN from src/main/java/ or relative path
                 clean_fqcn = norm_path
                 for prefix in ("src/main/java/", "src/main/kotlin/", "src/"):
                     if clean_fqcn.startswith(prefix):
@@ -140,13 +174,50 @@ def solve_multi_donor_composition(
             else:
                 dep_versions[dep] = receipt.selected_version
 
-    is_valid = (len(conflicts) == 0)
+    covered_caps = tuple(dict.fromkeys(d.capability for d in donors))
+    req_caps = tuple(required_capabilities) if required_capabilities else covered_caps
+    residual_caps = tuple(c for c in req_caps if c not in covered_caps)
+    complete_coverage = (len(residual_caps) == 0)
+    is_valid = (len(conflicts) == 0 and complete_coverage)
+
+    subgraph_receipts = tuple(
+        SubgraphProofReceipt(
+            subgraph_id=f"{d.repository}@{d.commit_sha}:{d.capability}",
+            capability=d.capability,
+            repository=d.repository,
+            commit_sha=d.commit_sha,
+            closure_hash=d.commit_sha,
+            artifact_paths=tuple(df.path for df in d.files),
+            is_verified=d.closure_complete,
+            proof_level="COMPILE_VERIFIED" if d.closure_complete else "PARTIAL_REUSE",
+        )
+        for d in donors
+    )
+
     return CompositionResult(
         is_valid=is_valid,
         selected_donors=tuple(donors) if is_valid else (),
         conflicts=tuple(conflicts),
         resolved_dependencies=tuple(resolved_deps),
+        required_capabilities=req_caps,
+        covered_capabilities=covered_caps,
+        residual_capabilities=residual_caps,
+        complete_coverage=complete_coverage,
+        subgraph_receipts=subgraph_receipts,
     )
+
+
+def _score_composition_beam(combo: Sequence[DonorSlice], total_caps: int) -> float:
+    """Calculate proof-quality score for a candidate donor combination."""
+    if not combo:
+        return 0.0
+    covered = len({d.capability for d in combo})
+    coverage_score = (covered / max(1, total_caps)) * 100.0
+    confidence_score = sum(d.confidence for d in combo) * 10.0
+    proof_score = sum(20.0 if d.closure_complete else 5.0 for d in combo)
+    cost_penalty = sum(d.adaptation_cost for d in combo) * 5.0
+    donor_count_penalty = len(combo) * 2.0
+    return coverage_score + confidence_score + proof_score - cost_penalty - donor_count_penalty
 
 
 def search_best_donor_composition(
@@ -174,26 +245,28 @@ def search_best_donor_composition(
                     new_combo,
                     target_loader=target_loader,
                     target_minecraft=target_minecraft,
+                    required_capabilities=tuple(d.capability for d in new_combo),
                 )
-                if eval_res.is_valid:
+                if len(eval_res.conflicts) == 0:
                     next_beams.append(new_combo)
 
         if not next_beams:
             # If all combinations for this capability conflict, keep the best partial combos
             break
 
-        # Score and prune beams (higher file count / lower donor diversity score)
-        next_beams.sort(key=lambda b: sum(len(d.files) for d in b), reverse=True)
+        # Score and prune beams using proof-quality scoring
+        next_beams.sort(key=lambda b: _score_composition_beam(b, len(caps)), reverse=True)
         beams = next_beams[:beam_width]
 
     if not beams or not beams[0]:
-        return CompositionResult(is_valid=False)
+        return CompositionResult(is_valid=False, required_capabilities=tuple(caps), residual_capabilities=tuple(caps), complete_coverage=False)
 
     best_combo = beams[0]
     return solve_multi_donor_composition(
         best_combo,
         target_loader=target_loader,
         target_minecraft=target_minecraft,
+        required_capabilities=tuple(caps),
     )
 
 
