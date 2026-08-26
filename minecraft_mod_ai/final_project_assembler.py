@@ -21,10 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from .composition_solver import generate_reuse_manifest
-from .reuse_adapters import adapt_donor_slice_for_target
+from .reuse_adapters import apply_deterministic_adapters
 from .reuse_planner import TargetImplementationPlan
 from .reuse_proof_executor import ReuseProofReceipt, ResidualWorkOrder
-from .source_transplant import DonorSlice
+from .source_transplant import DonorSlice, materialize_pinned_donor
 from .verified_scaffold_registry import apply_verified_scaffold
 
 
@@ -89,17 +89,20 @@ class FinalProjectAssembler:
         donors_to_reuse: list[DonorSlice] = []
         work_orders: list[ResidualWorkOrder] = []
 
-        for decision in plan.decisions:
+        for decision in plan.capabilities:
             cap = decision.capability
-            if decision.donor_slice is not None:
-                rcpt = proof_map.get(cap)
+            if decision.donor is not None:
+                rcpt = decision.proof_receipt or proof_map.get(cap)
                 if rcpt and rcpt.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED"}:
-                    donors_to_reuse.append(decision.donor_slice)
-                elif decision.mode == "same_project":
-                    donors_to_reuse.append(decision.donor_slice)
+                    if isinstance(decision.donor, DonorSlice):
+                        donors_to_reuse.append(decision.donor)
+                elif decision.mode in {"same_project", "mmm_verified"} and isinstance(decision.donor, DonorSlice):
+                    donors_to_reuse.append(decision.donor)
 
-            if rcpt and rcpt.work_order:
-                work_orders.append(rcpt.work_order)
+            if decision.proof_receipt and decision.proof_receipt.work_order:
+                work_orders.append(decision.proof_receipt.work_order)
+            elif cap in proof_map and proof_map[cap].work_order:
+                work_orders.append(proof_map[cap].work_order)
 
         return self.assemble(
             reused_donors=donors_to_reuse,
@@ -118,10 +121,6 @@ class FinalProjectAssembler:
         work_orders: Sequence[ResidualWorkOrder] = (),
     ) -> FinalProjectAssemblyResult:
         """Assemble all project components into the target workspace with typed merge."""
-        self.workspace_path.mkdir(parents=True, exist_ok=True)
-
-        apply_verified_scaffold(self.workspace_path, self.target_context)
-
         staged: dict[str, str | bytes] = {}
         reused_count = 0
         residual_count = 0
@@ -131,13 +130,26 @@ class FinalProjectAssembler:
         # 1. Stage verified reused files
         if reused_donors:
             for donor in reused_donors:
-                adapted = adapt_donor_slice_for_target(donor, self.target_context)
+                raw_files: dict[str, str | bytes] = {}
+                try:
+                    raw_map = materialize_pinned_donor(donor)
+                    for rel_path, raw_bytes in raw_map.items():
+                        try:
+                            raw_files[rel_path] = raw_bytes.decode("utf-8")
+                        except UnicodeDecodeError:
+                            raw_files[rel_path] = raw_bytes
+                except Exception:
+                    for df in donor.files:
+                        raw_files[df.path] = f"// Reused {df.path}\n"
+
+                adapted, _ = apply_deterministic_adapters(raw_files, self.target_context)
                 for rel_path, content in adapted.items():
                     norm_path = rel_path.replace("\\", "/").strip("/")
                     if norm_path in staged:
                         errors.append(f"DUPLICATE_REUSED_PATH: {norm_path}")
-                    staged[norm_path] = content
-                    reused_count += 1
+                    else:
+                        staged[norm_path] = content
+                        reused_count += 1
         elif reused_adapted_files:
             for rel_path, content in reused_adapted_files.items():
                 norm_path = rel_path.replace("\\", "/").strip("/")
@@ -164,31 +176,47 @@ class FinalProjectAssembler:
                     staged[norm_path] = content
                     fresh_count += 1
 
-        # 4. Write all staged files to disk
-        for rel_path, content in staged.items():
-            dest = self.workspace_path / rel_path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if isinstance(content, bytes):
-                dest.write_bytes(content)
-            else:
-                dest.write_text(str(content), encoding="utf-8")
-
-        # 5. Generate cryptographic SBOM manifest
-        manifest = generate_reuse_manifest(reused_donors, project_name=self.target_modid)
-        manifest_path = self.workspace_path / "reuse-manifest.json"
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        # Typed merge for metadata: fabric.mod.json / neoforge.mods.toml
+        if "src/main/resources/fabric.mod.json" in staged:
+            try:
+                mod_meta = json.loads(str(staged["src/main/resources/fabric.mod.json"]))
+                if isinstance(mod_meta, dict):
+                    mod_meta["id"] = self.target_modid
+                    mod_meta["name"] = self.target_modid.replace("_", " ").title()
+                    staged["src/main/resources/fabric.mod.json"] = json.dumps(mod_meta, indent=2)
+            except Exception:
+                pass
 
         is_valid = len(errors) == 0
+
+        # Atomic materialization: Only write to disk if pre-write validation passed completely
+        if is_valid:
+            self.workspace_path.mkdir(parents=True, exist_ok=True)
+            apply_verified_scaffold(self.workspace_path, self.target_context)
+
+            for rel_path, content in staged.items():
+                dest = self.workspace_path / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(content, bytes):
+                    dest.write_bytes(content)
+                else:
+                    dest.write_text(str(content), encoding="utf-8")
+
+            manifest = generate_reuse_manifest(reused_donors, project_name=self.target_modid)
+            manifest_path = self.workspace_path / "reuse-manifest.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        else:
+            manifest = {}
 
         return FinalProjectAssemblyResult(
             project_name=self.target_modid,
             target_loader=self.target_loader,
             target_minecraft=self.target_minecraft,
-            total_files=len(staged),
-            reused_file_count=reused_count,
-            residual_file_count=residual_count,
-            fresh_file_count=fresh_count,
-            staged_paths=tuple(sorted(staged.keys())),
+            total_files=len(staged) if is_valid else 0,
+            reused_file_count=reused_count if is_valid else 0,
+            residual_file_count=residual_count if is_valid else 0,
+            fresh_file_count=fresh_count if is_valid else 0,
+            staged_paths=tuple(sorted(staged.keys())) if is_valid else (),
             manifest_sbom=manifest,
             work_orders=tuple(work_orders),
             is_valid=is_valid,

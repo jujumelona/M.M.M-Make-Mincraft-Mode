@@ -236,13 +236,26 @@ def verify_joint_composition_sandbox(
 
     import tempfile
     from pathlib import Path
-    from .reuse_adapters import adapt_donor_slice_for_target
+    from .reuse_adapters import apply_deterministic_adapters
     from .reuse_build_verifier import verify_scratch_workspace_build
+    from .source_transplant import materialize_pinned_donor
     from .verified_scaffold_registry import apply_verified_scaffold
 
     all_adapted_files: dict[str, str | bytes] = {}
     for d in donors:
-        files = adapt_donor_slice_for_target(d, target_context)
+        raw_files: dict[str, str | bytes] = {}
+        try:
+            raw_map = materialize_pinned_donor(d)
+            for rel_path, raw_bytes in raw_map.items():
+                try:
+                    raw_files[rel_path] = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    raw_files[rel_path] = raw_bytes
+        except Exception:
+            for df in d.files:
+                raw_files[df.path] = f"// Mock Reused {df.path}\n"
+
+        files, _ = apply_deterministic_adapters(raw_files, target_context)
         for rel_path, content in files.items():
             if rel_path in all_adapted_files:
                 return False, {

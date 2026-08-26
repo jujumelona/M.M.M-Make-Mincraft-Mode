@@ -420,15 +420,3 @@ def apply_deterministic_adapters(
     result_files: dict[str, str | bytes] = {**working_files, **binary_files}
     return result_files, tuple(receipts)
 
-
-def adapt_donor_slice_for_target(
-    donor_slice: Any,
-    target_context: Mapping[str, Any],
-) -> dict[str, str | bytes]:
-    """Adapt a DonorSlice files into target context format applying deterministic adapters."""
-    raw_files: dict[str, str | bytes] = {}
-    for df in donor_slice.files:
-        raw_files[df.path] = f"// Reused {df.path}\n"
-    adapted, _ = apply_deterministic_adapters(raw_files, target_context)
-    return adapted
-
