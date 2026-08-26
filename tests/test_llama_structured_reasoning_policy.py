@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import llama_server_hardware_policy
-from minecraft_mod_ai.llama_structured_decode_policy import bind_structured_decode_policy
+from minecraft_mod_ai.llama_structured_decode_policy import (
+    _bind_structured_generation_retry,
+    bind_structured_decode_policy,
+)
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 
 
 def _adapter():
@@ -81,6 +87,65 @@ def test_explicit_schema_reaches_native_llama_payload() -> None:
             "schema": schema,
         },
     }
+
+
+def test_native_structured_invalid_then_valid_regenerates_exactly_once() -> None:
+    class FakeAdapter:
+        def __init__(self) -> None:
+            self.outputs = ['{"broken"', '{"ok":true}']
+            self.calls = 0
+
+        def generate(self, request):
+            del request
+            self.calls += 1
+            return self.outputs.pop(0)
+
+    module = SimpleNamespace(LlamaCppAdapter=FakeAdapter)
+    _bind_structured_generation_retry(module)
+    adapter = FakeAdapter()
+
+    result = adapter.generate(_request(response_format="json"))
+
+    assert result == '{"ok":true}'
+    assert adapter.calls == 2
+
+
+def test_native_structured_second_invalid_response_escapes_after_two_calls() -> None:
+    class FakeAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, request):
+            del request
+            self.calls += 1
+            return '{"broken"'
+
+    module = SimpleNamespace(LlamaCppAdapter=FakeAdapter)
+    _bind_structured_generation_retry(module)
+    adapter = FakeAdapter()
+
+    with pytest.raises(StructuredOutputValidationError):
+        adapter.generate(_request(response_format="json"))
+
+    assert adapter.calls == 2
+
+
+def test_non_structured_native_generation_is_not_retried_or_validated() -> None:
+    class FakeAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, request):
+            del request
+            self.calls += 1
+            return "not-json"
+
+    module = SimpleNamespace(LlamaCppAdapter=FakeAdapter)
+    _bind_structured_generation_retry(module)
+    adapter = FakeAdapter()
+
+    assert adapter.generate(_request(response_format="text")) == "not-json"
+    assert adapter.calls == 1
 
 
 def test_freeform_text_keeps_model_default_reasoning() -> None:
