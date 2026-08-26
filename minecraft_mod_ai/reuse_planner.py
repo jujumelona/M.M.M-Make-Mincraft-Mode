@@ -404,9 +404,9 @@ class TargetImplementationPlan:
                     "source_id": item.source_id,
                     "fresh_generation_scope": (
                         "forbidden"
-                        if (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"}) and item.mode != "adapt"
+                        if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED", "INTEGRATION_VERIFIED", "RUNTIME_BOOT_VERIFIED"} and item.mode != "adapt"
                         else "residual_only"
-                        if (item.mode == "adapt" or item.proof_level == "PARTIAL_REUSE") and (item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "PARTIAL_REUSE", "HOST_VERIFIED"} or item.mode in {"same_project", "mmm_verified"})
+                        if item.proof_level in {"PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED"} or (item.mode == "adapt" and item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "PARTIAL_REUSE", "HOST_VERIFIED"})
                         else "full"
                     ),
                 }
@@ -739,6 +739,7 @@ def _plan_target(
                     reuse_verification_cost=0.18 * fresh_verify,
                     source_id="current_project",
                     rationale="Existing project capability is explicitly evidenced and retained in-place.",
+                    proof_level="HOST_VERIFIED",
                 )
             )
             continue
@@ -762,6 +763,7 @@ def _plan_target(
                     source_id=verified.component_id,
                     donor={"registry_component": verified.to_dict()},
                     rationale="Previously verified MMM component matches the exact target and capability.",
+                    proof_level="COMPILE_VERIFIED",
                 )
             )
             continue
@@ -832,6 +834,7 @@ def _plan_target(
                             donor=donor.to_dict(),
                             rationale="Pinned permissive donor slice passed compilation verification in isolated target sandbox.",
                             proof_level=proof_lvl,
+                            proof_receipt=winning_receipt,
                         )
                     )
                     continue
@@ -852,6 +855,7 @@ def _plan_target(
                             donor=donor.to_dict(),
                             rationale="Pinned donor slice is structurally useful but requires adaptation or residual fresh generation.",
                             proof_level=proof_lvl,
+                            proof_receipt=winning_receipt,
                         )
                     )
                     continue

@@ -8,9 +8,11 @@ Executes actual compilation and static validation in isolated scratch target wor
 3. Captures exit code, stdout, stderr, unresolved symbols, and emits structured BuildVerificationReceipt.
 """
 
+import hashlib
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,6 +135,57 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
     return executed, passed, failed, tuple(dict.fromkeys(test_ids)), individual_results
 
 
+def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
+    props = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.properties"
+    dist_url = ""
+    dist_sha = ""
+    gradle_ver = "8.10.2"
+    if props.exists():
+        text = props.read_text(encoding="utf-8")
+        url_match = re.search(r"distributionUrl=([^\r\n]+)", text)
+        if url_match:
+            dist_url = url_match.group(1).replace(r"\:", ":")
+            v_match = re.search(r"gradle-([0-9.]+)-", dist_url)
+            if v_match:
+                gradle_ver = v_match.group(1)
+        sha_match = re.search(r"distributionSha256Sum=([^\r\n]+)", text)
+        if sha_match:
+            dist_sha = sha_match.group(1).strip()
+
+    loader = "fabric"
+    mc_ver = "1.21.1"
+    bg = workspace_root / "build.gradle"
+    bg_kts = workspace_root / "build.gradle.kts"
+    bg_text = ""
+    if bg.exists():
+        bg_text = bg.read_text(encoding="utf-8")
+    elif bg_kts.exists():
+        bg_text = bg_kts.read_text(encoding="utf-8")
+
+    if "net.neoforged" in bg_text:
+        loader = "neoforge"
+    elif "net.minecraftforge" in bg_text:
+        loader = "forge"
+
+    mc_match = re.search(r"['\"]com\.mojang:minecraft:([^'\"]+)['\"]", bg_text) or re.search(r"minecraft_version\s*=\s*['\"]?([^'\"\s]+)", bg_text)
+    if mc_match:
+        mc_ver = mc_match.group(1).strip()
+
+    java_ver = "21"
+
+    toolchain_id = f"{loader}:{gradle_ver}:{mc_ver}:{dist_sha or 'local'}"
+    toolchain_hash = "sha256:" + hashlib.sha256(toolchain_id.encode("utf-8")).hexdigest()
+
+    return BuildToolchainReceipt(
+        gradle_version=gradle_ver,
+        distribution_sha256=dist_sha,
+        java_version=java_ver,
+        loader=loader,
+        minecraft_version=mc_ver,
+        toolchain_hash=toolchain_hash,
+    )
+
+
 def verify_scratch_workspace_build(
     workspace_root: str | Path,
     *,
@@ -142,6 +195,7 @@ def verify_scratch_workspace_build(
     """Execute two-stage (compileJava -> test) verification in the target scratch workspace."""
     ws = Path(workspace_root).resolve()
     gradlew, tool_name = _find_gradle_wrapper(ws)
+    toolchain = _inspect_build_toolchain(ws)
 
     if gradlew:
         # Stage 1: Compile verification
@@ -203,6 +257,7 @@ def verify_scratch_workspace_build(
                 tests_failed_count=tests_failed_count,
                 executed_test_ids=executed_test_ids,
                 individual_test_results=individual_results,
+                toolchain=toolchain,
             )
         except Exception as e:
             return BuildVerificationReceipt(

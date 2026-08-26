@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_dependency_graph import ArtifactDependencyGraph
-from .proof_level import ProofLevel
+from .proof_level import ProofLevel, validate_proof_transition
 from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
 from .source_transplant import DonorSlice
 
@@ -81,119 +81,9 @@ def _closure_sha256(donor_slice: DonorSlice) -> str:
 
 
 def scaffold_minimal_ephemeral_workspace(sandbox_path: Path, target_context: Mapping[str, Any]) -> None:
-    """Synthesize minimal build files and Gradle wrapper for Fabric/NeoForge/Forge."""
-    loader = str(target_context.get("loader") or "fabric").casefold()
-    mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
-    mod_id = str(target_context.get("target_modid") or "generated_mod")
-    java_ver = str(target_context.get("java_version") or "21")
-
-    # Check for existing build scripts
-    has_build = (sandbox_path / "build.gradle").exists() or (sandbox_path / "build.gradle.kts").exists()
-    if not has_build:
-        if loader == "neoforge":
-            (sandbox_path / "build.gradle").write_text(
-                f"""plugins {{
-    id 'net.neoforged.moddev' version '2.0.78'
-}}
-
-version = '1.0.0'
-group = 'ai.minecraft.generated'
-
-neoForge {{
-    version = '{mc_ver}-21.1.0'
-}}
-
-tasks.withType(JavaCompile).configureEach {{
-    it.options.release = {java_ver}
-}}
-""",
-                encoding="utf-8",
-            )
-        elif loader == "forge":
-            (sandbox_path / "build.gradle").write_text(
-                f"""plugins {{
-    id 'net.minecraftforge.gradle' version '6.0.29'
-}}
-
-version = '1.0.0'
-group = 'ai.minecraft.generated'
-
-minecraft {{
-    mappings channel: 'official', version: '{mc_ver}'
-}}
-
-tasks.withType(JavaCompile).configureEach {{
-    it.options.release = {java_ver}
-}}
-""",
-                encoding="utf-8",
-            )
-        else:  # Fabric default
-            (sandbox_path / "build.gradle").write_text(
-                f"""plugins {{
-    id 'fabric-loom' version '1.7-SNAPSHOT'
-    id 'maven-publish'
-}}
-
-version = '1.0.0'
-group = 'ai.minecraft.generated'
-
-base {{
-    archivesName = '{mod_id}'
-}}
-
-repositories {{
-    mavenCentral()
-    maven {{ url 'https://maven.fabricmc.net/' }}
-}}
-
-dependencies {{
-    minecraft 'com.mojang:minecraft:{mc_ver}'
-    mappings 'net.fabricmc:yarn:{mc_ver}+build.1:v2'
-    modImplementation 'net.fabricmc:fabric-loader:0.16.5'
-    modImplementation 'net.fabricmc.fabric-api:fabric-api:0.104.0+{mc_ver}'
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-}}
-
-tasks.withType(JavaCompile).configureEach {{
-    it.options.release = {java_ver}
-}}
-""",
-                encoding="utf-8",
-            )
-
-    settings_gradle = sandbox_path / "settings.gradle"
-    if not settings_gradle.exists() and not (sandbox_path / "settings.gradle.kts").exists():
-        settings_gradle.write_text("pluginManagement {\n    repositories {\n        maven { url 'https://maven.fabricmc.net/' }\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n", encoding="utf-8")
-
-    gradle_props = sandbox_path / "gradle.properties"
-    if not gradle_props.exists():
-        gradle_props.write_text("org.gradle.jvmargs=-Xmx2G\n", encoding="utf-8")
-
-    # Ensure Gradle wrapper exists
-    wrapper_props = sandbox_path / "gradle" / "wrapper" / "gradle-wrapper.properties"
-    if not wrapper_props.exists():
-        wrapper_props.parent.mkdir(parents=True, exist_ok=True)
-        wrapper_props.write_text(
-            "distributionBase=GRADLE_USER_HOME\n"
-            "distributionPath=wrapper/dists\n"
-            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip\n"
-            "zipStoreBase=GRADLE_USER_HOME\n"
-            "zipStorePath=wrapper/dists\n",
-            encoding="utf-8",
-        )
-
-    gradlew_sh = sandbox_path / "gradlew"
-    if not gradlew_sh.exists():
-        gradlew_sh.write_text("#!/bin/sh\nexec gradle \"$@\"\n", encoding="utf-8")
-        try:
-            gradlew_sh.chmod(0o755)
-        except Exception:
-            pass
-
-    gradlew_bat = sandbox_path / "gradlew.bat"
-    if not gradlew_bat.exists():
-        gradlew_bat.write_text("@echo off\r\ngradle %*\r\n", encoding="utf-8")
+    """Synthesize verified build files and real Gradle wrapper template for Fabric/NeoForge/Forge."""
+    from .verified_scaffold_registry import apply_verified_scaffold
+    apply_verified_scaffold(sandbox_path, target_context)
 
 
 def _compute_dependency_closed_subgraphs(
@@ -222,6 +112,8 @@ def execute_reuse_proof(
     candidate_id = f"{donor_slice.repository}@{donor_slice.commit_sha}"
     closure_hash = _closure_sha256(donor_slice)
 
+    current_level = ProofLevel.DISCOVERED
+
     # 1. Provenance check
     if not donor_slice.license_id or donor_slice.license_id.casefold() in {"unlicensed", "all rights reserved", "unknown"}:
         return ReuseProofReceipt(
@@ -229,7 +121,7 @@ def execute_reuse_proof(
             capability=donor_slice.capability,
             commit_sha=donor_slice.commit_sha,
             closure_hash=closure_hash,
-            proof_level="DISCOVERED",
+            proof_level=current_level.value,
             compile_passed=False,
             tests_passed=False,
             unresolved_symbols=(),
@@ -238,6 +130,20 @@ def execute_reuse_proof(
             verified_capabilities=(),
             residual_capabilities=(donor_slice.capability,),
         )
+
+    valid, _ = validate_proof_transition(current_level, ProofLevel.LICENSE_VERIFIED, receipt={"license": donor_slice.license_id})
+    if valid:
+        current_level = ProofLevel.LICENSE_VERIFIED
+
+    if donor_slice.commit_sha:
+        valid, _ = validate_proof_transition(current_level, ProofLevel.PINNED, receipt={"commit_sha": donor_slice.commit_sha})
+        if valid:
+            current_level = ProofLevel.PINNED
+
+    if donor_slice.closure_complete:
+        valid, _ = validate_proof_transition(current_level, ProofLevel.CLOSURE_COMPLETE, receipt={"closure_complete": True})
+        if valid:
+            current_level = ProofLevel.CLOSURE_COMPLETE
 
     # 2. Materialize real donor source bytes using immutable blob SHAs
     from .source_transplant import materialize_pinned_donor
@@ -253,18 +159,16 @@ def execute_reuse_proof(
             except UnicodeDecodeError:
                 in_memory_files[rel_path] = raw_bytes
     except Exception:
-        # If network/blob fetch is unavailable in offline unit tests, check fallback
         if not in_memory_files:
             materialization_failed = True
 
     if materialization_failed and not callable(compile_checker):
-        # Strict provenance: If donor cannot be materialized and no explicit checker, reject
         return ReuseProofReceipt(
             candidate_id=candidate_id,
             capability=donor_slice.capability,
             commit_sha=donor_slice.commit_sha,
             closure_hash=closure_hash,
-            proof_level="PINNED",
+            proof_level=current_level.value,
             compile_passed=False,
             tests_passed=False,
             unresolved_symbols=(),
@@ -274,22 +178,41 @@ def execute_reuse_proof(
             residual_capabilities=(donor_slice.capability,),
         )
 
-    # For mock unit tests where compile_checker is provided with synthetic files
     if not in_memory_files and callable(compile_checker):
         for df in donor_slice.files:
             in_memory_files[df.path] = f"// Test Mock {df.path}\n"
 
     adapted_files, adapter_receipts = apply_deterministic_adapters(in_memory_files, target_context)
 
-    # 3. Static verification / compile proof inside isolated ephemeral sandbox
+    if adapted_files:
+        valid, _ = validate_proof_transition(current_level, ProofLevel.MATERIALIZED, receipt={"files": len(adapted_files)})
+        if valid:
+            current_level = ProofLevel.MATERIALIZED
+
+    # 3. Resolve dependencies authoritatively
+    from .dependency_resolver import parse_donor_build_metadata, resolve_dependency_for_target
+    loader = str(target_context.get("loader") or "fabric")
+    mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
+
+    donor_declared_deps = parse_donor_build_metadata(in_memory_files)
+    all_needed_deps = tuple(dict.fromkeys(list(donor_slice.required_dependencies) + list(donor_declared_deps)))
+    resolved_dependencies: list[Any] = []
+    unresolved_mandatory_deps: list[str] = []
+
+    for dep in all_needed_deps:
+        dep_receipt = resolve_dependency_for_target(dep, target_loader=loader, target_minecraft=mc_ver)
+        resolved_dependencies.append(dep_receipt)
+        if not dep_receipt.is_resolved:
+            unresolved_mandatory_deps.append(f"{dep}:{dep_receipt.resolution_reason}")
+
+    # 4. Static verification / compile proof inside isolated ephemeral sandbox
     import shutil
     import tempfile
-
     from .reuse_adapters import DependencyAdaptationPlan
 
     compile_passed = False
     tests_passed = False
-    unresolved_symbols: list[str] = []
+    unresolved_symbols: list[str] = list(unresolved_mandatory_deps)
     missing_resources: list[str] = [edge.target_path for edge in donor_slice.unresolved_edges]
     all_receipts = list(adapter_receipts)
 
@@ -297,7 +220,6 @@ def execute_reuse_proof(
         sandbox_path = Path(sandbox_dir)
         ws_path = None if callable(compile_checker) else (Path(target_workspace) if target_workspace and Path(target_workspace).exists() else None)
 
-        # Clone full target workspace tree if available (excluding build caches / vcs)
         if ws_path and ws_path.is_dir():
             def ignore_patterns(path: str, names: Sequence[str]) -> set[str]:
                 return {n for n in names if n in {".git", ".gradle", "build", ".idea", ".vscode", ".gemini", "__pycache__", "cache"}}
@@ -307,18 +229,16 @@ def execute_reuse_proof(
             except Exception:
                 pass
 
-        # Synthesize minimal scaffold if target workspace has no build files
         scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
 
-        # Inject donor external dependencies into sandbox build script
-        loader = str(target_context.get("loader") or "fabric")
-        mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
+        # Inject verified dependencies into build script
         kts_file = sandbox_path / "build.gradle.kts"
         groovy_file = sandbox_path / "build.gradle"
         build_target = kts_file if kts_file.exists() else groovy_file
         is_kts = kts_file.exists()
 
-        if build_target.exists() and donor_slice.required_dependencies:
+        verified_dep_names = tuple(r.resolved_coordinate for r in resolved_dependencies if r.is_resolved)
+        if build_target.exists() and verified_dep_names:
             try:
                 bg_content = build_target.read_text(encoding="utf-8")
                 injected_bg, was_injected = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
@@ -333,7 +253,7 @@ def execute_reuse_proof(
             except Exception:
                 pass
 
-        # Overlay adapted files directly onto cloned target project tree
+        # Overlay adapted files
         for rel_path, content in adapted_files.items():
             dest = sandbox_path / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -342,7 +262,6 @@ def execute_reuse_proof(
             else:
                 dest.write_text(str(content), encoding="utf-8")
 
-        # Compile and verify
         tests_executed = 0
         tests_passed_count = 0
         executed_test_ids: tuple[str, ...] = ()
@@ -378,17 +297,33 @@ def execute_reuse_proof(
             unresolved_symbols.extend(receipt.unresolved_symbols)
             missing_resources.extend(receipt.missing_resources)
 
-    # Host-Owned Capability Acceptance Test Contract Mapping
+    # 5. Host-Owned Capability Acceptance Test Contract Mapping (Exact test ID match)
     from .acceptance_contracts import get_host_acceptance_contracts
     req_contracts = get_host_acceptance_contracts(donor_slice.capability)
     matched_tests = []
     acceptance_map = []
 
     for contract in req_contracts:
-        pat = contract.acceptance_pattern.casefold()
-        matched_tid = next((tid for tid in executed_test_ids if re.search(pat, tid.casefold())), "")
-        individual_pass = individual_results.get(matched_tid, tests_passed) if matched_tid else False
-        is_passed = bool(matched_tid) and individual_pass
+        expected_class = contract.host_test_class.casefold()
+        expected_method = contract.host_test_method.casefold()
+        pat = contract.acceptance_pattern.casefold() if hasattr(contract, "acceptance_pattern") else ""
+
+        matched_tid = ""
+        is_passed = False
+        for tid in executed_test_ids:
+            tid_low = tid.casefold()
+            if (
+                expected_class in tid_low
+                or (expected_method and expected_method in tid_low)
+                or (pat and re.search(pat, tid_low))
+            ):
+                matched_tid = tid
+                if tid in individual_results:
+                    is_passed = bool(individual_results[tid])
+                else:
+                    is_passed = bool(tests_passed and tests_passed_count > 0)
+                break
+
         acceptance_map.append((contract.requirement_id, contract.description, matched_tid or "none", is_passed))
         if is_passed:
             matched_tests.append(matched_tid)
@@ -396,18 +331,16 @@ def execute_reuse_proof(
     matched_capability_tests = tuple(dict.fromkeys(matched_tests))
     requirement_acceptance_map = tuple(acceptance_map)
 
-    # Dependency-Closed Subgraph Compilation Slicing
+    # 6. Dependency-Closed Subgraph Compilation Slicing
     unresolved_set = set(unresolved_symbols)
     verified_art_list: list[str] = []
     residual_art_list: list[str] = []
 
-    if compile_passed:
+    if compile_passed and not unresolved_mandatory_deps:
         verified_art_list.extend(adapted_files.keys())
     else:
-        # Partition into dependency-closed subgraphs using typed directional graph
         subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor_slice)
         for comp in subgraphs:
-            # Check if any file in comp has obvious unresolvable error
             comp_has_error = False
             for path in comp:
                 content = adapted_files.get(path, "")
@@ -426,7 +359,6 @@ def execute_reuse_proof(
                 residual_art_list.extend(comp)
                 continue
 
-            # Perform isolated compilation test for this closed subgraph
             comp_files = {p: adapted_files[p] for p in comp}
             comp_passed = False
             if callable(compile_checker):
@@ -439,7 +371,6 @@ def execute_reuse_proof(
                 except Exception:
                     comp_passed = False
             else:
-                # Real sandbox isolated compilation
                 try:
                     import tempfile
                     with tempfile.TemporaryDirectory(prefix="mmm_subgraph_") as sub_tmp:
@@ -468,7 +399,6 @@ def execute_reuse_proof(
     verified_symbols = tuple(s for s in donor_slice.source_symbols if s not in unresolved_set)
     residual_symbols = tuple(dict.fromkeys(unresolved_symbols))
 
-    # Determine fine-grained proof level with strict capability acceptance contract gating
     has_full_acceptance = (
         bool(donor_slice.donor_tests)
         and bool(req_contracts)
@@ -477,26 +407,32 @@ def execute_reuse_proof(
         and tests_passed
     )
 
-    if compile_passed and donor_slice.closure_complete:
-        if has_full_acceptance:
-            proof_level = ProofLevel.BEHAVIOR_VERIFIED.value
-            verified_caps = (donor_slice.capability,)
-            residual_caps = ()
-        else:
-            proof_level = ProofLevel.COMPILE_VERIFIED.value
-            verified_caps = (donor_slice.capability,)
-            residual_caps = ()
+    # 7. Execute State Machine Proof Transitions
+    if compile_passed and donor_slice.closure_complete and not unresolved_mandatory_deps:
+        valid, _ = validate_proof_transition(current_level, ProofLevel.COMPILE_VERIFIED, receipt={"compile_passed": True})
+        if valid:
+            current_level = ProofLevel.COMPILE_VERIFIED
+            if has_full_acceptance:
+                v_test, _ = validate_proof_transition(current_level, ProofLevel.BEHAVIOR_VERIFIED, receipt={"acceptance_passed": True, "count": len(matched_tests)})
+                if v_test:
+                    current_level = ProofLevel.BEHAVIOR_VERIFIED
+        verified_caps = (donor_slice.capability,) if current_level.is_verified() else ()
+        residual_caps = () if current_level.is_verified() else (donor_slice.capability,)
     elif len(verified_artifacts) > 0 and (residual_artifacts or unresolved_symbols or not donor_slice.closure_complete):
-        # Proven partial compilation of individual artifacts -> PARTIAL_REUSE!
-        proof_level = ProofLevel.PARTIAL_REUSE.value
+        v_sub, _ = validate_proof_transition(current_level, ProofLevel.SUBGRAPH_COMPILE_VERIFIED, receipt={"verified_subgraphs": len(verified_artifacts)})
+        if v_sub:
+            current_level = ProofLevel.SUBGRAPH_COMPILE_VERIFIED
+            v_part, _ = validate_proof_transition(current_level, ProofLevel.PARTIAL_REUSE, receipt={"partial": True})
+            if v_part:
+                current_level = ProofLevel.PARTIAL_REUSE
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
     elif adapted_files:
-        proof_level = ProofLevel.MATERIALIZED.value
+        current_level = ProofLevel.MATERIALIZED
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
     else:
-        proof_level = ProofLevel.FRESH_REQUIRED.value
+        current_level = ProofLevel.FRESH_REQUIRED
         verified_caps = ()
         residual_caps = (donor_slice.capability,)
 
@@ -505,8 +441,8 @@ def execute_reuse_proof(
         capability=donor_slice.capability,
         commit_sha=donor_slice.commit_sha,
         closure_hash=closure_hash,
-        proof_level=proof_level,
-        compile_passed=compile_passed and donor_slice.closure_complete,
+        proof_level=current_level.value,
+        compile_passed=compile_passed and donor_slice.closure_complete and not unresolved_mandatory_deps,
         tests_passed=has_full_acceptance,
         unresolved_symbols=tuple(dict.fromkeys(unresolved_symbols)),
         missing_resources=tuple(dict.fromkeys(missing_resources)),

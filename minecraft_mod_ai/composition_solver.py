@@ -188,8 +188,8 @@ def solve_multi_donor_composition(
             commit_sha=d.commit_sha,
             closure_hash=d.commit_sha,
             artifact_paths=tuple(df.path for df in d.files),
-            is_verified=d.closure_complete,
-            proof_level="COMPILE_VERIFIED" if d.closure_complete else "PARTIAL_REUSE",
+            is_verified=bool(is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}),
+            proof_level="COMPILE_VERIFIED" if (is_valid and d.closure_complete and d.target_compatibility in {"exact", "metadata_exact"}) else ("PARTIAL_REUSE" if d.files else "UNVERIFIED"),
         )
         for d in donors
     )

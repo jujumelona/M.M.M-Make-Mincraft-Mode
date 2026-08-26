@@ -63,11 +63,19 @@ class ProofLevel(str, Enum):
 _LEGAL_TRANSITIONS: dict[ProofLevel, set[ProofLevel]] = {
     ProofLevel.DISCOVERED: {ProofLevel.LICENSE_VERIFIED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
     ProofLevel.LICENSE_VERIFIED: {ProofLevel.PINNED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
-    ProofLevel.PINNED: {ProofLevel.CLOSURE_COMPLETE, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
-    ProofLevel.CLOSURE_COMPLETE: {ProofLevel.MATERIALIZED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.PINNED: {ProofLevel.CLOSURE_COMPLETE, ProofLevel.MATERIALIZED, ProofLevel.UNVERIFIED, ProofLevel.FRESH_REQUIRED},
+    ProofLevel.CLOSURE_COMPLETE: {
+        ProofLevel.MATERIALIZED,
+        ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
+        ProofLevel.COMPILE_VERIFIED,
+        ProofLevel.PARTIAL_REUSE,
+        ProofLevel.UNVERIFIED,
+        ProofLevel.FRESH_REQUIRED,
+    },
     ProofLevel.MATERIALIZED: {
         ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
         ProofLevel.COMPILE_VERIFIED,
+        ProofLevel.PARTIAL_REUSE,
         ProofLevel.UNVERIFIED,
         ProofLevel.FRESH_REQUIRED,
     },
