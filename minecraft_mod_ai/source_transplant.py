@@ -50,6 +50,66 @@ _BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
 
 
 @dataclass(frozen=True)
+class ArtifactNode:
+    path: str
+    artifact_kind: str  # "java_source" | "json_model" | "texture_png" | "loot_table" | "recipe" | "tag_json" | "mixin_config" | "access_widener" | "mod_metadata" | "gradle_build"
+    blob_sha: str
+    sha256: str
+    size_bytes: int
+    declared_symbols: tuple[str, ...] = ()
+    referenced_symbols: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "artifact_kind": self.artifact_kind,
+            "blob_sha": self.blob_sha,
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
+            "declared_symbols": list(self.declared_symbols),
+            "referenced_symbols": list(self.referenced_symbols),
+        }
+
+
+@dataclass(frozen=True)
+class ArtifactEdge:
+    source_path: str
+    target_path: str
+    relation: str  # "import" | "type_ref" | "model_parent" | "texture_ref" | "loot_ref" | "mixin_target" | "registry_ref" | "access_widener_ref"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_path": self.source_path,
+            "target_path": self.target_path,
+            "relation": self.relation,
+        }
+
+
+@dataclass(frozen=True)
+class CompatibilityEvidence:
+    minecraft_version: str
+    loader: str
+    loader_version: str = ""
+    java_version: str = ""
+    fabric_api_dependency: str = ""
+    mixin_count: int = 0
+    has_access_widener: bool = False
+    status: str = "unverified"  # "metadata_exact" | "metadata_adapt" | "unverified"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "minecraft_version": self.minecraft_version,
+            "loader": self.loader,
+            "loader_version": self.loader_version,
+            "java_version": self.java_version,
+            "fabric_api_dependency": self.fabric_api_dependency,
+            "mixin_count": self.mixin_count,
+            "has_access_widener": self.has_access_widener,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
 class DonorFile:
     path: str
     blob_sha: str
@@ -82,10 +142,16 @@ class DonorSlice:
     donor_tests: tuple[str, ...]
     confidence: float
     adaptation_cost: float = 0.0
+    closure_complete: bool = True
+    truncation_reason: str = ""
+    artifact_nodes: tuple[ArtifactNode, ...] = ()
+    artifact_edges: tuple[ArtifactEdge, ...] = ()
+    unresolved_edges: tuple[ArtifactEdge, ...] = ()
+    compatibility_evidence: CompatibilityEvidence | None = None
 
     @property
     def exact_target(self) -> bool:
-        return self.target_compatibility == "exact"
+        return self.target_compatibility in {"exact", "metadata_exact"} and self.closure_complete
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -103,6 +169,12 @@ class DonorSlice:
             "donor_tests": list(self.donor_tests),
             "confidence": self.confidence,
             "adaptation_cost": self.adaptation_cost,
+            "closure_complete": self.closure_complete,
+            "truncation_reason": self.truncation_reason,
+            "artifact_nodes": [n.to_dict() for n in self.artifact_nodes],
+            "artifact_edges": [e.to_dict() for e in self.artifact_edges],
+            "unresolved_edges": [e.to_dict() for e in self.unresolved_edges],
+            "compatibility_evidence": self.compatibility_evidence.to_dict() if self.compatibility_evidence else None,
         }
 
 
@@ -198,47 +270,96 @@ def inspect_repository_slice(
         selected: list[str] = []
         selected_set: set[str] = set()
         total_bytes = 0
-        while pending and len(selected) < _MAX_CLOSURE_FILES:
+        artifact_nodes: list[ArtifactNode] = []
+        artifact_edges: list[ArtifactEdge] = []
+        unresolved_edges: list[ArtifactEdge] = []
+        truncation_reason = ""
+        closure_complete = True
+
+        # Index resource files in repo
+        resource_index: dict[str, str] = {}
+        for path in blobs:
+            if "/src/main/resources/" in f"/{path}":
+                clean_path = path.casefold()
+                stem = Path(path).stem.casefold()
+                resource_index[clean_path] = path
+                if stem not in resource_index:
+                    resource_index[stem] = path
+
+        while pending:
+            if len(selected) >= _MAX_CLOSURE_FILES:
+                closure_complete = False
+                truncation_reason = f"Exceeded MAX_CLOSURE_FILES ({_MAX_CLOSURE_FILES})"
+                while pending:
+                    rem = pending.popleft()
+                    unresolved_edges.append(ArtifactEdge(source_path="closure_root", target_path=rem, relation="type_ref"))
+                break
+
             path = pending.popleft()
             if path in selected_set:
                 continue
             raw = _fetch_blob_bytes(client, repository, blobs[path])
             if not raw or total_bytes + len(raw) > _MAX_SLICE_BYTES:
+                if total_bytes + len(raw) > _MAX_SLICE_BYTES:
+                    closure_complete = False
+                    truncation_reason = f"Exceeded MAX_SLICE_BYTES ({_MAX_SLICE_BYTES})"
+                    unresolved_edges.append(ArtifactEdge(source_path="closure_root", target_path=path, relation="size_overflow"))
                 continue
+
             selected.append(path)
             selected_set.add(path)
             contents[path] = raw
             total_bytes += len(raw)
-            text = raw.decode("utf-8", errors="replace")
-            referenced = set(_TOKEN.findall(text))
-            for symbol in sorted(referenced):
-                dep_path = declarations.get(symbol)
-                if dep_path and dep_path not in selected_set:
-                    pending.append(dep_path)
 
-        # Multi-Artifact Resource Closure: collect referenced JSON models, textures, loot tables, recipes
-        resource_paths = tuple(
-            path for path in blobs
-            if any(path.endswith(ext) for ext in (".json", ".png", ".mcmeta", ".accesswidener"))
-            and "/src/main/resources/" in f"/{path}"
-        )
-        if resource_paths:
-            selected_stems = {Path(p).stem.casefold() for p in selected}
-            for res_path in resource_paths:
-                if len(selected) >= _MAX_CLOSURE_FILES or total_bytes >= _MAX_SLICE_BYTES:
-                    break
-                res_stem = Path(res_path).stem.casefold()
-                if res_stem in selected_stems or any(stem in res_path.casefold() for stem in selected_stems):
-                    if res_path not in selected_set:
-                        raw = _fetch_blob_bytes(client, repository, blobs[res_path])
-                        if raw and total_bytes + len(raw) <= _MAX_SLICE_BYTES:
-                            selected.append(res_path)
-                            selected_set.add(res_path)
-                            contents[res_path] = raw
-                            total_bytes += len(raw)
+            text = raw.decode("utf-8", errors="replace")
+            kind = "java_source" if path.endswith(".java") else ("json_model" if path.endswith(".json") else "other")
+            local_declared = tuple(sorted(set(_TYPE_DECL.findall(text))))
+            local_referenced = tuple(sorted(set(_TOKEN.findall(text))))
+
+            artifact_nodes.append(
+                ArtifactNode(
+                    path=path,
+                    artifact_kind=kind,
+                    blob_sha=blobs[path],
+                    sha256="sha256:" + hashlib.sha256(raw).hexdigest(),
+                    size_bytes=len(raw),
+                    declared_symbols=local_declared,
+                    referenced_symbols=local_referenced[:64],
+                )
+            )
+
+            # Java symbol closure
+            if path.endswith(".java"):
+                for symbol in sorted(set(_TOKEN.findall(text))):
+                    dep_path = declarations.get(symbol)
+                    if dep_path:
+                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=dep_path, relation="type_ref"))
+                        if dep_path not in selected_set:
+                            pending.append(dep_path)
+
+                # Resource Identifier closure from Java code
+                for id_match in re.findall(r'"([a-z0-9_.-]+:[a-z0-9_/.-]+)"', text):
+                    parts = id_match.split(":", 1)
+                    if len(parts) == 2:
+                        res_name = parts[1].split("/")[-1].casefold()
+                        matched_res = resource_index.get(res_name)
+                        if matched_res and matched_res not in selected_set:
+                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
+                            pending.append(matched_res)
+
+            # JSON model parent/texture closure
+            elif path.endswith(".json"):
+                for parent_match in re.findall(r'"parent"\s*:\s*"([^"]+)"', text):
+                    parent_stem = parent_match.split(":")[-1].split("/")[-1].casefold()
+                    matched_parent = resource_index.get(parent_stem)
+                    if matched_parent and matched_parent not in selected_set:
+                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
+                        pending.append(matched_parent)
 
         if not selected:
             return None
+
+        # Build DonorFile list
         files: list[DonorFile] = []
         symbols: set[str] = set()
         for path in selected:
@@ -255,35 +376,46 @@ def inspect_repository_slice(
                     symbols=local_symbols,
                 )
             )
+
         overlap = len({token.casefold() for token in symbols} & capability_tokens)
         confidence = min(
             0.99,
             0.55
-            + (0.25 if compatibility == "exact" else 0.05)
+            + (0.25 if compatibility in {"exact", "metadata_exact"} else 0.05)
             + min(0.15, 0.03 * overlap)
-            + min(0.04, 0.01 * len(files)),
+            + min(0.04, 0.01 * len(files))
+            - (0.20 if not closure_complete else 0.0),
         )
         adaptation_cost = round(
             10.0 * len(required_dependencies)
-            + (0.0 if compatibility == "exact" else 25.0)
+            + (0.0 if compatibility in {"exact", "metadata_exact"} else 25.0)
             + (5.0 if "mixin" in metadata_text.casefold() else 0.0)
-            + 0.002 * (total_bytes / 1024.0),
+            + 0.002 * (total_bytes / 1024.0)
+            + (15.0 if not closure_complete else 0.0),
             2,
         )
+        ev = _target_compatibility_evidence(metadata_text, adapter=adapter)
+
         return DonorSlice(
             capability=capability,
             repository=repository,
             commit_sha=commit_sha,
             license_id=license_id,
             source_url=str(snapshot.get("source_url") or f"https://github.com/{repository}"),
-            target_compatibility=compatibility,
+            target_compatibility=compatibility if closure_complete else "unverified",
             files=tuple(files),
             seed_files=seed_paths,
             source_symbols=tuple(sorted(symbols)),
             required_dependencies=required_dependencies,
             donor_tests=donor_tests,
-            confidence=round(confidence, 4),
+            confidence=round(max(0.1, confidence), 4),
             adaptation_cost=adaptation_cost,
+            closure_complete=closure_complete,
+            truncation_reason=truncation_reason,
+            artifact_nodes=tuple(artifact_nodes),
+            artifact_edges=tuple(artifact_edges),
+            unresolved_edges=tuple(unresolved_edges),
+            compatibility_evidence=ev,
         )
     except Exception:
         return None
@@ -541,23 +673,41 @@ def _build_metadata_text(
     return "\n".join(chunks)
 
 
-def _target_compatibility(text: str, *, adapter: PlatformAdapter) -> str:
+def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> CompatibilityEvidence:
     if not text:
-        return "unverified"
+        return CompatibilityEvidence(minecraft_version="", loader="", status="unverified")
     folded = text.casefold()
     loader = adapter.loader.casefold()
     loader_evidenced = loader in folded or (loader == "fabric" and "fabricloader" in folded)
     prop = _MINECRAFT_PROP.search(text)
-    if prop:
-        value = prop.group(1).strip()
-        if value == adapter.minecraft_version and loader_evidenced:
-            return "exact"
-        return "adapt"
-    if adapter.minecraft_version in text and loader_evidenced:
-        return "exact"
-    if loader_evidenced:
-        return "adapt"
-    return "unverified"
+    mc_ver = prop.group(1).strip() if prop else ""
+    if not mc_ver:
+        for v in (adapter.minecraft_version, "1.21", "1.20", "1.19"):
+            if v in text:
+                mc_ver = v
+                break
+    mixin_count = len(re.findall(r"\bmixins?\b", folded))
+    has_aw = ".accesswidener" in text or "accessWidener" in text
+
+    if (mc_ver == adapter.minecraft_version or adapter.minecraft_version in text) and loader_evidenced:
+        status = "metadata_exact"
+    elif loader_evidenced:
+        status = "metadata_adapt"
+    else:
+        status = "unverified"
+
+    return CompatibilityEvidence(
+        minecraft_version=mc_ver,
+        loader=adapter.loader if loader_evidenced else "",
+        mixin_count=mixin_count,
+        has_access_widener=has_aw,
+        status=status,
+    )
+
+
+def _target_compatibility(text: str, *, adapter: PlatformAdapter) -> str:
+    ev = _target_compatibility_evidence(text, adapter=adapter)
+    return "exact" if ev.status == "metadata_exact" else ("adapt" if ev.status == "metadata_adapt" else "unverified")
 
 
 def _declared_dependencies(text: str) -> tuple[str, ...]:

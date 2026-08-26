@@ -196,6 +196,19 @@ def decompose_capability_graph(
                 register_search_terms(anchor, (word,))
     if not ordered:
         add("gameplay.core", "fallback")
+
+    # Wire explicit requires edges from atomic capability ontology
+    from .canonical_capability_ontology import atomic_capability_definitions
+    atomics = atomic_capability_definitions()
+    for node in ordered:
+        cap_def = atomics.get(node)
+        if cap_def and cap_def.default_dependencies:
+            for dep in cap_def.default_dependencies:
+                if dep in seen:
+                    edge = (node, dep)
+                    if edge not in edges:
+                        edges.append(edge)
+
     for node in ordered:
         if node not in search_terms or not search_terms[node]:
             register_search_terms(node, (node.replace(".", " "),))
@@ -915,13 +928,23 @@ def _discover_best_donor(
                     donors.append(donor)
     if not donors:
         return None
+
+    def executable_gain(donor: DonorSlice) -> float:
+        # gain = fresh_cost - expected(adaptation + dependency_risk + truncation_penalty)
+        fresh_w, _ = _fresh_cost(capability)
+        adaptation_penalty = 0.05 * getattr(donor, "adaptation_cost", 0.0)
+        dep_penalty = 0.25 * len(donor.required_dependencies)
+        truncation_penalty = 2.0 if not getattr(donor, "closure_complete", True) else 0.0
+        return (fresh_w * donor.confidence) - (adaptation_penalty + dep_penalty + truncation_penalty)
+
     return max(
         donors,
         key=lambda donor: (
+            executable_gain(donor),
             donor.exact_target,
             donor.confidence,
+            -getattr(donor, "adaptation_cost", 0.0),
             -len(donor.required_dependencies),
-            -len(donor.files),
             donor.repository,
         ),
     )

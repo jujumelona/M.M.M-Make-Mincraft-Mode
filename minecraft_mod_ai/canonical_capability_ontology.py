@@ -10,9 +10,8 @@ Single source of truth for:
 """
 
 import re
-import unicodedata
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 # ---------------------------------------------------------------------------
 # 1. Atomic Canonical Capabilities
@@ -512,49 +511,163 @@ def romanize_korean_universal(text: str) -> str:
             result.append(_CHOSUNG[cho] + _JUNGSUNG[jung] + _JONGSUNG[jong])
         else:
             result.append(char)
-    normalized = unicodedata.normalize("NFKD", "".join(result))
-    return normalized.encode("ascii", "ignore").decode("ascii")
+    return "".join(result)
+
+
+@dataclass(frozen=True)
+class CapabilityResolutionNode:
+    capability_id: str
+    source_span: str
+    origin: str  # "explicit" | "archetype_inferred" | "dependency_required" | "unresolved_concept"
+    confidence: float = 1.0
+    is_required: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "capability_id": self.capability_id,
+            "source_span": self.source_span,
+            "origin": self.origin,
+            "confidence": self.confidence,
+            "is_required": self.is_required,
+        }
+
+
+@dataclass(frozen=True)
+class CapabilityResolution:
+    nodes: tuple[CapabilityResolutionNode, ...]
+    edges: tuple[tuple[str, str], ...]  # (parent, required_dependency)
+    unresolved_spans: tuple[str, ...] = ()
+
+    @property
+    def capability_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(node.capability_id for node in self.nodes))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "mmm/capability-resolution-v1",
+            "nodes": [n.to_dict() for n in self.nodes],
+            "edges": [{"from": u, "to": v} for u, v in self.edges],
+            "unresolved_spans": list(self.unresolved_spans),
+        }
+
+
+def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolution:
+    """Resolve a user phrase to a structured capability graph with provenance and requires-edges."""
+    clean = str(phrase or "").strip()
+    if not clean:
+        default_node = CapabilityResolutionNode(
+            capability_id="gameplay.core",
+            source_span=clean,
+            origin="explicit",
+            confidence=0.5,
+        )
+        return CapabilityResolution(nodes=(default_node,), edges=(), unresolved_spans=())
+
+    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", clean)
+    ignored = {
+        "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
+        "minecraft", "mod", "with", "to", "for", "that", "and", "or",
+        "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템", "해줘", "넣어줘",
+    }
+
+    nodes: list[CapabilityResolutionNode] = []
+    seen_caps: set[str] = set()
+    unresolved_words: list[str] = []
+
+    for word in words:
+        low = word.casefold()
+        if low in ignored:
+            continue
+        if low in _THEME_ARCHETYPES:
+            for cap in _THEME_ARCHETYPES[low]:
+                if cap not in seen_caps:
+                    seen_caps.add(cap)
+                    nodes.append(
+                        CapabilityResolutionNode(
+                            capability_id=cap,
+                            source_span=word,
+                            origin="archetype_inferred",
+                            confidence=0.85,
+                            is_required=False,
+                        )
+                    )
+        elif low in _FUNCTIONAL_ARCHETYPES or low in _CANONICAL_DOMAIN_MAP:
+            caps = _CANONICAL_DOMAIN_MAP.get(low, ())
+            for idx, cap in enumerate(caps):
+                if cap not in seen_caps:
+                    seen_caps.add(cap)
+                    nodes.append(
+                        CapabilityResolutionNode(
+                            capability_id=cap,
+                            source_span=word,
+                            origin="explicit" if idx == 0 else "dependency_required",
+                            confidence=0.95 if idx == 0 else 0.85,
+                            is_required=True if idx == 0 else False,
+                        )
+                    )
+        else:
+            unresolved_words.append(word)
+
+    unresolved_spans: list[str] = []
+    if unresolved_words:
+        unresolved_phrase = " ".join(unresolved_words)
+        raw_slug = romanize_korean_universal(unresolved_phrase)
+        slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
+        slug = re.sub(r"_+", "_", slug)
+        if slug:
+            cap_id = f"unresolved:{slug[:48]}"
+            if cap_id not in seen_caps:
+                seen_caps.add(cap_id)
+                nodes.append(
+                    CapabilityResolutionNode(
+                        capability_id=cap_id,
+                        source_span=unresolved_phrase,
+                        origin="unresolved_concept",
+                        confidence=0.70,
+                        is_required=True,
+                    )
+                )
+                unresolved_spans.append(unresolved_phrase)
+
+    if not nodes:
+        nodes.append(
+            CapabilityResolutionNode(
+                capability_id="gameplay.core",
+                source_span=clean,
+                origin="explicit",
+                confidence=0.5,
+            )
+        )
+
+    # Establish explicit directed requires edges from ontology definitions
+    edges: list[tuple[str, str]] = []
+    for node in nodes:
+        cap_def = _ATOMIC_CAPABILITIES.get(node.capability_id)
+        if cap_def and cap_def.default_dependencies:
+            for dep in cap_def.default_dependencies:
+                if dep in seen_caps and (node.capability_id, dep) not in edges:
+                    edges.append((node.capability_id, dep))
+
+    return CapabilityResolution(
+        nodes=tuple(nodes),
+        edges=tuple(edges),
+        unresolved_spans=tuple(unresolved_spans),
+    )
 
 
 def resolve_capabilities_from_phrase(phrase: str) -> tuple[str, ...]:
     """Resolve a user phrase to canonical capabilities via ontology or dynamic slugification."""
-    clean = str(phrase or "").strip()
-    if not clean:
-        return ("gameplay.core",)
-    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", clean)
-    matched_caps: list[str] = []
-    for word in words:
-        low = word.casefold()
-        if low in _CANONICAL_DOMAIN_MAP:
-            for cap in _CANONICAL_DOMAIN_MAP[low]:
-                if cap not in matched_caps:
-                    matched_caps.append(cap)
-    if matched_caps:
-        return tuple(matched_caps)
-
-    # Dynamic fallback: romanize arbitrary concept into a valid capability identifier
-    ignored = {
-        "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "and", "or",
-        "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템",
-    }
-    meaningful = [item for item in words if item.casefold() not in ignored]
-    raw_slug = romanize_korean_universal("_".join(meaningful) if meaningful else clean)
-    slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
-    slug = re.sub(r"_+", "_", slug)
-    if not slug:
-        slug = "custom_feature"
-    if not slug[0].isalpha():
-        slug = f"feat_{slug}"
-    return (slug[:64] or "gameplay.core",)
+    res = resolve_capabilities_from_phrase_structured(phrase)
+    return res.capability_ids
 
 
 def search_queries_for_capability(capability: str) -> tuple[str, ...]:
     """Return targeted English search queries for a canonical or dynamic capability."""
-    if capability in _ATOMIC_CAPABILITIES:
-        return _ATOMIC_CAPABILITIES[capability].search_queries
+    clean_cap = capability.removeprefix("unresolved:").removeprefix("provisional:")
+    if clean_cap in _ATOMIC_CAPABILITIES:
+        return _ATOMIC_CAPABILITIES[clean_cap].search_queries
     # For composite or dynamic capabilities, construct clean Minecraft mod queries
-    tokens = capability.replace(".", " ").replace("_", " ").split()
+    tokens = clean_cap.replace(".", " ").replace("_", " ").split()
     joined = " ".join(tokens)
     return (
         f"{joined} mod",
