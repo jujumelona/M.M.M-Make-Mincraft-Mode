@@ -188,6 +188,7 @@ def build_repository_observation_ledger(
             "exact_source_quotes": True,
             "path_sha256_byte_range_bound": True,
             "global_contract_anchors_before_ranked_regions": True,
+            "distant_exact_anchor_protection": True,
             "task_adaptive_retrieval": True,
             "line_ranked_context": True,
             "ordered_procedure_alignment": True,
@@ -205,8 +206,28 @@ def build_repository_observation_ledger(
         "procedural_retrieval": procedural_receipt,
         "records": records,
     }
-    while records and _json_size(ledger) > byte_budget:
-        records.pop()
+    if records and _json_size(ledger) > byte_budget:
+        baseline = [item for item in records if item.get("kind") == "global_exact_source_anchor"]
+        protected_anchor_ids: set[str] = set()
+        if baseline:
+            by_path = sorted(baseline, key=lambda item: str(item.get("path", "")))
+            protected_anchor_ids.add(str(by_path[0].get("observation_id", "")))
+            protected_anchor_ids.add(str(by_path[-1].get("observation_id", "")))
+
+        def removable_record_index() -> int | None:
+            for index in range(len(records) - 1, -1, -1):
+                if records[index].get("kind") != "global_exact_source_anchor":
+                    return index
+            for index in range(len(records) - 1, -1, -1):
+                if str(records[index].get("observation_id", "")) not in protected_anchor_ids:
+                    return index
+            return None
+
+        while records and _json_size(ledger) > byte_budget:
+            index = removable_record_index()
+            if index is None:
+                break
+            records.pop(index)
 
     observation_digest = hashlib.sha256()
     for record in records:

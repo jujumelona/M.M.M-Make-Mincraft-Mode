@@ -61,6 +61,15 @@ def _minimum_candidates() -> int:
     return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 3, minimum=1, maximum=12)
 
 
+def _curseforge_api_key() -> str:
+    """Return the optional host-owned CurseForge credential without exposing it."""
+
+    return (
+        os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()
+        or os.environ.get("CURSEFORGE_API_KEY", "").strip()
+    )
+
+
 def _graph_search_terms(
     capabilities: Sequence[str],
     capability_graph: Mapping[str, Any] | None,
@@ -177,10 +186,7 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> lis
 
 
 def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
-    api_key = (
-        os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()
-        or os.environ.get("CURSEFORGE_API_KEY", "").strip()
-    )
+    api_key = _curseforge_api_key()
     if not api_key:
         return []
     params = {
@@ -267,7 +273,7 @@ def discover_repositories_for_graph(
         return capability, provider, values
 
     providers = ["github", "modrinth"]
-    if os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip() or os.environ.get("CURSEFORGE_API_KEY", "").strip():
+    if _curseforge_api_key():
         providers.append("curseforge")
 
     def run_wave(capability_set: Sequence[str], variant_index: int) -> None:
