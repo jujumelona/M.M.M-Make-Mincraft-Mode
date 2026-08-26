@@ -93,7 +93,9 @@ class RepositoryArtifactIndex:
             cls_name = m.group(1)
             fqcn = f"{pkg}.{cls_name}" if pkg else cls_name
             self.fqcn_to_path[fqcn] = path
-            self.symbol_to_paths.setdefault(cls_name, []).append(path)
+            paths = self.symbol_to_paths.setdefault(cls_name, [])
+            if path not in paths:
+                paths.append(path)
 
         for m_reg in _REGISTRY_CALL_RE.finditer(content):
             reg_id = m_reg.group(1)
