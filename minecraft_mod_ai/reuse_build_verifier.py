@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Real Gradle and Javac Build Verifier for Reuse Proof Workspaces.
+"""Real Gradle build verifier for isolated reuse-proof workspaces.
 
-Executes actual compilation and static validation in isolated scratch target workspaces:
-1. Detects Gradle wrapper (./gradlew or gradlew.bat) and invokes 'compileJava' or 'check'.
-2. Fallbacks to javac or static Java AST/symbol linkage verifier when build wrapper is absent.
-3. Captures exit code, stdout, stderr, unresolved symbols, and emits structured BuildVerificationReceipt.
+The verifier executes the target Gradle wrapper, records the observed toolchain,
+and treats JUnit XML as the only authority for individual test identities.  Console
+summaries may establish aggregate counts but can never fabricate a per-test PASS.
 """
 
 import hashlib
@@ -88,8 +87,27 @@ def _find_gradle_wrapper(workspace_root: Path) -> tuple[Path | None, str]:
     return None, "none"
 
 
-def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, int, tuple[str, ...], dict[str, bool]]:
-    """Extract individual testcase results (tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results)."""
+def _canonical_test_id(class_name: str, case_name: str) -> str:
+    """Return one stable FQCN.method test identity without permissive aliases."""
+
+    cls = str(class_name or "").strip()
+    method = str(case_name or "").strip()
+    no_arg = re.fullmatch(r"([A-Za-z_$][A-Za-z0-9_$]*)\(\)", method)
+    if no_arg:
+        method = no_arg.group(1)
+    if not cls or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]*", cls):
+        return ""
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", method):
+        return ""
+    return f"{cls}.{method}"
+
+
+def _parse_test_results(
+    workspace_root: Path,
+    stdout: str,
+) -> tuple[int, int, int, tuple[str, ...], dict[str, bool]]:
+    """Extract aggregate counts plus exact individual results from JUnit XML only."""
+
     executed = 0
     failed = 0
     test_ids: list[str] = []
@@ -98,37 +116,50 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
     test_results_dir = workspace_root / "build" / "test-results" / "test"
     if test_results_dir.is_dir():
         import xml.etree.ElementTree as ET
-        for xml_file in test_results_dir.glob("*.xml"):
+
+        for xml_file in sorted(test_results_dir.glob("*.xml")):
             try:
-                tree = ET.parse(xml_file)
-                root = tree.getroot()
-                if root.tag == "testsuite":
-                    suite_name = str(root.attrib.get("name") or xml_file.stem)
-                    for case in root.findall("testcase"):
-                        case_name = case.attrib.get("name") or "unknownTest"
-                        full_test_id = f"{suite_name}.{case_name}"
-                        executed += 1
-                        has_failure = (case.find("failure") is not None) or (case.find("error") is not None)
-                        if has_failure:
-                            failed += 1
-                            individual_results[full_test_id] = False
-                        else:
-                            individual_results[full_test_id] = True
-                        test_ids.append(full_test_id)
-                        test_ids.append(case_name)
-                        individual_results[case_name] = not has_failure
-            except Exception:
-                pass
+                root = ET.parse(xml_file).getroot()
+                if root.tag != "testsuite":
+                    continue
+                suite_name = str(root.attrib.get("name") or "").strip()
+                for case in root.iter("testcase"):
+                    executed += 1
+                    has_failure = (
+                        case.find("failure") is not None
+                        or case.find("error") is not None
+                    )
+                    is_skipped = case.find("skipped") is not None
+                    if has_failure:
+                        failed += 1
+                    class_name = str(case.attrib.get("classname") or suite_name).strip()
+                    case_name = str(case.attrib.get("name") or "").strip()
+                    canonical_id = _canonical_test_id(class_name, case_name)
+                    if not canonical_id:
+                        continue
+                    passed_individually = not has_failure and not is_skipped
+                    existing = individual_results.get(canonical_id)
+                    if existing is None:
+                        individual_results[canonical_id] = passed_individually
+                    else:
+                        # Duplicate canonical IDs are fail-closed: all observations must pass.
+                        individual_results[canonical_id] = bool(existing and passed_individually)
+                    test_ids.append(canonical_id)
+            except (ET.ParseError, OSError, ValueError):
+                # Malformed/missing XML simply cannot provide individual proof.
+                continue
 
     if executed == 0:
-        # Fallback to parsing console output if XML reports were not found
-        match = re.search(r"(\d+)\s+tests completed,\s+(\d+)\s+failed", stdout, re.IGNORECASE)
+        # Aggregate console summaries are useful for build diagnostics only.  They do not
+        # create individual test identities or PASS receipts.
+        match = re.search(
+            r"(\d+)\s+tests completed,\s+(\d+)\s+failed",
+            stdout,
+            re.IGNORECASE,
+        )
         if match:
             executed = int(match.group(1))
             failed = int(match.group(2))
-        for t_match in re.findall(r"> Task :test\s+([A-Za-z0-9_.]+)", stdout):
-            test_ids.append(t_match)
-            individual_results[t_match] = (failed == 0)
 
     passed = max(0, executed - failed)
     return executed, passed, failed, tuple(dict.fromkeys(test_ids)), individual_results
@@ -136,7 +167,6 @@ def _parse_test_results(workspace_root: Path, stdout: str) -> tuple[int, int, in
 
 def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
     props = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.properties"
-    dist_url = ""
     dist_sha = ""
     gradle_ver = "8.10.2"
     if props.exists():
@@ -166,20 +196,31 @@ def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
     elif "net.minecraftforge" in bg_text:
         loader = "forge"
 
-    mc_match = re.search(r"['\"]com\.mojang:minecraft:([^'\"]+)['\"]", bg_text) or re.search(r"minecraft_version\s*=\s*['\"]?([^'\"\s]+)", bg_text)
+    mc_match = re.search(
+        r"['\"]com\.mojang:minecraft:([^'\"]+)['\"]",
+        bg_text,
+    ) or re.search(
+        r"minecraft_version\s*=\s*['\"]?([^'\"\s]+)",
+        bg_text,
+    )
     if mc_match:
         mc_ver = mc_match.group(1).strip()
 
     java_ver = "21"
     try:
-        res_java = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=2.0)
+        res_java = subprocess.run(
+            ["java", "-version"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
         j_text = res_java.stderr + res_java.stdout
         j_match = re.search(r'version\s+"?([0-9._]+)"?', j_text)
         if j_match:
             v_str = j_match.group(1)
             parts = v_str.split(".")
             java_ver = parts[1] if parts[0] == "1" and len(parts) > 1 else parts[0]
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
 
     toolchain_id = f"{loader}:{gradle_ver}:{mc_ver}:{java_ver}:{dist_sha or 'local'}"
@@ -207,7 +248,6 @@ def verify_scratch_workspace_build(
     toolchain = _inspect_build_toolchain(ws)
 
     if gradlew:
-        # Stage 1: Compile verification
         compile_cmd = [str(gradlew), "compileJava", "--no-daemon", "-q"]
         try:
             res_compile = subprocess.run(
@@ -219,11 +259,15 @@ def verify_scratch_workspace_build(
             )
             compile_stdout, compile_stderr = res_compile.stdout, res_compile.stderr
             compile_exit = res_compile.returncode
-            compile_passed = (compile_exit == 0)
+            compile_passed = compile_exit == 0
 
-            unresolved = tuple(re.findall(r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)", compile_stderr + compile_stdout))
+            unresolved = tuple(
+                re.findall(
+                    r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)",
+                    compile_stderr + compile_stdout,
+                )
+            )
 
-            # Stage 2: Test verification (only if compilation passed and run_tests requested)
             tests_executed = 0
             tests_passed_count = 0
             tests_failed_count = 0
@@ -245,9 +289,19 @@ def verify_scratch_workspace_build(
                     )
                     combined_stdout += "\n" + res_test.stdout
                     combined_stderr += "\n" + res_test.stderr
-                    tests_executed, tests_passed_count, tests_failed_count, executed_test_ids, individual_results = _parse_test_results(ws, res_test.stdout)
-                    tests_passed = (tests_executed > 0) and (tests_failed_count == 0) and (res_test.returncode == 0)
-                except Exception as test_err:
+                    (
+                        tests_executed,
+                        tests_passed_count,
+                        tests_failed_count,
+                        executed_test_ids,
+                        individual_results,
+                    ) = _parse_test_results(ws, res_test.stdout)
+                    tests_passed = (
+                        tests_executed > 0
+                        and tests_failed_count == 0
+                        and res_test.returncode == 0
+                    )
+                except (OSError, subprocess.SubprocessError) as test_err:
                     combined_stderr += f"\nTest execution failed: {test_err}"
                     tests_passed = False
 
@@ -268,13 +322,13 @@ def verify_scratch_workspace_build(
                 individual_test_results=individual_results,
                 toolchain=toolchain,
             )
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as exc:
             return BuildVerificationReceipt(
                 build_tool=tool_name,
                 command=tuple(compile_cmd),
                 exit_code=1,
                 stdout="",
-                stderr=str(e),
+                stderr=str(exc),
                 compile_passed=False,
                 tests_passed=False,
                 unresolved_symbols=(),
@@ -283,9 +337,9 @@ def verify_scratch_workspace_build(
                 tests_passed_count=0,
                 tests_failed_count=0,
                 executed_test_ids=(),
+                toolchain=toolchain,
             )
 
-    # Without a verified build environment (e.g. Gradle wrapper), compilation proof cannot be attested.
     return BuildVerificationReceipt(
         build_tool="none",
         command=(),
@@ -300,4 +354,5 @@ def verify_scratch_workspace_build(
         tests_passed_count=0,
         tests_failed_count=0,
         executed_test_ids=(),
+        toolchain=toolchain,
     )
