@@ -6,6 +6,10 @@ The verifier executes only a checksum-attested Gradle wrapper, records the obser
 Java/Gradle target identity, and treats JUnit XML as the only authority for individual
 test identities. Console summaries may establish aggregate counts but can never
 fabricate a per-test PASS.
+
+Exact, successful scratch builds are content-addressed and single-flight within one
+process. The cache key binds every proof input byte plus the attested toolchain. Failed
+or timed-out executions are never persisted, so transient failures remain retryable.
 """
 
 import hashlib
@@ -13,9 +17,21 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from concurrent.futures import Future
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import Lock
 from typing import Any
+
+
+_BUILD_CACHE_LOCK = Lock()
+_BUILD_CACHE: dict[tuple[str, str], "BuildVerificationReceipt"] = {}
+_BUILD_INFLIGHT: dict[tuple[str, str], Future["BuildVerificationReceipt"]] = {}
+_BUILD_CACHE_MAX_ENTRIES = 64
+_BUILD_CACHE_MAX_INPUT_BYTES = 32 * 1024 * 1024
+_BUILD_FINGERPRINT_EXCLUDED_DIRS = frozenset(
+    {".git", ".gradle", "build", "__pycache__", ".idea", ".vscode", ".gemini"}
+)
 
 
 @dataclass(frozen=True)
@@ -372,13 +388,270 @@ def _toolchain_failure_receipt(
     )
 
 
+def _workspace_input_fingerprint(
+    workspace_root: Path,
+    toolchain: BuildToolchainReceipt,
+) -> str:
+    """Hash exact proof inputs while pruning build/cache outputs from traversal."""
+
+    digest = hashlib.sha256()
+    total_bytes = 0
+    try:
+        for root_text, dir_names, file_names in os.walk(workspace_root, followlinks=False):
+            root = Path(root_text)
+            kept_dirs: list[str] = []
+            for name in sorted(dir_names):
+                directory = root / name
+                if name in _BUILD_FINGERPRINT_EXCLUDED_DIRS:
+                    continue
+                if directory.is_symlink():
+                    return ""
+                kept_dirs.append(name)
+            dir_names[:] = kept_dirs
+
+            for name in sorted(file_names):
+                path = root / name
+                if path.is_symlink() or not path.is_file():
+                    return ""
+                relative = path.relative_to(workspace_root).as_posix()
+                stat = path.stat()
+                total_bytes += int(stat.st_size)
+                if total_bytes > _BUILD_CACHE_MAX_INPUT_BYTES:
+                    return ""
+                digest.update(relative.encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(str(stat.st_mode & 0o777).encode("ascii"))
+                digest.update(b"\0")
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                digest.update(b"\0")
+    except (OSError, RuntimeError, ValueError):
+        return ""
+
+    digest.update(toolchain.toolchain_hash.encode("utf-8"))
+    return "sha256:" + digest.hexdigest()
+
+
+def _cache_get(key: tuple[str, str], command: tuple[str, ...]) -> BuildVerificationReceipt | None:
+    with _BUILD_CACHE_LOCK:
+        receipt = _BUILD_CACHE.get(key)
+        if receipt is None:
+            return None
+        _BUILD_CACHE.pop(key, None)
+        _BUILD_CACHE[key] = receipt
+    return replace(receipt, command=command)
+
+
+def _cache_store(key: tuple[str, str], receipt: BuildVerificationReceipt) -> None:
+    with _BUILD_CACHE_LOCK:
+        _BUILD_CACHE.pop(key, None)
+        _BUILD_CACHE[key] = receipt
+        while len(_BUILD_CACHE) > _BUILD_CACHE_MAX_ENTRIES:
+            _BUILD_CACHE.pop(next(iter(_BUILD_CACHE)))
+
+
+def _claim_inflight(
+    key: tuple[str, str],
+) -> tuple[Future[BuildVerificationReceipt], bool]:
+    with _BUILD_CACHE_LOCK:
+        existing = _BUILD_INFLIGHT.get(key)
+        if existing is not None:
+            return existing, False
+        future: Future[BuildVerificationReceipt] = Future()
+        _BUILD_INFLIGHT[key] = future
+        return future, True
+
+
+def _finish_inflight(
+    key: tuple[str, str],
+    future: Future[BuildVerificationReceipt],
+    *,
+    receipt: BuildVerificationReceipt | None = None,
+    error: BaseException | None = None,
+) -> None:
+    with _BUILD_CACHE_LOCK:
+        if _BUILD_INFLIGHT.get(key) is future:
+            _BUILD_INFLIGHT.pop(key, None)
+    if error is not None:
+        future.set_exception(error)
+    elif receipt is not None:
+        future.set_result(receipt)
+
+
+def _run_compile_stage(
+    ws: Path,
+    gradlew: Path,
+    tool_name: str,
+    toolchain: BuildToolchainReceipt,
+    fingerprint: str,
+    timeout_seconds: float,
+) -> BuildVerificationReceipt:
+    compile_cmd = (str(gradlew), "compileJava", "--no-daemon", "-q")
+    cache_key = (fingerprint, "compile") if fingerprint else None
+    if cache_key is not None:
+        cached = _cache_get(cache_key, compile_cmd)
+        if cached is not None:
+            return cached
+        future, owner = _claim_inflight(cache_key)
+        if not owner:
+            return replace(future.result(), command=compile_cmd)
+    else:
+        future = None
+
+    try:
+        res_compile = subprocess.run(
+            list(compile_cmd),
+            cwd=str(ws),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        compile_stdout = res_compile.stdout
+        compile_stderr = res_compile.stderr
+        compile_exit = res_compile.returncode
+        compile_passed = compile_exit == 0
+        unresolved = tuple(
+            re.findall(
+                r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)",
+                compile_stderr + compile_stdout,
+            )
+        )
+        receipt = BuildVerificationReceipt(
+            build_tool=tool_name,
+            command=compile_cmd,
+            exit_code=compile_exit,
+            stdout=compile_stdout,
+            stderr=compile_stderr,
+            compile_passed=compile_passed,
+            tests_passed=False,
+            unresolved_symbols=unresolved,
+            missing_resources=(),
+            tests_executed=0,
+            tests_passed_count=0,
+            tests_failed_count=0,
+            executed_test_ids=(),
+            individual_test_results={},
+            toolchain=toolchain,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        receipt = BuildVerificationReceipt(
+            build_tool=tool_name,
+            command=compile_cmd,
+            exit_code=1,
+            stdout="",
+            stderr=str(exc),
+            compile_passed=False,
+            tests_passed=False,
+            unresolved_symbols=(),
+            missing_resources=(),
+            tests_executed=0,
+            tests_passed_count=0,
+            tests_failed_count=0,
+            executed_test_ids=(),
+            individual_test_results={},
+            toolchain=toolchain,
+        )
+    except BaseException as exc:
+        if cache_key is not None and future is not None:
+            _finish_inflight(cache_key, future, error=exc)
+        raise
+
+    if cache_key is not None and future is not None:
+        if receipt.compile_passed:
+            _cache_store(cache_key, receipt)
+        _finish_inflight(cache_key, future, receipt=receipt)
+    return receipt
+
+
+def _run_test_stage(
+    ws: Path,
+    gradlew: Path,
+    compile_receipt: BuildVerificationReceipt,
+    fingerprint: str,
+    timeout_seconds: float,
+) -> BuildVerificationReceipt:
+    compile_cmd = tuple(compile_receipt.command)
+    cache_key = (fingerprint, "test") if fingerprint else None
+    if cache_key is not None:
+        cached = _cache_get(cache_key, compile_cmd)
+        if cached is not None:
+            return cached
+        future, owner = _claim_inflight(cache_key)
+        if not owner:
+            return replace(future.result(), command=compile_cmd)
+    else:
+        future = None
+
+    combined_stdout = compile_receipt.stdout
+    combined_stderr = compile_receipt.stderr
+    tests_executed = 0
+    tests_passed_count = 0
+    tests_failed_count = 0
+    executed_test_ids: tuple[str, ...] = ()
+    individual_results: dict[str, bool] = {}
+    tests_passed = False
+
+    test_cmd = [str(gradlew), "test", "--no-daemon", "-q"]
+    try:
+        res_test = subprocess.run(
+            test_cmd,
+            cwd=str(ws),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        combined_stdout += "\n" + res_test.stdout
+        combined_stderr += "\n" + res_test.stderr
+        (
+            tests_executed,
+            tests_passed_count,
+            tests_failed_count,
+            executed_test_ids,
+            individual_results,
+        ) = _parse_test_results(ws, res_test.stdout)
+        tests_passed = (
+            tests_executed > 0
+            and tests_failed_count == 0
+            and res_test.returncode == 0
+        )
+        receipt = replace(
+            compile_receipt,
+            stdout=combined_stdout,
+            stderr=combined_stderr,
+            tests_passed=tests_passed,
+            tests_executed=tests_executed,
+            tests_passed_count=tests_passed_count,
+            tests_failed_count=tests_failed_count,
+            executed_test_ids=executed_test_ids,
+            individual_test_results=individual_results,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        receipt = replace(
+            compile_receipt,
+            stdout=combined_stdout,
+            stderr=combined_stderr + f"\nTest execution failed: {exc}",
+            tests_passed=False,
+        )
+    except BaseException as exc:
+        if cache_key is not None and future is not None:
+            _finish_inflight(cache_key, future, error=exc)
+        raise
+
+    if cache_key is not None and future is not None:
+        if receipt.compile_passed and receipt.tests_passed:
+            _cache_store(cache_key, receipt)
+        _finish_inflight(cache_key, future, receipt=receipt)
+    return receipt
+
+
 def verify_scratch_workspace_build(
     workspace_root: str | Path,
     *,
     run_tests: bool = False,
     timeout_seconds: float = 60.0,
 ) -> BuildVerificationReceipt:
-    """Execute two-stage compile/test verification in an attested target sandbox."""
+    """Execute compile/test proof once per exact input+toolchain identity."""
 
     ws = Path(workspace_root).resolve()
     gradlew, tool_name = _find_gradle_wrapper(ws)
@@ -408,95 +681,22 @@ def verify_scratch_workspace_build(
     if not toolchain.is_attested:
         return _toolchain_failure_receipt(tool_name, toolchain)
 
-    compile_cmd = [str(gradlew), "compileJava", "--no-daemon", "-q"]
-    try:
-        res_compile = subprocess.run(
-            compile_cmd,
-            cwd=str(ws),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-        compile_stdout = res_compile.stdout
-        compile_stderr = res_compile.stderr
-        compile_exit = res_compile.returncode
-        compile_passed = compile_exit == 0
+    fingerprint = _workspace_input_fingerprint(ws, toolchain)
+    compile_receipt = _run_compile_stage(
+        ws,
+        gradlew,
+        tool_name,
+        toolchain,
+        fingerprint,
+        timeout_seconds,
+    )
+    if not compile_receipt.compile_passed or not run_tests:
+        return compile_receipt
 
-        unresolved = tuple(
-            re.findall(
-                r"cannot find symbol\s+symbol:\s+class\s+([A-Za-z0-9_]+)",
-                compile_stderr + compile_stdout,
-            )
-        )
-
-        tests_executed = 0
-        tests_passed_count = 0
-        tests_failed_count = 0
-        executed_test_ids: tuple[str, ...] = ()
-        individual_results: dict[str, bool] = {}
-        tests_passed = False
-        combined_stdout = compile_stdout
-        combined_stderr = compile_stderr
-
-        if compile_passed and run_tests:
-            test_cmd = [str(gradlew), "test", "--no-daemon", "-q"]
-            try:
-                res_test = subprocess.run(
-                    test_cmd,
-                    cwd=str(ws),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                )
-                combined_stdout += "\n" + res_test.stdout
-                combined_stderr += "\n" + res_test.stderr
-                (
-                    tests_executed,
-                    tests_passed_count,
-                    tests_failed_count,
-                    executed_test_ids,
-                    individual_results,
-                ) = _parse_test_results(ws, res_test.stdout)
-                tests_passed = (
-                    tests_executed > 0
-                    and tests_failed_count == 0
-                    and res_test.returncode == 0
-                )
-            except (OSError, subprocess.SubprocessError) as test_err:
-                combined_stderr += f"\nTest execution failed: {test_err}"
-                tests_passed = False
-
-        return BuildVerificationReceipt(
-            build_tool=tool_name,
-            command=tuple(compile_cmd),
-            exit_code=compile_exit,
-            stdout=combined_stdout,
-            stderr=combined_stderr,
-            compile_passed=compile_passed,
-            tests_passed=tests_passed,
-            unresolved_symbols=unresolved,
-            missing_resources=(),
-            tests_executed=tests_executed,
-            tests_passed_count=tests_passed_count,
-            tests_failed_count=tests_failed_count,
-            executed_test_ids=executed_test_ids,
-            individual_test_results=individual_results,
-            toolchain=toolchain,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return BuildVerificationReceipt(
-            build_tool=tool_name,
-            command=tuple(compile_cmd),
-            exit_code=1,
-            stdout="",
-            stderr=str(exc),
-            compile_passed=False,
-            tests_passed=False,
-            unresolved_symbols=(),
-            missing_resources=(),
-            tests_executed=0,
-            tests_passed_count=0,
-            tests_failed_count=0,
-            executed_test_ids=(),
-            toolchain=toolchain,
-        )
+    return _run_test_stage(
+        ws,
+        gradlew,
+        compile_receipt,
+        fingerprint,
+        timeout_seconds,
+    )
