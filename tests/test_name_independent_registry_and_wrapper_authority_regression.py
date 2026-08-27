@@ -26,9 +26,6 @@ Invariants under test
 """
 
 from functools import wraps
-from types import SimpleNamespace
-
-import pytest
 
 from minecraft_mod_ai.artifact_dependency_graph import (
     ArtifactDependencyGraph,
