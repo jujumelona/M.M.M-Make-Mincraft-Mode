@@ -23,13 +23,22 @@ def _checkpoint_for_exception(exc: BaseException | None) -> str | None:
     return None
 
 
+def _active_exception() -> BaseException | None:
+    # sys.exception() is Python 3.11+. MMM still supports Python 3.10, where the
+    # exception currently handled by the calling thread is available via exc_info().
+    getter = getattr(sys, "exception", None)
+    if callable(getter):
+        return getter()
+    return sys.exc_info()[1]
+
+
 def install(feedback_module: Any) -> None:
     current = feedback_module._latest_failed_feedback
     if getattr(current, "_mmm_current_exception_scoped", False):
         return
 
     def latest_failed_feedback(ledger: Any) -> dict[str, Any] | None:
-        checkpoint_id = _checkpoint_for_exception(sys.exception())
+        checkpoint_id = _checkpoint_for_exception(_active_exception())
         if checkpoint_id is None:
             return None
         with ledger._connect() as connection:
@@ -69,4 +78,4 @@ def install(feedback_module: Any) -> None:
     feedback_module._latest_failed_feedback = latest_failed_feedback
 
 
-__all__ = ["_checkpoint_for_exception", "install"]
+__all__ = ["_active_exception", "_checkpoint_for_exception", "install"]
