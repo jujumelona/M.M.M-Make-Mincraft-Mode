@@ -92,6 +92,8 @@ def _build_request_catalog_with_semantic_root_expansion(
         game_design,
         router=router,
     )
+    if router is None:
+        return catalog
     return _split_multi_root_requirements(catalog)
 
 
@@ -108,7 +110,7 @@ def build_authoritative_request_catalog(
     """
 
     catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(prompt, {}, router=router)
-    return _split_multi_root_requirements(catalog)
+    return _split_multi_root_requirements(catalog) if router is not None else catalog
 
 
 def install_evidence_request_guard() -> None:
