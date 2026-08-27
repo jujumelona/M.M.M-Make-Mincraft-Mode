@@ -4,6 +4,7 @@ import os
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, TypeVar
@@ -112,6 +113,7 @@ def prefetch_profile(profile: Any) -> None:
     from .llama_server_autotune import _resolve_model_path_direct
 
     _ensure_model_prefetch(config, _resolve_model_path_direct)
+
 
 def _discovery_routes(
     ecosystem_module: Any,
@@ -355,8 +357,123 @@ def _parallel_discover_seed_bundle_factory(
     return discover_seed_bundle_parallel
 
 
+def _bounded_coverage_query(central_module: Any, text: str) -> str:
+    """Preserve criterion text while respecting the official retriever query budget."""
+    text = str(text).strip()
+    if not text:
+        return ""
+    pages = central_module._lossless_query_pages(text, 1_800)
+    return pages[0].strip()
+
+
+def _coverage_query_plan(
+    central_module: Any,
+    domains: list[Any],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, list[str]], dict[str, list[str]]]:
+    """Bind every declared requirement/evidence kind to an explicit retrieval query."""
+    query_criteria: dict[str, list[str]] = {}
+    domain_queries: dict[str, list[str]] = {}
+    domain_criteria: dict[str, list[str]] = {}
+
+    for domain in domains:
+        queries = list(dict.fromkeys(domain.queries))
+        criteria: list[str] = []
+        if "official_docs" in domain.providers:
+            for requirement in domain.requirements:
+                key = f"requirement:{requirement}"
+                query = _bounded_coverage_query(central_module, requirement)
+                if not query:
+                    continue
+                criteria.append(key)
+                if query not in queries:
+                    queries.append(query)
+                query_criteria.setdefault(query, []).append(key)
+            for evidence_kind in domain.evidence_kinds:
+                key = f"evidence_kind:{evidence_kind}"
+                query = _bounded_coverage_query(
+                    central_module,
+                    f"{domain.objective} {evidence_kind} {domain.domain_id}",
+                )
+                if not query:
+                    continue
+                criteria.append(key)
+                if query not in queries:
+                    queries.append(query)
+                query_criteria.setdefault(query, []).append(key)
+        domain_queries[domain.domain_id] = queries
+        domain_criteria[domain.domain_id] = list(dict.fromkeys(criteria))
+
+    return (
+        {key: tuple(dict.fromkeys(value)) for key, value in query_criteria.items()},
+        domain_queries,
+        domain_criteria,
+    )
+
+
+def _receipt_satisfies_coverage(receipt: Mapping[str, Any]) -> bool:
+    return (
+        str(receipt.get("quality", "")).casefold() == "strong"
+        and bool(receipt.get("hits"))
+        and float(receipt.get("coverage", 0.0) or 0.0) > 0.0
+    )
+
+
+def _attach_coverage_status(
+    graph: dict[str, Any],
+    *,
+    query_criteria: Mapping[str, tuple[str, ...]],
+    domain_criteria: Mapping[str, list[str]],
+) -> dict[str, Any]:
+    """Make incomplete evidence explicit instead of treating any hit as coverage."""
+    unresolved: list[str] = []
+    for raw_domain in graph.get("domains", []):
+        if not isinstance(raw_domain, dict):
+            continue
+        domain_id = str(raw_domain.get("domain_id", ""))
+        required = list(domain_criteria.get(domain_id, ()))
+        if not required:
+            continue
+        covered: set[str] = set()
+        for query_result in raw_domain.get("queries", []):
+            if not isinstance(query_result, Mapping):
+                continue
+            primary = query_result.get("primary")
+            if not isinstance(primary, Mapping):
+                continue
+            query = str(primary.get("query", ""))
+            criteria = query_criteria.get(query, ())
+            if not criteria:
+                continue
+            satisfied = _receipt_satisfies_coverage(primary)
+            if not satisfied:
+                for correction in query_result.get("corrections", []):
+                    if isinstance(correction, Mapping) and _receipt_satisfies_coverage(correction):
+                        satisfied = True
+                        break
+            if satisfied:
+                covered.update(criteria)
+        uncovered = [criterion for criterion in required if criterion not in covered]
+        raw_domain["coverage"] = {
+            "required": required,
+            "covered": [criterion for criterion in required if criterion in covered],
+            "uncovered": uncovered,
+            "complete": not uncovered,
+        }
+        raw_domain["strategy"] = "coverage_driven_corrective"
+        if uncovered:
+            unresolved.append(domain_id)
+
+    graph["unresolved_official_domains"] = unresolved
+    graph["coverage_policy"] = (
+        "A domain is covered only when every declared requirement and evidence kind "
+        "has a strong, non-empty targeted receipt. Corrective retrieval is permitted "
+        "only for an uncovered targeted criterion."
+    )
+    return graph
+
+
 class _PrefetchedRetriever:
-    """Deduplicate and pipeline official-RAG primaries and corrective hops."""
+    """Deduplicate primary RAG calls without eagerly retrieving corrective hops."""
 
     def __init__(
         self,
@@ -366,18 +483,19 @@ class _PrefetchedRetriever:
         minecraft_version: str,
         loader: str,
         mappings: str,
+        query_criteria: Mapping[str, tuple[str, ...]],
     ) -> None:
         self._retrieve = retrieve
         self._pool = pool
         self._minecraft_version = minecraft_version
         self._loader = loader
         self._mappings = mappings
+        self._query_criteria = dict(query_criteria)
         self._lock = threading.RLock()
         self._futures: dict[tuple[str, int], Future[Any]] = {}
 
     def prefetch_primary(self, query: str) -> None:
-        future = self._submit(query, 8)
-        future.add_done_callback(self._prefetch_corrections)
+        self._submit(query, 8)
 
     def _submit(self, query: str, limit: int) -> Future[Any]:
         key = (query, limit)
@@ -396,13 +514,6 @@ class _PrefetchedRetriever:
             self._futures[key] = future
             return future
 
-    def _prefetch_corrections(self, future: Future[Any]) -> None:
-        if future.cancelled() or future.exception() is not None:
-            return
-        primary = future.result()
-        for correction_query in getattr(primary, "correction_queries", ()):
-            self._submit(str(correction_query), 4)
-
     def __call__(self, query: str, **kwargs: Any) -> Any:
         limit = int(kwargs.get("limit", 8))
         expected = {
@@ -412,15 +523,34 @@ class _PrefetchedRetriever:
             "limit": limit,
         }
         if any(kwargs.get(name) != value for name, value in expected.items()):
-            return self._retrieve(query, **kwargs)
-        return self._submit(query, limit).result()
+            receipt = self._retrieve(query, **kwargs)
+        else:
+            receipt = self._submit(query, limit).result()
+
+        # Baseline authored queries are useful evidence seeds, but they cannot trigger
+        # speculative corrective searches or satisfy a criterion merely by returning a hit.
+        if limit != 8 or query not in self._query_criteria:
+            if getattr(receipt, "correction_queries", ()):
+                return replace(
+                    receipt,
+                    correction_required=False,
+                    correction_queries=(),
+                )
+            return receipt
+
+        # A targeted criterion gets at most one corrective hop. If that hop is still
+        # weak, the coverage graph remains explicitly unresolved for later research.
+        correction_queries = tuple(getattr(receipt, "correction_queries", ()))
+        if len(correction_queries) > 1:
+            return replace(receipt, correction_queries=correction_queries[:1])
+        return receipt
 
 
 def _parallel_retrieve_domain_evidence_factory(
     central_module: Any,
     original_retrieve_graph: Callable[..., dict[str, Any]],
 ) -> Callable[..., dict[str, Any]]:
-    """Pipeline native official retrieval while delegating all graph semantics."""
+    """Run criterion-bound official RAG with bounded corrective retrieval."""
     original_default_retrieve = central_module.retrieve_official_evidence
 
     @wraps(original_retrieve_graph)
@@ -430,9 +560,6 @@ def _parallel_retrieve_domain_evidence_factory(
         retrieve: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         selected_retrieve = retrieve or original_default_retrieve
-        if retrieve is not None and retrieve is not original_default_retrieve:
-            return original_retrieve_graph(research_brief, retrieve=retrieve)
-
         raw_target = research_brief.get("_mmm_platform_target")
         if not isinstance(raw_target, Mapping):
             return original_retrieve_graph(
@@ -467,21 +594,42 @@ def _parallel_retrieve_domain_evidence_factory(
                 research_brief,
                 retrieve=selected_retrieve,
             )
-        primary_queries = [
-            query
-            for domain in domains
-            if "official_docs" in domain.providers
-            for query in domain.queries
-        ]
+
+        query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
+            central_module,
+            domains,
+        )
+        augmented_brief = dict(research_brief)
+        augmented_domains: list[dict[str, Any]] = []
+        for raw_domain, domain in zip(raw_domains, domains, strict=True):
+            updated = dict(raw_domain)
+            if "official_docs" in domain.providers:
+                updated["queries"] = domain_queries[domain.domain_id]
+            augmented_domains.append(updated)
+        augmented_brief["domains"] = augmented_domains
+
+        primary_queries = list(
+            dict.fromkeys(
+                query
+                for domain in domains
+                if "official_docs" in domain.providers
+                for query in domain_queries[domain.domain_id]
+            )
+        )
         workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
-        if len(primary_queries) <= 1 or workers <= 1:
-            return original_retrieve_graph(
-                research_brief,
+        if not primary_queries:
+            graph = original_retrieve_graph(
+                augmented_brief,
                 retrieve=selected_retrieve,
+            )
+            return _attach_coverage_status(
+                graph,
+                query_criteria=query_criteria,
+                domain_criteria=domain_criteria,
             )
 
         with ThreadPoolExecutor(
-            max_workers=min(workers, len(primary_queries)),
+            max_workers=min(workers, max(1, len(primary_queries))),
             thread_name_prefix="mmm_official_rag",
         ) as pool:
             prefetched = _PrefetchedRetriever(
@@ -490,10 +638,18 @@ def _parallel_retrieve_domain_evidence_factory(
                 minecraft_version=adapter.minecraft_version,
                 loader=adapter.loader,
                 mappings=adapter.yarn_mappings,
+                query_criteria=query_criteria,
             )
-            for query in primary_queries:
-                prefetched.prefetch_primary(query)
-            return original_retrieve_graph(research_brief, retrieve=prefetched)
+            if workers > 1:
+                for query in primary_queries:
+                    prefetched.prefetch_primary(query)
+            graph = original_retrieve_graph(augmented_brief, retrieve=prefetched)
+
+        return _attach_coverage_status(
+            graph,
+            query_criteria=query_criteria,
+            domain_criteria=domain_criteria,
+        )
 
     retrieve_domain_evidence_parallel._mmm_parallel_rag = True
     return retrieve_domain_evidence_parallel
