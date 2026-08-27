@@ -1,0 +1,110 @@
+name: Reuse evidence state migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/reuse-evidence-state-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch evidence state and add regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('minecraft_mod_ai/reuse_planner.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one reuse_planner match, got {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '    proof_level: str = "DISCOVERED"\n    proof_receipt: Any | None = None\n\n    @property\n',
+              '    proof_level: str = "DISCOVERED"\n    proof_receipt: Any | None = None\n    evidence_state: str = ""\n\n    @property\n',
+          )
+          replace_once(
+              '            "proof_level": self.proof_level,\n        }\n',
+              '            "proof_level": self.proof_level,\n            "evidence_state": _decision_evidence_state(self),\n        }\n',
+          )
+          helper = '''\n\ndef _decision_evidence_state(item: ReuseDecision) -> str:\n    explicit = str(item.evidence_state or "").strip().upper()\n    if explicit:\n        return explicit\n    if item.verified_reuse:\n        return "VERIFIED_REUSE"\n    if item.mode == "adapt" or item.proof_level in {"PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED"}:\n        return "PARTIAL_REUSE"\n    if item.mode == "fresh":\n        return "INSUFFICIENT_EVIDENCE"\n    return "CANDIDATE_EVIDENCE"\n\n\ndef _reuse_ledger_status(item: ReuseDecision) -> str:\n    evidence_state = _decision_evidence_state(item)\n    if evidence_state in {"INSUFFICIENT_EVIDENCE", "REUSE_REJECTED"}:\n        return evidence_state\n    if item.mode == "fresh":\n        return "FRESH_REQUIRED"\n    if item.proof_level in {"COMPILE_VERIFIED", "BEHAVIOR_VERIFIED", "HOST_VERIFIED"}:\n        return "VERIFIED_REUSE"\n    if item.proof_level in {"PARTIAL_REUSE", "SUBGRAPH_COMPILE_VERIFIED"}:\n        return "PARTIAL_REUSE"\n    if item.proof_level == "MATERIALIZED":\n        return "MATERIALIZED"\n    if item.proof_level == "CLOSURE_COMPLETE":\n        return "READY_FOR_PROOF"\n    if item.proof_level == "PINNED":\n        return "PINNED_CANDIDATE"\n    if item.proof_level == "DISCOVERED":\n        return "CANDIDATE"\n    return "PARTIAL_REUSE" if item.mode == "adapt" else "FRESH_REQUIRED"\n'''
+          replace_once(
+              '\n\n@dataclass(frozen=True)\nclass CompositionSelection:',
+              helper + '\n\n@dataclass(frozen=True)\nclass CompositionSelection:',
+          )
+
+          status_pattern = re.compile(
+              r'                    "status": \(\n.*?\n                    \),\n                    "mode": item\.mode,',
+              re.DOTALL,
+          )
+          text, count = status_pattern.subn(
+              '                    "status": _reuse_ledger_status(item),\n                    "mode": item.mode,',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one reuse ledger status expression, got {count}')
+
+          replace_once(
+              '        candidates = (selected_composition_donors[capability],) if capability in selected_composition_donors else candidates_by_cap.get(capability, ())\n',
+              '        evidence_state = "INSUFFICIENT_EVIDENCE"\n        candidates = (selected_composition_donors[capability],) if capability in selected_composition_donors else candidates_by_cap.get(capability, ())\n',
+          )
+          replace_once(
+              '            # If all candidates failed compilation (best_donor is None), fall through to fresh implementation!\n\n        decisions.append(\n',
+              '            # Candidate proof failure is negative evidence. Absence of a candidate is not.\n            if receipts:\n                evidence_state = "REUSE_REJECTED"\n\n        decisions.append(\n',
+          )
+          replace_once(
+              '                rationale="No verified reusable implementation survived provenance, target, and source-slice gates.",\n            )\n        )\n',
+              '                rationale=(\n                    "Reusable candidates were discovered but all failed executable proof gates."\n                    if evidence_state == "REUSE_REJECTED"\n                    else "No verified reusable candidate evidence was available; fresh implementation is a safe fallback, not proof that reuse is impossible."\n                ),\n                proof_level="FRESH_REQUIRED",\n                evidence_state=evidence_state,\n            )\n        )\n',
+          )
+          replace_once(
+              '                    proof_level="FRESH_REQUIRED",\n                )\n            )\n            continue\n',
+              '                    proof_level="FRESH_REQUIRED",\n                    evidence_state="REUSE_REJECTED",\n                )\n            )\n            continue\n',
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # Keep the evidence-kind token at the front so bounded query paging can never
+          # truncate the criterion that the query is meant to cover.
+          rag = Path('minecraft_mod_ai/parallel_runtime_contract.py')
+          rag_text = rag.read_text(encoding='utf-8')
+          old = '                    f"{domain.objective} {evidence_kind} {domain.domain_id}",'
+          new = '                    f"{evidence_kind} {domain.domain_id} {domain.objective}",'
+          if rag_text.count(old) != 1:
+              raise SystemExit('coverage query ordering patch did not match exactly once')
+          rag.write_text(rag_text.replace(old, new, 1), encoding='utf-8')
+
+          Path('tests/test_reuse_evidence_states.py').write_text(r'''from minecraft_mod_ai.reuse_planner import (\n    ReuseDecision,\n    _decision_evidence_state,\n    _reuse_ledger_status,\n)\n\n\ndef _decision(**overrides):\n    values = {\n        "capability": "example.capability",\n        "mode": "fresh",\n        "confidence": 1.0,\n        "fresh_implementation_cost": 2.0,\n        "fresh_verification_cost": 1.0,\n        "proof_level": "FRESH_REQUIRED",\n    }\n    values.update(overrides)\n    return ReuseDecision(**values)\n\n\ndef test_missing_reuse_evidence_is_not_reported_as_incompatibility():\n    decision = _decision()\n    assert _decision_evidence_state(decision) == "INSUFFICIENT_EVIDENCE"\n    assert _reuse_ledger_status(decision) == "INSUFFICIENT_EVIDENCE"\n    assert decision.to_dict()["evidence_state"] == "INSUFFICIENT_EVIDENCE"\n\n\ndef test_executable_candidate_failure_is_distinct_negative_evidence():\n    decision = _decision(evidence_state="REUSE_REJECTED")\n    assert _decision_evidence_state(decision) == "REUSE_REJECTED"\n    assert _reuse_ledger_status(decision) == "REUSE_REJECTED"\n\n\ndef test_verified_and_partial_reuse_keep_positive_states():\n    verified = _decision(\n        mode="same_project",\n        proof_level="HOST_VERIFIED",\n        evidence_state="",\n    )\n    partial = _decision(\n        mode="adapt",\n        proof_level="PARTIAL_REUSE",\n        evidence_state="",\n    )\n    assert _decision_evidence_state(verified) == "VERIFIED_REUSE"\n    assert _reuse_ledger_status(verified) == "VERIFIED_REUSE"\n    assert _decision_evidence_state(partial) == "PARTIAL_REUSE"\n    assert _reuse_ledger_status(partial) == "PARTIAL_REUSE"\n''', encoding='utf-8')
+
+          Path('tests/test_rag_coverage_driven.py').write_text(r'''from dataclasses import dataclass\nfrom types import SimpleNamespace\nfrom concurrent.futures import ThreadPoolExecutor\n\nfrom minecraft_mod_ai.parallel_runtime_contract import (\n    _PrefetchedRetriever,\n    _attach_coverage_status,\n    _coverage_query_plan,\n)\n\n\nclass _Central:\n    @staticmethod\n    def _lossless_query_pages(text, _budget):\n        return (text,)\n\n\ndef test_declared_requirements_and_evidence_kinds_become_coverage_criteria():\n    domain = SimpleNamespace(\n        domain_id="combat",\n        objective="Resolve combat API",\n        requirements=("boss spawning", "damage hooks"),\n        evidence_kinds=("minecraft_api", "testing"),\n        queries=("authored baseline query",),\n        providers=("official_docs",),\n    )\n    query_criteria, domain_queries, domain_criteria = _coverage_query_plan(_Central, [domain])\n    assert domain_queries["combat"][0] == "authored baseline query"\n    assert set(domain_criteria["combat"]) == {\n        "requirement:boss spawning",\n        "requirement:damage hooks",\n        "evidence_kind:minecraft_api",\n        "evidence_kind:testing",\n    }\n    assert all(criterion for values in query_criteria.values() for criterion in values)\n\n\ndef test_any_hit_does_not_count_as_complete_domain_coverage():\n    graph = {\n        "domains": [\n            {\n                "domain_id": "combat",\n                "queries": [\n                    {\n                        "primary": {\n                            "query": "boss spawning",\n                            "quality": "strong",\n                            "coverage": 1.0,\n                            "hits": [{"id": "one"}],\n                        },\n                        "corrections": [],\n                    }\n                ],\n            }\n        ],\n        "unresolved_official_domains": [],\n    }\n    result = _attach_coverage_status(\n        graph,\n        query_criteria={"boss spawning": ("requirement:boss spawning",)},\n        domain_criteria={\n            "combat": ["requirement:boss spawning", "evidence_kind:testing"]\n        },\n    )\n    coverage = result["domains"][0]["coverage"]\n    assert coverage["complete"] is False\n    assert coverage["covered"] == ["requirement:boss spawning"]\n    assert coverage["uncovered"] == ["evidence_kind:testing"]\n    assert result["unresolved_official_domains"] == ["combat"]\n\n\n@dataclass(frozen=True)\nclass _Receipt:\n    correction_required: bool\n    correction_queries: tuple[str, ...]\n\n\ndef test_corrections_are_not_eager_for_baselines_and_are_bounded_for_criteria():\n    calls = []\n\n    def retrieve(query, **_kwargs):\n        calls.append(query)\n        return _Receipt(True, ("correction one", "correction two"))\n\n    with ThreadPoolExecutor(max_workers=2) as pool:\n        wrapper = _PrefetchedRetriever(\n            retrieve,\n            pool,\n            minecraft_version="x",\n            loader="fabric",\n            mappings="m",\n            query_criteria={"targeted": ("requirement:x",)},\n        )\n        baseline = wrapper(\n            "baseline",\n            minecraft_version="x", loader="fabric", mappings="m", limit=8\n        )\n        targeted = wrapper(\n            "targeted",\n            minecraft_version="x", loader="fabric", mappings="m", limit=8\n        )\n    assert baseline.correction_queries == ()\n    assert baseline.correction_required is False\n    assert targeted.correction_queries == ("correction one",)\n    assert calls == ["baseline", "targeted"]\n''', encoding='utf-8')
+          PY
+      - name: Compile changed modules
+        run: python -m compileall -q minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/parallel_runtime_contract.py
+      - name: Install test runner
+        run: python -m pip install -q pytest
+      - name: Run focused regressions
+        run: python -m pytest -q tests/test_reuse_evidence_states.py tests/test_rag_coverage_driven.py tests/test_agent_runtime_hot_paths.py
+      - name: Commit migration to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/parallel_runtime_contract.py tests/test_reuse_evidence_states.py tests/test_rag_coverage_driven.py
+          git rm .github/workflows/reuse-evidence-state-fix.yml
+          git commit -m "fix: separate insufficient reuse evidence"
+          git push origin HEAD:main
