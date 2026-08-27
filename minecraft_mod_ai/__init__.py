@@ -1,63 +1,10 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .evidence_request_guard import install_evidence_request_guard
-from .semantic_requirement_authority import install_semantic_requirement_authority
-from .evidence_obligation_contract import install_evidence_obligation_contract
-from .target_grounding_contract import install_target_grounding_contract
-from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
-from .task_artifact_contract import install_task_artifact_contract
-from .design_resolution_provenance_contract import (
-    install_design_resolution_provenance_contract,
-)
-from .production_boundary_contract import install_production_boundary_contract
-from .structured_repair_contract import install_structured_repair_contract
-from .structured_subtree_repair_dispatch_contract import (
-    install_structured_subtree_repair_dispatch_contract,
-)
-from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
-from .execution_feedback_exception_scope_contract import (
-    install as install_execution_feedback_exception_scope,
-)
-from .execution_feedback_owner_precision_contract import (
-    install as install_execution_feedback_owner_precision,
-)
-from .implementation_kind_boundary_contract import (
-    install as install_implementation_kind_boundary,
-)
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
 initialize_runtime()
 finalize_runtime()
-install_evidence_request_guard()
-install_semantic_requirement_authority()
-install_evidence_obligation_contract()
-install_target_grounding_contract()
-install_requirement_branch_scope_contract()
-install_task_artifact_contract()
-install_design_resolution_provenance_contract()
-install_production_boundary_contract()
-install_structured_repair_contract()
-install_structured_subtree_repair_dispatch_contract()
-
-from . import complete_orchestrator as _feedback_orchestrator
-from . import complete_orchestrator_support as _orchestrator_support
-from . import complete_spec as _complete_spec
-from . import planner_template_schema as _planner_template_schema
-from . import work_graph as _feedback_work_graph
-
-install_implementation_kind_boundary(
-    complete_spec_module=_complete_spec,
-    support_module=_orchestrator_support,
-    orchestrator_module=_feedback_orchestrator,
-    template_module=_planner_template_schema,
-)
-install_execution_feedback_exception_scope(_execution_feedback_replan_contract)
-install_execution_feedback_owner_precision(_execution_feedback_replan_contract)
-_execution_feedback_replan_contract.install(
-    orchestrator_module=_feedback_orchestrator,
-    work_graph_module=_feedback_work_graph,
-)
 
 from .api import (
     ChatReply,
