@@ -36,6 +36,14 @@ class DependencyResolutionReceipt:
 
         return self.repository
 
+    @property
+    def dependency_name(self) -> str:
+        """Stable dependency identity derived from the authoritative receipt."""
+
+        if self.resolved_coordinate:
+            return self.resolved_coordinate.rsplit(":", 1)[0]
+        return self.donor_declared_coordinate
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "donor_declared_coordinate": self.donor_declared_coordinate,
