@@ -3,11 +3,10 @@ from __future__ import annotations
 """Single late-finalization owner for the fully composed runtime.
 
 ``runtime_bootstrap.initialize_runtime`` installs the ordered core/late/post-bootstrap
-contracts. Integrations that intentionally happen only *after* that sequence live here:
-MCP transport pooling replaces the final AgentToolRuntime session owner, and the
-structured-intent projection remains the outermost routing-query owner. Tool routing
-itself is owned by the small-model selector and the normal model tool/observation loop;
-late finalization must not add a second forced/causal routing policy.
+contracts. Integrations that intentionally happen only *after* that sequence live here.
+This module also owns the final product-policy layer that used to be assembled from package
+``__init__``. Keeping all child-contract composition here makes import order explicit and
+prevents package initialization from becoming a second, untracked patch chain.
 
 Late finalization is process-lifetime composition just like bootstrap. If any installer
 fails after mutating a callable, replaying the prefix is not transactionally safe. A
@@ -41,6 +40,10 @@ def finalize_runtime() -> None:
             agent_capability_context,
             agent_tool_runtime,
             agentic_pre_design_rag,
+            complete_orchestrator,
+            complete_orchestrator_support,
+            complete_spec,
+            execution_feedback_replan_contract,
             external_agent_bridge,
             external_mcp_router,
             external_procedural_skill_contract,
@@ -50,20 +53,33 @@ def finalize_runtime() -> None:
             model_router,
             model_tool_aliases,
             parallel_runtime_contract,
+            planner_template_schema,
             repository_grounding,
             research_rag_performance,
             small_model_max_agent_contract,
+            work_graph,
         )
         from .agent_observation_determinism import (
             install as install_observation_determinism,
         )
         from .agent_routing_intent_contract import install as install_routing_intent
         from .context_budget_preflight import run_context_budget_preflight
+        from .design_resolution_provenance_contract import (
+            install_design_resolution_provenance_contract,
+        )
         from .evidence_first_pipeline_contract import (
             install as install_evidence_first_pipeline,
         )
+        from .evidence_obligation_contract import install_evidence_obligation_contract
+        from .evidence_request_guard import install_evidence_request_guard
         from .evidence_task_receipt_contract import (
             install as install_evidence_task_receipts,
+        )
+        from .execution_feedback_exception_scope_contract import (
+            install as install_execution_feedback_exception_scope,
+        )
+        from .execution_feedback_owner_precision_contract import (
+            install as install_execution_feedback_owner_precision,
         )
         from .external_mcp_binding_concurrency_contract import (
             install as install_external_mcp_binding_concurrency,
@@ -72,6 +88,9 @@ def finalize_runtime() -> None:
             install as install_external_mcp_binding,
         )
         from .generation_concurrency_safety import install as install_generation_safety
+        from .implementation_kind_boundary_contract import (
+            install as install_implementation_kind_boundary,
+        )
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import (
@@ -89,6 +108,8 @@ def finalize_runtime() -> None:
         from .procedural_skill_identity_contract import (
             install as install_procedural_skill_identity,
         )
+        from .production_boundary_contract import install_production_boundary_contract
+        from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
         from .retrieval_cpu_budget_contract import (
             install as install_retrieval_cpu_budget,
         )
@@ -102,7 +123,14 @@ def finalize_runtime() -> None:
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
+        from .semantic_requirement_authority import install_semantic_requirement_authority
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+        from .structured_repair_contract import install_structured_repair_contract
+        from .structured_subtree_repair_dispatch_contract import (
+            install_structured_subtree_repair_dispatch_contract,
+        )
+        from .target_grounding_contract import install_target_grounding_contract
+        from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import (
             install as install_tool_schema_ownership,
         )
@@ -150,6 +178,32 @@ def finalize_runtime() -> None:
         run_runtime_preflight()
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
+
+        # Product-policy finalization. This order intentionally matches the historical
+        # post-finalize package-init sequence while moving composition under one owner.
+        install_evidence_request_guard()
+        install_semantic_requirement_authority()
+        install_evidence_obligation_contract()
+        install_target_grounding_contract()
+        install_requirement_branch_scope_contract()
+        install_task_artifact_contract()
+        install_design_resolution_provenance_contract()
+        install_production_boundary_contract()
+        install_structured_repair_contract()
+        install_structured_subtree_repair_dispatch_contract()
+        install_implementation_kind_boundary(
+            complete_spec_module=complete_spec,
+            support_module=complete_orchestrator_support,
+            orchestrator_module=complete_orchestrator,
+            template_module=planner_template_schema,
+        )
+        install_execution_feedback_exception_scope(execution_feedback_replan_contract)
+        install_execution_feedback_owner_precision(execution_feedback_replan_contract)
+        execution_feedback_replan_contract.install(
+            orchestrator_module=complete_orchestrator,
+            work_graph_module=work_graph,
+        )
+
         _FINALIZED = True
         _FINALIZING = False
 
