@@ -57,6 +57,8 @@ def finalize_runtime() -> None:
             model_tool_aliases,
             parallel_runtime_contract,
             planner_template_schema,
+            production_contract,
+            quality_evidence,
             repository_grounding,
             research_rag_performance,
             small_model_max_agent_contract,
@@ -112,6 +114,9 @@ def finalize_runtime() -> None:
             install as install_procedural_skill_identity,
         )
         from .production_boundary_contract import install_production_boundary_contract
+        from .quality_public_acceptance_view_contract import (
+            install as install_quality_public_acceptance_view,
+        )
         from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
         from .retrieval_cpu_budget_contract import (
             install as install_retrieval_cpu_budget,
@@ -196,6 +201,7 @@ def finalize_runtime() -> None:
         install_task_artifact_contract()
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
+        install_quality_public_acceptance_view(production_contract, quality_evidence)
         install_structured_repair_contract()
         install_structured_subtree_repair_dispatch_contract()
         install_implementation_kind_boundary(
