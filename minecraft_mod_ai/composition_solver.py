@@ -166,6 +166,15 @@ def _host_build_infrastructure(path: str) -> bool:
     } or normalized.startswith("gradle/wrapper/")
 
 
+def _dependency_module_identity(receipt: DependencyResolutionReceipt) -> str:
+    """Return the resolved Maven group:name key without inventing a second registry."""
+
+    parts = str(receipt.resolved_coordinate or "").split(":")
+    if len(parts) >= 2 and parts[0] and parts[1]:
+        return f"{parts[0]}:{parts[1]}"
+    return str(receipt.donor_declared_coordinate or "").strip()
+
+
 def _static_conflicts(donors: Sequence[DonorSlice]) -> list[CompositionConflict]:
     conflicts: list[CompositionConflict] = []
     seen_fqcns: dict[str, str] = {}
@@ -267,25 +276,26 @@ def _resolve_declared_dependencies(
                     )
                 )
                 continue
-            previous = selected_by_name.get(receipt.dependency_name)
+            module_identity = _dependency_module_identity(receipt)
+            previous = selected_by_name.get(module_identity)
             if previous is not None and previous != receipt.resolved_coordinate:
                 conflicts.append(
                     CompositionConflict(
                         "dependency_version_conflict",
                         (
-                            receipt.dependency_name,
+                            module_identity,
                             previous,
                             receipt.resolved_coordinate,
                         ),
                         (
                             "Conflicting resolved coordinates for dependency "
-                            f"'{receipt.dependency_name}': {previous} vs "
+                            f"'{module_identity}': {previous} vs "
                             f"{receipt.resolved_coordinate}"
                         ),
                     )
                 )
             else:
-                selected_by_name[receipt.dependency_name] = receipt.resolved_coordinate
+                selected_by_name[module_identity] = receipt.resolved_coordinate
     return receipts, conflicts
 
 
@@ -421,9 +431,6 @@ def verify_joint_composition_sandbox(
             "missing_capabilities": list(missing),
         }
 
-    # Production (real build verifier) always requires independent donor proof.
-    # Synthetic compile_checker seams remain opt-in so legacy unit tests do not gain
-    # authority over production proof semantics.
     must_prove = (
         compile_checker is None
         if require_individual_proof is None
@@ -512,7 +519,7 @@ def verify_joint_composition_sandbox(
         for dependency in dict.fromkeys(declared_dependencies)
     )
     unresolved = tuple(
-        f"{receipt.dependency_name}:{receipt.resolution_reason}"
+        f"{receipt.donor_declared_coordinate}:{receipt.resolution_reason}"
         for receipt in dependency_receipts
         if not receipt.is_resolved
     )
