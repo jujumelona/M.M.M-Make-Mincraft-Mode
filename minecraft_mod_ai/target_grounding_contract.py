@@ -34,7 +34,9 @@ _REQUIRED_TARGET_FIELDS = (
 
 
 def _text(value: Any) -> str:
-    return str(value or "").strip()
+    # Presence and validity are separate contracts. Numeric zero is present and must
+    # reach the field-specific validator so it is reported as invalid, not missing.
+    return "" if value is None else str(value).strip()
 
 
 def _is_unresolved(value: Any) -> bool:
