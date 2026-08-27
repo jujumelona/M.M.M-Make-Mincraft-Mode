@@ -592,6 +592,46 @@ def _catalog_requirement_covers_clause(
     return _matched_source_span(prompt, statement) == clause
 
 
+_INTERNAL_ACCEPTANCE_MARKERS = (
+    "owned anchors",
+    "owned_anchor",
+    "declared provides",
+    "declared_provides",
+    "required gates",
+    "required_gates",
+    "task_sha256",
+    "done_predicate",
+)
+
+
+def _is_public_acceptance(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if re.match(r"^task_[a-z0-9_]+\s*:", folded):
+        return False
+    return not any(marker in folded for marker in _INTERNAL_ACCEPTANCE_MARKERS)
+
+
+def _requirement_acceptance(
+    capability: str,
+    candidates: Iterable[Any],
+) -> tuple[str, ...]:
+    claimed = tuple(
+        dict.fromkeys(
+            text
+            for item in candidates
+            if (text := str(item or "").strip()) and _is_public_acceptance(text)
+        )
+    )
+    if claimed:
+        return claimed
+    return (
+        f"Verify the observable player-facing behavior for capability {capability}.",
+    )
+
+
 def _merge_catalog_uncovered_prompt_requirements(
     catalog: Mapping[str, Any],
     prompt: str,
@@ -667,8 +707,7 @@ def _merge_catalog_uncovered_prompt_requirements(
                 "semantic_status": semantic["semantic_status"],
                 "unresolved_spans": semantic["unresolved_spans"],
                 "acceptance": list(
-                    matching_acceptance
-                    or (f"Verify the observable outcome for {capability}: {statement}",)
+                    _requirement_acceptance(capability, matching_acceptance)
                 ),
             }
         )
@@ -755,8 +794,8 @@ def build_request_catalog(
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
-        acceptance = matching_acceptance or (
-            f"Verify the observable outcome for {capability}: {statement}",
+        acceptance = _requirement_acceptance(
+            capability, matching_acceptance
         )
         ir = _invoke_semantic_model(statement, span["char_start"], span["char_end"], prompt, router)
         _validate_semantic_ir(ir, prompt)
@@ -1680,13 +1719,14 @@ def _compile_tasks(
                 for name, value in branches.items()
                 if value.get("status") == "ACTIVE" and _step_uses_branch(step, name)
             ]
+            # Structural integrity is enforced by done_predicate below.
+            # task.acceptance carries only public requirement acceptance on the
+            # terminal semantic step, so downstream aggregation cannot expose
+            # task IDs, owned-anchor checks, or gate mechanics to the user.
             acceptance = [
-                f"{task_id}: all declared provides exist and all owned anchors pass their integrity checks",
-                *(
-                    str(item)
-                    for item in gap.get("acceptance", ())
-                    if index == len(steps) - 1
-                ),
+                str(item)
+                for item in gap.get("acceptance", ())
+                if index == len(steps) - 1 and _is_public_acceptance(item)
             ]
             task: dict[str, Any] = {
                 "task_id": task_id,

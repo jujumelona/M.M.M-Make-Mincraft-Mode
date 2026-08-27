@@ -57,10 +57,6 @@ from .canonical_capability_ontology import (
 
 _CAPABILITY_HINTS = _canonical_domain_map()
 _PROMPT_CAPABILITY_WORDS = frozenset(_CAPABILITY_HINTS)
-_DESIGN_REFERENCE_WORDS = frozenset({
-    "above", "declared", "described", "existing", "following", "listed",
-    "requested", "requirement", "requirements", "system", "systems",
-})
 
 
 def _capability_graph_limit() -> int:
@@ -74,11 +70,6 @@ def _capability_graph_limit() -> int:
     if value < 0:
         raise ValueError("MMM_REUSE_CAPABILITY_LIMIT must be a non-negative integer.")
     return value
-
-
-def _is_design_reference_span(value: str) -> bool:
-    words = {token.casefold() for token in _TOKEN.findall(value)}
-    return bool(words) and words <= _DESIGN_REFERENCE_WORDS
 
 
 @dataclass(frozen=True)
@@ -216,10 +207,15 @@ def decompose_capability_graph(
     )
     from .capability_semantic_inference import enrich_resolution_with_semantic_inference
 
+    # Capture whether a host-authored design/catalog/module already owns the
+    # requirement scope before prompt supplementation begins.  Unknown raw prompt
+    # text may never enlarge an authoritative graph unless semantic inference
+    # supplies an explicit proposal.
+    authoritative_scope = bool(ordered)
     prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
     enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
     selected_nodes = list(enriched_res.nodes)
-    if ordered:
+    if authoritative_scope:
         prompt_words = {
             token.casefold()
             for token in _TOKEN.findall(str(prompt or ""))
@@ -243,19 +239,17 @@ def decompose_capability_graph(
             )
 
         required_by_span: dict[str, list[Any]] = {}
-        for node in prompt_res.nodes:
-            if node.is_required and node.origin in {"explicit", "unresolved_concept"}:
-                # An EvidenceRequestCatalog supplies the non-ontology requirement
-                # identities itself.  Its prompt supplement is limited to explicit
-                # recognized capabilities, so incidental words in a theme/title
-                # cannot manufacture a competing provisional requirement.
-                if catalog_used and node.origin != "explicit":
-                    continue
-                if node.origin == "unresolved_concept" and _is_design_reference_span(
-                    node.source_span
-                ):
-                    continue
-                required_by_span.setdefault(node.source_span, []).append(node)
+        for node in enriched_res.nodes:
+            if not node.is_required:
+                continue
+            # Deterministic unresolved placeholders are bookkeeping only.  A
+            # design-scoped graph accepts prompt supplements only when they are
+            # canonical explicit capabilities or router-evidenced proposals.
+            if node.origin not in {"explicit", "provisional_inferred"}:
+                continue
+            if catalog_used and node.origin != "explicit":
+                continue
+            required_by_span.setdefault(node.source_span, []).append(node)
 
         missing_spans: set[str] = set()
         for span, roots in required_by_span.items():
@@ -293,6 +287,26 @@ def decompose_capability_graph(
     for u, v in enriched_res.edges:
         if u in seen and v in seen and (u, v) not in edges:
             edges.append((u, v))
+
+    if not authoritative_scope:
+        inferred_spans = {
+            node.source_span
+            for node in enriched_res.nodes
+            if node.origin == "provisional_inferred" and node.source_span
+        }
+        for span in prompt_res.unresolved_spans:
+            clean_span = str(span or "").strip()
+            if not clean_span or clean_span in inferred_spans:
+                continue
+            # Preserve one unknown authored requirement as one opaque node.  Do
+            # not hallucinate primary/state/logic children or dependencies.
+            opaque_id = (
+                "provisional:semantic_"
+                + hashlib.sha256(clean_span.encode("utf-8")).hexdigest()[:12]
+            )
+            anchor = add(opaque_id, "prompt_resolution.provisional_opaque", expand=False)
+            if anchor:
+                register_search_terms(anchor, (clean_span,))
 
     if not ordered:
         add("gameplay.core", "fallback")
