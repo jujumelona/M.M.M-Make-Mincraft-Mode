@@ -7,6 +7,10 @@ from .target_grounding_contract import install_target_grounding_contract
 from .task_artifact_contract import install_task_artifact_contract
 from .production_boundary_contract import install_production_boundary_contract
 from .structured_repair_contract import install_structured_repair_contract
+from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
+from .execution_feedback_exception_scope_contract import (
+    install as install_execution_feedback_exception_scope,
+)
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
@@ -19,6 +23,15 @@ install_target_grounding_contract()
 install_task_artifact_contract()
 install_production_boundary_contract()
 install_structured_repair_contract()
+
+from . import complete_orchestrator as _feedback_orchestrator
+from . import work_graph as _feedback_work_graph
+
+install_execution_feedback_exception_scope(_execution_feedback_replan_contract)
+_execution_feedback_replan_contract.install(
+    orchestrator_module=_feedback_orchestrator,
+    work_graph_module=_feedback_work_graph,
+)
 
 from .api import (
     ChatReply,
