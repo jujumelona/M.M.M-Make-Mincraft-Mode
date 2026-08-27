@@ -97,7 +97,7 @@ jobs:
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           curl --fail --location --retry 4 --retry-all-errors \
             --output "dist/gradle-${GRADLE_VERSION}-wrapper.jar" \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-wrapper.jar"
+            "https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VERSION}/gradle/wrapper/gradle-wrapper.jar"
 
       - name: Verify official Gradle checksums
         if: steps.release.outputs.published != 'true'
