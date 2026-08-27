@@ -11,6 +11,9 @@ from .design_resolution_provenance_contract import (
 )
 from .production_boundary_contract import install_production_boundary_contract
 from .structured_repair_contract import install_structured_repair_contract
+from .structured_subtree_repair_dispatch_contract import (
+    install_structured_subtree_repair_dispatch_contract,
+)
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
 from .execution_feedback_exception_scope_contract import (
     install as install_execution_feedback_exception_scope,
@@ -35,6 +38,7 @@ install_task_artifact_contract()
 install_design_resolution_provenance_contract()
 install_production_boundary_contract()
 install_structured_repair_contract()
+install_structured_subtree_repair_dispatch_contract()
 
 from . import complete_orchestrator as _feedback_orchestrator
 from . import complete_orchestrator_support as _orchestrator_support
