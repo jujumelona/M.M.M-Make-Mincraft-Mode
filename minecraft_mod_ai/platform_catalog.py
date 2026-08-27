@@ -5,9 +5,10 @@ from __future__ import annotations
 A loader name is not support. A target becomes selectable only when a registered
 provider resolves the complete toolchain needed by generation/build/validation.
 No Minecraft version, mappings, loader/API coordinate, Java version, Loom version,
-Gradle version, or resource-pack format is selected from an offline default here.
+Gradle version, or pack metadata is selected from an offline default here.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,19 +29,86 @@ class PlatformAdapter:
     loader: str
     minecraft_version: str
     java_version: str
+    # Backward-compatible coordinate consumed by existing generators. New code must use
+    # mappings_kind/mappings_version so "mojang" is not mislabeled as Yarn semantics.
     yarn_mappings: str
+    mappings_kind: str
+    mappings_version: str
     fabric_loader: str
     fabric_api: str
     fabric_loom: str
     gradle: str
     gradle_sha256: str
+    data_pack_version: str
+    resource_pack_version: str
     resource_pack_format: int
+    release_metadata_url: str
     source_api_family: str
     deterministic_module_kinds: frozenset[str]
 
+    def validate(self) -> None:
+        required = {
+            "adapter_id": self.adapter_id,
+            "edition": self.edition,
+            "loader": self.loader,
+            "minecraft_version": self.minecraft_version,
+            "java_version": self.java_version,
+            "yarn_mappings": self.yarn_mappings,
+            "mappings_kind": self.mappings_kind,
+            "mappings_version": self.mappings_version,
+            "fabric_loader": self.fabric_loader,
+            "fabric_api": self.fabric_api,
+            "fabric_loom": self.fabric_loom,
+            "gradle": self.gradle,
+            "gradle_sha256": self.gradle_sha256,
+            "data_pack_version": self.data_pack_version,
+            "resource_pack_version": self.resource_pack_version,
+            "release_metadata_url": self.release_metadata_url,
+            "source_api_family": self.source_api_family,
+        }
+        missing = sorted(key for key, value in required.items() if not str(value).strip())
+        if missing:
+            raise ValueError(
+                "Executable platform provider returned partial target metadata: "
+                f"{missing}."
+            )
+        if self.mappings_kind not in {"mojang", "yarn"}:
+            raise ValueError(f"Unsupported mappings kind: {self.mappings_kind!r}.")
+        if self.mappings_kind == "mojang" and self.mappings_version != "mojang":
+            raise ValueError("Mojang mappings must use the canonical mappings_version='mojang'.")
+        if self.yarn_mappings != self.mappings_version:
+            raise ValueError(
+                "Legacy yarn_mappings compatibility coordinate disagrees with mappings_version."
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256):
+            raise ValueError("Executable platform provider returned an invalid Gradle SHA-256.")
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.data_pack_version):
+            raise ValueError("Executable platform provider returned an invalid data pack version.")
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.resource_pack_version):
+            raise ValueError("Executable platform provider returned an invalid resource pack version.")
+        expected_major = int(self.resource_pack_version.split(".", 1)[0])
+        if type(self.resource_pack_format) is not int or self.resource_pack_format <= 0:
+            raise ValueError("Resource pack format must be a positive provider-derived integer.")
+        if self.resource_pack_format != expected_major:
+            raise ValueError(
+                "Resource pack format major disagrees with the exact provider resource-pack version."
+            )
+        if not self.release_metadata_url.startswith("https://www.minecraft.net/"):
+            raise ValueError("Pack metadata must be grounded in an official Minecraft release URL.")
+
     def public_dict(self) -> dict[str, Any]:
+        self.validate()
         value = asdict(self)
         value["deterministic_module_kinds"] = sorted(self.deterministic_module_kinds)
+        value["mappings"] = {
+            "kind": self.mappings_kind,
+            "version": self.mappings_version,
+        }
+        value["pack_versions"] = {
+            "data": self.data_pack_version,
+            "resource": self.resource_pack_version,
+            "resource_major": self.resource_pack_format,
+        }
         return value
 
 
@@ -109,17 +177,6 @@ def discover_target_keys(
     minecraft_version: str | None = None,
     limit_per_loader: int = 12,
 ) -> tuple[tuple[str, str], ...]:
-    """Enumerate provider-advertised targets without eagerly resolving toolchains.
-
-    Enumeration is intentionally cheap. Full loader/API/Loom/Gradle/checksum
-    resolution belongs to the optimizer when a candidate is actually evaluated.
-    This avoids the previous double-resolution network fan-out and prevents one
-    downstream metadata failure from silently deleting otherwise valid candidates.
-
-    ``minecraft_version`` remains only as an exact-query compatibility filter for
-    callers that deliberately inspect a known target. Automatic planning does not
-    pass it and therefore never fixes the version before reuse evaluation.
-    """
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
     limit = max(1, int(limit_per_loader))
     requested_version = str(minecraft_version or "").strip()
@@ -139,7 +196,7 @@ def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
     result: list[PlatformAdapter] = []
     for loader in executable_loaders():
         try:
-            result.append(provider_for_loader(loader).resolve(version))
+            result.append(adapter_for_target(version, loader))
         except ValueError:
             continue
     return tuple(result)
@@ -149,11 +206,12 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
     version = str(minecraft_version).strip()
     if not version:
         raise ValueError("Minecraft version must not be empty when resolving an exact target.")
-    return provider_for_loader(loader).resolve(version)
+    adapter = provider_for_loader(loader).resolve(version)
+    adapter.validate()
+    return adapter
 
 
 def newest_adapter(*, loader: str) -> PlatformAdapter:
-    """Compatibility helper only. Automatic planning must use platform_optimizer."""
     versions = supported_minecraft_versions(loader=loader)
     if not versions:
         raise ValueError(f"No discoverable platform target for loader={loader!r}.")
@@ -230,8 +288,8 @@ def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
             "fabric_version": adapter.fabric_api,
             "loom_version": adapter.fabric_loom,
         }
-        if adapter.yarn_mappings != "mojang":
-            expected["yarn_mappings"] = adapter.yarn_mappings
+        if adapter.mappings_kind == "yarn":
+            expected["yarn_mappings"] = adapter.mappings_version
         for key, expected_value in expected.items():
             actual = properties.get(key)
             if actual and actual != expected_value:
@@ -253,7 +311,7 @@ def platform_catalog_receipt() -> dict[str, Any]:
             }
         )
     return {
-        "schema_version": "mmm/executable-platform-registry-v1",
+        "schema_version": "mmm/executable-platform-registry-v2",
         "providers": providers,
     }
 
@@ -274,22 +332,35 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
     except PlatformDiscoveryError as exc:
         raise ValueError(str(exc)) from exc
     digest = target.discovery_sha256.split(":", 1)[-1][:12]
-    return PlatformAdapter(
+    try:
+        resource_major = int(target.resource_pack_version.split(".", 1)[0])
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(
+            "Official target discovery returned an invalid resource-pack version."
+        ) from exc
+    adapter = PlatformAdapter(
         adapter_id=f"fabric_live_{_safe_id(version)}_{digest}",
         edition="java",
         loader="fabric",
         minecraft_version=target.minecraft_version,
         java_version=target.java_version,
         yarn_mappings=target.mappings_version,
+        mappings_kind=target.mappings_kind,
+        mappings_version=target.mappings_version,
         fabric_loader=target.loader_version,
         fabric_api=target.fabric_api_version,
         fabric_loom=target.loom_version,
         gradle=target.gradle_version,
         gradle_sha256=target.gradle_sha256,
-        resource_pack_format=int(getattr(target, "resource_pack_format", 0) or 0),
+        data_pack_version=target.data_pack_version,
+        resource_pack_version=target.resource_pack_version,
+        resource_pack_format=resource_major,
+        release_metadata_url=target.release_metadata_url,
         source_api_family="fabric_live_ai",
         deterministic_module_kinds=frozenset(),
     )
+    adapter.validate()
+    return adapter
 
 
 def _read_gradle_properties(path: Path) -> dict[str, str]:
@@ -316,7 +387,7 @@ def _safe_id(value: str) -> str:
 register_platform_provider(
     PlatformProvider(
         loader="fabric",
-        provider_id="official-fabric-meta-maven-template-v1",
+        provider_id="official-fabric-meta-maven-minecraft-release-v2",
         discover_versions=_fabric_versions,
         resolve=_fabric_adapter,
     )
