@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from functools import wraps
 from typing import Any
