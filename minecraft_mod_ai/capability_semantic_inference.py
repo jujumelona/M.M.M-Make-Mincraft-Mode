@@ -22,6 +22,10 @@ from .canonical_capability_ontology import (
 )
 
 
+class SemanticInferenceError(RuntimeError):
+    """Raised when production semantic authority cannot resolve authored meaning."""
+
+
 @dataclass(frozen=True)
 class ProvisionalCapabilityProposal:
     capability_id: str
@@ -68,7 +72,7 @@ def _router_payload(router: Any, span: str) -> Any:
     Production passes a ModelRouter instance, which is intentionally not callable.
     Treating only ``callable(router)`` as usable silently disabled semantic inference
     in reuse planning and caused opaque ``semantic_<hash>`` capabilities to leak into
-    retrieval.  This adapter keeps one semantic contract across both call sites.
+    retrieval. This adapter keeps one semantic contract across both call sites.
     """
 
     if router is None:
@@ -131,7 +135,7 @@ def infer_provisional_capabilities(
     """Infer provisional capabilities only from explicit semantic-router evidence.
 
     Absence or failure of semantic evidence never authorizes deterministic synthetic
-    children.  The caller can distinguish that state from a successful decomposition
+    children. The caller can distinguish that state from a successful decomposition
     and must not turn it into an executable opaque retrieval capability.
     """
 
@@ -216,9 +220,10 @@ def enrich_resolution_with_semantic_inference(
     """Replace unresolved placeholders only with semantically evidenced proposals.
 
     ``unresolved:*`` nodes are parser bookkeeping, not executable capabilities, so
-    they are never promoted into a reuse graph. If no router evidence exists, they
-    remain unresolved metadata for the caller to gate rather than becoming fake
-    searchable capabilities.
+    they are never promoted into a reuse graph. If a production router was supplied,
+    every unresolved authored span must receive semantic evidence before this function
+    returns. This creates a hard barrier before reuse/RAG and prevents opaque hash
+    capabilities from becoming retrieval queries.
     """
 
     if not resolution.unresolved_spans:
@@ -247,6 +252,13 @@ def enrich_resolution_with_semantic_inference(
         for span in resolution.unresolved_spans
         if str(span or "").strip() not in resolved_spans
     )
+
+    if router is not None and remaining_unresolved:
+        rendered = " | ".join(str(span) for span in remaining_unresolved)
+        raise SemanticInferenceError(
+            "production semantic decomposition unresolved; reuse/research is blocked "
+            f"before retrieval: {rendered}"
+        )
 
     return CapabilityResolution(
         nodes=all_nodes,
