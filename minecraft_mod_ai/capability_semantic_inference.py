@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-"""Host-Governed Semantic Inference for Unresolved Capability Concepts.
+"""Host-governed semantic inference for unresolved capability concepts.
 
-When user prompts contain novel or domain-specific concepts not present in the canonical
-ontology (e.g., "은행 대출", "초전도체 자기부상", "워프 드라이브"), this module proposes
-atomic sub-capabilities marked with the 'provisional:*' namespace and explicit dependency edges.
-
-The model proposes atomic decompositions, but the host strictly owns capability IDs,
-edges, and provenance. All provisional nodes remain distinct from canonical verified capabilities.
+Unknown prompt concepts may be expanded into provisional capability nodes only when
+an actual semantic router supplies evidence for that decomposition. The host owns
+capability IDs, edges, and provenance; deterministic code must never invent
+``primary/state/logic`` requirements merely because text was not recognized by the
+canonical ontology.
 """
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -40,14 +40,35 @@ class ProvisionalCapabilityProposal:
         )
 
 
+def _proposal_slug(value: str) -> str:
+    """Return a stable ASCII identifier without making language-specific guesses."""
+
+    clean = str(value or "").strip().casefold()
+    slug = re.sub(r"[^a-z0-9_.-]+", "_", clean).strip("_.-")
+    slug = re.sub(r"_+", "_", slug)
+    if slug:
+        return slug[:40]
+    return "semantic_" + hashlib.sha256(clean.encode("utf-8")).hexdigest()[:12]
+
+
 def infer_provisional_capabilities(
     unresolved_spans: Sequence[str],
     *,
     router: Any = None,
 ) -> tuple[tuple[CapabilityResolutionNode, ...], tuple[tuple[str, str], ...]]:
-    """Infer provisional atomic capabilities and dependency edges for unresolved concept spans."""
+    """Infer provisional capabilities only from explicit semantic-router evidence.
+
+    In particular, the absence of a router is not evidence that an unknown phrase
+    implies three synthetic primary/state/logic requirements. Returning no proposal
+    keeps deterministic parsing conservative and prevents incidental prompt wording
+    from expanding an otherwise complete design graph.
+    """
+
     inferred_nodes: list[CapabilityResolutionNode] = []
     inferred_edges: list[tuple[str, str]] = []
+
+    if not callable(router):
+        return (), ()
 
     for span in unresolved_spans:
         clean = str(span or "").strip()
@@ -55,79 +76,49 @@ def infer_provisional_capabilities(
             continue
 
         proposals: list[ProvisionalCapabilityProposal] = []
-
-        # 1. Try model router if provided
-        if callable(router):
-            try:
-                prompt_text = f"Decompose Minecraft mod concept into atomic sub-features: {clean}"
-                response = router(prompt_text)
-                if isinstance(response, Sequence):
-                    for item in response:
-                        if isinstance(item, Mapping) and str(item.get("name") or "").strip():
-                            raw_name = str(item["name"]).strip()
-                            slug = re.sub(r"[^a-z0-9_]+", "_", raw_name.casefold()).strip("_")
-                            cap_id = f"provisional:{slug[:40]}"
-                            proposals.append(
-                                ProvisionalCapabilityProposal(
-                                    capability_id=cap_id,
-                                    source_span=clean,
-                                    category=str(item.get("category") or "custom"),
-                                    description=str(item.get("description") or clean),
-                                    suggested_dependencies=tuple(item.get("dependencies") or ()),
-                                    search_queries=(f"{slug} mod", f"minecraft {slug}"),
-                                )
-                            )
-            except Exception:
-                proposals = []
-
-        # Deterministic atomic breakdown fallback
-        if not proposals:
-            slug = re.sub(r"[^a-z0-9_]+", "_", clean.casefold()).strip("_")
-            slug = re.sub(r"_+", "_", slug)
-            if not slug:
-                import hashlib
-                slug = hashlib.sha256(clean.encode("utf-8")).hexdigest()[:12]
-
-            primary_id = f"provisional:{slug[:40]}"
-            state_id = f"provisional:{slug[:30]}.state"
-            logic_id = f"provisional:{slug[:30]}.logic"
-
-            proposals.append(
-                ProvisionalCapabilityProposal(
-                    capability_id=primary_id,
-                    source_span=clean,
-                    category="custom_mechanic",
-                    description=f"Primary mechanic for {clean}",
-                    suggested_dependencies=(state_id, logic_id, "persistence.state_store", "network.action_sync"),
-                    search_queries=(f"{slug} mod", f"minecraft {slug} mod"),
-                )
+        try:
+            response = router(
+                "Decompose this Minecraft mod concept into atomic gameplay capabilities. "
+                "Return only capabilities actually supported by the request: " + clean
             )
-            proposals.append(
-                ProvisionalCapabilityProposal(
-                    capability_id=state_id,
-                    source_span=clean,
-                    category="state",
-                    description=f"Persistent state store for {clean}",
-                    suggested_dependencies=("persistence.state_store",),
-                    search_queries=(),
-                )
-            )
-            proposals.append(
-                ProvisionalCapabilityProposal(
-                    capability_id=logic_id,
-                    source_span=clean,
-                    category="logic",
-                    description=f"Execution logic and rules for {clean}",
-                    suggested_dependencies=(state_id,),
-                    search_queries=(f"{slug} logic",),
-                )
-            )
+            if isinstance(response, Sequence) and not isinstance(
+                response, (str, bytes, bytearray)
+            ):
+                for item in response:
+                    if not isinstance(item, Mapping):
+                        continue
+                    raw_name = str(item.get("name") or "").strip()
+                    if not raw_name:
+                        continue
+                    slug = _proposal_slug(raw_name)
+                    cap_id = f"provisional:{slug}"
+                    dependencies = tuple(
+                        str(dep).strip()
+                        for dep in item.get("dependencies", ())
+                        if str(dep).strip()
+                    )
+                    proposals.append(
+                        ProvisionalCapabilityProposal(
+                            capability_id=cap_id,
+                            source_span=clean,
+                            category=str(item.get("category") or "custom"),
+                            description=str(item.get("description") or clean),
+                            suggested_dependencies=dependencies,
+                            search_queries=(
+                                f"{slug.replace('.', ' ')} mod",
+                                f"minecraft {slug.replace('.', ' ')}",
+                            ),
+                        )
+                    )
+        except Exception:
+            proposals = []
 
         for prop in proposals:
             inferred_nodes.append(prop.to_node())
             for dep in prop.suggested_dependencies:
-                if (prop.capability_id, dep) not in inferred_edges:
-                    inferred_edges.append((prop.capability_id, dep))
+                edge = (prop.capability_id, dep)
+                if edge not in inferred_edges:
+                    inferred_edges.append(edge)
 
     return tuple(inferred_nodes), tuple(inferred_edges)
 
@@ -137,7 +128,14 @@ def enrich_resolution_with_semantic_inference(
     *,
     router: Any = None,
 ) -> CapabilityResolution:
-    """Enrich a CapabilityResolution by expanding unresolved spans into provisional capability subgraphs."""
+    """Replace unresolved placeholders only with semantically evidenced proposals.
+
+    ``unresolved:*`` nodes are parser bookkeeping, not executable capabilities, so
+    they are never promoted into a reuse graph. If no router evidence exists, they
+    simply disappear and the caller can rely on authoritative design/catalog nodes
+    or its ordinary empty-graph fallback.
+    """
+
     if not resolution.unresolved_spans:
         return resolution
 
@@ -146,9 +144,9 @@ def enrich_resolution_with_semantic_inference(
         router=router,
     )
 
-    # Filter out original unresolved:* placeholder nodes in favor of inferred provisional nodes
     retained_nodes = [
-        node for node in resolution.nodes
+        node
+        for node in resolution.nodes
         if not node.capability_id.startswith("unresolved:")
     ]
     all_nodes = tuple(dict.fromkeys([*retained_nodes, *inferred_nodes]))
