@@ -6,6 +6,7 @@ from .evidence_obligation_contract import install_evidence_obligation_contract
 from .target_grounding_contract import install_target_grounding_contract
 from .task_artifact_contract import install_task_artifact_contract
 from .production_boundary_contract import install_production_boundary_contract
+from .structured_repair_contract import install_structured_repair_contract
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
@@ -17,6 +18,7 @@ install_evidence_obligation_contract()
 install_target_grounding_contract()
 install_task_artifact_contract()
 install_production_boundary_contract()
+install_structured_repair_contract()
 
 from .api import (
     ChatReply,
