@@ -56,7 +56,9 @@ class TestGameplayRootPromotionLanguageIndependent:
         statement = "trade items"
         explicit = "custom.explicit_design_id"
         ir = _make_ir(statement)
-        fields = _semantic_requirement_fields(explicit, ir, "req_explicit")
+        fields = _semantic_requirement_fields(
+            explicit, ir, "req_explicit", is_design_module=True
+        )
         assert any(explicit in p for p in fields["provides"])
 
     def test_no_gameplay_roots_keeps_original_capability(self) -> None:
