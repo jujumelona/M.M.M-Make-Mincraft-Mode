@@ -8,9 +8,14 @@ be overwritten or modified, and generation is confined to declared missing inter
 unbound registries, missing resources, and necessary glue bindings.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+
+_WORKSPACE_CONTRACT_PATH = ".minecraft_ai/residual-generation-contracts.json"
 
 
 class ProtectedReuseArtifactError(PermissionError):
@@ -27,6 +32,20 @@ class ResidualScopeViolation(PermissionError):
     def __init__(self, path: str, message: str = "") -> None:
         super().__init__(message or f"Path is outside allowed residual generation scope: {path}")
         self.path = path
+
+
+class ResidualWritePreconditionError(PermissionError):
+    """Raised when a residual replacement is not bound to the planned file bytes."""
+
+    def __init__(self, path: str, message: str = "") -> None:
+        super().__init__(
+            message or f"Residual write precondition does not match planned bytes: {path}"
+        )
+        self.path = path
+
+
+class ResidualContractLoadError(ValueError):
+    """Raised when persisted residual write policy is malformed."""
 
 
 @dataclass(frozen=True)
@@ -112,7 +131,8 @@ class ResidualGenerationContract:
     protected_artifacts: Mapping[str, str] = field(default_factory=dict)  # path -> sha256
     protected_symbols: tuple[str, ...] = ()
     allowed_write_paths: tuple[str, ...] = ()
-    allowed_create_prefixes: tuple[str, ...] = ("src/main/java/", "src/main/resources/", "src/client/java/")
+    expected_old_sha256: Mapping[str, str] = field(default_factory=dict)
+    allowed_create_prefixes: tuple[str, ...] = ()
     required_new_artifacts: tuple[str, ...] = ()
     required_symbols: tuple[str, ...] = ()
     required_interfaces: tuple[str, ...] = ()
@@ -122,16 +142,64 @@ class ResidualGenerationContract:
     required_dependency_changes: tuple[DependencyRequirement, ...] = ()
     glue_contracts: tuple[GlueContract, ...] = ()
 
+    def __post_init__(self) -> None:
+        if self.allowed_create_prefixes:
+            raise ValueError(
+                "Residual create permissions must name exact artifacts, not prefixes."
+            )
+        protected: dict[str, str] = {}
+        for raw_path, raw_digest in self.protected_artifacts.items():
+            path = _normalize_path(raw_path)
+            digest = _normalize_sha256(raw_digest)
+            if not path or not digest or path in protected:
+                raise ValueError(
+                    "Protected reuse artifacts require unique safe SHA-256 paths."
+                )
+            protected[path] = digest
+
+        write_paths = tuple(_normalize_path(path) for path in self.allowed_write_paths)
+        new_paths = tuple(_normalize_path(path) for path in self.required_new_artifacts)
+        if (
+            not all(write_paths)
+            or not all(new_paths)
+            or len(set(write_paths)) != len(write_paths)
+            or len(set(new_paths)) != len(new_paths)
+            or set(write_paths) & set(new_paths)
+        ):
+            raise ValueError(
+                "Residual writes and creates require disjoint unique exact paths."
+            )
+
+        expected: dict[str, str] = {}
+        for raw_path, raw_digest in self.expected_old_sha256.items():
+            path = _normalize_path(raw_path)
+            digest = _normalize_sha256(raw_digest)
+            if not path or not digest or path in expected:
+                raise ValueError(
+                    "Residual replacement preconditions require unique SHA-256 paths."
+                )
+            expected[path] = digest
+        if set(expected) != set(write_paths):
+            raise ValueError(
+                "Every residual replacement path must carry its exact old SHA-256."
+            )
+        if set(protected) & (set(write_paths) | set(new_paths)):
+            raise ValueError("Protected reuse artifacts cannot be residual write targets.")
+
+        object.__setattr__(self, "protected_artifacts", protected)
+        object.__setattr__(self, "allowed_write_paths", tuple(sorted(write_paths)))
+        object.__setattr__(self, "expected_old_sha256", dict(sorted(expected.items())))
+        object.__setattr__(self, "required_new_artifacts", tuple(sorted(new_paths)))
+
     def allows_path(self, path: str) -> bool:
         """Check if path is permissible for residual generation."""
-        norm = path.replace("\\", "/").strip("/")
+        norm = _normalize_path(path)
+        if not norm:
+            return False
         if norm in self.protected_artifacts:
             return False
-        if norm in self.allowed_write_paths:
+        if norm in self.allowed_write_paths or norm in self.required_new_artifacts:
             return True
-        for pfx in self.allowed_create_prefixes:
-            if norm.startswith(pfx):
-                return True
         return False
 
     def validate_write(self, path: str, old_sha256: str | None = None) -> None:
@@ -146,6 +214,7 @@ class ResidualGenerationContract:
             "protected_artifacts": dict(self.protected_artifacts),
             "protected_symbols": list(self.protected_symbols),
             "allowed_write_paths": list(self.allowed_write_paths),
+            "expected_old_sha256": dict(self.expected_old_sha256),
             "allowed_create_prefixes": list(self.allowed_create_prefixes),
             "required_new_artifacts": list(self.required_new_artifacts),
             "required_symbols": list(self.required_symbols),
@@ -164,8 +233,162 @@ def validate_residual_write(
     contract: ResidualGenerationContract,
 ) -> None:
     """Validate write request against the ResidualGenerationContract."""
-    norm = path.replace("\\", "/").strip("/")
+    norm = _normalize_path(path)
+    if not norm:
+        raise ResidualScopeViolation(str(path), "Residual write path is unsafe or empty.")
     if norm in contract.protected_artifacts:
         raise ProtectedReuseArtifactError(norm)
     if not contract.allows_path(norm):
         raise ResidualScopeViolation(norm)
+
+    expected_by_path = {
+        _normalize_path(item_path): _normalize_sha256(digest)
+        for item_path, digest in contract.expected_old_sha256.items()
+    }
+    expected = expected_by_path.get(norm, "")
+    if old_sha256 is None:
+        if expected or norm in {
+            _normalize_path(item) for item in contract.allowed_write_paths
+        }:
+            raise ResidualWritePreconditionError(
+                norm,
+                f"Residual path already exists and requires its planned old SHA-256: {norm}",
+            )
+        return
+
+    actual = _normalize_sha256(old_sha256)
+    if not expected:
+        raise ResidualWritePreconditionError(
+            norm,
+            f"Residual replacement has no code-owned old SHA-256 precondition: {norm}",
+        )
+    if not actual or actual != expected:
+        raise ResidualWritePreconditionError(norm)
+    if norm not in {_normalize_path(item) for item in contract.allowed_write_paths}:
+        raise ResidualScopeViolation(
+            norm,
+            f"Residual replacement is not an exact allowed write path: {norm}",
+        )
+
+
+def validate_residual_write_against_contracts(
+    path: str,
+    old_sha256: str | None,
+    contracts: tuple[ResidualGenerationContract, ...] | list[ResidualGenerationContract],
+) -> None:
+    """Apply the single residual write gate across one plan's contracts.
+
+    A protected path remains protected even if another contract accidentally lists
+    it as writable.  Otherwise exactly one declared residual scope must authorize
+    the operation; undeclared source edits fail closed.
+    """
+
+    normalized = _normalize_path(path)
+    if not normalized:
+        raise ResidualScopeViolation(str(path), "Residual write path is unsafe or empty.")
+    for contract in contracts:
+        if normalized in {
+            _normalize_path(protected) for protected in contract.protected_artifacts
+        }:
+            validate_residual_write(normalized, old_sha256, contract)
+
+    matching = [contract for contract in contracts if contract.allows_path(normalized)]
+    if not matching:
+        raise ResidualScopeViolation(
+            normalized,
+            "Residual write is not declared by the active residual contract.",
+        )
+    if len(matching) != 1:
+        raise ResidualScopeViolation(
+            normalized,
+            "Residual write is claimed by multiple contracts and is ambiguous.",
+        )
+    validate_residual_write(normalized, old_sha256, matching[0])
+
+
+def load_residual_generation_contracts(
+    project_root: str | Path,
+) -> tuple[ResidualGenerationContract, ...]:
+    """Load the planner-owned residual policy persisted by FinalProjectAssembler."""
+
+    path = Path(project_root) / _WORKSPACE_CONTRACT_PATH
+    if not path.exists():
+        return ()
+    if path.is_symlink() or not path.is_file():
+        raise ResidualContractLoadError("Residual contract metadata is not a regular file.")
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResidualContractLoadError("Residual contract metadata is unreadable.") from exc
+    raw_contracts = payload.get("contracts") if isinstance(payload, Mapping) else None
+    if not isinstance(raw_contracts, list):
+        raise ResidualContractLoadError("Residual contract metadata has no contracts array.")
+
+    contracts: list[ResidualGenerationContract] = []
+    for raw in raw_contracts:
+        if not isinstance(raw, Mapping):
+            raise ResidualContractLoadError("Residual contract entry must be an object.")
+        capability = str(raw.get("capability") or "").strip()
+        if not capability:
+            raise ResidualContractLoadError("Residual contract capability must be non-empty.")
+        for key in (
+            "protected_artifacts",
+            "expected_old_sha256",
+        ):
+            if not isinstance(raw.get(key, {}), Mapping):
+                raise ResidualContractLoadError(f"Residual contract field {key} must be an object.")
+        sequence_fields = (
+            "requirement_ids",
+            "protected_symbols",
+            "allowed_write_paths",
+            "allowed_create_prefixes",
+            "required_new_artifacts",
+        )
+        if any(
+            not isinstance(raw.get(key, ()), list)
+            for key in sequence_fields
+        ):
+            raise ResidualContractLoadError("Residual contract path fields must be arrays.")
+        try:
+            contracts.append(
+                ResidualGenerationContract(
+                    capability=capability,
+                    requirement_ids=tuple(str(item) for item in raw.get("requirement_ids", ())),
+                    protected_artifacts={
+                        str(item_path): str(digest)
+                        for item_path, digest in raw.get("protected_artifacts", {}).items()
+                    },
+                    protected_symbols=tuple(str(item) for item in raw.get("protected_symbols", ())),
+                    allowed_write_paths=tuple(str(item) for item in raw.get("allowed_write_paths", ())),
+                    expected_old_sha256={
+                        str(item_path): str(digest)
+                        for item_path, digest in raw.get("expected_old_sha256", {}).items()
+                    },
+                    allowed_create_prefixes=tuple(str(item) for item in raw.get("allowed_create_prefixes", ())),
+                    required_new_artifacts=tuple(str(item) for item in raw.get("required_new_artifacts", ())),
+                )
+            )
+        except ValueError as exc:
+            raise ResidualContractLoadError(str(exc)) from exc
+    return tuple(contracts)
+
+
+def _normalize_path(path: Any) -> str:
+    raw = str(path or "").replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or re.match(r"^[A-Za-z]:/", raw):
+        return ""
+    parts = tuple(part for part in raw.split("/") if part not in {"", "."})
+    if not parts or ".." in parts:
+        return ""
+    return "/".join(parts)
+
+
+def _normalize_sha256(value: Any) -> str:
+    raw = str(value or "").strip().casefold()
+    if re.fullmatch(r"[0-9a-f]{64}", raw):
+        return "sha256:" + raw
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", raw):
+        return raw
+    return ""

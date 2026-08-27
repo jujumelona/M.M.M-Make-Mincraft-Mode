@@ -106,6 +106,92 @@ def _closure_sha256(donor_slice: DonorSlice) -> str:
     return "sha256:" + hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
+def _residual_java_artifact_path(symbol: str, target_context: Mapping[str, Any]) -> str:
+    """Map one declared residual Java symbol to its exact target-owned source path."""
+
+    raw = str(symbol or "").strip().replace("$", ".")
+    simple_name = raw.rsplit(".", 1)[-1]
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", simple_name):
+        return ""
+    target_package = str(
+        target_context.get("target_package") or "ai.minecraft.generated.mod"
+    ).strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", target_package):
+        return ""
+    return f"src/main/java/{target_package.replace('.', '/')}/{simple_name}.java"
+
+
+def _residual_resource_artifact_path(
+    path: str,
+    target_context: Mapping[str, Any],
+) -> str:
+    normalized = _safe_workspace_relative_path(path)
+    if not normalized:
+        return ""
+    original = normalized
+    if normalized.startswith("src/main/resources/"):
+        normalized = normalized.removeprefix("src/main/resources/")
+    if not normalized.startswith(("assets/", "data/")):
+        return original if original.startswith("src/") else ""
+    kind, _source_namespace, *rest = normalized.split("/")
+    if not rest:
+        return ""
+    target_modid = str(target_context.get("target_modid") or "generated_mod").strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]*", target_modid):
+        return ""
+    return f"src/main/resources/{kind}/{target_modid}/" + "/".join(rest)
+
+
+def _safe_workspace_relative_path(path: Any) -> str:
+    """Return a canonical in-workspace path or reject an unsafe spelling."""
+
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
+        return ""
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _existing_workspace_hashes(
+    target_workspace: str | Path,
+    paths: Sequence[str],
+) -> dict[str, str]:
+    """Bind residual replacements to the target bytes observed during proof."""
+
+    raw_root = str(target_workspace or "").strip()
+    if not raw_root:
+        return {}
+    try:
+        root = Path(raw_root).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return {}
+    if not root.is_dir() or root.is_symlink():
+        return {}
+
+    hashes: dict[str, str] = {}
+    for raw_path in paths:
+        normalized = _safe_workspace_relative_path(raw_path)
+        if not normalized:
+            continue
+        target = root.joinpath(*normalized.split("/"))
+        try:
+            resolved = target.resolve()
+            resolved.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not resolved.is_file() or resolved.is_symlink():
+            continue
+        try:
+            hashes[normalized] = "sha256:" + hashlib.sha256(
+                resolved.read_bytes()
+            ).hexdigest()
+        except OSError:
+            continue
+    return hashes
+
+
 def scaffold_minimal_ephemeral_workspace(sandbox_path: Path, target_context: Mapping[str, Any]) -> None:
     """Synthesize verified build files and real Gradle wrapper template for Fabric/NeoForge/Forge."""
     from .verified_scaffold_registry import apply_verified_scaffold
@@ -501,7 +587,7 @@ def execute_reuse_proof(
     for p in verified_artifacts:
         content = adapted_files.get(p, "")
         b = content.encode("utf-8") if isinstance(content, str) else content
-        protected_hashes[p] = hashlib.sha256(b).hexdigest()
+        protected_hashes[p] = "sha256:" + hashlib.sha256(b).hexdigest()
 
     res_reqs = tuple(
         ResourceRequirement(
@@ -528,11 +614,46 @@ def execute_reuse_proof(
         for s in verified_symbols
     )
 
+    exact_residual_paths = {
+        normalized
+        for path in residual_artifacts
+        if (normalized := _safe_workspace_relative_path(path))
+    }
+    exact_residual_paths.update(
+        path
+        for path in (
+            _residual_resource_artifact_path(item, target_context)
+            for item in missing_res
+        )
+        if path
+    )
+    exact_residual_paths.update(
+        path
+        for path in (
+            _residual_java_artifact_path(symbol, target_context)
+            for symbol in missing_ifaces
+        )
+        if path
+    )
+    exact_residual_paths.difference_update(protected_hashes)
+    expected_old_sha256 = _existing_workspace_hashes(
+        target_workspace,
+        tuple(sorted(exact_residual_paths)),
+    )
+    allowed_write_paths = tuple(sorted(expected_old_sha256))
+    required_new_artifacts = tuple(
+        path for path in sorted(exact_residual_paths) if path not in expected_old_sha256
+    )
+
     residual_contract = ResidualGenerationContract(
         capability=donor_slice.capability,
         requirement_ids=(donor_slice.capability,),
         protected_artifacts=protected_hashes,
         protected_symbols=verified_symbols,
+        allowed_write_paths=allowed_write_paths,
+        expected_old_sha256=expected_old_sha256,
+        allowed_create_prefixes=(),
+        required_new_artifacts=required_new_artifacts,
         required_symbols=residual_symbols,
         required_interfaces=missing_ifaces,
         required_resource_edges=res_reqs,

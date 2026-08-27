@@ -109,6 +109,15 @@ def _split_into_semantic_clauses(text: str) -> list[str]:
     return clauses if clauses else [cleaned]
 
 
+def _evidence_capability_id(value: Any) -> str:
+    """Convert a provides receipt back to its authored capability identity."""
+
+    text = str(value or "").strip()
+    if text.casefold().startswith("capability:"):
+        text = text[len("capability:") :].strip()
+    return text
+
+
 def build_requirement_catalog(
     prompt: str,
     resolution: CapabilityResolution | None = None,
@@ -132,18 +141,35 @@ def build_requirement_catalog(
                 continue
             req_id = str(r.get("requirement_id") or r.get("id") or f"REQ-{i:03d}")
             stmt = str(r.get("statement") or r.get("description") or f"Requirement {req_id}")
-            provides = []
-            if r.get("capability"):
-                provides.append(str(r["capability"]))
-            if isinstance(r.get("provides"), Sequence):
-                for p in r["provides"]:
-                    if str(p).strip() and str(p) not in provides:
-                        provides.append(str(p).strip())
+            provides: list[str] = []
+            seen_provides: set[str] = set()
+
+            def add_provide(raw: Any) -> None:
+                capability = _evidence_capability_id(raw)
+                key = capability.casefold()
+                if capability and key not in seen_provides:
+                    seen_provides.add(key)
+                    provides.append(capability)
+
+            add_provide(r.get("capability"))
+            raw_provides = r.get("provides")
+            if isinstance(raw_provides, Sequence) and not isinstance(
+                raw_provides, (str, bytes, bytearray)
+            ):
+                for provide in raw_provides:
+                    add_provide(provide)
+
+            source_span = r.get("source_span")
+            original_span = (
+                str(source_span.get("text") or stmt)
+                if isinstance(source_span, Mapping)
+                else str(r.get("original_span") or stmt)
+            )
 
             req_spec = RequirementSpec(
                 id=req_id,
                 statement=stmt,
-                original_span=str(r.get("original_span") or stmt),
+                original_span=original_span,
                 normalized_statement=stmt,
                 mandatory=bool(r.get("mandatory", True)),
                 provides=tuple(provides),
@@ -245,4 +271,3 @@ def build_requirement_catalog(
         )
 
     return RequirementCatalog(requirements=tuple(reqs), capabilities=tuple(caps))
-

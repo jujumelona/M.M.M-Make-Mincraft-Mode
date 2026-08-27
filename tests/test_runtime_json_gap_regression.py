@@ -29,7 +29,7 @@ def _tool_request(tool: dict) -> GenerationRequest:
     )
 
 
-def test_json_requests_use_native_json_constraint_without_grammar():
+def test_json_requests_keep_validation_host_side_without_grammar():
     adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
     request = SimpleNamespace(
         messages=({"role": "user", "content": "return JSON"},),
@@ -37,9 +37,8 @@ def test_json_requests_use_native_json_constraint_without_grammar():
         response_format="json",
     )
     payload = _server_payload(adapter, request)
-    assert payload["response_format"] == {"type": "json_object"}
-    assert "json_schema" not in payload
-    assert "grammar" not in payload
+    for forbidden in ("response_format", "json_schema", "grammar"):
+        assert forbidden not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 

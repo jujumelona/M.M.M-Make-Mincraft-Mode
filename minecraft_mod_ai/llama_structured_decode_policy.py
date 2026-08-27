@@ -34,22 +34,6 @@ def _is_qwen35(adapter: Any) -> bool:
     return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
 
 
-def _structured_response_format(request: Any) -> dict[str, Any]:
-    schema = getattr(request, "response_schema", None)
-    if schema is None:
-        return {"type": "json_object"}
-    if not isinstance(schema, Mapping):
-        raise TypeError("structured response_schema must be a mapping")
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_structured_response",
-            "strict": True,
-            "schema": dict(schema),
-        },
-    }
-
-
 def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
     """Validate native structured text and regenerate the whole response at most once."""
 
@@ -98,12 +82,11 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
 
 
 def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Preserve native structured constraints and host validation as defense in depth.
+    """Keep structured validation host-owned and bound JSON page budgets.
 
-    Every tool-free JSON request carries the same OpenAI-compatible ``response_format``
-    contract used by the remote adapter. Native llama text is then host-validated after
-    generation; one rejected complete response causes exactly one full regeneration.
-    The malformed response itself is never extracted, coerced, patched, or repaired.
+    Native llama transport must never receive a second JSON-schema or grammar contract:
+    the host validates the completed response and may regenerate it once. This avoids
+    conflicting server/tool grammars while keeping bounded JSON section policy local.
     """
 
     # Runtime bootstrap passes the real hardware-policy module. Keep isolated policy
@@ -121,12 +104,16 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
     @wraps(current)
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
         result = current(adapter, request)
+        if getattr(request, "response_format", None) == "json":
+            # A prior compatibility wrapper may have added an OpenAI response
+            # constraint. The host is the sole JSON-schema authority for native llama.
+            result = dict(result)
+            for key in ("response_format", "json_schema", "grammar"):
+                result.pop(key, None)
         if result.get("tools"):
             return result
         if getattr(request, "response_format", None) != "json":
             return result
-
-        result["response_format"] = _structured_response_format(request)
 
         schema = getattr(request, "response_schema", None)
         properties = schema.get("properties") if isinstance(schema, Mapping) else None

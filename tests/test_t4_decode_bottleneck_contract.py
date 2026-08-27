@@ -149,7 +149,7 @@ def test_qwen_draft_kv_stage_selects_fastest_identical_output(monkeypatch) -> No
     assert len(decision.probes) == 3
 
 
-def test_qwen_game_design_schema_uses_native_constraint_fastpath() -> None:
+def test_qwen_game_design_schema_stays_host_owned() -> None:
     module = SimpleNamespace(
         _server_payload=lambda _adapter, _request: {
             "response_format": {"type": "json_object", "schema": {}},
@@ -166,13 +166,7 @@ def test_qwen_game_design_schema_uses_native_constraint_fastpath() -> None:
     )
 
     payload = module._server_payload(adapter, request)
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_structured_response",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    for forbidden in ("response_format", "json_schema", "grammar"):
+        assert forbidden not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}

@@ -491,6 +491,10 @@ class CustomModuleGenerator:
                     raise CustomModuleGenerationError(
                         f"Output continuation reached maximum allowed attempts ({continuation_count})."
                     ) from exc
+                if state_sha256 in seen_output_states:
+                    raise CustomModuleGenerationError(
+                        "Output continuation reached a no-source-progress fixed point."
+                    ) from exc
                 seen_output_states.add(state_sha256)
                 continuation_count += 1
                 active_messages = _output_exhaustion_continuation_messages(

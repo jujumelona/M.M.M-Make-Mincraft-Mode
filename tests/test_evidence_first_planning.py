@@ -12,6 +12,7 @@ from minecraft_mod_ai.complete_planner import (
 from minecraft_mod_ai.evidence_first_planning import (
     EvidencePlanError,
     _hash_without,
+    build_request_catalog,
     compile_evidence_first_plan,
     task_batches,
     validate_evidence_first_plan,
@@ -56,6 +57,50 @@ def test_plan_hash_and_semantic_ids_are_deterministic() -> None:
     assert first["plan_sha256"].startswith("sha256:")
     assert len(first["request_catalog"]["requirements"]) == 3
     assert len(first["tasks"]) > 10
+
+
+def test_prompt_only_catalog_preserves_each_authored_requirement_clause() -> None:
+    prompt = "Add a machine with saved state, synced packets, and a screen."
+    catalog = build_request_catalog(prompt, {})
+
+    assert [item["capability"] for item in catalog["requirements"]] == [
+        "machine_saved_state",
+        "synced_packets",
+        "screen",
+    ]
+    assert [item["source_span"]["text"] for item in catalog["requirements"]] == [
+        "Add a machine with saved state",
+        "synced packets",
+        "a screen.",
+    ]
+
+
+def test_unmatched_design_module_does_not_cover_the_prompt_clause() -> None:
+    catalog = build_request_catalog("Add quests.", _design("placeholder"))
+
+    assert [item["capability"] for item in catalog["requirements"]] == [
+        "placeholder",
+        "quests",
+    ]
+
+
+def test_existing_catalog_merges_uncovered_prompt_clause_without_dropping_records() -> None:
+    prompt = "Add trade. Add quests."
+    catalog = build_request_catalog(prompt, _design("trade"))
+    catalog["requirements"] = [
+        item for item in catalog["requirements"] if item["capability"] != "quests"
+    ]
+    catalog["catalog_sha256"] = _hash_without(catalog, "catalog_sha256")
+    design = _design("trade")
+    design["_evidence_request_catalog"] = catalog
+
+    merged = build_request_catalog(prompt, design)
+
+    assert [item["capability"] for item in merged["requirements"]] == [
+        "trade",
+        "quests",
+    ]
+    assert merged["catalog_sha256"] == _hash_without(merged, "catalog_sha256")
 
 
 def test_machine_vertical_dag_uses_predicates_and_exact_provider_edges() -> None:

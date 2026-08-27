@@ -168,13 +168,44 @@ def test_host_materializes_unique_span_with_exact_sha(tmp_path) -> None:
     assert "int value = 1" in source.read_text(encoding="utf-8")
 
 
+def test_residual_contract_is_a_single_gate_before_source_patch_writes(tmp_path) -> None:
+    from minecraft_mod_ai.residual_generation_contract import ResidualGenerationContract
+
+    project = _project(tmp_path)
+    existing = project / "src/main/java/example/ResidualBridge.java"
+    existing.write_text("final class ResidualBridge {}\n", encoding="utf-8")
+    old_sha = "sha256:" + hashlib.sha256(existing.read_bytes()).hexdigest()
+    contract = ResidualGenerationContract(
+        capability="trade.custom_npc",
+        protected_artifacts={
+            "src/main/java/example/ProtectedTrade.java": "sha256:" + "a" * 64,
+        },
+        allowed_write_paths=("src/main/java/example/ResidualBridge.java",),
+        expected_old_sha256={"src/main/java/example/ResidualBridge.java": old_sha},
+        required_new_artifacts=("src/main/java/example/NewTradeBridge.java",),
+    )
+    patcher = TransactionalSourcePatcher(project, residual_contracts=(contract,))
+
+    with pytest.raises(source_patch_module.SourcePatchError, match="RESIDUAL_WRITE_CONTRACT"):
+        patcher.apply(
+            [{"operation": "create", "path": "src/main/java/example/Undeclared.java", "content": "class Undeclared {}\n"}]
+        )
+
+    patcher.apply(
+        [{"operation": "create", "path": "src/main/java/example/NewTradeBridge.java", "content": "class NewTradeBridge {}\n"}]
+    )
+    patcher.apply(
+        [{"operation": "replace", "path": "src/main/java/example/ResidualBridge.java", "expected_sha256": old_sha, "content": "final class ResidualBridge { int value; }\n"}]
+    )
+
+
 def test_noop_patch_skips_commit_and_does_not_prove_source_diff(monkeypatch, tmp_path) -> None:
     workspace = tmp_path / "workspace"
     project = _project(workspace)
     source = project / "src/main/java/example/Example.java"
     content = "final class Example { int value = 1; }\n"
     source.write_text(content, encoding="utf-8")
-    expected = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    expected = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
     committed: list[object] = []
 
     monkeypatch.setattr(

@@ -760,7 +760,7 @@ def test_behavior_verified_requires_nonzero_tests_executed() -> None:
     assert receipt_passed.tests_executed == 2
 
 
-def test_artifact_level_partial_reuse_slicing(monkeypatch) -> None:
+def test_artifact_level_partial_reuse_slicing(monkeypatch, tmp_path) -> None:
     code_a = b"package com.donor.mod;\npublic class CleanClass {}"
     code_b = b"package com.donor.mod;\npublic class BrokenClass { MissingSymbol field; }"
     import hashlib
@@ -808,13 +808,28 @@ def test_artifact_level_partial_reuse_slicing(monkeypatch) -> None:
             return {"compile_passed": True, "tests_passed": False}
         return {"compile_passed": False, "unresolved_symbols": ["MissingSymbol"]}
 
-    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_partial)
+    existing = tmp_path / "src/main/java/BrokenClass.java"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("package target; final class BrokenClass {}\n", encoding="utf-8")
+    existing_sha256 = "sha256:" + hashlib.sha256(existing.read_bytes()).hexdigest()
+
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace=tmp_path,
+        target_context={},
+        compile_checker=mock_partial,
+    )
 
     assert receipt.proof_level == "PARTIAL_REUSE"
     assert "src/main/java/CleanClass.java" in receipt.verified_artifacts
     assert "src/main/java/BrokenClass.java" in receipt.residual_artifacts
     assert "CleanClass" in receipt.verified_symbols
     assert "MissingSymbol" in receipt.residual_symbols
+    assert receipt.contract.allowed_write_paths == ("src/main/java/BrokenClass.java",)
+    assert receipt.contract.expected_old_sha256 == {
+        "src/main/java/BrokenClass.java": existing_sha256,
+    }
+    assert "src/main/java/BrokenClass.java" not in receipt.contract.required_new_artifacts
 
 
 def test_two_stage_compile_and_test_separation() -> None:
@@ -1394,27 +1409,15 @@ def test_multi_donor_beam_search_composition_solver() -> None:
 
 
 def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None:
-    from minecraft_mod_ai.final_project_assembler import FinalProjectAssembler
-    from minecraft_mod_ai.reuse_proof_executor import ResidualWorkOrder
+    from dataclasses import replace
 
-    donor = source_transplant.DonorSlice(
-        capability="boss.entity",
-        repository="example/boss-mod",
-        commit_sha="1111111111111111111111111111111111111111",
-        license_id="MIT",
-        source_url="https://github.com/example/boss-mod",
-        target_compatibility="exact",
-        files=(
-            source_transplant.DonorFile("src/main/java/BossEntity.java", "b1", "sha:1", 100, ("BossEntity",)),
-        ),
-        seed_files=("src/main/java/BossEntity.java",),
-        source_symbols=("BossEntity",),
-        required_dependencies=(),
-        donor_tests=(),
-        confidence=0.95,
-        adaptation_cost=0.0,
-        closure_complete=True,
+    from minecraft_mod_ai.final_project_assembler import FinalProjectAssembler
+    from minecraft_mod_ai.reuse_artifacts import ReusableArtifactBundle
+    from minecraft_mod_ai.residual_generation_contract import (
+        DependencyRequirement,
+        ResidualGenerationContract,
     )
+    from minecraft_mod_ai.reuse_proof_executor import ResidualWorkOrder
 
     work_order = ResidualWorkOrder(
         capability="boss.entity",
@@ -1435,11 +1438,38 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
             "target_package": "ai.minecraft.generated.rpg",
         },
     )
+    bundle = ReusableArtifactBundle.from_same_project(
+        "boss.entity",
+        files={
+            "src/main/java/BossEntity.java": (
+                b"package ai.minecraft.generated.rpg;\n"
+                b"public class BossEntity {}"
+            ),
+        },
+        source_ref="test:boss-entity",
+    )
+    bundle = replace(
+        bundle,
+        proof_receipt={
+            "schema_version": "mmm/same-project-proof-receipt-v1",
+            "proof_level": "HOST_VERIFIED",
+            "capability": bundle.capability,
+            "bundle_id": bundle.bundle_id,
+            "source_ref": bundle.source_ref,
+            "file_hashes": dict(bundle.file_hashes),
+        },
+    )
+    residual_contract = ResidualGenerationContract(
+        capability="boss.entity",
+        requirement_ids=("boss.entity",),
+        required_new_artifacts=("src/main/java/IBossPhase.java",),
+        required_dependency_changes=(
+            DependencyRequirement("example:residual-api:1.0.0"),
+        ),
+    )
 
     res = assembler.assemble(
-        reused_adapted_files={
-            "src/main/java/BossEntity.java": "package ai.minecraft.generated.rpg;\npublic class BossEntity {}",
-        },
+        reused_bundles=(bundle,),
         residual_files={
             "src/main/java/IBossPhase.java": "package ai.minecraft.generated.rpg;\npublic interface IBossPhase {}",
         },
@@ -1447,6 +1477,7 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
             "src/main/java/QuestSystem.java": "package ai.minecraft.generated.rpg;\npublic class QuestSystem {}",
         },
         work_orders=(work_order,),
+        residual_contracts=(residual_contract,),
     )
 
     assert res.is_valid is True
@@ -1458,24 +1489,58 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
     assert (tmp_path / "src/main/java/BossEntity.java").exists()
     assert (tmp_path / "src/main/java/IBossPhase.java").exists()
     assert (tmp_path / "src/main/java/QuestSystem.java").exists()
+    assert "example:residual-api:1.0.0" in (tmp_path / "build.gradle").read_text(encoding="utf-8")
+    assert (tmp_path / ".minecraft_ai/residual-generation-contracts.json").exists()
 
-    # Test assemble_plan with TargetImplementationPlan
-    from minecraft_mod_ai.reuse_planner import ReuseDecision, TargetImplementationPlan
+    # The assembler-persisted policy becomes the default write lock for coder tools.
+    import pytest
+    from minecraft_mod_ai.source_patch import SourcePatchError, TransactionalSourcePatcher
+
+    with pytest.raises(SourcePatchError, match="RESIDUAL_WRITE_CONTRACT"):
+        TransactionalSourcePatcher(tmp_path).apply(
+            [{
+                "operation": "create",
+                "path": "src/main/java/UndeclaredBossMutation.java",
+                "content": "final class UndeclaredBossMutation {}\n",
+            }]
+        )
+
+    # Test the production planner -> bundle -> contract -> assembler path.
+    from minecraft_mod_ai.reuse_planner import (
+        CompositionSelection,
+        ReuseDecision,
+        TargetImplementationPlan,
+    )
     from minecraft_mod_ai.platform_catalog import adapter_for_target
 
     adapter = adapter_for_target("1.21.1", "fabric")
+    plan_workspace = tmp_path / "plan-output"
+    plan_assembler = FinalProjectAssembler(
+        plan_workspace,
+        target_context={
+            "loader": "fabric",
+            "minecraft_version": "1.21.1",
+            "target_modid": "my_rpg_mod",
+            "target_package": "ai.minecraft.generated.rpg",
+        },
+    )
+    plan_contract = ResidualGenerationContract(
+        capability="boss.entity",
+        requirement_ids=("boss.entity",),
+        required_new_artifacts=("src/main/java/PlanBossPhase.java",),
+    )
     plan = TargetImplementationPlan(
         adapter=adapter,
         capabilities=(
             ReuseDecision(
                 capability="boss.entity",
-                mode="source_transplant",
+                mode="same_project",
                 confidence=0.95,
                 fresh_implementation_cost=10.0,
                 fresh_verification_cost=5.0,
-                donor=donor.to_dict(),
-                donor_slice=donor,
-                proof_level="COMPILE_VERIFIED",
+                artifact_bundle=bundle,
+                proof_level="HOST_VERIFIED",
+                proof_receipt=bundle.proof_receipt,
             ),
         ),
         platform_evidence=None,
@@ -1489,17 +1554,70 @@ def test_final_project_assembler_orchestration_and_typed_merge(tmp_path) -> None
         verification_work=0.0,
         uncertainty=0.0,
         reusable_registry_candidates=0,
+        selected_composition=CompositionSelection(
+            bundles=(bundle,),
+            total_covered_requirements=("boss.entity",),
+        ),
+        residual_contracts=(plan_contract,),
     )
 
-    plan_res = assembler.assemble_plan(
+    plan_res = plan_assembler.assemble_plan(
         plan,
-        residual_files={"src/main/java/IBossPhase.java": "public interface IBossPhase {}"},
-        fresh_files={"src/main/java/QuestSystem.java": "public class QuestSystem {}"},
+        residual_files={"src/main/java/PlanBossPhase.java": "public interface PlanBossPhase {}"},
+        fresh_files={"src/main/java/PlanQuestSystem.java": "public class PlanQuestSystem {}"},
     )
+    assert plan_res.is_valid is True
     assert plan_res.target_loader == "fabric"
     assert plan_res.target_minecraft == "1.21.1"
-    assert (tmp_path / "assembly-manifest.json").exists()
-    assert (tmp_path / "dependency-lock.json").exists()
+    assert plan_res.reused_file_count == 1
+    assert plan_res.residual_file_count == 1
+    assert (plan_workspace / "assembly-manifest.json").exists()
+    assert (plan_workspace / "dependency-lock.json").exists()
+
+
+def test_final_project_assembler_requires_bundle_bound_proof_receipt(tmp_path) -> None:
+    from dataclasses import replace
+
+    from minecraft_mod_ai.final_project_assembler import FinalProjectAssembler
+    from minecraft_mod_ai.reuse_artifacts import ReusableArtifactBundle
+
+    assembler = FinalProjectAssembler(
+        tmp_path,
+        target_context={"loader": "fabric", "minecraft_version": "1.21.1"},
+    )
+    bundle = ReusableArtifactBundle.from_same_project(
+        "trade.transaction",
+        files={"src/main/java/TradeTransaction.java": "final class TradeTransaction {}\n"},
+        proof_receipt={"proof_level": "HOST_VERIFIED"},
+    )
+
+    rejected = assembler.assemble(reused_bundles=(bundle,))
+
+    assert rejected.is_valid is False
+    assert rejected.errors == ("BUNDLE_PROOF_REQUIRED: same_project:trade.transaction",)
+
+    component = ReusableArtifactBundle.from_verified_component(
+        "component-trade",
+        "trade.transaction",
+        files={"src/main/java/TradeTransaction.java": "final class TradeTransaction {}\n"},
+    )
+    component = replace(
+        component,
+        proof_receipt={
+            "schema_version": "mmm/registry-component-proof-receipt-v1",
+            "proof_level": "COMPILE_VERIFIED",
+            "capability": component.capability,
+            "bundle_id": component.bundle_id,
+            "source_ref": component.source_ref,
+            "file_hashes": dict(component.file_hashes),
+        },
+    )
+
+    accepted = assembler.assemble(reused_bundles=(component,))
+
+    assert accepted.is_valid is True
+    assert accepted.reused_file_count == 1
+    assert (tmp_path / "src/main/java/TradeTransaction.java").exists()
 
 
 def test_residual_generation_contract_write_guards() -> None:
@@ -1507,15 +1625,20 @@ def test_residual_generation_contract_write_guards() -> None:
     from minecraft_mod_ai.residual_generation_contract import (
         ResidualGenerationContract,
         ProtectedReuseArtifactError,
+        ResidualWritePreconditionError,
         ResidualScopeViolation,
         validate_residual_write,
     )
 
     contract = ResidualGenerationContract(
         capability="trade.custom_npc",
-        protected_artifacts={"src/main/java/TradeNpc.java": "sha:123"},
+        protected_artifacts={"src/main/java/TradeNpc.java": "sha256:" + "c" * 64},
         protected_symbols=("TradeNpc",),
         allowed_write_paths=("src/main/java/TradeInterface.java",),
+        expected_old_sha256={
+            "src/main/java/TradeInterface.java": "a" * 64,
+        },
+        required_new_artifacts=("src/main/java/NewTradeService.java",),
     )
 
     # 1. Modifying protected artifact must raise ProtectedReuseArtifactError
@@ -1526,9 +1649,17 @@ def test_residual_generation_contract_write_guards() -> None:
     with pytest.raises(ResidualScopeViolation):
         validate_residual_write("build.gradle", None, contract)
 
-    # 3. Allowed write path must pass
-    validate_residual_write("src/main/java/TradeInterface.java", None, contract)
+    # 3. Existing files require the exact pre-write bytes from the contract.
+    with pytest.raises(ResidualWritePreconditionError):
+        validate_residual_write("src/main/java/TradeInterface.java", None, contract)
+    with pytest.raises(ResidualWritePreconditionError):
+        validate_residual_write("src/main/java/TradeInterface.java", "b" * 64, contract)
+    validate_residual_write("src/main/java/TradeInterface.java", "a" * 64, contract)
+
+    # 4. Creates are exact declared files, never a broad source-root prefix.
     validate_residual_write("src/main/java/NewTradeService.java", None, contract)
+    with pytest.raises(ResidualScopeViolation):
+        validate_residual_write("src/main/java/UndeclaredTradeService.java", None, contract)
 
 
 def test_reusable_artifact_bundle_and_repository_locator() -> None:
@@ -1561,6 +1692,8 @@ def test_reusable_artifact_bundle_and_repository_locator() -> None:
 
 
 def test_build_model_and_resource_merge_registry() -> None:
+    import pytest
+
     from minecraft_mod_ai.build_model import BuildModel, BuildTargetSpec
     from minecraft_mod_ai.resource_merge_registry import ResourceMergeRegistry
 
@@ -1588,13 +1721,10 @@ def test_build_model_and_resource_merge_registry() -> None:
     assert ok is True
     assert "Iron Sword" in merged_lang and "Iron Shield" in merged_lang
 
-
-
-
-
-
-
-
+    with pytest.raises(ValueError, match="TRAVERSAL"):
+        ResourceMergeRegistry.canonical_path(
+            "../outside.json", target_modid="test_mod"
+        )
 
 
 

@@ -8,6 +8,7 @@ from minecraft_mod_ai.project_inventory import inspect_project_inventory
 from minecraft_mod_ai.reuse_planner import (
     ReuseDecision,
     _declared_same_project_capabilities,
+    _plan_target,
     decompose_capability_graph,
 )
 from minecraft_mod_ai.source_transplant import _target_compatibility
@@ -22,6 +23,74 @@ def test_capability_graph_uses_behavior_not_whole_mod_theme() -> None:
     assert "trade.validation" in graph.nodes
     assert "ui.shop_menu" in graph.nodes
     assert all("maple" not in item and "메이플" not in item for item in graph.nodes)
+
+
+def test_capability_graph_merges_prompt_requirements_missing_from_design() -> None:
+    graph = decompose_capability_graph(
+        "Add trade and quests.",
+        design={"systems": [{"id": "trade"}]},
+    )
+
+    assert "trade.transaction" in graph.nodes
+    assert "quest.state" in graph.nodes
+    assert "quest.progression" in graph.nodes
+    assert "quest.reward" in graph.nodes
+
+
+def test_evidence_catalog_capability_is_not_prefixed_or_rewritten() -> None:
+    capability = "interdimensional_player_owned_energy_distribution_network_audited_access"
+    prompt = capability.replace("_", " ") + "."
+    catalog = {
+        "requirements": [
+            {
+                "requirement_id": "req-custom",
+                "capability": capability,
+                "statement": prompt,
+                "provides": [f"capability:{capability}"],
+            }
+        ]
+    }
+
+    graph = decompose_capability_graph(
+        prompt,
+        design={"_evidence_request_catalog": catalog},
+    )
+
+    assert graph.nodes == (capability,)
+
+
+def test_evidence_catalog_does_not_suppress_uncovered_prompt_requirement() -> None:
+    graph = decompose_capability_graph(
+        "Add trade and quests.",
+        design={
+            "_evidence_request_catalog": {
+                "requirements": [
+                    {
+                        "requirement_id": "req-trade",
+                        "capability": "trade.transaction",
+                        "statement": "trade",
+                        "provides": ["capability:trade.transaction"],
+                    }
+                ]
+            }
+        },
+    )
+
+    assert "trade.transaction" in graph.nodes
+    assert "quest.state" in graph.nodes
+    assert "quest.progression" in graph.nodes
+    assert "quest.reward" in graph.nodes
+
+
+def test_underscore_structured_capability_is_not_ontology_rewritten() -> None:
+    capability = "interdimensional_player_owned_energy_distribution_network"
+
+    graph = decompose_capability_graph(
+        capability.replace("_", " "),
+        design={"systems": [{"id": capability}]},
+    )
+
+    assert graph.nodes == (capability,)
 
 
 def test_capability_graph_has_no_default_logical_project_size_cap() -> None:
@@ -64,6 +133,39 @@ def test_validated_project_receipt_admits_exact_same_project_capability(
     )
 
     assert "weather_compass" in capabilities
+
+
+def test_planner_materializes_same_project_reuse_as_a_proof_bound_bundle(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "settings.gradle").write_text("rootProject.name = 'reuse'\n", encoding="utf-8")
+    source = tmp_path / "src/main/java/example/WeatherCompass.java"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "package example; public final class WeatherCompass {}\n",
+        encoding="utf-8",
+    )
+    inventory = inspect_project_inventory(tmp_path).to_dict()
+
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+
+    plan = _plan_target(
+        adapter_for_target("1.21.1", "fabric"),
+        capabilities=("weather_compass",),
+        design={"_existing_project_inventory": inventory},
+        platform_evidence=None,
+        registry=(),
+        same_project={"weather_compass"},
+        discovery_client=None,
+        allow_network=False,
+    )
+
+    decision = plan.capabilities[0]
+    assert decision.donor_slice is None
+    assert decision.artifact_bundle is not None
+    assert decision.artifact_bundle.proof_receipt["proof_level"] == "HOST_VERIFIED"
+    assert plan.selected_composition is not None
+    assert plan.selected_composition.bundles == (decision.artifact_bundle,)
 
 
 def test_reuse_value_is_saved_work_not_reuse_count() -> None:

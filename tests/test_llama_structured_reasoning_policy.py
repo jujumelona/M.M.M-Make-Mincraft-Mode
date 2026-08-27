@@ -29,7 +29,7 @@ def _request(*, response_format: str, tools=(), response_schema=None):
     )
 
 
-def test_installed_payload_preserves_structured_constraint() -> None:
+def test_installed_payload_keeps_structured_validation_host_side() -> None:
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
@@ -41,19 +41,12 @@ def test_installed_payload_preserves_structured_constraint() -> None:
         _request(response_format="json", response_schema=schema),
     )
 
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_structured_response",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
 
 
-def test_schema_less_json_keeps_native_json_object_constraint() -> None:
+def test_schema_less_json_keeps_validation_host_side() -> None:
     module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
     bind_structured_decode_policy(module)
 
@@ -62,12 +55,12 @@ def test_schema_less_json_keeps_native_json_object_constraint() -> None:
         _request(response_format="json", response_schema=None),
     )
 
-    assert payload["response_format"] == {"type": "json_object"}
+    assert "response_format" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_explicit_schema_reaches_native_llama_payload() -> None:
+def test_explicit_schema_stays_out_of_native_llama_payload() -> None:
     module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
     bind_structured_decode_policy(module)
     schema = {
@@ -82,14 +75,7 @@ def test_explicit_schema_reaches_native_llama_payload() -> None:
         _request(response_format="json", response_schema=schema),
     )
 
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mmm_structured_response",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    assert "response_format" not in payload
 
 
 def test_native_structured_invalid_then_valid_regenerates_exactly_once() -> None:

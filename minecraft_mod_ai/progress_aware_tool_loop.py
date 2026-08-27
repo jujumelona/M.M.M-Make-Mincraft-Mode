@@ -1134,10 +1134,10 @@ def generate_with_tools(
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
             if forced_rag_tool is not None:
                 forced_rag_attempts += 1
-                if forced_rag_attempts >= 2:
+                if forced_rag_attempts >= 1:
                     raise ModelConfigurationError(
                         f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r} "
-                        "after two bounded attempts."
+                        "after one bounded forced attempt."
                     )
                 messages.extend([
                     {"role": "assistant", "content": content},

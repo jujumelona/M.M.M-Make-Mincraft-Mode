@@ -11,6 +11,12 @@ from typing import Any
 
 from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
 from .project_write_lock import project_write_lock
+from .residual_generation_contract import (
+    ResidualContractLoadError,
+    ResidualGenerationContract,
+    load_residual_generation_contracts,
+    validate_residual_write_against_contracts,
+)
 
 _WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
 
@@ -116,10 +122,23 @@ class TransactionalSourcePatcher:
     }
     _CONDITIONAL_FIELDS = frozenset({"content", "expected_sha256", "replacements"})
 
-    def __init__(self, project_root: str | Path) -> None:
+    def __init__(
+        self,
+        project_root: str | Path,
+        *,
+        residual_contracts: Iterable[ResidualGenerationContract] | None = None,
+    ) -> None:
         self.project_root = Path(project_root).expanduser().resolve()
         if not self.project_root.is_dir() or self.project_root.is_symlink():
             raise SourcePatchError(f"Project root is not a real directory: {self.project_root}")
+        try:
+            self._residual_contracts = tuple(
+                residual_contracts
+                if residual_contracts is not None
+                else load_residual_generation_contracts(self.project_root)
+            )
+        except ResidualContractLoadError as exc:
+            raise SourcePatchError(f"Residual write policy is invalid: {exc}") from exc
 
     def apply(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
         # Keep the lock around validation/staging as well as commit. expected_sha256
@@ -156,6 +175,17 @@ class TransactionalSourcePatcher:
                 raise SourcePatchError(f"Patch target is not a regular file: {item['path']}")
             before = path.read_bytes() if exists else None
             originals[path] = before
+            if self._residual_contracts:
+                try:
+                    validate_residual_write_against_contracts(
+                        item["path"],
+                        sha256_bytes(before) if before is not None else None,
+                        self._residual_contracts,
+                    )
+                except PermissionError as exc:
+                    raise SourcePatchError(
+                        f"RESIDUAL_WRITE_CONTRACT: {exc}"
+                    ) from exc
             expected = item.get("expected_sha256")
             if item["operation"] == "create":
                 if exists:

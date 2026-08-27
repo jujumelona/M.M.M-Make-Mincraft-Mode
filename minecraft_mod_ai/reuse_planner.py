@@ -14,7 +14,7 @@ import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from . import platform_optimizer as _platform
@@ -25,6 +25,9 @@ from .component_registry import (
 )
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
+from .residual_generation_contract import ResidualGenerationContract
+from .reuse_artifacts import ReusableArtifactBundle, bundle_proof_allows_reuse
+from .proof_level import ProofLevel
 from .reuse_discovery import discover_repositories_for_graph
 from .source_transplant import (
     DonorSlice,
@@ -55,6 +58,10 @@ from .canonical_capability_ontology import (
 
 _CAPABILITY_HINTS = _canonical_domain_map()
 _PROMPT_CAPABILITY_WORDS = frozenset(_CAPABILITY_HINTS)
+_DESIGN_REFERENCE_WORDS = frozenset({
+    "above", "declared", "described", "existing", "following", "listed",
+    "requested", "requirement", "requirements", "system", "systems",
+})
 
 
 def _capability_graph_limit() -> int:
@@ -68,6 +75,11 @@ def _capability_graph_limit() -> int:
     if value < 0:
         raise ValueError("MMM_REUSE_CAPABILITY_LIMIT must be a non-negative integer.")
     return value
+
+
+def _is_design_reference_span(value: str) -> bool:
+    words = {token.casefold() for token in _TOKEN.findall(value)}
+    return bool(words) and words <= _DESIGN_REFERENCE_WORDS
 
 
 @dataclass(frozen=True)
@@ -115,11 +127,17 @@ def decompose_capability_graph(
     def at_limit() -> bool:
         return limit > 0 and len(ordered) >= limit
 
-    def add(raw: Any, source: str, parent: str = "") -> str:
+    def add(
+        raw: Any,
+        source: str,
+        parent: str = "",
+        *,
+        expand: bool = True,
+    ) -> str:
         value = _capability_id(raw)
         if not value:
             return ""
-        expanded = _expand_capability(value)
+        expanded = _expand_capability(value) if expand else (value,)
         anchor = expanded[0] if expanded else value
         for node in expanded or (value,):
             if node not in seen and not at_limit():
@@ -171,7 +189,9 @@ def decompose_capability_graph(
         for req in req_catalog.requirements:
             source = f"evidence_request_catalog.{req.id}"
             for cap in req.provides:
-                anchor = add(cap, source)
+                # The evidence catalog is the requirement authority. Ontology
+                # expansion may enrich searches later, but may not rename it here.
+                anchor = add(cap, source, expand=False)
                 if anchor:
                     register_search_terms(anchor, (cap, req.statement))
                     catalog_used = True
@@ -190,22 +210,90 @@ def decompose_capability_graph(
         for kind in module_kinds:
             add(kind, "module_kind")
 
-    if not ordered:
-        # Prompt fallback resolution for uncovered prompt spans
-        from .canonical_capability_ontology import (
-            resolve_capabilities_from_phrase_structured,
-        )
-        from .capability_semantic_inference import enrich_resolution_with_semantic_inference
+    # Merge every explicit prompt requirement not already covered by the design or
+    # EvidenceRequestCatalog.  Catalog presence cannot suppress a sibling clause.
+    from .canonical_capability_ontology import (
+        resolve_capabilities_from_phrase_structured,
+    )
+    from .capability_semantic_inference import enrich_resolution_with_semantic_inference
 
-        prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
-        enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
-        for node in enriched_res.nodes:
-            anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
-            if anchor:
-                register_search_terms(anchor, (node.source_span or anchor,))
-        for u, v in enriched_res.edges:
-            if u in seen and v in seen and (u, v) not in edges:
-                edges.append((u, v))
+    prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))
+    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)
+    selected_nodes = list(enriched_res.nodes)
+    if ordered:
+        prompt_words = {
+            token.casefold()
+            for token in _TOKEN.findall(str(prompt or ""))
+        }
+
+        def structured_design_covers_span(capability: str, span: str) -> bool:
+            if not _is_explicit_capability_identifier(capability):
+                return False
+            capability_words = {
+                token.casefold()
+                for token in _TOKEN.findall(capability.replace(".", " ").replace("_", " "))
+            }
+            span_words = {
+                token.casefold() for token in _TOKEN.findall(span)
+            }
+            return bool(
+                capability_words
+                and span_words
+                and capability_words <= prompt_words
+                and span_words <= capability_words
+            )
+
+        required_by_span: dict[str, list[Any]] = {}
+        for node in prompt_res.nodes:
+            if node.is_required and node.origin in {"explicit", "unresolved_concept"}:
+                # An EvidenceRequestCatalog supplies the non-ontology requirement
+                # identities itself.  Its prompt supplement is limited to explicit
+                # recognized capabilities, so incidental words in a theme/title
+                # cannot manufacture a competing provisional requirement.
+                if catalog_used and node.origin != "explicit":
+                    continue
+                if node.origin == "unresolved_concept" and _is_design_reference_span(
+                    node.source_span
+                ):
+                    continue
+                required_by_span.setdefault(node.source_span, []).append(node)
+
+        missing_spans: set[str] = set()
+        for span, roots in required_by_span.items():
+            # A design may carry an explicit structured ID while the prompt
+            # spells it as words.  Treat that exact lossless spelling as
+            # covered before ontology expansion, without hiding other spans.
+            authored_id = _capability_id(span)
+            covered = any(
+                item == authored_id
+                or structured_design_covers_span(item, span)
+                for item in ordered
+            )
+            if covered:
+                register_search_terms(authored_id, (span,))
+            for root in roots:
+                if covered:
+                    break
+                capability = _capability_id(root.capability_id)
+                expanded = _expand_capability(capability) if capability else ()
+                matched = [item for item in (capability, *expanded) if item in seen]
+                if matched:
+                    covered = True
+                    for item in matched:
+                        register_search_terms(item, (span,))
+            if not covered:
+                missing_spans.add(span)
+        selected_nodes = [
+            node for node in enriched_res.nodes if node.source_span in missing_spans
+        ]
+
+    for node in selected_nodes:
+        anchor = add(node.capability_id, f"prompt_resolution.{node.origin}")
+        if anchor:
+            register_search_terms(anchor, (node.source_span or anchor,))
+    for u, v in enriched_res.edges:
+        if u in seen and v in seen and (u, v) not in edges:
+            edges.append((u, v))
 
     if not ordered:
         add("gameplay.core", "fallback")
@@ -240,18 +328,33 @@ def _capability_id(raw: Any) -> str:
     text = str(raw or "").strip().casefold()
     if not text:
         return ""
+    text = text.removeprefix("capability:")
+    semantic_prefix = next(
+        (prefix for prefix in ("unresolved:", "provisional:") if text.startswith(prefix)),
+        "",
+    )
+    if semantic_prefix:
+        text = text[len(semantic_prefix) :]
     if text in _CAPABILITY_HINTS:
-        return text
+        return semantic_prefix + text
     romanized = romanize_korean_universal(text)
     clean = re.sub(r"[^a-z0-9_.-]+", "_", romanized.casefold()).strip("_.-")
     clean = re.sub(r"_+", "_", clean)
     if not clean or clean in {"minecraft", "mod", "module", "system", "feature"}:
         return ""
-    return clean
+    return semantic_prefix + clean
+
+
+def _is_explicit_capability_identifier(value: str) -> bool:
+    return bool(
+        re.fullmatch(r"[a-z][a-z0-9]*(?:[._:/-][a-z0-9_]+)+", value)
+    )
 
 
 def _expand_capability(value: str) -> tuple[str, ...]:
-    if "." in value and not value.startswith("unresolved:"):
+    # Structured identifiers are authored requirement identities.  They are not
+    # ontology hints merely because they use underscores instead of dots.
+    if _is_explicit_capability_identifier(value) and not value.startswith("unresolved:"):
         return (value,)
     res = resolve_capabilities_from_phrase(value)
     return res if res else (value,)
@@ -272,6 +375,7 @@ class ReuseDecision:
     source_id: str = ""
     donor: Mapping[str, Any] | None = None
     donor_slice: Any | None = None
+    artifact_bundle: ReusableArtifactBundle | None = None
     rationale: str = ""
     proof_level: str = "DISCOVERED"
     proof_receipt: Any | None = None
@@ -329,18 +433,21 @@ class ReuseDecision:
             value["donor"] = dict(self.donor)
         if self.proof_receipt is not None:
             value["proof_receipt"] = self.proof_receipt.to_dict() if hasattr(self.proof_receipt, "to_dict") else self.proof_receipt
+        if self.artifact_bundle is not None:
+            value["artifact_bundle"] = self.artifact_bundle.to_dict()
         return value
 
 
 @dataclass(frozen=True)
 class CompositionSelection:
-    bundles: tuple[Any, ...] = ()
+    bundles: tuple[ReusableArtifactBundle, ...] = ()
     joint_build_receipt: Mapping[str, Any] = field(default_factory=dict)
     conflicts_resolved: tuple[str, ...] = ()
     total_covered_requirements: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": "mmm/composition-selection-v1",
             "bundles": [b.to_dict() if hasattr(b, "to_dict") else b for b in self.bundles],
             "joint_build_receipt": dict(self.joint_build_receipt),
             "conflicts_resolved": list(self.conflicts_resolved),
@@ -365,7 +472,7 @@ class TargetImplementationPlan:
     reusable_registry_candidates: int
     capability_graph: Mapping[str, Any] | None = None
     selected_composition: CompositionSelection | None = None
-    residual_contracts: tuple[Any, ...] = ()
+    residual_contracts: tuple[ResidualGenerationContract, ...] = ()
 
     @property
     def unresolved_capabilities(self) -> int:
@@ -443,6 +550,14 @@ class TargetImplementationPlan:
             "unresolved_capabilities": self.unresolved_capabilities,
             "reusable_registry_candidates": self.reusable_registry_candidates,
             "capability_graph": dict(self.capability_graph) if isinstance(self.capability_graph, Mapping) else {"nodes": [item.capability for item in self.capabilities], "edges": [], "sources": []},
+            "selected_composition": (
+                self.selected_composition.to_dict()
+                if self.selected_composition is not None
+                else None
+            ),
+            "residual_contracts": [
+                contract.to_dict() for contract in self.residual_contracts
+            ],
             "selection_basis": (
                 "minimum_expected_implementation_and_verification_work_after_verified_reuse"
             ),
@@ -943,6 +1058,128 @@ def _plan_target(
             )
         )
 
+    # The planner owns the conversion from historical planner shapes to the
+    # production assembly contract.  DonorSlice remains provenance metadata;
+    # FinalProjectAssembler consumes proof-bound bundles exclusively.
+    bundles: list[ReusableArtifactBundle] = []
+    residual_contracts: list[ResidualGenerationContract] = []
+    joint_build_receipt: dict[str, Any] = {}
+    bound_decisions: list[ReuseDecision] = []
+    for decision in decisions:
+        bundle = decision.artifact_bundle
+        receipt = decision.proof_receipt
+
+        if decision.mode == "same_project":
+            bundle = _same_project_bundle(design, decision.capability)
+            receipt = bundle.proof_receipt if bundle is not None else None
+        elif decision.mode == "mmm_verified":
+            component = find_verified_component(
+                registry,
+                capability=decision.capability,
+                minecraft_version=adapter.minecraft_version,
+                loader=adapter.loader,
+            )
+            bundle = (
+                _verified_component_bundle(component, decision.capability)
+                if component is not None
+                else None
+            )
+            receipt = bundle.proof_receipt if bundle is not None else None
+        elif decision.donor_slice is not None and receipt is not None:
+            level = ProofLevel.from_value(getattr(receipt, "proof_level", ""))
+            if level.allows_reuse():
+                contract = getattr(receipt, "contract", None)
+                protected = (
+                    contract.protected_artifacts
+                    if isinstance(contract, ResidualGenerationContract)
+                    else {}
+                )
+                bundle = ReusableArtifactBundle.from_donor_slice(
+                    decision.donor_slice,
+                    proof_receipt=receipt,
+                    requirement_ids=(decision.capability,),
+                    protected_artifacts=protected,
+                )
+
+        proof_level = decision.proof_level
+        if receipt is not None:
+            receipt_level = (
+                receipt.get("proof_level")
+                if isinstance(receipt, Mapping)
+                else getattr(receipt, "proof_level", None)
+            )
+            if receipt_level:
+                proof_level = str(receipt_level)
+
+        if bundle is not None and bundle_proof_allows_reuse(bundle, receipt):
+            bundles.append(bundle)
+            contract = (
+                getattr(receipt, "contract", None)
+                if receipt is not None
+                else None
+            )
+            if isinstance(contract, ResidualGenerationContract):
+                residual_contracts.append(contract)
+            if decision.capability in joint_composition_receipts:
+                joint_build_receipt[decision.capability] = joint_composition_receipts[
+                    decision.capability
+                ]
+            bound_decisions.append(
+                replace(
+                    decision,
+                    artifact_bundle=bundle,
+                    proof_receipt=receipt,
+                    proof_level=proof_level,
+                )
+            )
+            continue
+
+        if decision.mode in {"same_project", "mmm_verified", "source_transplant", "adapt"}:
+            fresh_impl, fresh_verify = _fresh_cost(decision.capability)
+            bound_decisions.append(
+                ReuseDecision(
+                    capability=decision.capability,
+                    mode="fresh",
+                    confidence=1.0,
+                    fresh_implementation_cost=fresh_impl,
+                    fresh_verification_cost=fresh_verify,
+                    rationale=(
+                        "No materializable artifact bundle survived exact proof receipt "
+                        "and byte-hash binding."
+                    ),
+                    proof_level="FRESH_REQUIRED",
+                )
+            )
+            continue
+
+        bound_decisions.append(replace(decision, artifact_bundle=None, proof_receipt=receipt))
+
+    decisions = bound_decisions
+    unique_contracts_list: list[ResidualGenerationContract] = []
+    seen_contract_capabilities: set[str] = set()
+    for contract in residual_contracts:
+        if contract.capability in seen_contract_capabilities:
+            continue
+        seen_contract_capabilities.add(contract.capability)
+        unique_contracts_list.append(contract)
+    unique_contracts = tuple(unique_contracts_list)
+    selected_composition = None
+    if bundles:
+        selected_composition = CompositionSelection(
+            bundles=tuple(bundles),
+            joint_build_receipt={
+                "schema_version": "mmm/joint-reuse-proof-v1",
+                "per_capability": joint_build_receipt,
+            },
+            total_covered_requirements=tuple(
+                dict.fromkeys(
+                    requirement_id
+                    for bundle in bundles
+                    for requirement_id in bundle.requirement_ids
+                )
+            ),
+        )
+
     fresh_work = sum(item.fresh_implementation_cost for item in decisions if item.mode == "fresh")
     adaptation_work = sum(item.adaptation_cost + item.integration_cost for item in decisions if item.mode != "fresh")
     verification = sum(
@@ -993,6 +1230,8 @@ def _plan_target(
         uncertainty=round(uncertainty, 4),
         reusable_registry_candidates=len(registry),
         capability_graph=dict(capability_graph) if isinstance(capability_graph, Mapping) else None,
+        selected_composition=selected_composition,
+        residual_contracts=unique_contracts,
     )
 
 
@@ -1148,6 +1387,185 @@ def _fresh_cost(capability: str) -> tuple[float, float]:
     return round(implementation, 4), round(verification, 4)
 
 
+def _validated_existing_inventory(
+    design: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if not isinstance(design, Mapping):
+        return None
+    raw_inventory = design.get("_existing_project_inventory")
+    if not isinstance(raw_inventory, Mapping):
+        raw_inventory = design.get("_existing_snapshot")
+    if not isinstance(raw_inventory, Mapping):
+        return None
+    try:
+        from .project_inventory import validate_project_inventory_payload
+
+        return validate_project_inventory_payload(raw_inventory)
+    except (ImportError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def _same_project_bundle(
+    design: Mapping[str, Any] | None,
+    capability: str,
+) -> ReusableArtifactBundle | None:
+    inventory = _validated_existing_inventory(design)
+    if not isinstance(inventory, Mapping):
+        return None
+    catalog = inventory.get("component_catalog")
+    components = catalog.get("components") if isinstance(catalog, Mapping) else None
+    if not isinstance(components, list):
+        return None
+
+    key = capability.casefold()
+    selected: list[Mapping[str, Any]] = []
+    for component in components:
+        if not isinstance(component, Mapping):
+            continue
+        provided = {
+            str(value).strip().casefold().removeprefix("capability:")
+            for value in component.get("provides", ())
+        }
+        if key in provided:
+            selected.append(component)
+    if not selected:
+        return None
+
+    file_hashes = {
+        str(component.get("locator") or "").split("#", 1)[0].replace("\\", "/"): str(
+            component.get("content_sha256") or ""
+        )
+        for component in selected
+        if str(component.get("locator") or "").strip()
+        and str(component.get("content_sha256") or "").strip()
+    }
+    if not file_hashes:
+        return None
+    source_ref = str(inventory.get("project_snapshot_sha256") or "current_workspace")
+    bundle_id = f"same_project:{capability}"
+    proof_receipt = {
+        "schema_version": "mmm/same-project-proof-receipt-v1",
+        "proof_level": "HOST_VERIFIED",
+        "capability": capability,
+        "bundle_id": bundle_id,
+        "source_ref": source_ref,
+        "inventory_sha256": str(inventory.get("inventory_sha256") or ""),
+        "component_ids": [str(item.get("component_id") or "") for item in selected],
+        "file_hashes": dict(sorted(file_hashes.items())),
+    }
+    symbols = tuple(
+        dict.fromkeys(
+            str(item.get("name") or "").strip()
+            for item in selected
+            if str(item.get("name") or "").strip()
+        )
+    )
+    return ReusableArtifactBundle.from_same_project(
+        capability,
+        file_hashes=file_hashes,
+        symbols=symbols,
+        proof_receipt=proof_receipt,
+        source_ref=source_ref,
+        provenance={
+            "source": "current_project",
+            "inventory_sha256": str(inventory.get("inventory_sha256") or ""),
+            "components": [dict(item) for item in selected],
+        },
+    )
+
+
+def _registry_artifact_hashes(artifact: Mapping[str, Any]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    target_path = str(artifact.get("target_path") or "").replace("\\", "/").strip("/")
+    target_sha = str(artifact.get("sha256") or "").strip()
+    if target_path and target_sha:
+        hashes[target_path] = target_sha
+    raw_files = artifact.get("files")
+    if isinstance(raw_files, Mapping):
+        for path, value in raw_files.items():
+            digest = value.get("sha256") if isinstance(value, Mapping) else ""
+            normalized = str(path).replace("\\", "/").strip("/")
+            if normalized and str(digest or "").strip():
+                hashes[normalized] = str(digest)
+    elif isinstance(raw_files, Sequence) and not isinstance(raw_files, (str, bytes)):
+        for item in raw_files:
+            if not isinstance(item, Mapping):
+                continue
+            path = str(item.get("path") or "").replace("\\", "/").strip("/")
+            digest = str(item.get("sha256") or "").strip()
+            if path and digest:
+                hashes[path] = digest
+    return hashes
+
+
+def _registry_artifact_files(artifact: Mapping[str, Any]) -> dict[str, str | bytes]:
+    """Extract only immutable registry file payloads; hashes alone are not bytes."""
+
+    raw_files = artifact.get("files")
+    files: dict[str, str | bytes] = {}
+    if isinstance(raw_files, Mapping):
+        iterable = raw_files.items()
+        for raw_path, raw_value in iterable:
+            path = str(raw_path).replace("\\", "/").strip("/")
+            value = raw_value
+            if isinstance(raw_value, Mapping):
+                value = raw_value.get("content", raw_value.get("text"))
+            if path and isinstance(value, (str, bytes)):
+                files[path] = value
+    elif isinstance(raw_files, Sequence) and not isinstance(raw_files, (str, bytes)):
+        for raw_value in raw_files:
+            if not isinstance(raw_value, Mapping):
+                continue
+            path = str(raw_value.get("path") or "").replace("\\", "/").strip("/")
+            value = raw_value.get("content", raw_value.get("text"))
+            if path and isinstance(value, (str, bytes)):
+                files[path] = value
+    return files
+
+
+def _verified_component_bundle(
+    component: VerifiedComponent,
+    capability: str,
+) -> ReusableArtifactBundle | None:
+    file_hashes = _registry_artifact_hashes(component.artifact)
+    files = _registry_artifact_files(component.artifact)
+    # A registry receipt without immutable source/resource bytes is useful
+    # evidence, but cannot be staged as production reuse.
+    if not file_hashes or set(file_hashes) - set(files):
+        return None
+    bundle = ReusableArtifactBundle.from_verified_component(
+        component.component_id,
+        capability,
+        files=files,
+        file_hashes=file_hashes,
+        dependencies=component.required_dependencies,
+        symbols=component.public_symbols,
+        provenance={
+            "component_id": component.component_id,
+            "source_origin": component.source_origin,
+            "source_commit": component.source_commit,
+            "license_id": component.license_id,
+            "artifact": dict(component.artifact),
+        },
+    )
+    proof_receipt = {
+        "schema_version": "mmm/registry-component-proof-receipt-v1",
+        "proof_level": "COMPILE_VERIFIED",
+        "capability": capability,
+        "bundle_id": bundle.bundle_id,
+        "source_ref": bundle.source_ref,
+        "file_hashes": dict(bundle.file_hashes),
+        "component_id": component.component_id,
+        "source_commit": component.source_commit,
+        "test_receipts": list(component.test_receipts),
+        "target": {
+            "minecraft_version": component.minecraft_version,
+            "loader": component.loader,
+        },
+    }
+    return replace(bundle, proof_receipt=proof_receipt)
+
+
 def _declared_same_project_capabilities(design: Mapping[str, Any] | None) -> set[str]:
     """Return only capabilities backed by a validated existing-project inventory.
 
@@ -1156,18 +1574,8 @@ def _declared_same_project_capabilities(design: Mapping[str, Any] | None) -> set
     exact symbol/resource identities.
     """
 
-    if not isinstance(design, Mapping):
-        return set()
-    raw_inventory = design.get("_existing_project_inventory")
-    if not isinstance(raw_inventory, Mapping):
-        raw_inventory = design.get("_existing_snapshot")
-    if not isinstance(raw_inventory, Mapping):
-        return set()
-    try:
-        from .project_inventory import validate_project_inventory_payload
-
-        inventory = validate_project_inventory_payload(raw_inventory)
-    except (ImportError, ValueError, TypeError, RecursionError):
+    inventory = _validated_existing_inventory(design)
+    if not isinstance(inventory, Mapping):
         return set()
     catalog = inventory.get("component_catalog")
     components = catalog.get("components") if isinstance(catalog, Mapping) else None

@@ -42,7 +42,6 @@ from .canonical_capability_ontology import (
     canonical_domain_map as _canonical_domain_map,
 )
 from .canonical_capability_ontology import (
-    resolve_capabilities_from_phrase,
     resolve_capabilities_from_phrase_structured,
     romanize_korean_universal,
 )
@@ -158,45 +157,62 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
 
 
 def _capability_from_statement(statement: str) -> str:
-    caps = resolve_capabilities_from_phrase(statement)
-    return caps[0] if caps else "gameplay.core"
+    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", statement)
+    ignored = {
+        "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
+        "minecraft", "mod", "with", "to", "for", "that", "and", "then", "그리고",
+        "추가", "만들어", "만들기", "구현", "모드",
+    }
+    semantic = [item for item in words if item.casefold() not in ignored]
+    # Requirement identity is a lossless semantic slug, not the first ontology hit.
+    # Ontology expansion belongs downstream and may never replace the authored scope.
+    value = "_".join(semantic) or statement
+    romanized = romanize_korean_universal(value)
+    normalized = re.sub(r"[^a-z0-9_]+", "_", romanized.casefold()).strip("_")
+    return re.sub(r"_+", "_", normalized) or "semantic"
 
 
-def _source_span(prompt: str, statement: str) -> dict[str, Any]:
+def _matched_source_span(prompt: str, statement: str) -> tuple[int, int] | None:
     folded_prompt = prompt.casefold()
-    candidates = (
-        statement,
-        statement.replace(".", " ").replace("_", " "),
+    normalized_statement = statement.strip().rstrip(".?!;:")
+    candidates = tuple(
+        dict.fromkeys(
+            candidate
+            for candidate in (
+                statement,
+                normalized_statement,
+                statement.replace(".", " ").replace("_", " "),
+                normalized_statement.replace(".", " ").replace("_", " "),
+            )
+            if candidate
+        )
     )
-    start = -1
-    matched = ""
     for candidate in candidates:
         candidate = candidate.strip()
         if not candidate:
             continue
         start = folded_prompt.find(candidate.casefold())
         if start >= 0:
-            matched = prompt[start : start + len(candidate)]
-            break
-    if start < 0:
+            match_end = start + len(candidate)
+            return next(
+                (
+                    (left, right)
+                    for left, right in _semantic_clause_spans(prompt)
+                    if left <= start and match_end <= right
+                ),
+                (start, match_end),
+            )
+    return None
+
+
+def _source_span(prompt: str, statement: str) -> dict[str, Any]:
+    matched_span = _matched_source_span(prompt, statement)
+    if matched_span is None:
         spans = _semantic_spans(prompt)
         start, end = spans[0] if spans else (0, len(prompt))
-        matched = prompt[start:end]
     else:
-        match_end = start + len(matched)
-        containing = next(
-            (
-                (left, right)
-                for left, right in _semantic_clause_spans(prompt)
-                if left <= start and match_end <= right
-            ),
-            None,
-        )
-        if containing is not None:
-            start, end = containing
-            matched = prompt[start:end]
-        else:
-            end = match_end
+        start, end = matched_span
+    matched = prompt[start:end]
     return {
         "source_id": "requested_prompt",
         "char_start": start,
@@ -280,6 +296,100 @@ def _capability_records(game_design: Mapping[str, Any]) -> tuple[tuple[str, str]
     return tuple(output)
 
 
+def _catalog_requirement_covers_clause(
+    requirement: Mapping[str, Any],
+    prompt: str,
+    clause: tuple[int, int],
+) -> bool:
+    """Recognize only an authored requirement that really binds this prompt span."""
+
+    statement = str(requirement.get("statement") or "").strip()
+    if not statement:
+        return False
+    return _matched_source_span(prompt, statement) == clause
+
+
+def _merge_catalog_uncovered_prompt_requirements(
+    catalog: Mapping[str, Any],
+    prompt: str,
+    game_design: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Preserve every authored clause when an earlier catalog was incomplete.
+
+    A stored EvidenceRequestCatalog is useful provenance, but it cannot make a
+    later prompt clause disappear merely because another clause already has a
+    requirement record.  We retain all existing records and append only exact,
+    previously-uncovered clauses, then rebind the catalog hash.
+    """
+
+    raw_requirements = catalog.get("requirements")
+    if not isinstance(raw_requirements, list):
+        return dict(catalog)
+    requirements = [dict(item) for item in raw_requirements if isinstance(item, Mapping)]
+    covered = {
+        clause
+        for clause in _semantic_clause_spans(prompt)
+        if any(
+            _catalog_requirement_covers_clause(requirement, prompt, clause)
+            for requirement in requirements
+        )
+    }
+    additions: list[tuple[str, str]] = []
+    for start, end in _semantic_clause_spans(prompt):
+        if (start, end) in covered:
+            continue
+        statement = prompt[start:end]
+        additions.append((_capability_from_statement(statement), statement))
+        # Keep existing behavior for theme archetypes, but only as additive
+        # entries alongside the original authored clause.
+        resolution = resolve_capabilities_from_phrase_structured(statement)
+        for node in resolution.nodes:
+            if node.origin == "archetype_inferred":
+                additions.append((node.capability_id, node.source_span or statement))
+    if not additions:
+        return dict(catalog)
+
+    acceptance_source = _strings(game_design.get("acceptance_tests"))
+    for index, (capability, statement) in enumerate(
+        additions, start=len(requirements)
+    ):
+        span = _source_span(prompt, statement)
+        requirement_id = _stable_id(
+            "req",
+            capability,
+            {
+                "prompt_sha256": _sha(prompt),
+                "index": index,
+                "span": [span["char_start"], span["char_end"]],
+            },
+        )
+        matching_acceptance = tuple(
+            item
+            for item in acceptance_source
+            if _word_overlap(item, f"{capability} {statement}")
+        )
+        requirements.append(
+            {
+                "requirement_id": requirement_id,
+                "capability": capability,
+                "statement": statement,
+                "mandatory": True,
+                "source_span": span,
+                "provides": [_canonical_capability(capability)],
+                "acceptance": list(
+                    matching_acceptance
+                    or (f"Verify the observable outcome for {capability}: {statement}",)
+                ),
+            }
+        )
+
+    merged = dict(catalog)
+    merged["requirements"] = requirements
+    merged["catalog_sha256"] = ""
+    merged["catalog_sha256"] = _hash_without(merged, "catalog_sha256")
+    return merged
+
+
 def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(prompt, str) or not prompt.strip():
         raise EvidencePlanError("Evidence-first planning requires a non-empty request.")
@@ -287,15 +397,29 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
     if isinstance(existing, Mapping):
         catalog = dict(existing)
         _validate_request_catalog(catalog, prompt=prompt)
-        return catalog
+        return _merge_catalog_uncovered_prompt_requirements(
+            catalog, prompt, game_design
+        )
     records = _capability_records(game_design)
-    if not records:
-        structured = resolve_capabilities_from_phrase_structured(prompt)
-        extracted: list[tuple[str, str]] = []
-        for node in structured.nodes:
-            span_text = node.source_span if (node.source_span and node.source_span in prompt) else prompt
-            extracted.append((node.capability_id, span_text))
-        records = tuple(extracted)
+    covered_spans = {
+        span
+        for _capability, statement in records
+        for span in (_matched_source_span(prompt, statement),)
+        if span is not None
+    }
+    merged_records = list(records)
+    for start, end in _semantic_clause_spans(prompt):
+        if (start, end) in covered_spans:
+            continue
+        statement = prompt[start:end]
+        merged_records.append((_capability_from_statement(statement), statement))
+        # Theme archetypes are useful decompositions, but remain additive: the
+        # authored clause above is never replaced by an inferred subsystem.
+        resolution = resolve_capabilities_from_phrase_structured(statement)
+        for node in resolution.nodes:
+            if node.origin == "archetype_inferred":
+                merged_records.append((node.capability_id, node.source_span or statement))
+    records = tuple(merged_records)
     if not records:
         raise EvidencePlanError("The request did not yield any semantic requirement.")
 

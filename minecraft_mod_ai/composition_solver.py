@@ -374,10 +374,12 @@ def search_best_donor_composition(
 
 
 def generate_reuse_manifest(
-    selected_donors: Sequence[DonorSlice],
+    selected_donors: Sequence[DonorSlice] = (),
     project_name: str = "custom_mod",
+    *,
+    selected_bundles: Sequence[Any] = (),
 ) -> dict[str, Any]:
-    """Generate cryptographic provenance SBOM and reuse-manifest.json."""
+    """Generate one provenance SBOM for legacy donors and canonical bundles."""
     manifest_files: list[dict[str, Any]] = []
 
     for donor in selected_donors:
@@ -392,12 +394,39 @@ def generate_reuse_manifest(
                 "is_reused": True,
             })
 
+    bundle_values: list[dict[str, Any]] = []
+    for bundle in selected_bundles:
+        bundle_dict = bundle.to_dict() if hasattr(bundle, "to_dict") else dict(bundle)
+        bundle_values.append(bundle_dict)
+        provenance = getattr(bundle, "provenance", {})
+        if not isinstance(provenance, Mapping):
+            provenance = {}
+        file_hashes = getattr(bundle, "file_hashes", {})
+        protected_paths = getattr(bundle, "protected_paths", ())
+        for path in protected_paths:
+            manifest_files.append({
+                "path": path,
+                "origin_repo": provenance.get("repository", getattr(bundle, "source_ref", "")),
+                "origin_commit": provenance.get("commit_sha", ""),
+                "origin_blob_sha": "",
+                "origin_sha256": file_hashes.get(path, "") if isinstance(file_hashes, Mapping) else "",
+                "license": provenance.get("license_id", ""),
+                "bundle_id": getattr(bundle, "bundle_id", ""),
+                "origin_kind": getattr(bundle, "origin_kind", ""),
+                "is_reused": True,
+            })
+
     return {
         "schema_version": "mmm/reuse-manifest-v1",
         "project_name": project_name,
         "total_reused_files": len(manifest_files),
         "reused_file_count": len(manifest_files),
-        "donor_count": len(selected_donors),
+        "donor_count": len(selected_donors) + sum(
+            getattr(bundle, "origin_kind", "") == "external_donor"
+            for bundle in selected_bundles
+        ),
+        "bundle_count": len(selected_bundles),
         "donors": [d.to_dict() for d in selected_donors],
+        "bundles": bundle_values,
         "files": manifest_files,
     }
