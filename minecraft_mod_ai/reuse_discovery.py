@@ -8,11 +8,13 @@ identity, then pass only a small coverage-diverse representative set to the
 expensive source-transplant inspector.
 """
 
+import atexit
 import os
 import re
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,6 +22,8 @@ import httpx
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+")
 _MINECRAFT_GAME_ID = 432
+_HTTP_CLIENT_LOCK = Lock()
+_HTTP_CLIENT: httpx.Client | None = None
 
 
 @dataclass
@@ -62,6 +66,38 @@ def _minimum_candidates() -> int:
     return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 3, minimum=1, maximum=12)
 
 
+def _pooled_http_client() -> httpx.Client:
+    """Return one thread-safe connection pool for auxiliary discovery APIs."""
+
+    global _HTTP_CLIENT
+    with _HTTP_CLIENT_LOCK:
+        if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+            workers = _workers()
+            _HTTP_CLIENT = httpx.Client(
+                timeout=10.0,
+                follow_redirects=False,
+                headers={"User-Agent": "MMM-reuse-discovery/1"},
+                limits=httpx.Limits(
+                    max_connections=max(8, workers * 2),
+                    max_keepalive_connections=max(4, workers),
+                    keepalive_expiry=30.0,
+                ),
+            )
+        return _HTTP_CLIENT
+
+
+def _close_pooled_http_client() -> None:
+    global _HTTP_CLIENT
+    with _HTTP_CLIENT_LOCK:
+        client = _HTTP_CLIENT
+        _HTTP_CLIENT = None
+    if client is not None and not client.is_closed:
+        client.close()
+
+
+atexit.register(_close_pooled_http_client)
+
+
 def _curseforge_api_key() -> str:
     """Return the optional host-owned CurseForge credential without exposing it."""
 
@@ -99,10 +135,13 @@ def _graph_search_terms(
         if not isinstance(terms, Sequence) or isinstance(terms, (str, bytes)):
             continue
         values: list[str] = []
+        seen: set[str] = set()
         for term in terms:
             text = " ".join(str(term or "").split())
-            if text and text not in values:
+            folded = text.casefold()
+            if text and folded not in seen:
                 values.append(text)
+                seen.add(folded)
         if values:
             result[capability] = tuple(values)
     return result
@@ -110,21 +149,28 @@ def _graph_search_terms(
 
 def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
     values: list[str] = []
+    seen_values: set[str] = set()
     semantic = " ".join(_TOKEN.findall(capability.replace(".", " ").replace("-", " ")))
     for raw in [*terms, semantic]:
         text = " ".join(str(raw or "").split())
-        if text and text.casefold() not in {item.casefold() for item in values}:
+        folded = text.casefold()
+        if text and folded not in seen_values:
             values.append(text[:512])
+            seen_values.add(folded)
     expanded: list[str] = []
+    expanded_seen: set[str] = set()
     for text in values:
         expanded.append(text)
+        expanded_seen.add(text.casefold())
         if len(expanded) >= _query_variant_limit():
             break
     if len(expanded) < _query_variant_limit() and semantic:
         for suffix in ("system", "implementation source"):
             query = f"{semantic} {suffix}"
-            if query.casefold() not in {item.casefold() for item in expanded}:
+            folded = query.casefold()
+            if folded not in expanded_seen:
                 expanded.append(query)
+                expanded_seen.add(folded)
             if len(expanded) >= _query_variant_limit():
                 break
     return tuple(expanded or (capability,))
@@ -173,15 +219,12 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> lis
     if not jobs:
         return direct
 
+    client = _pooled_http_client()
+
     def resolve(job: tuple[int, str]) -> tuple[str, float]:
         index, url = job
         try:
-            response = httpx.get(
-                url,
-                timeout=8.0,
-                follow_redirects=False,
-                headers={"User-Agent": "MMM-reuse-discovery/1"},
-            )
+            response = client.get(url, timeout=8.0)
             response.raise_for_status()
             value = response.json()
             if not isinstance(value, Mapping):
@@ -219,12 +262,11 @@ def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
         "index": "0",
     }
     try:
-        response = httpx.get(
+        response = _pooled_http_client().get(
             "https://api.curseforge.com/v1/mods/search",
             params=params,
             headers={"Accept": "application/json", "x-api-key": api_key},
             timeout=10.0,
-            follow_redirects=False,
         )
         response.raise_for_status()
         raw = response.json()
