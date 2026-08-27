@@ -3,7 +3,7 @@ from __future__ import annotations
 """Executable reuse proof engine and multi-candidate fallback loop.
 
 Verified reuse is never awarded from metadata, fuzzy test names, or aggregate test
-success.  Compilation must execute in an isolated target build environment and
+success. Compilation must execute in an isolated target build environment and
 behavior proof additionally requires an MMM-owned, implementation-bound acceptance
 test with an exact JUnit XML identity and individual PASS result.
 """
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .artifact_dependency_graph import ArtifactDependencyGraph
+from .artifact_dependency_graph import ArtifactDependencyGraph, ArtifactNode
 from .proof_level import ProofLevel, validate_proof_transition
 from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
 from .source_transplant import DonorSlice
@@ -222,10 +222,49 @@ def _compute_dependency_closed_subgraphs(
     adapted_files: Mapping[str, Any],
     donor_slice: DonorSlice,
 ) -> list[list[str]]:
-    """Partition donor files into typed dependency-closed directional subgraphs."""
+    """Return directional closures using repository-time graph evidence when present.
+
+    Real donor discovery computes artifact nodes/edges before the slice is materialized.
+    That pre-slice graph is authoritative here. Re-parsing adapted files is retained
+    only as a compatibility fallback for synthetic unit-test donors without graph
+    receipts.
+    """
 
     if not adapted_files:
         return []
+
+    available_paths = set(adapted_files)
+    if donor_slice.artifact_nodes:
+        graph = ArtifactDependencyGraph()
+        for donor_node in donor_slice.artifact_nodes:
+            if donor_node.path not in available_paths:
+                continue
+            graph.add_node(
+                ArtifactNode(
+                    id=donor_node.path,
+                    kind=ArtifactDependencyGraph.kind_for_path(donor_node.path),
+                    rel_path=donor_node.path,
+                    symbols_defined=donor_node.declared_symbols,
+                    symbols_referenced=donor_node.referenced_symbols,
+                )
+            )
+        for edge in donor_slice.artifact_edges:
+            if edge.source_path in graph.nodes and edge.target_path in graph.nodes:
+                graph.add_edge(edge.source_path, edge.target_path)
+        for edge in donor_slice.unresolved_edges:
+            if edge.source_path in graph.nodes:
+                from .artifact_dependency_graph import UnresolvedArtifactEdge
+
+                graph.unresolved_edges.append(
+                    UnresolvedArtifactEdge(
+                        source_id=edge.source_path,
+                        requested_target=edge.target_path,
+                        relation=edge.relation,
+                        reason="REPOSITORY_GRAPH_UNRESOLVED",
+                    )
+                )
+        return graph.compute_directional_closures()
+
     sym_map = {
         donor_file.path: donor_file.symbols
         for donor_file in donor_slice.files
@@ -370,6 +409,7 @@ def execute_reuse_proof(
             current_level = ProofLevel.MATERIALIZED
 
     from .dependency_resolver import (
+        inject_resolved_dependencies_into_build_gradle,
         parse_donor_build_metadata,
         resolve_dependency_for_target,
     )
@@ -398,8 +438,6 @@ def execute_reuse_proof(
 
     import shutil
     import tempfile
-
-    from .reuse_adapters import DependencyAdaptationPlan
 
     compile_passed = False
     tests_passed = False
@@ -443,8 +481,6 @@ def execute_reuse_proof(
                     dirs_exist_ok=True,
                 )
             except (OSError, shutil.Error):
-                # A target-copy failure does not inherit unverified target bytes; the
-                # isolated verified scaffold below remains the only build base.
                 pass
 
         scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
@@ -453,12 +489,10 @@ def execute_reuse_proof(
         groovy_file = sandbox_path / "build.gradle"
         build_target = kts_file if kts_file.exists() else groovy_file
         is_kts = kts_file.exists()
-        verified_dep_names = tuple(
-            receipt.resolved_coordinate
-            for receipt in resolved_dependencies
-            if receipt.is_resolved and receipt.resolved_coordinate
+        exact_dependency_receipts = tuple(
+            receipt for receipt in resolved_dependencies if receipt.is_resolved
         )
-        if verified_dep_names:
+        if exact_dependency_receipts:
             if not build_target.exists():
                 dependency_injection_failed = True
                 reason = "DEPENDENCY_INJECTION_FAILED: target build script is missing"
@@ -468,11 +502,9 @@ def execute_reuse_proof(
                 try:
                     bg_content = build_target.read_text(encoding="utf-8")
                     injected_bg, _was_injected = (
-                        DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
+                        inject_resolved_dependencies_into_build_gradle(
                             bg_content,
-                            verified_dep_names,
-                            loader=loader,
-                            minecraft_version=mc_ver,
+                            exact_dependency_receipts,
                             is_kotlin_dsl=is_kts,
                         )
                     )
@@ -599,7 +631,11 @@ def execute_reuse_proof(
     residual_art_list: list[str] = []
     verified_subgraph_count = 0
 
-    if compile_passed and not unresolved_mandatory_deps:
+    if (
+        compile_passed
+        and donor_slice.closure_complete
+        and not unresolved_mandatory_deps
+    ):
         verified_art_list.extend(adapted_files.keys())
     else:
         subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor_slice)
@@ -665,6 +701,21 @@ def execute_reuse_proof(
                                 destination.write_bytes(content)
                             else:
                                 destination.write_text(str(content), encoding="utf-8")
+                        if exact_dependency_receipts:
+                            sub_kts = sub_path / "build.gradle.kts"
+                            sub_groovy = sub_path / "build.gradle"
+                            sub_build = sub_kts if sub_kts.exists() else sub_groovy
+                            if not sub_build.exists():
+                                raise RuntimeError(
+                                    "subgraph target build script is missing"
+                                )
+                            sub_text = sub_build.read_text(encoding="utf-8")
+                            sub_text, _ = inject_resolved_dependencies_into_build_gradle(
+                                sub_text,
+                                exact_dependency_receipts,
+                                is_kotlin_dsl=sub_kts.exists(),
+                            )
+                            sub_build.write_text(sub_text, encoding="utf-8")
                         from .reuse_build_verifier import verify_scratch_workspace_build
 
                         sub_receipt = verify_scratch_workspace_build(
@@ -743,16 +794,15 @@ def execute_reuse_proof(
         residual_caps = (
             () if current_level.is_verified() else (donor_slice.capability,)
         )
-    elif len(verified_artifacts) > 0 and (
+    elif verified_subgraph_count > 0 and len(verified_artifacts) > 0 and (
         residual_artifacts
         or unresolved_symbols
         or not donor_slice.closure_complete
     ):
-        subgraph_evidence_count = verified_subgraph_count or 1
         subgraph_valid, _ = validate_proof_transition(
             current_level,
             ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
-            receipt={"verified_subgraphs": subgraph_evidence_count},
+            receipt={"verified_subgraphs": verified_subgraph_count},
         )
         if subgraph_valid:
             current_level = ProofLevel.SUBGRAPH_COMPILE_VERIFIED
@@ -952,7 +1002,10 @@ def execute_candidate_fallback_loop(
         receipts.append(receipt)
         if receipt.compile_passed:
             return candidate, tuple(receipts)
-        if receipt.proof_level == ProofLevel.PARTIAL_REUSE.value and partial_candidate is None:
+        if (
+            receipt.proof_level == ProofLevel.PARTIAL_REUSE.value
+            and partial_candidate is None
+        ):
             partial_candidate = candidate
 
     if partial_candidate is not None:
