@@ -197,8 +197,7 @@ def _capability_from_statement(statement: str) -> str:
     words = re.findall(r"[\w]+", statement, re.UNICODE)
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "and", "then", "그리고",
-        "추가", "만들어", "만들기", "구현", "모드",
+        "minecraft", "mod", "with", "to", "for", "that", "and", "then",
     }
     semantic = [item for item in words if item.casefold() not in ignored]
     # Requirement identity is a lossless semantic slug, not the first ontology hit.
@@ -404,7 +403,6 @@ def _invoke_semantic_model(
 
 
 
-
 def _validate_semantic_ir(ir: SemanticRequirementIR, prompt: str) -> None:
     """Host-side tamper and offset validation for a SemanticRequirementIR.
 
@@ -465,7 +463,6 @@ def _expand_semantic_ir(
     return tuple(gameplay), tuple(implementation), ir.unresolved
 
 
-
 def _semantic_requirement_fields(
     capability: str,
     ir: SemanticRequirementIR,
@@ -485,8 +482,9 @@ def _semantic_requirement_fields(
         # Design module IDs are authority — preserve verbatim, no promotion.
         selected: tuple[str, ...] = (capability,)
     else:
-        prompt_derived = capability == _capability_from_statement(ir.intent)
-        selected = gameplay if prompt_derived and gameplay else (capability,)
+        # Prompt provenance is already explicit in is_design_module. Never compare
+        # a raw-text fallback ID to a model-translated intent string.
+        selected = gameplay if gameplay else (capability,)
     primary = selected[0]
     artifact_tasks = tuple(
         _stable_id(
