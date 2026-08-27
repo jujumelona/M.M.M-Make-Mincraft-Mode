@@ -263,7 +263,7 @@ def test_unpunctuated_natural_korean_maplestory_prompt_regression() -> None:
     from minecraft_mod_ai.evidence_first_planning import build_request_catalog
     semantic_router = SimpleNamespace(
         generate_text=lambda *_args, **_kwargs: (
-            '{"intent":"maplestory progression systems",'
+            '{"intent":"' + prompt + '",'
             '"gameplay_capability_candidates":['
             '"mob.spawning","boss.entity","item.equipment",'
             '"progression.level","item.upgrade"],'
