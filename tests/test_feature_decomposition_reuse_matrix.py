@@ -88,13 +88,14 @@ def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None
                 ]
             }
 
-    def fake_get(url, **kwargs):
-        observed["url"] = url
-        observed["params"] = kwargs.get("params")
-        observed["headers"] = kwargs.get("headers")
-        return FakeResponse()
+    class FakeClient:
+        def get(self, url, **kwargs):
+            observed["url"] = url
+            observed["params"] = kwargs.get("params")
+            observed["headers"] = kwargs.get("headers")
+            return FakeResponse()
 
-    monkeypatch.setattr(reuse_discovery.httpx, "get", fake_get)
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: FakeClient())
 
     results = reuse_discovery._search_curseforge("보스 시스템", limit=10)
 
@@ -108,10 +109,12 @@ def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None
 def test_curseforge_failure_does_not_break_provider_discovery(monkeypatch) -> None:
     monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "broken-key")
 
-    def failing_get(url, **kwargs):
-        raise ConnectionError("CurseForge endpoint unreachable")
+    class FailingClient:
+        def get(self, url, **kwargs):
+            del url, kwargs
+            raise ConnectionError("CurseForge endpoint unreachable")
 
-    monkeypatch.setattr(reuse_discovery.httpx, "get", failing_get)
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: FailingClient())
 
     client = SimpleNamespace(
         search=lambda provider, query, **kwargs: {
