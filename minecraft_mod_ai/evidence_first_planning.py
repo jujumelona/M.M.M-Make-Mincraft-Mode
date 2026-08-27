@@ -291,17 +291,12 @@ def _stub_semantic_model(
     source_end: int,
     prompt: str,
 ) -> SemanticRequirementIR:
-    """Stub Semantic Model — uses the ontology alias resolver as a fallback.
+    """Stub Semantic Model — uses the ontology alias resolver as a deterministic fallback.
 
-    Replace this function with a real LLM call when the model integration is
-    ready.  The output interface (SemanticRequirementIR) stays stable regardless
-    of whether the underlying implementation is a stub or a full model.
-
-    The stub consolidates ALL ontology resolution calls so that raw user text
-    NEVER reaches the ontology resolver outside this function's boundary.
-    Only ``explicit`` gameplay roots are surfaced as candidates; archetype-inferred
-    expansions are an internal ontology concern and are included in the alias-lookup
-    step inside ``_expand_semantic_ir`` via dependency expansion.
+    Replace with ``_model_semantic_ir`` (real LLM path) by passing a router to
+    ``build_request_catalog``.  The stub never sets ``unresolved=True`` because it
+    has no authority to block generation — only a real Semantic Model that has
+    genuinely attempted to interpret the clause may make that determination.
     """
     resolution = resolve_capabilities_from_phrase_structured(clause)
     candidates = tuple(
@@ -312,7 +307,6 @@ def _stub_semantic_model(
             and not node.capability_id.startswith("unresolved:")
         )
     )
-    unresolved_flag = bool(resolution.unresolved_spans) and not candidates
     return SemanticRequirementIR(
         source_start=source_start,
         source_end=source_end,
@@ -320,8 +314,95 @@ def _stub_semantic_model(
         intent=clause,
         gameplay_capability_candidates=candidates,
         confidence=0.85 if candidates else 0.0,
-        unresolved=unresolved_flag,
+        # Stub is best-effort — it never blocks generation.
+        # Only a real LLM model may set unresolved=True.
+        unresolved=False,
     )
+
+
+def _model_semantic_ir(
+    clause: str,
+    source_start: int,
+    source_end: int,
+    prompt: str,
+    router: Any,
+) -> SemanticRequirementIR:
+    """Real Semantic Model path — calls the LLM via router.generate_text.
+
+    The model receives the raw clause and must return:
+      - ``gameplay_capability_candidates``: list of canonical dotted IDs
+        (e.g. "economy.trade", "spaceship.vehicle") representing the user intent
+      - ``unresolved``: true if the model genuinely cannot determine a gameplay
+        capability for this clause (blocks generation)
+      - ``intent``: language-neutral description of the clause intent
+
+    The ontology alias map is NOT used here — the model is the semantic authority.
+    The ontology is only called later in ``_expand_semantic_ir`` for dependency
+    expansion on the candidates returned by the model.
+    """
+    import json as _json
+
+    system_msg = (
+        "You are a Minecraft mod semantic planner.  Given a user requirement clause, "
+        "identify the canonical gameplay capability IDs it describes.\n\n"
+        "Respond with JSON only:\n"
+        "{\n"
+        '  "intent": "<language-neutral one-line description>",\n'
+        '  "gameplay_capability_candidates": ["<dotted.id>", ...],\n'
+        '  "unresolved": false\n'
+        "}\n\n"
+        "Use dotted IDs like economy.trade, spaceship.vehicle, resource.mining, "
+        "combat.boss, worldgen.ore, ui.shop, network.action_sync, etc.  "
+        "Set unresolved=true ONLY if you genuinely cannot determine any gameplay "
+        "capability from the clause."
+    )
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": clause},
+    ]
+    try:
+        raw = router.generate_text(
+            "planner",
+            messages,
+            response_format="json",
+            enable_tools=False,
+        )
+        data = _json.loads(raw)
+        candidates = tuple(
+            str(c).strip()
+            for c in data.get("gameplay_capability_candidates", [])
+            if str(c).strip()
+        )
+        intent = str(data.get("intent", clause)).strip() or clause
+        unresolved = bool(data.get("unresolved", False)) and not candidates
+    except Exception:
+        # On any model/parse failure fall back to stub — never crash catalog build.
+        return _stub_semantic_model(clause, source_start, source_end, prompt)
+
+    return SemanticRequirementIR(
+        source_start=source_start,
+        source_end=source_end,
+        source_sha256=_sha(prompt[source_start:source_end]),
+        intent=intent,
+        gameplay_capability_candidates=candidates,
+        confidence=0.95 if candidates else 0.0,
+        unresolved=unresolved,
+    )
+
+
+def _invoke_semantic_model(
+    clause: str,
+    source_start: int,
+    source_end: int,
+    prompt: str,
+    router: Any | None,
+) -> SemanticRequirementIR:
+    """Dispatcher: real model when router is available, stub otherwise."""
+    if router is not None:
+        return _model_semantic_ir(clause, source_start, source_end, prompt, router)
+    return _stub_semantic_model(clause, source_start, source_end, prompt)
+
+
 
 
 def _validate_semantic_ir(ir: SemanticRequirementIR, prompt: str) -> None:
@@ -517,6 +598,7 @@ def _merge_catalog_uncovered_prompt_requirements(
     catalog: Mapping[str, Any],
     prompt: str,
     game_design: Mapping[str, Any],
+    router: Any | None = None,
 ) -> dict[str, Any]:
     """Preserve every authored clause when an earlier catalog was incomplete.
 
@@ -566,7 +648,8 @@ def _merge_catalog_uncovered_prompt_requirements(
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
-        ir = _stub_semantic_model(statement, span["char_start"], span["char_end"], prompt)
+        ir = _invoke_semantic_model(statement, span["char_start"], span["char_end"], prompt, router)
+        _validate_semantic_ir(ir, prompt)
         semantic = _semantic_requirement_fields(
             capability, ir, requirement_id
         )
@@ -599,7 +682,25 @@ def _merge_catalog_uncovered_prompt_requirements(
     return merged
 
 
-def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[str, Any]:
+def build_request_catalog(
+    prompt: str,
+    game_design: Mapping[str, Any],
+    router: Any | None = None,
+) -> dict[str, Any]:
+    """Build an evidence-first requirement catalog from a user prompt.
+
+    Parameters
+    ----------
+    prompt:
+        Raw user prompt (any UTF-8 script).
+    game_design:
+        Game design mapping — may contain an existing ``_evidence_request_catalog``
+        to merge against.
+    router:
+        Optional ``ModelRouter`` instance.  When provided, each structural clause
+        is interpreted by the real Semantic Model (LLM) via ``_model_semantic_ir``.
+        When ``None``, the deterministic alias-resolver stub is used instead.
+    """
     if not isinstance(prompt, str) or not prompt.strip():
         raise EvidencePlanError("Evidence-first planning requires a non-empty request.")
     existing = game_design.get("_evidence_request_catalog")
@@ -607,7 +708,7 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         catalog = dict(existing)
         _validate_request_catalog(catalog, prompt=prompt)
         return _merge_catalog_uncovered_prompt_requirements(
-            catalog, prompt, game_design
+            catalog, prompt, game_design, router=router
         )
     # _capability_records returns design-module-backed entries; prompt clauses are not.
     records_raw = _capability_records(game_design)
@@ -659,7 +760,8 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         acceptance = matching_acceptance or (
             f"Verify the observable outcome for {capability}: {statement}",
         )
-        ir = _stub_semantic_model(statement, span["char_start"], span["char_end"], prompt)
+        ir = _invoke_semantic_model(statement, span["char_start"], span["char_end"], prompt, router)
+        _validate_semantic_ir(ir, prompt)
         semantic = _semantic_requirement_fields(
             capability, ir, requirement_id,
             is_design_module=from_design_module,
