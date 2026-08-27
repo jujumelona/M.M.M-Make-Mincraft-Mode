@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-"""Build Metadata Dependency Resolver and Cross-Loader Version Constraint Engine.
+"""Authoritative external dependency resolution for reuse proof sandboxes.
 
-Parses build.gradle, libs.versions.toml, fabric.mod.json, and neoforge.mods.toml from donor slices.
-Resolves external coordinates, repositories, and version ranges against target Minecraft and loader constraints.
-Emits structured DependencyResolutionReceipt records. Unresolved mandatory dependencies drop the affected
-subgraph to residual fresh generation instead of silently skipping or failing the entire donor.
+This module is the single owner of dependency names, target coordinates, Maven
+repositories, and Gradle configurations used by executable reuse verification.
+No downstream adapter is allowed to reinterpret an already-resolved coordinate.
+Unknown dependencies and unsupported target tuples fail closed.
 """
 
+import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,9 +24,17 @@ class DependencyResolutionReceipt:
     resolved_coordinate: str
     repository: str
     selected_version: str
+    gradle_configuration: str = "modImplementation"
     artifact_hash: str = ""
+    resolution_fingerprint: str = ""
     resolution_reason: str = "exact_match"
     is_resolved: bool = True
+
+    @property
+    def repository_url(self) -> str:
+        """Compatibility alias for callers that use the more explicit name."""
+
+        return self.repository
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,16 +44,29 @@ class DependencyResolutionReceipt:
             "target_minecraft": self.target_minecraft,
             "resolved_coordinate": self.resolved_coordinate,
             "repository": self.repository,
+            "repository_url": self.repository,
             "selected_version": self.selected_version,
+            "gradle_configuration": self.gradle_configuration,
+            # artifact_hash is intentionally empty until actual Maven artifact bytes
+            # are downloaded and verified.  A coordinate hash is not an artifact hash.
             "artifact_hash": self.artifact_hash,
+            "resolution_fingerprint": self.resolution_fingerprint,
             "resolution_reason": self.resolution_reason,
             "is_resolved": self.is_resolved,
         }
 
 
-# Canonical Maven repositories and coordinate resolution matrix
 _CANONICAL_DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
     "geckolib": {
+        "aliases": {
+            "geckolib",
+            "geckolib_fabric",
+            "geckolib_neoforge",
+            "geckolib_forge",
+            "software.bernie.geckolib:geckolib-fabric",
+            "software.bernie.geckolib:geckolib-neoforge",
+            "software.bernie.geckolib:geckolib-forge",
+        },
         "repository": "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/",
         "group": "software.bernie.geckolib",
         "name_by_loader": {
@@ -60,6 +82,16 @@ _CANONICAL_DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "cloth_config": {
+        "aliases": {
+            "cloth_config",
+            "cloth-config",
+            "cloth_config_fabric",
+            "cloth_config_neoforge",
+            "cloth_config_forge",
+            "me.shedaniel.cloth:cloth-config-fabric",
+            "me.shedaniel.cloth:cloth-config-neoforge",
+            "me.shedaniel.cloth:cloth-config-forge",
+        },
         "repository": "https://maven.shedaniel.me/",
         "group": "me.shedaniel.cloth",
         "name_by_loader": {
@@ -74,6 +106,16 @@ _CANONICAL_DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "cardinal_components": {
+        "aliases": {
+            "cardinal_components",
+            "cardinal-components",
+            "cardinal_components_api",
+            "cardinal-components-api",
+            "cardinal_components_base",
+            "cardinal-components-base",
+            "dev.onyxstudios.cardinal-components-api:cardinal-components-api",
+            "dev.onyxstudios.cardinal-components-api:cardinal-components-base",
+        },
         "repository": "https://ladysnake.jfrog.io/artifactory/mods",
         "group": "dev.onyxstudios.cardinal-components-api",
         "name_by_loader": {
@@ -86,6 +128,10 @@ _CANONICAL_DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "patchouli": {
+        "aliases": {
+            "patchouli",
+            "vazkii.patchouli:patchouli",
+        },
         "repository": "https://maven.blamejared.com/",
         "group": "vazkii.patchouli",
         "name_by_loader": {
@@ -94,11 +140,84 @@ _CANONICAL_DEPENDENCY_REGISTRY: dict[str, dict[str, Any]] = {
             "forge": "Patchouli",
         },
         "version_matrix": {
-            "1.21.1": "1.21.1-84-FABRIC",
-            "1.20.1": "1.20.1-84-FABRIC",
+            "1.21.1": {
+                "fabric": "1.21.1-84-FABRIC",
+                "neoforge": "1.21.1-84-NEOFORGE",
+                "forge": "1.21.1-84-FORGE",
+            },
+            "1.20.1": {
+                "fabric": "1.20.1-84-FABRIC",
+                "forge": "1.20.1-84-FORGE",
+            },
         },
     },
 }
+
+
+def _normalized_dependency_token(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    pieces = value.split(":")
+    if len(pieces) >= 2:
+        value = ":".join(pieces[:2])
+    return value.casefold().replace("-", "_")
+
+
+def _canonical_dependency_key(raw: str) -> str:
+    token = _normalized_dependency_token(raw)
+    if not token:
+        return ""
+    for key, entry in _CANONICAL_DEPENDENCY_REGISTRY.items():
+        aliases = {
+            _normalized_dependency_token(alias)
+            for alias in entry.get("aliases", ())
+        }
+        aliases.add(_normalized_dependency_token(key))
+        for artifact in entry.get("name_by_loader", {}).values():
+            aliases.add(_normalized_dependency_token(artifact))
+            aliases.add(
+                _normalized_dependency_token(f"{entry.get('group', '')}:{artifact}")
+            )
+        if token in aliases:
+            return key
+    return ""
+
+
+def _selected_version(
+    entry: Mapping[str, Any],
+    *,
+    target_loader: str,
+    target_minecraft: str,
+) -> str:
+    version_map = entry.get("version_matrix", {})
+    raw_version = version_map.get(target_minecraft)
+    if raw_version is None:
+        mc_prefix = ".".join(target_minecraft.split(".")[:2])
+        raw_version = version_map.get(mc_prefix)
+    if isinstance(raw_version, Mapping):
+        return str(raw_version.get(target_loader.casefold()) or "").strip()
+    return str(raw_version or "").strip()
+
+
+def _resolution_fingerprint(
+    *,
+    repository: str,
+    coordinate: str,
+    configuration: str,
+    target_loader: str,
+    target_minecraft: str,
+) -> str:
+    payload = "\n".join(
+        (
+            repository,
+            coordinate,
+            configuration,
+            target_loader.casefold(),
+            target_minecraft,
+        )
+    )
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def resolve_dependency_for_target(
@@ -107,106 +226,229 @@ def resolve_dependency_for_target(
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
 ) -> DependencyResolutionReceipt:
-    """Resolve a requested donor dependency against target loader and Minecraft version."""
-    norm_dep = dep_name.strip().lower().replace("-", "_")
-    entry = _CANONICAL_DEPENDENCY_REGISTRY.get(norm_dep)
+    """Resolve one donor dependency against the reviewed target matrix."""
+
+    loader = str(target_loader or "").strip().casefold()
+    minecraft = str(target_minecraft or "").strip()
+    canonical_key = _canonical_dependency_key(dep_name)
+    entry = _CANONICAL_DEPENDENCY_REGISTRY.get(canonical_key)
 
     if not entry:
         return DependencyResolutionReceipt(
             donor_declared_coordinate=dep_name,
             requested_constraint=dep_name,
-            target_loader=target_loader,
-            target_minecraft=target_minecraft,
+            target_loader=loader,
+            target_minecraft=minecraft,
             resolved_coordinate="",
             repository="",
             selected_version="",
+            gradle_configuration="",
             resolution_reason="NO_VERIFIED_COORDINATE",
             is_resolved=False,
         )
 
-    repo_url = entry["repository"]
-    group = entry["group"]
-    loader_names = entry.get("name_by_loader", {})
-    art_name = loader_names.get(target_loader.lower())
-    if not art_name:
+    repo_url = str(entry["repository"])
+    group = str(entry["group"])
+    artifact_name = str(entry.get("name_by_loader", {}).get(loader) or "")
+    if not artifact_name:
         return DependencyResolutionReceipt(
             donor_declared_coordinate=dep_name,
-            requested_constraint=f"{target_loader}@{target_minecraft}",
-            target_loader=target_loader,
-            target_minecraft=target_minecraft,
+            requested_constraint=f"{loader}@{minecraft}",
+            target_loader=loader,
+            target_minecraft=minecraft,
             resolved_coordinate="",
             repository=repo_url,
             selected_version="",
-            resolution_reason=f"UNSUPPORTED_LOADER_{target_loader.upper()}",
+            gradle_configuration="",
+            resolution_reason=f"UNSUPPORTED_LOADER_{loader.upper()}",
             is_resolved=False,
         )
 
-    version_map = entry.get("version_matrix", {})
-    version = version_map.get(target_minecraft)
-    if not version:
-        # Check minor version match
-        mc_prefix = ".".join(target_minecraft.split(".")[:2])
-        version = version_map.get(mc_prefix)
-
+    version = _selected_version(
+        entry,
+        target_loader=loader,
+        target_minecraft=minecraft,
+    )
     if not version:
         return DependencyResolutionReceipt(
             donor_declared_coordinate=dep_name,
-            requested_constraint=f"{target_loader}@{target_minecraft}",
-            target_loader=target_loader,
-            target_minecraft=target_minecraft,
+            requested_constraint=f"{loader}@{minecraft}",
+            target_loader=loader,
+            target_minecraft=minecraft,
             resolved_coordinate="",
             repository=repo_url,
             selected_version="",
-            resolution_reason=f"NO_COMPATIBLE_VERSION_FOR_MC_{target_minecraft}",
+            gradle_configuration="",
+            resolution_reason=f"NO_COMPATIBLE_VERSION_FOR_MC_{minecraft}",
             is_resolved=False,
         )
 
-    import hashlib
-    resolved_coord = f"{group}:{art_name}:{version}"
-    artifact_hash = hashlib.sha256(f"{repo_url}:{resolved_coord}".encode("utf-8")).hexdigest()
-
+    coordinate = f"{group}:{artifact_name}:{version}"
+    configuration = "modImplementation" if loader == "fabric" else "implementation"
     return DependencyResolutionReceipt(
         donor_declared_coordinate=dep_name,
-        requested_constraint=f"{target_loader}@{target_minecraft}",
-        target_loader=target_loader,
-        target_minecraft=target_minecraft,
-        resolved_coordinate=resolved_coord,
+        requested_constraint=f"{loader}@{minecraft}",
+        target_loader=loader,
+        target_minecraft=minecraft,
+        resolved_coordinate=coordinate,
         repository=repo_url,
         selected_version=version,
-        artifact_hash=artifact_hash,
+        gradle_configuration=configuration,
+        artifact_hash="",
+        resolution_fingerprint=_resolution_fingerprint(
+            repository=repo_url,
+            coordinate=coordinate,
+            configuration=configuration,
+            target_loader=loader,
+            target_minecraft=minecraft,
+        ),
         resolution_reason="exact_matrix_match",
         is_resolved=True,
     )
 
 
+def _gradle_repo_line(repository: str, *, kotlin: bool) -> str:
+    if kotlin:
+        return f'    maven {{ url = uri("{repository}") }}\n'
+    return f"    maven {{ url = uri('{repository}') }}\n"
+
+
+def _gradle_dependency_line(
+    configuration: str,
+    coordinate: str,
+    *,
+    kotlin: bool,
+) -> str:
+    if kotlin:
+        return f'    {configuration}("{coordinate}")\n'
+    return f"    {configuration} '{coordinate}'\n"
+
+
+def inject_resolved_dependencies_into_build_gradle(
+    build_content: str,
+    receipts: Sequence[DependencyResolutionReceipt],
+    *,
+    is_kotlin_dsl: bool = False,
+) -> tuple[str, bool]:
+    """Inject exact reviewed receipt coordinates without re-resolving their names."""
+
+    if not receipts:
+        return build_content, False
+    unresolved = [receipt for receipt in receipts if not receipt.is_resolved]
+    if unresolved:
+        names = ", ".join(receipt.donor_declared_coordinate for receipt in unresolved)
+        raise ValueError(f"cannot inject unresolved dependencies: {names}")
+
+    exact_receipts = tuple(
+        receipt
+        for receipt in receipts
+        if receipt.resolved_coordinate
+        and receipt.repository
+        and receipt.gradle_configuration
+        and receipt.resolution_fingerprint
+    )
+    if len(exact_receipts) != len(receipts):
+        raise ValueError("resolved dependency receipt is missing authoritative Gradle fields")
+
+    modified = build_content
+    changed = False
+    repositories = tuple(dict.fromkeys(receipt.repository for receipt in exact_receipts))
+    dependencies = tuple(
+        dict.fromkeys(
+            (receipt.gradle_configuration, receipt.resolved_coordinate)
+            for receipt in exact_receipts
+        )
+    )
+
+    missing_repositories = [repo for repo in repositories if repo not in modified]
+    if missing_repositories:
+        repo_lines = "".join(
+            _gradle_repo_line(repo, kotlin=is_kotlin_dsl)
+            for repo in missing_repositories
+        )
+        marker = "repositories {"
+        if marker in modified:
+            modified = modified.replace(marker, f"{marker}\n{repo_lines}", 1)
+        else:
+            modified += f"\nrepositories {{\n{repo_lines}}}\n"
+        changed = True
+
+    missing_dependencies = [
+        (configuration, coordinate)
+        for configuration, coordinate in dependencies
+        if coordinate not in modified
+    ]
+    if missing_dependencies:
+        dep_lines = "".join(
+            _gradle_dependency_line(
+                configuration,
+                coordinate,
+                kotlin=is_kotlin_dsl,
+            )
+            for configuration, coordinate in missing_dependencies
+        )
+        marker = "dependencies {"
+        if marker in modified:
+            modified = modified.replace(marker, f"{marker}\n{dep_lines}", 1)
+        else:
+            modified += f"\ndependencies {{\n{dep_lines}}}\n"
+        changed = True
+
+    for receipt in exact_receipts:
+        if receipt.resolved_coordinate not in modified:
+            raise ValueError(
+                f"dependency injection did not materialize {receipt.resolved_coordinate}"
+            )
+        if receipt.repository not in modified:
+            raise ValueError(
+                f"dependency injection did not materialize repository {receipt.repository}"
+            )
+
+    return modified, changed
+
+
 def parse_donor_build_metadata(files: Mapping[str, Any]) -> tuple[str, ...]:
-    """Extract declared external dependencies from donor build files (build.gradle, build.gradle.kts, toml, json)."""
+    """Extract reviewed external dependency identifiers from donor metadata."""
+
     declared: list[str] = []
 
-    for rel_path, content in files.items():
-        text = content if isinstance(content, str) else content.decode("utf-8", errors="ignore")
-        p = rel_path.lower()
+    def add_if_known(value: str) -> None:
+        canonical = _canonical_dependency_key(value)
+        if canonical:
+            declared.append(canonical)
 
-        # 1. fabric.mod.json
-        if "fabric.mod.json" in p:
+    for rel_path, content in files.items():
+        text = (
+            content
+            if isinstance(content, str)
+            else content.decode("utf-8", errors="ignore")
+        )
+        path = rel_path.lower()
+
+        if "fabric.mod.json" in path:
             for match in re.findall(r'"([a-zA-Z0-9_.-]+)":\s*"[^"]+"', text):
                 if match not in {"fabricloader", "fabric", "minecraft", "java"}:
-                    declared.append(match)
+                    add_if_known(match)
 
-        # 2. build.gradle & build.gradle.kts
-        if "build.gradle" in p or "build.gradle.kts" in p:
-            # Groovy / Kotlin coordinates: "group:artifact:version" or libs.something
-            for match in re.findall(r'(?:modImplementation|implementation|include|api)\s*\(?\s*["\']([^"\':]+):([^"\':]+):([^"\':]+)["\']', text):
-                dep_id = match[1]
-                declared.append(dep_id)
+        if "build.gradle" in path:
+            coordinate_pattern = (
+                r"(?:modImplementation|implementation|include|api)"
+                r"\s*\(?\s*[\"']([^\"':]+):([^\"':]+):([^\"']+)[\"']"
+            )
+            for group, artifact, _version in re.findall(coordinate_pattern, text):
+                add_if_known(f"{group}:{artifact}")
 
-        # 3. libs.versions.toml
-        if "libs.versions.toml" in p or p.endswith(".toml"):
-            for match in re.findall(r'module\s*=\s*["\']([^"\':]+):([^"\':]+)["\']', text):
-                dep_id = match[1]
-                declared.append(dep_id)
-            for match in re.findall(r'modId\s*=\s*["\']([a-zA-Z0-9_.-]+)["\']', text):
+        if "libs.versions.toml" in path or path.endswith(".toml"):
+            for group, artifact in re.findall(
+                r'module\s*=\s*[\"\']([^\"\':]+):([^\"\':]+)[\"\']',
+                text,
+            ):
+                add_if_known(f"{group}:{artifact}")
+            for match in re.findall(
+                r'modId\s*=\s*[\"\']([a-zA-Z0-9_.-]+)[\"\']',
+                text,
+            ):
                 if match not in {"minecraft", "forge", "neoforge"}:
-                    declared.append(match)
+                    add_if_known(match)
 
     return tuple(dict.fromkeys(declared))
