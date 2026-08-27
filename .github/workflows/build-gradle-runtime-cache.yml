@@ -27,7 +27,7 @@ jobs:
       RELEASE_TAG: gradle-runtime-cache-v1-immutable
       GRADLE_VERSION: ${{ matrix.gradle_version }}
     steps:
-      - name: Resolve official checksums
+      - name: Resolve official checksums and source tag
         id: checksums
         shell: bash
         run: |
@@ -36,22 +36,27 @@ jobs:
             7.6)
               dist=7ba68c54029790ab444b39d7e293d3236b2632631fb5f2e012bb28b4ff669e4b
               wrapper=c5a643cf80162e665cc228f7b16f343fef868e47d3a4836f62e18b7e17ac018a
+              source_tag=v7.6.0
               ;;
             8.1)
               dist=a62c5f99585dd9e1f95dab7b9415a0e698fa9dd1e6c38537faa81ac078f4d23e
               wrapper=ed2c26eba7cfb93cc2b7785d05e534f07b5b48b5e7fc941921cd098628abca58
+              source_tag=v8.1.0
               ;;
             8.5)
               dist=9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026
               wrapper=d3b261c2820e9e3d8d639ed084900f11f4a86050a8f83342ade7b6bc9b0d2bdd
+              source_tag=v8.5.0
               ;;
             8.8)
               dist=a4b4158601f8636cdeeab09bd76afb640030bb5b144aafe261a5e8af027dc612
               wrapper=cb0da6751c2b753a16ac168bb354870ebb1e162e9083f116729cec9c781156b8
+              source_tag=v8.8.0
               ;;
             8.10.2)
               dist=31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26
               wrapper=2db75c40782f5e8ba1fc278a5574bab070adccb2d21ca5a6e5ed840888448046
+              source_tag=v8.10.2
               ;;
             *)
               echo "unsupported Gradle version: $GRADLE_VERSION" >&2
@@ -60,6 +65,7 @@ jobs:
           esac
           echo "distribution_sha256=$dist" >> "$GITHUB_OUTPUT"
           echo "wrapper_sha256=$wrapper" >> "$GITHUB_OUTPUT"
+          echo "source_tag=$source_tag" >> "$GITHUB_OUTPUT"
 
       - name: Check immutable GitHub cache
         id: release
@@ -89,6 +95,8 @@ jobs:
       - name: Download official Gradle runtime
         if: steps.release.outputs.published != 'true'
         shell: bash
+        env:
+          SOURCE_TAG: ${{ steps.checksums.outputs.source_tag }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -97,7 +105,7 @@ jobs:
             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
           curl --fail --location --retry 4 --retry-all-errors \
             --output "dist/gradle-${GRADLE_VERSION}-wrapper.jar" \
-            "https://raw.githubusercontent.com/gradle/gradle/v${GRADLE_VERSION}/gradle/wrapper/gradle-wrapper.jar"
+            "https://raw.githubusercontent.com/gradle/gradle/${SOURCE_TAG}/gradle/wrapper/gradle-wrapper.jar"
 
       - name: Verify official Gradle checksums
         if: steps.release.outputs.published != 'true'
