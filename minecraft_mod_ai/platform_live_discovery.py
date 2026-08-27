@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import threading
@@ -28,6 +29,9 @@ class LiveFabricTarget:
     gradle_sha256: str
     mappings_kind: str
     mappings_version: str
+    data_pack_version: str
+    resource_pack_version: str
+    release_metadata_url: str
     discovery_sha256: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,6 +46,9 @@ class LiveFabricTarget:
             "gradle_sha256": self.gradle_sha256,
             "mappings_kind": self.mappings_kind,
             "mappings_version": self.mappings_version,
+            "data_pack_version": self.data_pack_version,
+            "resource_pack_version": self.resource_pack_version,
+            "release_metadata_url": self.release_metadata_url,
             "discovery_sha256": self.discovery_sha256,
         }
 
@@ -59,7 +66,13 @@ _FABRIC_WRAPPER = (
     "gradle-wrapper.properties"
 )
 _MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+_MINECRAFT_ARTICLE = "https://www.minecraft.net/en-us/article/minecraft-java-edition-{}"
 _API_METADATA_PATH = "/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
+_PACK_VERSION = re.compile(
+    r"\b(The\s+)?(?P<kind>Data|Resource)\s+Pack\s+version\s+is\s+now\s+"
+    r"(?P<version>[0-9]+(?:\.[0-9]+)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _fetch(url: str, *, timeout: int = 20) -> bytes:
@@ -283,8 +296,7 @@ def _mojang_java_version(version: str) -> str:
 
 @lru_cache(maxsize=1)
 def _stable_java_versions() -> tuple[tuple[str, str], ...]:
-    """Resolve the candidate Java requirements concurrently, preserving version order."""
-
+    """Resolve candidate Java requirements concurrently, preserving version order."""
     versions = latest_stable_versions(limit=8)
     if not versions:
         return ()
@@ -319,7 +331,6 @@ def _common_platform_metadata() -> tuple[
     tuple[tuple[str, str], ...],
 ]:
     """Fetch version-independent official metadata once, with independent I/O overlapped."""
-
     with ThreadPoolExecutor(max_workers=5, thread_name_prefix="mmm-platform-meta") as pool:
         loader_future = pool.submit(_stable_loader)
         api_future = pool.submit(_maven_versions, _API_METADATA_PATH)
@@ -337,6 +348,36 @@ def _common_platform_metadata() -> tuple[
         )
 
 
+def _release_article_url(version: str) -> str:
+    value = str(version).strip()
+    if not value or not re.fullmatch(r"[0-9A-Za-z_.-]+", value):
+        raise PlatformDiscoveryError(f"invalid Minecraft version for release metadata: {version!r}")
+    return _MINECRAFT_ARTICLE.format(value.casefold())
+
+
+@lru_cache(maxsize=64)
+def _official_pack_versions(version: str) -> tuple[str, str, str]:
+    """Read exact Data/Resource Pack versions from the official Minecraft release article.
+
+    There is intentionally no numeric fallback. Missing or unparsable official metadata makes
+    the target incomplete and therefore ineligible for planning/generation.
+    """
+    url = _release_article_url(version)
+    raw = _fetch(url).decode("utf-8", errors="replace")
+    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    text = " ".join(text.split())
+    found: dict[str, str] = {}
+    for match in _PACK_VERSION.finditer(text):
+        found[match.group("kind").casefold()] = match.group("version")
+    data_pack = found.get("data", "")
+    resource_pack = found.get("resource", "")
+    if not data_pack or not resource_pack:
+        raise PlatformDiscoveryError(
+            f"official Minecraft release metadata did not expose complete pack versions for {version}"
+        )
+    return data_pack, resource_pack, url
+
+
 @lru_cache(maxsize=32)
 def discover_fabric_target(version: str) -> LiveFabricTarget:
     version = str(version).strip()
@@ -347,14 +388,19 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
             f"Minecraft {version} is not advertised by the official Fabric Meta API"
         )
 
-    (
-        loader,
-        api_versions,
-        loom,
-        gradle,
-        gradle_sha256,
-        _mojang_index,
-    ) = _common_platform_metadata()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="mmm-platform-target") as pool:
+        common_future = pool.submit(_common_platform_metadata)
+        pack_future = pool.submit(_official_pack_versions, version)
+        (
+            loader,
+            api_versions,
+            loom,
+            gradle,
+            gradle_sha256,
+            _mojang_index,
+        ) = common_future.result()
+        data_pack_version, resource_pack_version, release_metadata_url = pack_future.result()
+
     api = _api_from_versions(version, api_versions)
     prefetched_java = dict(_stable_java_versions()).get(version, "")
     java = prefetched_java or _mojang_java_version(version)
@@ -362,7 +408,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
     mappings_kind = "mojang"
     mappings_version = "mojang"
     payload = {
-        "source": "official-live-discovery-v2",
+        "source": "official-live-discovery-v3",
         "minecraft_version": version,
         "stable": bool(row["stable"]),
         "loader_version": loader,
@@ -373,6 +419,9 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
         "gradle_sha256": gradle_sha256,
         "mappings_kind": mappings_kind,
         "mappings_version": mappings_version,
+        "data_pack_version": data_pack_version,
+        "resource_pack_version": resource_pack_version,
+        "release_metadata_url": release_metadata_url,
         "sources": [
             _META,
             _MAVEN,
@@ -380,6 +429,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
             _FABRIC_TEMPLATE_PROPERTIES,
             _FABRIC_WRAPPER,
             _MOJANG_MANIFEST,
+            release_metadata_url,
         ],
     }
     digest = hashlib.sha256(
@@ -396,5 +446,8 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
         gradle_sha256=gradle_sha256,
         mappings_kind=mappings_kind,
         mappings_version=mappings_version,
+        data_pack_version=data_pack_version,
+        resource_pack_version=resource_pack_version,
+        release_metadata_url=release_metadata_url,
         discovery_sha256="sha256:" + digest,
     )
