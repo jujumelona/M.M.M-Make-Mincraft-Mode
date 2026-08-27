@@ -9,6 +9,8 @@ into independent requirement records before reuse/gap/task planning so every sem
 root receives its own proof and implementation path.
 """
 
+import json
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
@@ -17,6 +19,71 @@ from .game_design import GameDesignPlanner
 
 _INSTALLED = False
 _ORIGINAL_BUILD_REQUEST_CATALOG = _evidence.build_request_catalog
+
+
+class _StrictSemanticRouterProxy:
+    """Observe production semantic failures even if a downstream caller catches them.
+
+    ``evidence_first_planning`` historically caught router/JSON failures and silently
+    substituted its deterministic stub.  That made a configured semantic model appear
+    successful while changing request meaning.  This proxy records the original model
+    contract result so the request guard can fail closed after the legacy call returns.
+    """
+
+    def __init__(self, router: Any) -> None:
+        self._router = router
+        self.failure_reason = ""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._router, name)
+
+    def generate_text(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            raw = self._router.generate_text(*args, **kwargs)
+        except Exception as exc:
+            self.failure_reason = f"semantic router call failed: {type(exc).__name__}: {exc}"
+            raise
+
+        if kwargs.get("response_format") != "json":
+            return raw
+
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception as exc:
+            self.failure_reason = f"semantic router returned invalid JSON: {type(exc).__name__}: {exc}"
+            return raw
+
+        if not isinstance(payload, Mapping):
+            self.failure_reason = "semantic router JSON root is not an object"
+            return raw
+
+        candidates = payload.get("gameplay_capability_candidates")
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes, bytearray)):
+            self.failure_reason = "semantic router omitted gameplay_capability_candidates"
+            return raw
+        roots = tuple(str(item).strip() for item in candidates if str(item).strip())
+        if not roots:
+            self.failure_reason = "semantic router returned no gameplay capability roots"
+        if bool(payload.get("unresolved", False)):
+            self.failure_reason = "semantic router marked the authored requirement unresolved"
+        return raw
+
+
+def _original_catalog_strict(
+    prompt: str,
+    game_design: Any,
+    *,
+    router: Any | None,
+) -> dict[str, Any]:
+    if router is None:
+        return _ORIGINAL_BUILD_REQUEST_CATALOG(prompt, game_design, router=None)
+    proxy = _StrictSemanticRouterProxy(router)
+    catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(prompt, game_design, router=proxy)
+    if proxy.failure_reason:
+        raise _evidence.EvidencePlanError(
+            "production semantic interpretation failed closed: " + proxy.failure_reason
+        )
+    return catalog
 
 
 def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
@@ -87,7 +154,7 @@ def _build_request_catalog_with_semantic_root_expansion(
     game_design: Any,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(
+    catalog = _original_catalog_strict(
         prompt,
         game_design,
         router=router,
@@ -106,10 +173,11 @@ def build_authoritative_request_catalog(
     Passing an empty design is intentional: model-produced design modules, features,
     acceptance prose, and reuse hints cannot participate in requirement identity.
     When a router is available it owns only semantic interpretation of the already
-    frozen authored spans.
+    frozen authored spans. A configured router is authoritative: its failure may not
+    be silently replaced by deterministic host semantics.
     """
 
-    catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(prompt, {}, router=router)
+    catalog = _original_catalog_strict(prompt, {}, router=router)
     return _split_multi_root_requirements(catalog) if router is not None else catalog
 
 
