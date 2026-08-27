@@ -3,9 +3,9 @@ from __future__ import annotations
 """Keep conditional implementation branches local to the requirement that activated them.
 
 The base evidence planner historically concatenated every requirement into one text blob and
-activated branches globally.  A GUI clause could therefore make an unrelated machine task
+activated branches globally. A GUI clause could therefore make an unrelated machine task
 inherit client-screen work, or a persistence clause could make sibling tasks inherit codec
-work.  Branches are architecture decisions, not authored requirements, so their provenance
+work. Branches are architecture decisions, not authored requirements, so their provenance
 must name the exact requirement(s) that activated them and task compilation must consume only
 that local view.
 """
@@ -73,10 +73,18 @@ _TERMS: dict[str, tuple[str, ...]] = {
 
 
 def _contains_term(text: str, term: str) -> bool:
-    # Treat punctuation, dots and underscores as semantic separators while avoiding
-    # accidental substring hits (for example item inside itemization).
-    escaped = re.escape(term).replace(r"\_", r"[_\s.-]+")
-    return re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", text) is not None
+    """Match semantic tokens without substring leakage.
+
+    Compound capability IDs may use spaces, dots, hyphens or underscores interchangeably,
+    while ordinary word prefixes/suffixes must not count. For example ``block_entity``
+    matches ``block entity`` but ``item`` does not match ``itemization``.
+    """
+
+    parts = [part for part in re.split(r"[_\s.-]+", term.casefold()) if part]
+    if not parts:
+        return False
+    compound = r"[_\s.-]+".join(re.escape(part) for part in parts)
+    return re.search(rf"(?<![a-z0-9]){compound}(?![a-z0-9])", text.casefold()) is not None
 
 
 def _requirement_text(requirement: Mapping[str, Any]) -> str:
@@ -235,6 +243,7 @@ def install_requirement_branch_scope_contract() -> None:
 
 __all__ = [
     "_branches_for_requirement",
+    "_contains_term",
     "_scoped_branch_predicates",
     "install_requirement_branch_scope_contract",
 ]
