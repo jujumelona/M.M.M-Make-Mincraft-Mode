@@ -11,6 +11,7 @@ expensive source-transplant inspector.
 import atexit
 import os
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-_TOKEN = re.compile(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+")
+_TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
 _HTTP_CLIENT: httpx.Client | None = None
@@ -242,15 +243,25 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> lis
     return direct
 
 
+def _ascii_search_query(value: str) -> str:
+    """Project arbitrary Unicode text onto the ASCII-only CurseForge query field.
+
+    This is intentionally script-neutral: Unicode normalization may preserve
+    compatible Latin characters, while unsupported scripts fall back at the
+    provider boundary instead of invoking a language-specific transliterator.
+    """
+
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    ascii_text = re.sub(r"[^A-Za-z0-9\s_-]+", " ", ascii_text)
+    return re.sub(r"\s+", " ", ascii_text).strip()
+
+
 def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
-    from .canonical_capability_ontology import romanize_korean_universal
-
-    clean_query = romanize_korean_universal(query.strip())
-    clean_query = re.sub(r"[^a-zA-Z0-9\s_-]+", " ", clean_query).strip()
-    clean_query = re.sub(r"\s+", " ", clean_query)
+    clean_query = _ascii_search_query(query)
     if not clean_query or len(clean_query) < 2:
         clean_query = "minecraft mod"
     params = {
