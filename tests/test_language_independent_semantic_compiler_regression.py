@@ -20,6 +20,7 @@ from minecraft_mod_ai.canonical_capability_ontology import (
 from minecraft_mod_ai.evidence_first_planning import (
     _capability_from_statement,
     _semantic_requirement_fields,
+    _stub_semantic_model,
     _slug,
     _word_overlap,
     build_request_catalog,
@@ -29,19 +30,26 @@ from minecraft_mod_ai.requirement_catalog import (
 )
 
 
+def _make_ir(statement: str):
+    """Helper: produce a SemanticRequirementIR from a raw clause via the stub model."""
+    return _stub_semantic_model(statement, 0, len(statement), statement)
+
+
 class TestGameplayRootPromotionLanguageIndependent:
     """_semantic_requirement_fields must promote gameplay roots for ALL languages."""
 
     def test_english_prompt_derived_gets_gameplay_roots(self) -> None:
         statement = "trade items with NPCs"
         capability = _capability_from_statement(statement)
-        fields = _semantic_requirement_fields(capability, statement, "req_test_001")
+        ir = _make_ir(statement)
+        fields = _semantic_requirement_fields(capability, ir, "req_test_001")
         assert isinstance(fields["gameplay_capabilities"], list)
 
     def test_korean_and_english_same_concept_same_structure(self) -> None:
         for stmt in ("trade items", "거래 시스템"):
             cap = _capability_from_statement(stmt)
-            fields = _semantic_requirement_fields(cap, stmt, "req_x")
+            ir = _make_ir(stmt)
+            fields = _semantic_requirement_fields(cap, ir, "req_x")
             assert isinstance(fields["gameplay_capabilities"], list)
             assert isinstance(fields["implementation_capabilities"], list)
             assert isinstance(fields["semantic_status"], str)
@@ -49,13 +57,15 @@ class TestGameplayRootPromotionLanguageIndependent:
     def test_non_prompt_derived_capability_not_overwritten(self) -> None:
         statement = "trade items"
         explicit = "custom.explicit_design_id"
-        fields = _semantic_requirement_fields(explicit, statement, "req_explicit")
+        ir = _make_ir(statement)
+        fields = _semantic_requirement_fields(explicit, ir, "req_explicit")
         assert any(explicit in p for p in fields["provides"])
 
     def test_no_gameplay_roots_keeps_original_capability(self) -> None:
         statement = "xyzzy frobnitz zork"
         capability = _capability_from_statement(statement)
-        fields = _semantic_requirement_fields(capability, statement, "req_nonsense")
+        ir = _make_ir(statement)
+        fields = _semantic_requirement_fields(capability, ir, "req_nonsense")
         assert capability in fields["provides"] or fields["gameplay_capabilities"] is not None
 
 

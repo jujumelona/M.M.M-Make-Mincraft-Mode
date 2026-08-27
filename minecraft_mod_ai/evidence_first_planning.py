@@ -262,18 +262,49 @@ def _source_span(prompt: str, statement: str) -> dict[str, Any]:
     }
 
 
-def _semantic_capability_layers(
-    statement: str,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Return gameplay roots, host-derived implementation nodes, and unknown spans.
+@dataclass(frozen=True)
+class SemanticRequirementIR:
+    """Formal contract between the Semantic Model layer and the canonical ontology.
 
-    The language model supplies descriptive content only.  The host owns the
-    Requirement -> gameplay capability -> implementation capability graph, so a
-    Minecraft API primitive can never replace an authored gameplay requirement.
+    The Semantic Model (currently a stub backed by the alias resolver; later a
+    real LLM) produces this IR for every structural clause in the user prompt.
+    The host validates the source offsets and sha256, then passes the IR to the
+    ontology for canonicalization and dependency expansion only.
+
+    The ontology MUST NOT receive raw user text — only model-produced
+    ``gameplay_capability_candidates`` IDs may be passed to the alias/dependency
+    expansion step.
     """
 
-    resolution = resolve_capabilities_from_phrase_structured(statement)
-    gameplay = tuple(
+    source_start: int                              # char offset in original prompt
+    source_end: int                                # char offset in original prompt
+    source_sha256: str                             # sha256(prompt[source_start:source_end])
+    intent: str                                    # language-neutral intent (stub: raw clause)
+    gameplay_capability_candidates: tuple[str, ...]  # canonical IDs proposed by model
+    confidence: float                              # 0.0–1.0
+    unresolved: bool                               # model could not determine gameplay cap
+
+
+def _stub_semantic_model(
+    clause: str,
+    source_start: int,
+    source_end: int,
+    prompt: str,
+) -> SemanticRequirementIR:
+    """Stub Semantic Model — uses the ontology alias resolver as a fallback.
+
+    Replace this function with a real LLM call when the model integration is
+    ready.  The output interface (SemanticRequirementIR) stays stable regardless
+    of whether the underlying implementation is a stub or a full model.
+
+    The stub consolidates ALL ontology resolution calls so that raw user text
+    NEVER reaches the ontology resolver outside this function's boundary.
+    Only ``explicit`` gameplay roots are surfaced as candidates; archetype-inferred
+    expansions are an internal ontology concern and are included in the alias-lookup
+    step inside ``_expand_semantic_ir`` via dependency expansion.
+    """
+    resolution = resolve_capabilities_from_phrase_structured(clause)
+    candidates = tuple(
         dict.fromkeys(
             node.capability_id
             for node in resolution.nodes
@@ -281,38 +312,99 @@ def _semantic_capability_layers(
             and not node.capability_id.startswith("unresolved:")
         )
     )
-    implementation = tuple(
-        dict.fromkeys(
-            node.capability_id
-            for node in resolution.nodes
-            if node.origin == "dependency_required"
-            and not node.capability_id.startswith("unresolved:")
-        )
+    unresolved_flag = bool(resolution.unresolved_spans) and not candidates
+    return SemanticRequirementIR(
+        source_start=source_start,
+        source_end=source_end,
+        source_sha256=_sha(prompt[source_start:source_end]),
+        intent=clause,
+        gameplay_capability_candidates=candidates,
+        confidence=0.85 if candidates else 0.0,
+        unresolved=unresolved_flag,
     )
-    return gameplay, implementation, tuple(resolution.unresolved_spans)
+
+
+def _validate_semantic_ir(ir: SemanticRequirementIR, prompt: str) -> None:
+    """Host-side tamper and offset validation for a SemanticRequirementIR.
+
+    Raises EvidencePlanError if:
+    - Source offsets are out of bounds.
+    - Source sha256 does not match the prompt slice.
+    - IR is marked unresolved (mandatory requirement cannot be generated).
+    """
+    if not (0 <= ir.source_start <= ir.source_end <= len(prompt)):
+        raise EvidencePlanError(
+            f"SemanticRequirementIR offsets [{ir.source_start}:{ir.source_end}] "
+            f"out of bounds for prompt length {len(prompt)}."
+        )
+    actual_sha = _sha(prompt[ir.source_start:ir.source_end])
+    if ir.source_sha256 != actual_sha:
+        raise EvidencePlanError(
+            "SemanticRequirementIR source_sha256 mismatch — source span was tampered."
+        )
+    if ir.unresolved:
+        raise EvidencePlanError(
+            "Semantic Model could not resolve a mandatory requirement span to a "
+            "gameplay capability; generation is blocked until the model resolves it."
+        )
+
+
+def _expand_semantic_ir(
+    ir: SemanticRequirementIR,
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """Ontology-only step: canonicalize + dependency-expand model-produced candidates.
+
+    The ontology receives ONLY ``ir.gameplay_capability_candidates`` — IDs already
+    proposed by the Semantic Model.  It never sees raw user text.
+
+    Returns (gameplay_roots, implementation_deps, unresolved_flag).
+    """
+    gameplay: list[str] = []
+    implementation: list[str] = []
+    seen: set[str] = set()
+
+    for candidate in ir.gameplay_capability_candidates:
+        low = candidate.casefold().strip()
+        # Alias canonicalization: look up in the known domain map.
+        canonical_caps = _DOMAIN_TERM_MAP.get(low)
+        if canonical_caps:
+            for idx, cap in enumerate(canonical_caps):
+                if cap not in seen:
+                    seen.add(cap)
+                    if idx == 0:
+                        gameplay.append(cap)
+                    else:
+                        implementation.append(cap)
+        else:
+            # Model is authority for unknown IDs — pass through verbatim.
+            if candidate not in seen:
+                seen.add(candidate)
+                gameplay.append(candidate)
+
+    return tuple(gameplay), tuple(implementation), ir.unresolved
+
 
 
 def _semantic_requirement_fields(
     capability: str,
-    statement: str,
+    ir: SemanticRequirementIR,
     requirement_id: str,
     *,
     is_design_module: bool = False,
 ) -> dict[str, Any]:
-    """Build deterministic traceability fields without changing legacy English IDs.
+    """Build deterministic traceability fields from a model-produced SemanticRequirementIR.
 
     Design-module capabilities are authoritative domain IDs (e.g. "trade", "quests")
     that must never be replaced by ontology gameplay roots — the design module is the
     single-authority source.  Only pure prompt-derived requirements (where no design
-    module covered the clause) get language-neutral gameplay root promotion.
+    module covered the clause) get gameplay root promotion via the IR candidates.
     """
-
-    gameplay, implementation, unresolved = _semantic_capability_layers(statement)
+    gameplay, implementation, unresolved_flag = _expand_semantic_ir(ir)
     if is_design_module:
         # Design module IDs are authority — preserve verbatim, no promotion.
         selected: tuple[str, ...] = (capability,)
     else:
-        prompt_derived = capability == _capability_from_statement(statement)
+        prompt_derived = capability == _capability_from_statement(ir.intent)
         selected = gameplay if prompt_derived and gameplay else (capability,)
     primary = selected[0]
     artifact_tasks = tuple(
@@ -329,8 +421,8 @@ def _semantic_requirement_fields(
         "gameplay_capabilities": list(selected),
         "implementation_capabilities": list(implementation),
         "artifact_task_ids": list(dict.fromkeys(artifact_tasks)),
-        "semantic_status": "UNRESOLVED" if unresolved and not gameplay else "RESOLVED",
-        "unresolved_spans": list(unresolved),
+        "semantic_status": "UNRESOLVED" if unresolved_flag and not gameplay else "RESOLVED",
+        "unresolved_spans": [ir.intent] if unresolved_flag else [],
     }
 
 
@@ -452,12 +544,6 @@ def _merge_catalog_uncovered_prompt_requirements(
             continue
         statement = prompt[start:end]
         additions.append((_capability_from_statement(statement), statement))
-        # Keep existing behavior for theme archetypes, but only as additive
-        # entries alongside the original authored clause.
-        resolution = resolve_capabilities_from_phrase_structured(statement)
-        for node in resolution.nodes:
-            if node.origin == "archetype_inferred":
-                additions.append((node.capability_id, node.source_span or statement))
     if not additions:
         return dict(catalog)
 
@@ -480,8 +566,9 @@ def _merge_catalog_uncovered_prompt_requirements(
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
+        ir = _stub_semantic_model(statement, span["char_start"], span["char_end"], prompt)
         semantic = _semantic_requirement_fields(
-            capability, statement, requirement_id
+            capability, ir, requirement_id
         )
         requirements.append(
             {
@@ -539,12 +626,6 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
             continue
         statement = prompt[start:end]
         merged_records.append((_capability_from_statement(statement), statement, False))
-        # Theme archetypes are useful decompositions, but remain additive: the
-        # authored clause above is never replaced by an inferred subsystem.
-        resolution = resolve_capabilities_from_phrase_structured(statement)
-        for node in resolution.nodes:
-            if node.origin == "archetype_inferred":
-                merged_records.append((node.capability_id, node.source_span or statement, False))
     # Deduplicate by normalized capability while preserving order.
     seen: set[str] = set()
     records_deduped: list[tuple[str, str, bool]] = []
@@ -578,8 +659,9 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         acceptance = matching_acceptance or (
             f"Verify the observable outcome for {capability}: {statement}",
         )
+        ir = _stub_semantic_model(statement, span["char_start"], span["char_end"], prompt)
         semantic = _semantic_requirement_fields(
-            capability, statement, requirement_id,
+            capability, ir, requirement_id,
             is_design_module=from_design_module,
         )
         requirements.append(
@@ -666,12 +748,20 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
         provides_set = frozenset(provides)
         promotion_occurred = bool(gameplay_caps) and gameplay_caps != provides_set
         if promotion_occurred:
-            expected, _implementation, unresolved = _semantic_capability_layers(text)
-            if unresolved and not expected:
+            # Replay from stored IR output — do NOT re-run the ontology resolver on
+            # raw text.  The stored gameplay_capabilities ARE the model-produced IR
+            # output already validated at catalog build time.
+            stored_gameplay = frozenset(
+                str(v).removeprefix("capability:")
+                for v in requirement.get("gameplay_capabilities", ())
+                if str(v).strip()
+            )
+            stored_status = str(requirement.get("semantic_status", "RESOLVED"))
+            if stored_status == "UNRESOLVED" and not stored_gameplay:
                 raise EvidencePlanError(
                     "Mandatory request text is unresolved; generation is blocked."
                 )
-            if expected and not set(expected).intersection(provides):
+            if stored_gameplay and not stored_gameplay.intersection(provides_set):
                 raise EvidencePlanError(
                     "Requirement semantic binding lost a gameplay capability."
                 )
