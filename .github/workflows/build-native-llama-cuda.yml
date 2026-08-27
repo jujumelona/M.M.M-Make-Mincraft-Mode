@@ -18,10 +18,10 @@ jobs:
     container: nvidia/cuda:12.4.1-devel-ubuntu22.04
     env:
       LLAMA_SOURCE_REF: 1d2869c6e54d5003f3927a79efbca0fefa034a6d
-      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v3-max-t4
+      BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v4-immutable
       BUNDLE_PREFIX: llama-1d2869c-cuda12.4-max
       BUNDLE_ARCH: ${{ inputs.cuda_arch }}
-      RELEASE_TAG: native-llama-1d2869c-cuda12.4-max-v3
+      RELEASE_TAG: native-llama-1d2869c-cuda12.4-max-v4-immutable
     steps:
       - name: Install build and release tools
         shell: bash
@@ -33,7 +33,39 @@ jobs:
           rm -rf /var/lib/apt/lists/*
           gh --version
 
+      - name: Check immutable release generation
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="${BUNDLE_PREFIX}-sm${BUNDLE_ARCH}-linux-x86_64.tar.gz"
+          published=false
+          archive=false
+          checksum=false
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            names="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            if grep -Fxq "$asset" <<<"$names"; then archive=true; fi
+            if grep -Fxq "$asset.sha256" <<<"$names"; then checksum=true; fi
+            if [[ "$archive" != "$checksum" ]]; then
+              echo "immutable release is incomplete for SM${BUNDLE_ARCH}" >&2
+              exit 1
+            fi
+            if [[ "$archive" == true ]]; then published=true; fi
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "immutable release asset present=$published arch=SM${BUNDLE_ARCH}"
+
+      - name: Restore pinned native build cache
+        if: steps.release.outputs.published != 'true'
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp
+          key: native-llama-linux-cuda12.4-sm${{ inputs.cuda_arch }}-1d2869c-v4
+
       - name: Prepare CUDA driver stubs for link-only build
+        if: steps.release.outputs.published != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -43,10 +75,14 @@ jobs:
           test -e "$stub_dir/libcuda.so.1"
 
       - name: Build pinned native llama-server
+        if: steps.release.outputs.published != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama.cpp
+          if [[ ! -d llama.cpp/.git ]]; then
+            rm -rf llama.cpp
+            git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama.cpp
+          fi
           git -C llama.cpp fetch --depth 1 origin "$LLAMA_SOURCE_REF"
           git -C llama.cpp checkout --detach FETCH_HEAD
           test "$(git -C llama.cpp rev-parse HEAD)" = "$LLAMA_SOURCE_REF"
@@ -72,6 +108,7 @@ jobs:
           cmake --build llama.cpp/build --target llama-server -j "$(nproc)"
 
       - name: Verify native linkage contract
+        if: steps.release.outputs.published != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -93,6 +130,7 @@ jobs:
           grep -q '^GGML_LTO:BOOL=ON$' llama.cpp/build/CMakeCache.txt
 
       - name: Package one copy of each shared library
+        if: steps.release.outputs.published != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -180,14 +218,16 @@ jobs:
           (cd dist && sha256sum "$asset" > "$asset.sha256")
 
       - name: Upload workflow artifact backup
+        if: steps.release.outputs.published != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: native-llama-sm${{ inputs.cuda_arch }}
+          name: native-llama-v4-sm${{ inputs.cuda_arch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish this architecture immediately
+      - name: Publish immutable architecture asset
+        if: steps.release.outputs.published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -201,12 +241,16 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Native llama.cpp current MTP CUDA max-throughput" \
-              --notes "Verified native llama-server CUDA 12.4 max-throughput bundles. Source: ggml-org/llama.cpp 1d2869c6e54d5003f3927a79efbca0fefa034a6d (MTP draft type auto-detection). CUDA Graphs + CUB 3.2 dot path + FlashAttention + LTO." \
+              --title "Native llama.cpp immutable CUDA bundles v4" \
+              --notes "Immutable verified native llama-server CUDA 12.4 bundles. Source: ggml-org/llama.cpp 1d2869c6e54d5003f3927a79efbca0fefa034a6d. Assets are append-only; this workflow never clobbers an existing architecture asset." \
             || gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           fi
 
-          gh release upload "$RELEASE_TAG" \
+          if ! gh release upload "$RELEASE_TAG" \
             "dist/$asset" "dist/$asset.sha256" \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
+            --repo "$GITHUB_REPOSITORY"; then
+            names="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            grep -Fxq "$asset" <<<"$names"
+            grep -Fxq "$asset.sha256" <<<"$names"
+            echo "immutable asset was published by a concurrent worker; keeping existing files"
+          fi
