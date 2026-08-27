@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-"""Host-Owned Requirement Acceptance Contracts and Typed TestCase Receipts.
+"""Host-owned requirement acceptance contracts and typed testcase receipts.
 
-Transfers behavioral authority from donor self-tests to MMM Host-Owned Acceptance Contracts.
-Maps specific user requirements (REQ-CAP-001) to executable test cases, evaluating each test individually
-via structured TestCaseReceipt records.
+Host ownership alone does not prove donor behavior. A contract may only authorize
+BEHAVIOR_VERIFIED when ``implementation_bound`` is true and the generated test directly
+binds to the reused implementation. Generic host smoke tests remain useful build/runtime
+evidence but are deliberately capped below behavioral proof.
 """
 
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -38,7 +41,15 @@ class HostAcceptanceContract:
     description: str
     host_test_class: str
     host_test_method: str
-    acceptance_pattern: str
+    acceptance_pattern: str = ""
+    implementation_bound: bool = False
+
+    @property
+    def canonical_test_id(self) -> str:
+        return (
+            f"ai.minecraft.acceptance.{self.host_test_class}."
+            f"{self.host_test_method}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,10 +58,15 @@ class HostAcceptanceContract:
             "description": self.description,
             "host_test_class": self.host_test_class,
             "host_test_method": self.host_test_method,
+            "canonical_test_id": self.canonical_test_id,
             "acceptance_pattern": self.acceptance_pattern,
+            "implementation_bound": self.implementation_bound,
         }
 
 
+# These contracts currently materialize host-owned smoke tests. None directly binds a
+# donor/adapted implementation symbol yet, so implementation_bound intentionally remains
+# false. Capability-specific adapters may opt in only after generating a direct binding.
 _HOST_ACCEPTANCE_REGISTRY: dict[str, tuple[HostAcceptanceContract, ...]] = {
     "boss.entity": (
         HostAcceptanceContract("REQ-BOSS-001", "boss.entity", "Boss entity spawn and initialization", "MMM_BossSpawnAcceptanceTest", "testSpawn", "spawn|init|entity"),
@@ -80,81 +96,77 @@ _HOST_ACCEPTANCE_REGISTRY: dict[str, tuple[HostAcceptanceContract, ...]] = {
 }
 
 
-import hashlib
-from pathlib import Path
-
-
 def get_host_acceptance_contracts(capability: str) -> tuple[HostAcceptanceContract, ...]:
-    """Retrieve host-owned acceptance contracts for a given canonical capability."""
+    """Retrieve host-owned acceptance contracts for a canonical capability."""
     norm_cap = capability.strip().lower()
     return _HOST_ACCEPTANCE_REGISTRY.get(norm_cap, ())
 
 
 _CONTRACT_TEST_BODIES: dict[str, str] = {
-    "MMM_BossSpawnAcceptanceTest": """        // Real spawn & entity invariant verification
+    "MMM_BossSpawnAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         assertNotNull(this.getClass().getSimpleName(), "Boss entity test class must be loadable in JVM");
         assertTrue(this.getClass().getSimpleName().contains("Boss"), "Boss entity name verified");
 """,
-    "MMM_BossPersistenceAcceptanceTest": """        // State persistence and save/reload verification
+    "MMM_BossPersistenceAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         String testKey = "mmm_boss_state";
         String testVal = "ACTIVE_PHASE_1";
         java.util.Map<String, String> tag = new java.util.HashMap<>();
         tag.put(testKey, testVal);
         assertEquals("ACTIVE_PHASE_1", tag.get(testKey), "Boss state preserved across serialization");
 """,
-    "MMM_BossPhaseTransitionAcceptanceTest": """        // Health threshold phase transition verification
+    "MMM_BossPhaseTransitionAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         int maxHealth = 1000;
-        int currentHealth = 400; // < 50%
+        int currentHealth = 400;
         boolean isPhaseTwo = (currentHealth <= maxHealth * 0.5);
         assertTrue(isPhaseTwo, "Boss must transition to Phase 2 when health drops below 50%");
 """,
-    "MMM_BossLootAcceptanceTest": """        // Loot table emission and drop rewards verification
+    "MMM_BossLootAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         java.util.List<String> lootItems = java.util.Arrays.asList("minecraft:nether_star", "custom:boss_trophy");
         assertFalse(lootItems.isEmpty(), "Boss death must emit non-empty reward items");
         assertTrue(lootItems.contains("custom:boss_trophy"), "Boss loot table contains custom drop");
 """,
-    "MMM_BossAttackAcceptanceTest": """        // Combat attack phase orchestration
+    "MMM_BossAttackAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         int attackCooldown = 0;
         boolean canPerformSpecialAttack = (attackCooldown <= 0);
         assertTrue(canPerformSpecialAttack, "Attack phase must execute special attack on tick");
 """,
-    "MMM_BossImmunityAcceptanceTest": """        // Damage immunity gate
+    "MMM_BossImmunityAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         boolean isShieldActive = true;
         int incomingDamage = 50;
         int appliedDamage = isShieldActive ? 0 : incomingDamage;
         assertEquals(0, appliedDamage, "Immunity phase must negate incoming damage");
 """,
-    "MMM_ItemRegistryAcceptanceTest": """        // Item registry and attributes
+    "MMM_ItemRegistryAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         String registryKey = "custom:equipment_item";
         assertNotNull(registryKey, "Equipment item registered");
         assertTrue(registryKey.startsWith("custom:"), "Item namespace properly isolated");
 """,
-    "MMM_ItemDurabilityAcceptanceTest": """        // Durability decrement and breakage
+    "MMM_ItemDurabilityAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         int maxDurability = 250;
         int currentDurability = maxDurability - 1;
         assertTrue(currentDurability > 0, "Item takes damage");
         assertTrue(currentDurability < maxDurability, "Durability decreases on use");
 """,
-    "MMM_DamageCalculationAcceptanceTest": """        // Damage formula with armor reduction
+    "MMM_DamageCalculationAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         double baseDamage = 20.0;
         double armor = 10.0;
         double finalDamage = baseDamage * (1.0 - (armor / 50.0));
         assertTrue(finalDamage < baseDamage && finalDamage > 0, "Armor properly reduces combat damage");
 """,
-    "MMM_KnockbackAcceptanceTest": """        // Knockback velocity vector calculation
+    "MMM_KnockbackAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         double attackerX = 0.0, targetX = 5.0;
         double deltaX = targetX - attackerX;
         double knockbackStrength = 1.5;
         double motionX = (deltaX / 5.0) * knockbackStrength;
         assertTrue(motionX > 0.0, "Knockback propels target away from attacker");
 """,
-    "MMM_OreWorldgenAcceptanceTest": """        // Ore worldgen placement constraints
+    "MMM_OreWorldgenAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         int veinsPerChunk = 8;
         int minY = -64, maxY = 64;
         assertTrue(veinsPerChunk > 0, "Ore feature configures non-zero veins");
         assertTrue(minY < maxY, "Valid worldgen height bounds");
 """,
-    "MMM_SpellCastAcceptanceTest": """        // Spell casting invocation and mana deduction
+    "MMM_SpellCastAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         int mana = 100;
         int cost = 30;
         boolean canCast = mana >= cost;
@@ -162,7 +174,7 @@ _CONTRACT_TEST_BODIES: dict[str, str] = {
         mana -= cost;
         assertEquals(70, mana, "Mana accurately deducted after casting");
 """,
-    "MMM_SpellProjectileAcceptanceTest": """        // Spell projectile trajectory and collision
+    "MMM_SpellProjectileAcceptanceTest": """        // Host smoke invariant; not donor implementation-bound
         double velocity = 2.5;
         boolean hitTarget = true;
         assertTrue(velocity > 0.0, "Projectile has non-zero velocity");
@@ -175,7 +187,7 @@ def materialize_host_acceptance_tests(
     sandbox_path: str | Path,
     capability: str,
 ) -> tuple[dict[str, str], str]:
-    """Materialize real MMM host-owned Java acceptance test sources into the sandbox."""
+    """Materialize host-owned JVM smoke tests and return their exact source hash."""
     contracts = get_host_acceptance_contracts(capability)
     if not contracts:
         return {}, ""
@@ -192,7 +204,7 @@ def materialize_host_acceptance_tests(
         method_name = c.host_test_method
         body = _CONTRACT_TEST_BODIES.get(
             class_name,
-            f"""        // Contract: {c.requirement_id} - {c.description}
+            f"""        // Host smoke contract: {c.requirement_id} - {c.description}
         assertNotNull("{c.capability_id}", "Capability contract present");
         assertTrue("{c.description}".length() > 0, "Contract description verified");
 """,
