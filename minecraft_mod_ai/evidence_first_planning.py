@@ -24,8 +24,8 @@ _COMPONENT_ID_RE = re.compile(
 )
 _SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
 _CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:(?P<verbal_connective>면서|하며|해서|아서|어서|하고|고|며)(?=\s)|,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
-    re.IGNORECASE | re.UNICODE,
+    r"\s*(?:,|;|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
+    re.UNICODE,
 )
 _BRANCHES = (
     "needs_registry",
@@ -118,16 +118,52 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _semantic_spans(prompt: str) -> tuple[tuple[int, int], ...]:
-    """Split only at authored semantic boundaries, never by size or token budget."""
+    """Split only at authored semantic boundaries, never by size or token budget.
+
+    Newlines are first-class structural boundaries (list items, paragraph breaks).
+    Within each line, sentence-ending punctuation (.!?) further splits clauses.
+    """
     spans: list[tuple[int, int]] = []
-    for match in _SEMANTIC_BOUNDARY.finditer(prompt):
-        start, end = match.span()
-        while start < end and prompt[start].isspace():
-            start += 1
-        while end > start and prompt[end - 1].isspace():
-            end -= 1
-        if start < end:
-            spans.append((start, end))
+    # Split on newlines first, then apply sentence-boundary regex within each line.
+    line_offset = 0
+    for raw_line in re.split(r"\r?\n|\r", prompt):
+        line_start = line_offset
+        line_end = line_offset + len(raw_line)
+        line_offset = line_end + len(prompt[line_end:line_end + 1])  # skip the \n char
+        # Strip leading bullet markers (•, -, *, digits+dot) within the line.
+        stripped = re.sub(r"^[\s\-\*•▶●]+|^\s*\d+\.\s*", "", raw_line)
+        if not stripped.strip():
+            continue
+        # Apply sentence-boundary regex within the stripped content.
+        matched_any = False
+        for match in _SEMANTIC_BOUNDARY.finditer(raw_line):
+            start = line_start + match.start()
+            end = line_start + match.end()
+            # Strip leading bullet markers from each match.
+            inner = raw_line[match.start():match.end()]
+            inner_stripped = re.sub(r"^[\s\-\*•▶●]+|^\s*\d+\.\s*", "", inner)
+            if not inner_stripped.strip():
+                continue
+            offset_into_match = len(inner) - len(inner.lstrip()) + (len(inner.lstrip()) - len(inner_stripped.lstrip()))
+            start += offset_into_match
+            while start < end and prompt[start].isspace():
+                start += 1
+            while end > start and prompt[end - 1].isspace():
+                end -= 1
+            if start < end:
+                spans.append((start, end))
+                matched_any = True
+        if not matched_any and stripped.strip():
+            # No sentence boundary found — treat the whole line as one span.
+            s = line_start + len(raw_line) - len(raw_line.lstrip())
+            # Strip bullet prefix.
+            raw_stripped = re.sub(r"^[\s\-\*•▶●]+|^\s*\d+\.\s*", "", raw_line.lstrip())
+            s = line_start + (len(raw_line) - len(raw_line.lstrip())) + (len(raw_line.lstrip()) - len(raw_stripped))
+            e = line_start + len(raw_line.rstrip())
+            while s < e and prompt[s].isspace():
+                s += 1
+            if s < e:
+                spans.append((s, e))
     if not spans and prompt.strip():
         spans.append((len(prompt) - len(prompt.lstrip()), len(prompt.rstrip())))
     return tuple(spans)
@@ -140,10 +176,6 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
         cursor = sentence_start
         for separator in _CLAUSE_SEPARATOR.finditer(prompt, sentence_start, sentence_end):
             left, right = cursor, separator.start()
-            # Keep a verbal connective (e.g. "캐고", "하며") with the preceding
-            # authored clause — its verb is semantic evidence, not punctuation.
-            if separator.group("verbal_connective") is not None:
-                right = separator.end("verbal_connective")
             while left < right and prompt[left].isspace():
                 left += 1
             while right > left and prompt[right - 1].isspace():

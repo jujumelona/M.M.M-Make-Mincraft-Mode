@@ -747,17 +747,7 @@ _KOREAN_PARTICLES = (
 )
 
 _CLAUSE_SPLIT = re.compile(
-    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014|\.|\n|\r)\s*",
-    re.IGNORECASE | re.UNICODE,
-)
-
-# Korean often joins independent actions without punctuation ("캐고 돈을 벌어서
-# 거래하고").  Treat the connective as the end of the preceding clause while
-# preserving it in that clause for semantic resolution.  It is intentionally
-# restricted to a connective followed by whitespace, so identifiers and ordinary
-# Korean compounds are not split by a heuristic token budget.
-_KOREAN_ACTION_CONNECTIVE = re.compile(
-    r"(?:면서|하며|해서|아서|어서|하고|고|며)(?=\s)",
+    r"\s*(?:,|;|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014|\n|\r)\s*",
     re.UNICODE,
 )
 
@@ -813,21 +803,19 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
         )
         return CapabilityResolution(nodes=(default_node,), edges=(), unresolved_spans=())
 
-    ignored = {
-        "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
-        "minecraft", "mod", "with", "to", "for", "that", "and", "or", "all", "every",
-        "그리고", "또한", "및", "추가", "만들어", "만들고", "만든다", "만들기", "구현", "모드", "시스템", "해줘", "넣어줘",
-        "모두", "점점", "등", "해야해", "하게해줘", "부터", "까지",
-    }
+    # No language-specific tokens are silently dropped.  The ontology is a
+    # canonicalization / alias / dependency-expansion layer only — it must not
+    # make semantic decisions about which words to ignore.  Tokens absent from
+    # the alias map produce unresolved: IDs, which the Semantic Model layer
+    # resolves.  An empty ignored set ensures all scripts are treated equally.
+    ignored: frozenset[str] = frozenset()
 
-    # Clause-based separation.  Keep Korean connective suffixes in the preceding
-    # source span so aliases such as "캐고" and "벌어서" remain observable.
-    normalized_for_clauses = _KOREAN_ACTION_CONNECTIVE.sub(
-        lambda match: match.group(0) + "\n", clean
-    )
+    # Split only on language-neutral structural delimiters (comma, semicolon,
+    # arrows, bullets, newline).  Natural-language conjunctions ("and", "그리고",
+    # "면서", …) are NOT split points — that is the Semantic Model's job.
     raw_clauses = [
         clause.strip()
-        for clause in _CLAUSE_SPLIT.split(normalized_for_clauses)
+        for clause in _CLAUSE_SPLIT.split(clean)
         if clause.strip()
     ]
     if not raw_clauses:

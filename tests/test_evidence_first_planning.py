@@ -73,7 +73,7 @@ def test_prompt_only_catalog_preserves_each_authored_requirement_clause() -> Non
     assert [item["source_span"]["text"] for item in catalog["requirements"]] == [
         "Add a machine with saved state",
         "synced packets",
-        "a screen.",
+        "and a screen.",  # 'and' is no longer a split point — only comma is structural
     ]
 
 
