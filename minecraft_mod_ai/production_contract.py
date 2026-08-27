@@ -93,14 +93,15 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     acceptance_catalog: list[dict[str, str]] = []
     used_acceptance_statements: set[str] = set()
     for index, statement in enumerate(input_acceptance):
-        acceptance_catalog.append({'acceptance_ref': f'acceptance:input:{index:08d}', 'origin': 'input', 'statement': statement})
+        _validate_public_acceptance(statement)
+        acceptance_catalog.append({'acceptance_ref': f'acceptance:input:{index:08d}', 'origin': 'input', 'visibility': 'public', 'statement': statement})
         used_acceptance_statements.add(statement)
     dimension_acceptance: dict[str, str] = {}
     for dimension_id in active_dimensions:
         statement = str(_DIMENSIONS[dimension_id]['acceptance'])
         statement = _unique_acceptance_statement(f'[{dimension_id}] {statement}', used_acceptance_statements)
         ref = f'acceptance:quality:{dimension_id}'
-        acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'quality', 'statement': statement})
+        acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'quality', 'visibility': 'internal', 'statement': statement})
         used_acceptance_statements.add(statement)
         dimension_acceptance[dimension_id] = ref
     requirement_acceptance: dict[str, str] = {}
@@ -112,7 +113,8 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         else:
             statement = f"[{requirement_ref}] Demonstrate observable behavior or output satisfying: {requirement['statement']}"
         statement = _unique_acceptance_statement(statement, used_acceptance_statements)
-        acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'requirement', 'statement': statement})
+        _validate_public_acceptance(statement)
+        acceptance_catalog.append({'acceptance_ref': ref, 'origin': 'requirement', 'visibility': 'public', 'statement': statement})
         used_acceptance_statements.add(statement)
         requirement_acceptance[requirement_ref] = ref
     quality_catalog: list[dict[str, Any]] = []
@@ -158,7 +160,11 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         group_ref = 'coverage:' + requirement_ref
         requirement['coverage_group_ref'] = group_ref
         coverage_groups.append({'group_ref': group_ref, 'requirement_ref': requirement_ref, 'implementation_catalog_ref': 'catalog:implementations', 'implementation_refs': direct_implementations, 'acceptance_catalog_ref': 'catalog:acceptance', 'acceptance_refs': [requirement_acceptance[requirement_ref], *matched_input_tests], 'quality_dimension_refs': quality_refs, 'evidence_route_refs': ['evidence:' + value.removeprefix('quality:') for value in quality_refs]})
-    acceptance_tuple = tuple(entry['statement'] for entry in acceptance_catalog)
+    acceptance_tuple = tuple(
+        entry['statement']
+        for entry in acceptance_catalog
+        if entry['visibility'] == 'public'
+    )
     source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets), 'evidence_plan_sha256': '' if normalized_evidence_plan is None else str(normalized_evidence_plan['plan_sha256'])}
     contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': max((len(item['implementation_refs']) for item in coverage_groups), default=0)}, 'contract_sha256': ''}
     contract['contract_sha256'] = _hash_without_field(contract, 'contract_sha256')
@@ -231,15 +237,33 @@ def validate_production_contract(
             raise ProductionContractError(f'invalid requirement source: {ref}')
         _nonempty_string(item['source_ref'], 'requirement source_ref')
         _nonempty_string(item['statement'], 'requirement statement')
-        expected_requirement_digest = hashlib.sha256(_canonical_json({'source': item['source'], 'source_ref': item['source_ref'], 'statement': item['statement']}).encode('utf-8')).hexdigest()
-        if ref != f'requirement:{expected_requirement_digest}':
-            raise ProductionContractError(f'requirement ref does not match content: {ref}')
+        if normalized_evidence_plan is not None:
+            prefix = 'evidence_plan:'
+            source_ref = str(item['source_ref'])
+            if item['source'] != 'evidence_plan' or not source_ref.startswith(prefix):
+                raise ProductionContractError(
+                    f'evidence-mode requirement has invalid source binding: {ref}'
+                )
+            if ref != source_ref[len(prefix):]:
+                raise ProductionContractError(
+                    f'evidence requirement ID was rewritten: {ref}'
+                )
+        else:
+            expected_requirement_digest = hashlib.sha256(_canonical_json({'source': item['source'], 'source_ref': item['source_ref'], 'statement': item['statement']}).encode('utf-8')).hexdigest()
+            if ref != f'requirement:{expected_requirement_digest}':
+                raise ProductionContractError(f'requirement ref does not match content: {ref}')
         group_by_requirement[ref] = _nonempty_string(item['coverage_group_ref'], 'coverage_group_ref')
     root_requirements = [item for item in requirements if item['source'] == 'requested_prompt']
-    if len(root_requirements) != 1:
-        raise ProductionContractError('exactly one original request requirement is required')
-    if root_requirements[0]['statement'] != contract['requested_prompt']:
-        raise ProductionContractError('original request requirement was changed')
+    if normalized_evidence_plan is not None:
+        if root_requirements:
+            raise ProductionContractError(
+                'evidence mode must not create a second whole-request requirement'
+            )
+    else:
+        if len(root_requirements) != 1:
+            raise ProductionContractError('exactly one original request requirement is required')
+        if root_requirements[0]['statement'] != contract['requested_prompt']:
+            raise ProductionContractError('original request requirement was changed')
     if normalized_evidence_plan is not None:
         expected_requirements = _compile_evidence_requirements(
             str(contract['requested_prompt']), normalized_evidence_plan
@@ -369,18 +393,27 @@ def validate_production_contract(
     acceptance_refs: set[str] = set()
     catalog_acceptance: list[str] = []
     for item in acceptances:
-        _require_exact_keys(item, {'acceptance_ref', 'origin', 'statement'}, 'acceptance entry')
+        _require_exact_keys(item, {'acceptance_ref', 'origin', 'visibility', 'statement'}, 'acceptance entry')
         ref = _nonempty_string(item['acceptance_ref'], 'acceptance_ref')
         if ref in acceptance_refs:
             raise ProductionContractError(f'duplicate acceptance ref: {ref}')
         acceptance_refs.add(ref)
         if item['origin'] not in {'input', 'quality', 'requirement'}:
             raise ProductionContractError(f'invalid acceptance origin: {ref}')
+        if item['visibility'] not in {'public', 'internal'}:
+            raise ProductionContractError(f'invalid acceptance visibility: {ref}')
+        if item['origin'] == 'quality' and item['visibility'] != 'internal':
+            raise ProductionContractError(f'quality acceptance must remain internal: {ref}')
+        if item['origin'] != 'quality' and item['visibility'] != 'public':
+            raise ProductionContractError(f'non-quality acceptance must be public: {ref}')
         if item['origin'] == 'quality' and not ref.startswith('acceptance:quality:'):
             raise ProductionContractError(f'invalid quality acceptance ref: {ref}')
-        if item['origin'] == 'requirement' and not ref.startswith('acceptance:requirement:'):
+        if item['origin'] == 'requirement' and not ref.startswith('acceptance:'):
             raise ProductionContractError(f'invalid requirement acceptance ref: {ref}')
-        catalog_acceptance.append(_nonempty_string(item['statement'], 'acceptance statement'))
+        statement = _nonempty_string(item['statement'], 'acceptance statement')
+        if item['visibility'] == 'public':
+            _validate_public_acceptance(statement)
+            catalog_acceptance.append(statement)
     external_acceptance = list(acceptance_tests)
     if catalog_acceptance != external_acceptance:
         raise ProductionContractError('acceptance catalog does not match proposal acceptance tests')
@@ -592,29 +625,35 @@ def _compile_evidence_requirements(
     requested_prompt: str,
     evidence_plan: Mapping[str, Any],
 ) -> list[dict[str, str]]:
-    """Bind the production catalog to host-atomized evidence requirements.
+    """Project the approved evidence graph without inventing new identities.
 
-    The whole request remains a root scope record.  Every independently accepted
-    requirement is then represented by its immutable evidence-plan identifier so
-    coverage can point to the exact retained component or semantic task instead of
-    a token-overlap fallback.
+    ``requested_prompt`` is already bound by ``source_bindings`` and by every
+    requirement's exact source receipt.  Treating it as another requirement would
+    add a synthetic eighth requirement to a seven-node request graph, so evidence
+    mode preserves each original ``requirement_id`` verbatim and adds no root row.
     """
 
-    raw: list[tuple[str, str, str]] = [
-        ('requested_prompt', 'request:$', requested_prompt)
-    ]
+    if not requested_prompt.strip():
+        raise ProductionContractError('requested prompt is empty')
     request_catalog = evidence_plan.get('request_catalog')
     if not isinstance(request_catalog, Mapping):
         raise ProductionContractError('evidence plan request catalog is missing')
     requirements = request_catalog.get('requirements')
     if not isinstance(requirements, list) or not requirements:
         raise ProductionContractError('evidence plan has no request requirements')
+    compiled: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
     for requirement in requirements:
         if not isinstance(requirement, Mapping):
             raise ProductionContractError('evidence requirement must be an object')
         requirement_id = _nonempty_string(
             requirement.get('requirement_id'), 'evidence requirement ID'
         )
+        if requirement_id in seen_ids:
+            raise ProductionContractError(
+                f'duplicate evidence requirement ID: {requirement_id}'
+            )
+        seen_ids.add(requirement_id)
         source_span = requirement.get('source_span')
         if not isinstance(source_span, Mapping):
             raise ProductionContractError(
@@ -624,26 +663,11 @@ def _compile_evidence_requirements(
             source_span.get('text') or requirement.get('capability'),
             f'evidence requirement statement: {requirement_id}',
         )
-        raw.append(
-            ('evidence_plan', f'evidence_plan:{requirement_id}', statement)
-        )
-
-    compiled: list[dict[str, str]] = []
-    for source, source_ref, statement in raw:
-        digest = hashlib.sha256(
-            _canonical_json(
-                {
-                    'source': source,
-                    'source_ref': source_ref,
-                    'statement': statement,
-                }
-            ).encode('utf-8')
-        ).hexdigest()
         compiled.append(
             {
-                'requirement_ref': f'requirement:{digest}',
-                'source': source,
-                'source_ref': source_ref,
+                'requirement_ref': requirement_id,
+                'source': 'evidence_plan',
+                'source_ref': f'evidence_plan:{requirement_id}',
                 'statement': statement,
                 'coverage_group_ref': '',
             }
@@ -659,46 +683,47 @@ def _evidence_implementation_refs(
 ) -> list[str]:
     """Resolve one contract requirement to exact plan-owned implementation refs."""
 
-    if requirement.get('source') == 'requested_prompt':
-        result = ['implementation:evidence_plan']
-    else:
-        source_ref = str(requirement.get('source_ref') or '')
-        prefix = 'evidence_plan:'
-        if not source_ref.startswith(prefix):
-            raise ProductionContractError(
-                'evidence-mode requirement lacks an exact evidence-plan reference'
-            )
-        requirement_id = source_ref[len(prefix):]
-        bindings = evidence_plan.get('acceptance_release_bindings')
-        if not isinstance(bindings, list):
-            raise ProductionContractError(
-                'evidence plan acceptance bindings are missing'
-            )
-        matches = [
-            item
-            for item in bindings
-            if isinstance(item, Mapping)
-            and item.get('requirement_ref') == requirement_id
-        ]
-        if len(matches) != 1:
-            raise ProductionContractError(
-                f'evidence requirement needs exactly one release binding: {requirement_id}'
-            )
-        binding = matches[0]
-        component_refs = _require_string_list(
-            binding.get('component_refs'),
-            f'evidence component refs: {requirement_id}',
-            nonempty=False,
+    source_ref = str(requirement.get('source_ref') or '')
+    prefix = 'evidence_plan:'
+    if not source_ref.startswith(prefix):
+        raise ProductionContractError(
+            'evidence-mode requirement lacks an exact evidence-plan reference'
         )
-        task_refs = _require_string_list(
-            binding.get('task_refs'),
-            f'evidence task refs: {requirement_id}',
-            nonempty=False,
+    requirement_id = source_ref[len(prefix):]
+    if str(requirement.get('requirement_ref') or '') != requirement_id:
+        raise ProductionContractError(
+            f'evidence requirement identity drifted: {requirement_id}'
         )
-        result = [
-            *(f'implementation:retained_component:{value}' for value in component_refs),
-            *(f'implementation:module:{value}' for value in task_refs),
-        ]
+    bindings = evidence_plan.get('acceptance_release_bindings')
+    if not isinstance(bindings, list):
+        raise ProductionContractError(
+            'evidence plan acceptance bindings are missing'
+        )
+    matches = [
+        item
+        for item in bindings
+        if isinstance(item, Mapping)
+        and item.get('requirement_ref') == requirement_id
+    ]
+    if len(matches) != 1:
+        raise ProductionContractError(
+            f'evidence requirement needs exactly one release binding: {requirement_id}'
+        )
+    binding = matches[0]
+    component_refs = _require_string_list(
+        binding.get('component_refs'),
+        f'evidence component refs: {requirement_id}',
+        nonempty=False,
+    )
+    task_refs = _require_string_list(
+        binding.get('task_refs'),
+        f'evidence task refs: {requirement_id}',
+        nonempty=False,
+    )
+    result = [
+        *(f'implementation:retained_component:{value}' for value in component_refs),
+        *(f'implementation:module:{value}' for value in task_refs),
+    ]
     result = list(dict.fromkeys(result))
     if not result or not set(result) <= implementation_refs:
         raise ProductionContractError(
