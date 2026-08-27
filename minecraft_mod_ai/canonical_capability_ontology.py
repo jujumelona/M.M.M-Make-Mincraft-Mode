@@ -11,7 +11,7 @@ Single source of truth for:
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -320,6 +320,141 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         search_queries=("persistent state saved data fabric", "world nbt serialization fabric"),
         default_dependencies=(),
     ),
+
+    # Gameplay concepts used by the semantic request compiler. These stay above
+    # loader/API primitives so authored behavior is never replaced by an incidental
+    # implementation detail such as ``block_entity.tick``.
+    "resource.mining": CapabilityDefinition(
+        id="resource.mining",
+        category="resource",
+        description="Mine resources and award the resulting drops to the player",
+        search_queries=("minecraft resource mining mechanic", "custom mining drops mod"),
+        default_dependencies=("inventory.transfer",),
+    ),
+    "economy.reward": CapabilityDefinition(
+        id="economy.reward",
+        category="economy",
+        description="Award currency for completed gameplay actions",
+        search_queries=("minecraft currency reward system", "economy action rewards mod"),
+        default_dependencies=("economy.currency",),
+    ),
+    "economy.trade": CapabilityDefinition(
+        id="economy.trade",
+        category="economy",
+        description="Buy and sell goods through validated shop transactions",
+        search_queries=("minecraft shop trade transaction mod", "player shop economy fabric"),
+        default_dependencies=(
+            "economy.currency",
+            "ui.shop",
+            "network.transaction",
+            "persistence.balance",
+        ),
+    ),
+    "ui.shop": CapabilityDefinition(
+        id="ui.shop",
+        category="ui",
+        description="Player-facing shop inventory and trade interaction",
+        search_queries=("minecraft shop menu screen mod", "fabric custom shop ui"),
+        default_dependencies=("ui.menu", "network.transaction"),
+    ),
+    "network.transaction": CapabilityDefinition(
+        id="network.transaction",
+        category="network",
+        description="Server-authoritative transaction request and response protocol",
+        search_queries=("fabric transaction packet validation",),
+        default_dependencies=("network.action_sync",),
+    ),
+    "persistence.balance": CapabilityDefinition(
+        id="persistence.balance",
+        category="storage",
+        description="Persistent player currency balance and transaction ledger",
+        search_queries=("minecraft persistent player balance",),
+        default_dependencies=("persistence.state_store",),
+    ),
+    "spaceship.component_crafting": CapabilityDefinition(
+        id="spaceship.component_crafting",
+        category="crafting",
+        description="Craft functional spaceship components from gathered resources",
+        search_queries=("minecraft spaceship component crafting mod",),
+        default_dependencies=("crafting.recipe",),
+    ),
+    "spaceship.vehicle": CapabilityDefinition(
+        id="spaceship.vehicle",
+        category="transport",
+        description="A player-operated spaceship used for travel between destinations",
+        search_queries=("minecraft controllable spaceship vehicle mod",),
+        default_dependencies=("entity.vehicle", "network.action_sync"),
+    ),
+    "crafting.recipe": CapabilityDefinition(
+        id="crafting.recipe",
+        category="crafting",
+        description="Validated data-driven crafting recipes",
+        search_queries=("minecraft custom crafting recipe fabric",),
+        default_dependencies=(),
+    ),
+    "crew.npc": CapabilityDefinition(
+        id="crew.npc",
+        category="entity",
+        description="Crew non-player characters with persistent identity",
+        search_queries=("minecraft recruitable crew npc mod",),
+        default_dependencies=("entity.lifecycle",),
+    ),
+    "crew.recruitment": CapabilityDefinition(
+        id="crew.recruitment",
+        category="progression",
+        description="Recruit, retain, and manage a spaceship crew",
+        search_queries=("minecraft npc recruitment system",),
+        default_dependencies=("crew.npc", "persistence.state_store"),
+    ),
+    "space.travel": CapabilityDefinition(
+        id="space.travel",
+        category="transport",
+        description="Travel from the current world into space destinations",
+        search_queries=("minecraft space travel spaceship mod",),
+        default_dependencies=("entity.vehicle", "network.action_sync"),
+    ),
+    "worldgen.planet": CapabilityDefinition(
+        id="worldgen.planet",
+        category="worldgen",
+        description="Generate visitable planets with target-specific terrain",
+        search_queries=("minecraft planet world generation mod",),
+        default_dependencies=("worldgen.dimension",),
+    ),
+    "resource.special_ore": CapabilityDefinition(
+        id="resource.special_ore",
+        category="resource",
+        description="Spawn and mine a distinct special ore resource",
+        search_queries=("minecraft custom special ore worldgen",),
+        default_dependencies=("resource.mining", "worldgen.planet"),
+    ),
+    "alien.entity": CapabilityDefinition(
+        id="alien.entity",
+        category="entity",
+        description="Alien entities that participate in hostile encounters",
+        search_queries=("minecraft alien mob entity mod",),
+        default_dependencies=("entity.lifecycle", "combat.damage"),
+    ),
+    "combat.weapon": CapabilityDefinition(
+        id="combat.weapon",
+        category="combat",
+        description="Weapons and validated attacks used in combat encounters",
+        search_queries=("minecraft custom combat weapon mod",),
+        default_dependencies=("item.weapon", "combat.damage"),
+    ),
+    "colony.settlement": CapabilityDefinition(
+        id="colony.settlement",
+        category="progression",
+        description="Create and maintain a player colony settlement",
+        search_queries=("minecraft colony settlement building mod",),
+        default_dependencies=("colony.progression", "persistence.state_store"),
+    ),
+    "colony.progression": CapabilityDefinition(
+        id="colony.progression",
+        category="progression",
+        description="Advance colony population, buildings, and unlocks",
+        search_queries=("minecraft colony progression system",),
+        default_dependencies=("persistence.state_store",),
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -476,6 +611,47 @@ _FUNCTIONAL_ARCHETYPES: dict[str, tuple[str, ...]] = {
     "스킬": ("skill.ability", "skill.magic", "combat.damage"),
 }
 
+# Correct Unicode aliases. Older entries are intentionally retained for backward
+# compatibility with previously serialized requests that contained mojibake.
+_FUNCTIONAL_ARCHETYPES.update(
+    {
+        "광물": ("resource.mining",),
+        "채굴": ("resource.mining",),
+        "캐다": ("resource.mining",),
+        "캐고": ("resource.mining",),
+        "돈": ("economy.currency",),
+        "화폐": ("economy.currency",),
+        "벌다": ("economy.reward",),
+        "벌어": ("economy.reward",),
+        "거래": (
+            "economy.trade",
+            "economy.currency",
+            "ui.shop",
+            "network.transaction",
+            "persistence.balance",
+        ),
+        "상점": ("ui.shop", "economy.trade", "economy.currency"),
+        "우주선": ("spaceship.vehicle", "entity.vehicle", "network.action_sync"),
+        "부품": ("spaceship.component_crafting", "crafting.recipe"),
+        "선원": ("crew.npc", "crew.recruitment"),
+        "모아서": ("crew.recruitment",),
+        "우주로": ("space.travel",),
+        "나가고": ("space.travel",),
+        "행성": ("worldgen.planet",),
+        "특수": ("resource.special_ore",),
+        "외계인": ("alien.entity",),
+        "싸우고": ("combat.weapon",),
+        "식민지": ("colony.settlement", "colony.progression"),
+        "화면": ("ui.menu",),
+        "블록": ("gameplay.block",),
+        "block": ("gameplay.block",),
+        "screen": ("ui.menu",),
+        "packet": ("network.action_sync",),
+        "packets": ("network.action_sync",),
+        "saved": ("persistence.state_store",),
+    }
+)
+
 # Unified domain term mapping covering atomic, theme, and functional terms
 _CANONICAL_DOMAIN_MAP: dict[str, tuple[str, ...]] = {}
 for _k, _v in _THEME_ARCHETYPES.items():
@@ -562,9 +738,9 @@ class CapabilityResolution:
 
 
 _KOREAN_PARTICLES = (
-    "부터", "까지", "에게", "한테", "에서", "으로", "로",
+    "으로부터", "에게서", "에서는", "부터", "까지", "에게", "한테", "에서", "으로", "로",
     "에는", "에도", "에", "은", "는", "이", "가", "을", "를",
-    "와", "과", "도", "만", "의", "등", "및",
+    "와", "과", "도", "만", "의", "등", "및", "하고", "하며", "이며", "이랑", "랑",
     "시스템", "모드", "기능", "구현", "해줘", "만들어줘", "넣어줘",
     "해야해", "하게해줘",
 )
@@ -572,6 +748,16 @@ _KOREAN_PARTICLES = (
 _CLAUSE_SPLIT = re.compile(
     r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014|\.|\n|\r)\s*",
     re.IGNORECASE | re.UNICODE,
+)
+
+# Korean often joins independent actions without punctuation ("캐고 돈을 벌어서
+# 거래하고").  Treat the connective as the end of the preceding clause while
+# preserving it in that clause for semantic resolution.  It is intentionally
+# restricted to a connective followed by whitespace, so identifiers and ordinary
+# Korean compounds are not split by a heuristic token budget.
+_KOREAN_ACTION_CONNECTIVE = re.compile(
+    r"(?:면서|하며|해서|아서|어서|하고|고|며)(?=\s)",
+    re.UNICODE,
 )
 
 
@@ -629,12 +815,20 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
         "minecraft", "mod", "with", "to", "for", "that", "and", "or", "all", "every",
-        "그리고", "추가", "만들어", "만들기", "구현", "모드", "시스템", "해줘", "넣어줘",
+        "그리고", "또한", "및", "추가", "만들어", "만들고", "만든다", "만들기", "구현", "모드", "시스템", "해줘", "넣어줘",
         "모두", "점점", "등", "해야해", "하게해줘", "부터", "까지",
     }
 
-    # Clause-based separation
-    raw_clauses = [c.strip() for c in _CLAUSE_SPLIT.split(clean) if c.strip()]
+    # Clause-based separation.  Keep Korean connective suffixes in the preceding
+    # source span so aliases such as "캐고" and "벌어서" remain observable.
+    normalized_for_clauses = _KOREAN_ACTION_CONNECTIVE.sub(
+        lambda match: match.group(0) + "\n", clean
+    )
+    raw_clauses = [
+        clause.strip()
+        for clause in _CLAUSE_SPLIT.split(normalized_for_clauses)
+        if clause.strip()
+    ]
     if not raw_clauses:
         raw_clauses = [clean]
 
@@ -673,7 +867,28 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
                 elif canon_key in _FUNCTIONAL_ARCHETYPES or canon_key in _CANONICAL_DOMAIN_MAP:
                     caps = _CANONICAL_DOMAIN_MAP.get(canon_key, ())
                     for idx, cap in enumerate(caps):
-                        if cap not in seen_caps:
+                        if cap in seen_caps:
+                            # A capability may first occur as a dependency of an
+                            # earlier noun (for example, a shop) and later be
+                            # explicitly requested by an action (trade).  Preserve
+                            # the stronger authored binding instead of leaving it
+                            # permanently classified as implementation plumbing.
+                            if idx == 0:
+                                for node_index, existing in enumerate(nodes):
+                                    if (
+                                        existing.capability_id == cap
+                                        and existing.origin == "dependency_required"
+                                    ):
+                                        nodes[node_index] = replace(
+                                            existing,
+                                            source_span=word,
+                                            origin="explicit",
+                                            confidence=0.95,
+                                            is_required=True,
+                                        )
+                                        break
+                            continue
+                        else:
                             seen_caps.add(cap)
                             nodes.append(
                                 CapabilityResolutionNode(
@@ -813,4 +1028,3 @@ def capability_requirement_contracts(capability_id: str) -> tuple[CapabilityRequ
             acceptance_pattern=clean.split(".")[-1].replace("_", "|"),
         ),
     )
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,7 @@ class MinecraftRuntimeManager:
         mod_jar: str | Path,
         server_launcher: str | Path,
         eula_accepted: bool,
+        expected_mod_sha256: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if self._process_running(self.server_process) or self._process_running(
@@ -115,11 +117,23 @@ class MinecraftRuntimeManager:
             # A bad jar/launcher must not leave a reserved instance name behind.
             jar = self._existing_file(mod_jar)
             launcher = self._existing_file(server_launcher)
+            source_mod_sha256 = self._sha256_file(jar)
+            normalized_expected = self._normalize_sha256(expected_mod_sha256)
+            if normalized_expected and source_mod_sha256 != normalized_expected:
+                raise RuntimePolicyError(
+                    "Runtime mod JAR does not match the expected final artifact SHA-256."
+                )
             root = self._new_child(Path("runtime-instances") / instance_name)
             try:
                 mods = root / "mods"
                 mods.mkdir(parents=True)
-                shutil.copy2(jar, mods / jar.name)
+                installed_mod = mods / jar.name
+                shutil.copy2(jar, installed_mod)
+                installed_mod_sha256 = self._sha256_file(installed_mod)
+                if installed_mod_sha256 != source_mod_sha256:
+                    raise RuntimePolicyError(
+                        "Runtime mod JAR changed while it was copied into the instance."
+                    )
                 runtime_launcher = root / "fabric-server-launch.jar"
                 shutil.copy2(launcher, runtime_launcher)
                 (root / "eula.txt").write_text("eula=true\n", encoding="utf-8")
@@ -145,11 +159,32 @@ class MinecraftRuntimeManager:
             return {
                 "schema_version": "mmm/runtime-instance-v1",
                 "instance_root": str(root),
-                "mod_jar": str(mods / jar.name),
+                "mod_jar": str(installed_mod),
+                "source_mod_sha256": source_mod_sha256,
+                "installed_mod_sha256": installed_mod_sha256,
+                "expected_mod_sha256": normalized_expected or source_mod_sha256,
                 "server_launcher": str(runtime_launcher),
                 "minecraft_version": self.profile.minecraft_version,
                 "disposable": True,
             }
+
+    @staticmethod
+    def _normalize_sha256(value: str | None) -> str:
+        raw = str(value or "").strip().casefold()
+        if not raw:
+            return ""
+        digest = raw.removeprefix("sha256:")
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise RuntimePolicyError("Expected mod SHA-256 is invalid.")
+        return "sha256:" + digest
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return "sha256:" + digest.hexdigest()
 
     def start_server(self, timeout_seconds: int = 180) -> dict[str, Any]:
         if type(timeout_seconds) is not int or timeout_seconds < 1:

@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .artifact_dependency_graph import ArtifactDependencyGraph, ArtifactNode
+from .artifact_dependency_graph import ArtifactDependencyGraph
+from .build_model import BuildModel
 from .proof_level import ProofLevel, validate_proof_transition
 from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
 from .source_transplant import DonorSlice
@@ -218,6 +219,56 @@ def scaffold_minimal_ephemeral_workspace(
     apply_verified_scaffold(sandbox_path, target_context)
 
 
+def _dependency_receipt_value(receipt: Any, key: str, default: Any = "") -> Any:
+    if isinstance(receipt, Mapping):
+        return receipt.get(key, default)
+    return getattr(receipt, key, default)
+
+
+def _render_proof_build_model(
+    sandbox_path: Path,
+    target_context: Mapping[str, Any],
+    dependency_receipts: Sequence[Any],
+) -> None:
+    """Render the proof build through the same authoritative model as assembly."""
+
+    model = BuildModel.for_target_context(target_context)
+    for receipt in dependency_receipts:
+        if not bool(_dependency_receipt_value(receipt, "is_resolved", False)):
+            raise ValueError("Unresolved dependency cannot enter the proof build model.")
+        repository = str(_dependency_receipt_value(receipt, "repository", "")).strip()
+        coordinate = str(
+            _dependency_receipt_value(receipt, "resolved_coordinate", "")
+        ).strip()
+        if not coordinate:
+            raise ValueError("Resolved dependency receipt has no coordinate.")
+        if repository:
+            model.add_repository(repository)
+        model.add_dependency(
+            coordinate,
+            str(
+                _dependency_receipt_value(
+                    receipt,
+                    "gradle_configuration",
+                    "modImplementation"
+                    if model.target.loader == "fabric"
+                    else "implementation",
+                )
+            ),
+            sha256=str(_dependency_receipt_value(receipt, "artifact_hash", "")),
+        )
+
+    kotlin_build = sandbox_path / "build.gradle.kts"
+    if kotlin_build.exists() or kotlin_build.is_symlink():
+        kotlin_build.unlink()
+    (sandbox_path / "build.gradle").write_text(
+        model.render_gradle(
+            modid=str(target_context.get("target_modid") or "generated_mod")
+        ),
+        encoding="utf-8",
+    )
+
+
 def _compute_dependency_closed_subgraphs(
     adapted_files: Mapping[str, Any],
     donor_slice: DonorSlice,
@@ -237,30 +288,22 @@ def _compute_dependency_closed_subgraphs(
     if donor_slice.artifact_nodes:
         graph = ArtifactDependencyGraph()
         for donor_node in donor_slice.artifact_nodes:
-            if donor_node.path not in available_paths:
+            if donor_node.id not in available_paths:
                 continue
-            graph.add_node(
-                ArtifactNode(
-                    id=donor_node.path,
-                    kind=ArtifactDependencyGraph.kind_for_path(donor_node.path),
-                    rel_path=donor_node.path,
-                    symbols_defined=donor_node.declared_symbols,
-                    symbols_referenced=donor_node.referenced_symbols,
-                )
-            )
+            graph.add_node(donor_node)
         for edge in donor_slice.artifact_edges:
-            if edge.source_path in graph.nodes and edge.target_path in graph.nodes:
-                graph.add_edge(edge.source_path, edge.target_path)
+            if edge.source_id in graph.nodes and edge.target_id in graph.nodes:
+                graph.add_edge(edge.source_id, edge.target_id)
         for edge in donor_slice.unresolved_edges:
-            if edge.source_path in graph.nodes:
+            if edge.source_id in graph.nodes:
                 from .artifact_dependency_graph import UnresolvedArtifactEdge
 
                 graph.unresolved_edges.append(
                     UnresolvedArtifactEdge(
-                        source_id=edge.source_path,
-                        requested_target=edge.target_path,
+                        source_id=edge.source_id,
+                        requested_target=edge.requested_target,
                         relation=edge.relation,
-                        reason="REPOSITORY_GRAPH_UNRESOLVED",
+                        reason=edge.reason,
                     )
                 )
         return graph.compute_directional_closures()
@@ -383,7 +426,7 @@ def execute_reuse_proof(
             tests_passed=False,
             unresolved_symbols=(),
             missing_resources=tuple(
-                edge.target_path for edge in donor_slice.unresolved_edges
+                edge.requested_target for edge in donor_slice.unresolved_edges
             ),
             adaptations_applied=(),
             verified_capabilities=(),
@@ -409,7 +452,6 @@ def execute_reuse_proof(
             current_level = ProofLevel.MATERIALIZED
 
     from .dependency_resolver import (
-        inject_resolved_dependencies_into_build_gradle,
         parse_donor_build_metadata,
         resolve_dependency_for_target,
     )
@@ -443,7 +485,7 @@ def execute_reuse_proof(
     tests_passed = False
     unresolved_symbols: list[str] = list(unresolved_mandatory_deps)
     missing_resources: list[str] = [
-        edge.target_path for edge in donor_slice.unresolved_edges
+        edge.requested_target for edge in donor_slice.unresolved_edges
     ]
     all_receipts = list(adapter_receipts)
     generated_tests: dict[str, str] = {}
@@ -485,35 +527,20 @@ def execute_reuse_proof(
 
         scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
 
-        kts_file = sandbox_path / "build.gradle.kts"
-        groovy_file = sandbox_path / "build.gradle"
-        build_target = kts_file if kts_file.exists() else groovy_file
-        is_kts = kts_file.exists()
         exact_dependency_receipts = tuple(
             receipt for receipt in resolved_dependencies if receipt.is_resolved
         )
-        if exact_dependency_receipts:
-            if not build_target.exists():
-                dependency_injection_failed = True
-                reason = "DEPENDENCY_INJECTION_FAILED: target build script is missing"
-                unresolved_symbols.append(reason)
-                unresolved_mandatory_deps.append(reason)
-            else:
-                try:
-                    bg_content = build_target.read_text(encoding="utf-8")
-                    injected_bg, _was_injected = (
-                        inject_resolved_dependencies_into_build_gradle(
-                            bg_content,
-                            exact_dependency_receipts,
-                            is_kotlin_dsl=is_kts,
-                        )
-                    )
-                    build_target.write_text(injected_bg, encoding="utf-8")
-                except (OSError, RuntimeError, ValueError) as inj_err:
-                    dependency_injection_failed = True
-                    reason = f"DEPENDENCY_INJECTION_FAILED: {inj_err}"
-                    unresolved_symbols.append(reason)
-                    unresolved_mandatory_deps.append(reason)
+        try:
+            _render_proof_build_model(
+                sandbox_path,
+                target_context,
+                exact_dependency_receipts,
+            )
+        except (OSError, RuntimeError, ValueError) as inj_err:
+            dependency_injection_failed = True
+            reason = f"BUILD_MODEL_RENDER_FAILED: {inj_err}"
+            unresolved_symbols.append(reason)
+            unresolved_mandatory_deps.append(reason)
 
         for rel_path, content in adapted_files.items():
             dest = sandbox_path / rel_path
@@ -701,21 +728,11 @@ def execute_reuse_proof(
                                 destination.write_bytes(content)
                             else:
                                 destination.write_text(str(content), encoding="utf-8")
-                        if exact_dependency_receipts:
-                            sub_kts = sub_path / "build.gradle.kts"
-                            sub_groovy = sub_path / "build.gradle"
-                            sub_build = sub_kts if sub_kts.exists() else sub_groovy
-                            if not sub_build.exists():
-                                raise RuntimeError(
-                                    "subgraph target build script is missing"
-                                )
-                            sub_text = sub_build.read_text(encoding="utf-8")
-                            sub_text, _ = inject_resolved_dependencies_into_build_gradle(
-                                sub_text,
-                                exact_dependency_receipts,
-                                is_kotlin_dsl=sub_kts.exists(),
-                            )
-                            sub_build.write_text(sub_text, encoding="utf-8")
+                        _render_proof_build_model(
+                            sub_path,
+                            target_context,
+                            exact_dependency_receipts,
+                        )
                         from .reuse_build_verifier import verify_scratch_workspace_build
 
                         sub_receipt = verify_scratch_workspace_build(

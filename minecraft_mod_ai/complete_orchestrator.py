@@ -30,6 +30,14 @@ from .complete_orchestrator_support import (
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
 from .custom_module_generator import CustomModuleGenerator
 from .extended_content_generator import generate_extended_content
+from .final_artifact import (
+    FinalArtifactError,
+    build_requirement_coverage_receipt,
+    load_or_empty_reuse_manifest,
+    verify_final_mod_artifact,
+    verify_runtime_artifact_binding,
+    write_downloadable_bundle,
+)
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
 from .java_lsp import JavaLanguageService
@@ -324,8 +332,70 @@ class CompleteProductionOrchestrator:
             module_receipts.append({'schema_version': 'mmm/repair-receipt-v2', **repair})
         if build.get('status') != 'PASS':
             raise CompleteProductionError('Gradle/GameTest failed after the repair loop.')
-        self._succeed_work_node(ledger, 'build-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'build': build})
-        jar_path = _jar_path(build)
+        reported_jar = _jar_path(build)
+        try:
+            artifact_receipt = verify_final_mod_artifact(
+                project_root,
+                expected_mod_id=spec.mod_id,
+                expected_loader=spec.platform.loader,
+                expected_minecraft_version=spec.platform.minecraft_version,
+                expected_java=spec.platform.java_version,
+                expected_gradle=spec.platform.gradle,
+            ).to_dict()
+        except FinalArtifactError as exc:
+            raise CompleteProductionError(
+                f'Final generated project has no uniquely verified production JAR: {exc}'
+            ) from exc
+        jar_path = Path(str(artifact_receipt['artifact_path'])).resolve()
+        if reported_jar.resolve() != jar_path:
+            raise CompleteProductionError(
+                'Gradle build report does not identify the sole verified production JAR.'
+            )
+        successful_commands = {
+            str(item.get('name'))
+            for item in build.get('commands', ())
+            if isinstance(item, dict)
+            and item.get('exit_code') == 0
+            and item.get('timed_out', False) is False
+        }
+        if not successful_commands.intersection({'build', 'clean_build'}):
+            raise CompleteProductionError(
+                'Final project has no passing full Gradle build command receipt.'
+            )
+        build = dict(build)
+        build['artifact_receipt'] = artifact_receipt
+        build_receipt = {
+            'schema_version': 'mmm/final-build-receipt-v1',
+            'status': 'PASS',
+            'toolchain_attested': True,
+            'compile_java': 'PASS',
+            'tests': 'PASS',
+            'gradle_build': 'PASS',
+            'gametest': 'PASS' if options.run_gametest else 'NOT_REQUIRED',
+            'production_jar': 'PASS',
+            'jar_integrity': artifact_receipt['integrity'],
+            'mod_metadata': 'PASS',
+            'artifact_sha256': artifact_receipt['sha256'],
+            'artifact': artifact_receipt['artifact'],
+            'toolchain': {
+                'loader': artifact_receipt['loader'],
+                'minecraft_version': artifact_receipt['minecraft_version'],
+                'java': artifact_receipt['java'],
+                'gradle': artifact_receipt['gradle'],
+            },
+            'commands': list(build.get('commands', ())),
+        }
+        metadata_root = project_root / '.minecraft_ai'
+        metadata_root.mkdir(parents=True, exist_ok=True)
+        (metadata_root / 'artifact-receipt.json').write_text(
+            json.dumps(artifact_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
+        )
+        (metadata_root / 'build-receipt.json').write_text(
+            json.dumps(build_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
+        )
+        self._succeed_work_node(ledger, 'build-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'build': build, 'final_build_receipt': build_receipt})
         jar_validation = run_named_checkpoint(ledger, 'validate-jar', stage='validate:jar', input_value={'graph_hash': work_plan.graph_hash, 'jar_sha256': self._file_hash(jar_path)}, action=lambda: validate_jar(jar_path, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: jar_path.is_file())
         if jar_validation.get('status') != 'PASS':
             raise CompleteProductionError('Built JAR failed independent validation.')
@@ -346,10 +416,27 @@ class CompleteProductionOrchestrator:
                 launcher_copy = run_root / 'integration-inputs/fabric-server-launch.jar'
                 launcher_copy.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(launcher_source, launcher_copy)
-                prepared = runtime_manager.prepare_instance('complete-integration', mod_jar=jar_path, server_launcher=launcher_copy, eula_accepted=True)
+                prepared = runtime_manager.prepare_instance(
+                    'complete-integration',
+                    mod_jar=jar_path,
+                    server_launcher=launcher_copy,
+                    eula_accepted=True,
+                    expected_mod_sha256=str(artifact_receipt['sha256']),
+                )
                 server = runtime_manager.start_server(timeout_seconds=180)
                 client = runtime_manager.start_client() if options.run_client else None
-                runtime_receipt = {'prepared': prepared, 'server': server, 'client': client, 'server_memory_mb': memory}
+                runtime_receipt = {
+                    'schema_version': 'mmm/final-runtime-receipt-v1',
+                    'status': 'PASS',
+                    'artifact_sha256': artifact_receipt['sha256'],
+                    'prepared': prepared,
+                    'server': server,
+                    'client': client,
+                    'server_memory_mb': memory,
+                }
+                verify_runtime_artifact_binding(
+                    runtime_receipt, str(artifact_receipt['sha256'])
+                )
             else:
                 unresolved.append('runtime:not-requested')
             if options.run_mineflayer:
@@ -371,6 +458,15 @@ class CompleteProductionOrchestrator:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
                 runtime_receipt = {**(runtime_receipt or {}), 'cleanup': cleanup}
+        persisted_runtime_receipt = runtime_receipt or {
+            'schema_version': 'mmm/final-runtime-receipt-v1',
+            'status': 'NOT_REQUIRED',
+            'artifact_sha256': artifact_receipt['sha256'],
+        }
+        (metadata_root / 'runtime-receipt.json').write_text(
+            json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
+        )
         runtime_verified = not approved.external_runtime_required or (runtime_receipt is not None and playtest_receipt is not None and (visual_receipt is not None))
         if runtime_verified:
             self._succeed_work_node(ledger, 'runtime-playtest', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'NOT_REQUIRED' if not approved.external_runtime_required else 'PASS', 'runtime': runtime_receipt, 'playtest': playtest_receipt, 'visual': visual_receipt})
@@ -383,6 +479,26 @@ class CompleteProductionOrchestrator:
             unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
             self._record_quality_nodes(ledger, quality_report, allow_success=True)
         self._persist_work_evidence(project_root, ledger, work_plan)
+        contract = approved.game_design.get('_production_contract')
+        coverage_receipt = build_requirement_coverage_receipt(
+            contract=contract if isinstance(contract, dict) else None,
+            proposal_hash=approved.calculate_hash(),
+            quality_report=quality_report,
+            artifact_sha256=str(artifact_receipt['sha256']),
+            unresolved_gates=tuple(sorted(set(unresolved))),
+        )
+        (metadata_root / 'requirement-coverage.json').write_text(
+            json.dumps(coverage_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
+        )
+        reuse_manifest = load_or_empty_reuse_manifest(project_root, spec.mod_id)
+        if not (project_root / 'reuse-manifest.json').is_file() and not (
+            project_root / '.minecraft_ai/reuse-manifest.json'
+        ).is_file():
+            (metadata_root / 'reuse-manifest.json').write_text(
+                json.dumps(reuse_manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+                encoding='utf-8',
+            )
         from .mcp_tools import MMMToolService
         tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
         release_result = run_named_checkpoint(ledger, 'package-release', stage='package', input_value={'graph_hash': work_plan.graph_hash, 'proposal_hash': base.calculate_hash(), 'jar_sha256': self._file_hash(jar_path)}, action=lambda: tool_service.package_release(str(project_root), base.to_dict(), base.calculate_hash(), output_zip='releases/complete-release.zip', jar_path=str(jar_path)), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: Path(str(cached.get('release_zip', ''))).is_file())
@@ -390,13 +506,26 @@ class CompleteProductionOrchestrator:
         metadata = build_distribution_metadata(jar_path=jar_path, mod_id=spec.mod_id, version=spec.version, name=spec.mod_name, changelog=options.changelog, platform_lock=spec.platform)
         bundle = package_distribution_bundle(metadata, output_zip=run_root / 'releases/distribution-bundle.zip', source_zip=release_zip)
         distribution_receipt = {'metadata': metadata, 'bundle': bundle}
-        release_ready = not unresolved and quality_passed
+        release_ready = (
+            not unresolved
+            and quality_passed
+            and coverage_receipt.get('status') == 'PASS'
+        )
         if options.publish_provider and (not release_ready):
             raise CompleteProductionError('Publishing is blocked because required verification gates remain unresolved.')
         if options.publish_provider == 'modrinth':
             distribution_receipt['publish'] = publish_modrinth(metadata, project_id=str(options.publish_project_id))
         elif options.publish_provider == 'curseforge':
             distribution_receipt['publish'] = publish_curseforge(metadata, project_id=str(options.publish_project_id))
+        if release_ready:
+            distribution_receipt['downloadable_bundle'] = write_downloadable_bundle(
+                run_root / 'releases/final-mod-download',
+                artifact_receipt=artifact_receipt,
+                requirement_coverage=coverage_receipt,
+                reuse_manifest=reuse_manifest,
+                build_receipt=build_receipt,
+                runtime_receipt=persisted_runtime_receipt,
+            )
         if release_ready:
             self._succeed_work_node(ledger, 'package-release', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'release_zip': release_zip})
         else:

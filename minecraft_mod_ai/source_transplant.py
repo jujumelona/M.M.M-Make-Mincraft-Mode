@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import re
-from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,13 +23,21 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from .artifact_dependency_graph import (
+    ArtifactDependencyGraph,
+    ArtifactEdge,
+    ArtifactKind,
+    ArtifactNode,
+    UnresolvedArtifactEdge,
+)
+from .capability_implementation_locator import CapabilityImplementationLocator
 from .platform_catalog import PlatformAdapter
+from .repository_artifact_index import RepositoryArtifactIndex
 
 _PERMISSIVE = frozenset({
     "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
     "Unlicense", "CC0-1.0",
 })
-_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,127}")
 _TYPE_DECL = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _METHOD_DECL = re.compile(
     r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
@@ -48,43 +55,6 @@ _SNAPSHOT_INFLIGHT: dict[str, Event] = {}
 _BLOB_LOCK = Lock()
 _BLOB_CACHE: dict[tuple[str, str], bytes] = {}
 _BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
-
-
-@dataclass(frozen=True)
-class ArtifactNode:
-    path: str
-    artifact_kind: str  # "java_source" | "json_model" | "texture_png" | "loot_table" | "recipe" | "tag_json" | "mixin_config" | "access_widener" | "mod_metadata" | "gradle_build"
-    blob_sha: str
-    sha256: str
-    size_bytes: int
-    declared_symbols: tuple[str, ...] = ()
-    referenced_symbols: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "artifact_kind": self.artifact_kind,
-            "blob_sha": self.blob_sha,
-            "sha256": self.sha256,
-            "size_bytes": self.size_bytes,
-            "declared_symbols": list(self.declared_symbols),
-            "referenced_symbols": list(self.referenced_symbols),
-        }
-
-
-@dataclass(frozen=True)
-class ArtifactEdge:
-    source_path: str
-    target_path: str
-    relation: str  # "import" | "type_ref" | "model_parent" | "texture_ref" | "loot_ref" | "mixin_target" | "registry_ref" | "access_widener_ref"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source_path": self.source_path,
-            "target_path": self.target_path,
-            "relation": self.relation,
-        }
-
 
 @dataclass(frozen=True)
 class CompatibilityEvidence:
@@ -141,6 +111,62 @@ class DonorFile:
         }
 
 
+def _artifact_kind_from_dict(value: Mapping[str, Any]) -> ArtifactKind:
+    raw = str(value.get("kind") or value.get("artifact_kind") or "").strip()
+    if raw:
+        try:
+            return ArtifactKind(raw.upper())
+        except ValueError:
+            pass
+    path = str(value.get("id") or value.get("path") or "")
+    return ArtifactDependencyGraph.kind_for_path(path)
+
+
+def _artifact_node_from_dict(value: Mapping[str, Any]) -> ArtifactNode:
+    path = str(value.get("id") or value.get("path") or "")
+    return ArtifactNode(
+        id=path,
+        kind=_artifact_kind_from_dict(value),
+        namespace=str(value.get("namespace") or "common"),
+        logical_id=str(value.get("logical_id") or ""),
+        environment=str(value.get("environment") or "common"),
+        source_set=str(value.get("source_set") or "main"),
+        rel_path=str(value.get("rel_path") or path),
+        symbols_defined=tuple(
+            value.get("symbols_defined") or value.get("declared_symbols") or ()
+        ),
+        symbols_referenced=tuple(
+            value.get("symbols_referenced") or value.get("referenced_symbols") or ()
+        ),
+    )
+
+
+def _artifact_edge_from_dict(value: Mapping[str, Any]) -> ArtifactEdge:
+    return ArtifactEdge(
+        source_id=str(value.get("source_id") or value.get("source_path") or ""),
+        target_id=str(value.get("target_id") or value.get("target_path") or ""),
+        dependency_type=str(
+            value.get("dependency_type") or value.get("relation") or "reference"
+        ),
+        is_unresolved=bool(value.get("is_unresolved", False)),
+        is_mandatory=bool(value.get("is_mandatory", True)),
+    )
+
+
+def _unresolved_edge_from_dict(value: Mapping[str, Any]) -> UnresolvedArtifactEdge:
+    return UnresolvedArtifactEdge(
+        source_id=str(value.get("source_id") or value.get("source_path") or ""),
+        requested_target=str(
+            value.get("requested_target")
+            or value.get("target_id")
+            or value.get("target_path")
+            or ""
+        ),
+        relation=str(value.get("relation") or value.get("dependency_type") or "reference"),
+        reason=str(value.get("reason") or "REPOSITORY_GRAPH_UNRESOLVED"),
+    )
+
+
 @dataclass(frozen=True)
 class DonorSlice:
     capability: str
@@ -160,7 +186,7 @@ class DonorSlice:
     truncation_reason: str = ""
     artifact_nodes: tuple[ArtifactNode, ...] = ()
     artifact_edges: tuple[ArtifactEdge, ...] = ()
-    unresolved_edges: tuple[ArtifactEdge, ...] = ()
+    unresolved_edges: tuple[UnresolvedArtifactEdge, ...] = ()
     compatibility_evidence: CompatibilityEvidence | None = None
 
     @property
@@ -175,32 +201,19 @@ class DonorSlice:
     def from_dict(cls, value: Mapping[str, Any]) -> "DonorSlice":
         files = tuple(DonorFile.from_dict(f) for f in value.get("files", ()))
         artifact_nodes = tuple(
-            ArtifactNode(
-                path=str(n["path"]),
-                artifact_kind=str(n.get("artifact_kind", "java_source")),
-                blob_sha=str(n.get("blob_sha", "")),
-                sha256=str(n.get("sha256", "")),
-                size_bytes=int(n.get("size_bytes", n.get("size", 0))),
-                declared_symbols=tuple(n.get("declared_symbols", ())),
-                referenced_symbols=tuple(n.get("referenced_symbols", ())),
-            )
+            _artifact_node_from_dict(n)
             for n in value.get("artifact_nodes", ())
+            if isinstance(n, Mapping)
         )
         artifact_edges = tuple(
-            ArtifactEdge(
-                source_path=str(e["source_path"]),
-                target_path=str(e["target_path"]),
-                relation=str(e.get("relation", "import")),
-            )
+            _artifact_edge_from_dict(e)
             for e in value.get("artifact_edges", ())
+            if isinstance(e, Mapping)
         )
         unresolved_edges = tuple(
-            ArtifactEdge(
-                source_path=str(e["source_path"]),
-                target_path=str(e["target_path"]),
-                relation=str(e.get("relation", "unresolved")),
-            )
+            _unresolved_edge_from_dict(e)
             for e in value.get("unresolved_edges", ())
+            if isinstance(e, Mapping)
         )
         compat_raw = value.get("compatibility_evidence")
         compat = None
@@ -330,214 +343,115 @@ def inspect_repository_slice(
         if not java_paths:
             return None
 
-        capability_tokens = _semantic_tokens(capability)
-        ranked = sorted(
-            java_paths,
-            key=lambda path: (_path_score(path, capability_tokens), -len(path), path),
-            reverse=True,
+        tree_items = tuple(
+            {"path": path, "sha": blob_sha, "type": "blob"}
+            for path, blob_sha in blobs.items()
         )
-        seed_paths = tuple(path for path in ranked[:_MAX_SEEDS] if _path_score(path, capability_tokens) > 0)
+        index = RepositoryArtifactIndex.build_from_tree(
+            repository,
+            commit_sha,
+            tree_items,
+            blob_fetcher=lambda repo, blob_sha: _fetch_blob_bytes(
+                client, repo, blob_sha
+            ),
+        )
+        graph = index.build_dependency_graph()
+        unreadable = tuple(index.metadata.get("unreadable_artifacts") or ())
+        if unreadable:
+            # A partial repository index cannot prove a complete dependency closure.
+            return None
+
+        seed_evidence = CapabilityImplementationLocator.locate_seeds(
+            capability,
+            index,
+            max_seeds=_MAX_SEEDS,
+        )
+        seed_paths = tuple(
+            evidence.node_id
+            for evidence in seed_evidence
+            if evidence.node_id in graph.nodes
+        )
         if not seed_paths:
             return None
 
-        contents: dict[str, bytes] = {}
-        declarations: dict[str, str] = {}
-        # Building this map is only O(file-count) string work. Truncating it made
-        # dependency closure depend on tree ordering and could silently miss a class
-        # beyond the first 512 paths.
-        for path in java_paths:
-            stem = Path(path).stem
-            if stem and stem not in declarations:
-                declarations[stem] = path
-
-        pending = deque(seed_paths)
         selected: list[str] = []
         selected_set: set[str] = set()
-        total_bytes = 0
-        artifact_nodes: list[ArtifactNode] = []
-        artifact_edges: list[ArtifactEdge] = []
-        unresolved_edges: list[ArtifactEdge] = []
+        for seed_path in seed_paths:
+            if seed_path not in selected_set:
+                selected.append(seed_path)
+                selected_set.add(seed_path)
+        for closure in graph.compute_directional_closures(seed_paths):
+            for path in closure:
+                if path not in selected_set:
+                    selected.append(path)
+                    selected_set.add(path)
+
         truncation_reason = ""
-        closure_complete = True
+        if len(selected) > _MAX_CLOSURE_FILES:
+            truncation_reason = f"Exceeded MAX_CLOSURE_FILES ({_MAX_CLOSURE_FILES})"
+            selected = selected[:_MAX_CLOSURE_FILES]
+            selected_set = set(selected)
 
-        # Index resource files in repo using typed canonical identifiers and detect collisions
-        resource_index: dict[str, str] = {}
-        ambiguous_stems: set[str] = set()
-
-        for path in blobs:
-            clean_path = path.casefold()
-            resource_index[clean_path] = path
-            m = re.search(r"src/main/resources/(assets|data)/([^/]+)/([^/]+)/(.+)$", path, re.IGNORECASE)
-            if m:
-                _area, ns, category, subpath = m.group(1).casefold(), m.group(2).casefold(), m.group(3).casefold(), m.group(4).casefold()
-                subpath_stem = Path(subpath).stem.casefold()
-                resource_index[f"{ns}:{category}/{subpath}"] = path
-                resource_index[f"{ns}:{subpath}"] = path
-
-                for shorthand in (f"{ns}:{subpath_stem}", subpath_stem):
-                    if shorthand in resource_index and resource_index[shorthand] != path:
-                        ambiguous_stems.add(shorthand)
-                    else:
-                        resource_index[shorthand] = path
-
-                if category in {"models", "model"}:
-                    resource_index[f"model:{ns}:{subpath_stem}"] = path
-                    resource_index[f"model:{ns}:{subpath}"] = path
-                    resource_index[f"{ns}:item/{subpath_stem}"] = path
-                    resource_index[f"{ns}:block/{subpath_stem}"] = path
-                elif category in {"textures", "texture"}:
-                    resource_index[f"texture:{ns}:{subpath_stem}"] = path
-                    resource_index[f"texture:{ns}:{subpath}"] = path
-                    resource_index[f"{ns}:textures/{subpath_stem}"] = path
-            else:
-                stem = Path(path).stem.casefold()
-                if stem in resource_index and resource_index[stem] != path:
-                    ambiguous_stems.add(stem)
-                else:
-                    resource_index[stem] = path
-
-        while pending:
-            if len(selected) >= _MAX_CLOSURE_FILES:
-                closure_complete = False
-                truncation_reason = f"Exceeded MAX_CLOSURE_FILES ({_MAX_CLOSURE_FILES})"
-                while pending:
-                    rem = pending.popleft()
-                    unresolved_edges.append(ArtifactEdge(source_path="closure_root", target_path=rem, relation="type_ref"))
-                break
-
-            path = pending.popleft()
-            if path in selected_set:
+        contents: dict[str, bytes] = {}
+        total_bytes = 0
+        unresolved_edges: list[UnresolvedArtifactEdge] = [
+            edge
+            for edge in (*graph.unresolved_edges, *graph.ambiguous_edges)
+            if edge.source_id in selected_set
+            and (
+                edge in graph.ambiguous_edges
+                or graph.is_mandatory_unresolved(edge)
+            )
+        ]
+        for path in selected:
+            raw = index.artifact_bytes(path)
+            if raw is None:
+                unresolved_edges.append(
+                    UnresolvedArtifactEdge(
+                        source_id="closure_root",
+                        requested_target=path,
+                        relation="materialization",
+                        reason="INDEXED_ARTIFACT_BYTES_MISSING",
+                    )
+                )
                 continue
-            raw = _fetch_blob_bytes(client, repository, blobs[path])
-            if not raw or total_bytes + len(raw) > _MAX_SLICE_BYTES:
-                if total_bytes + len(raw) > _MAX_SLICE_BYTES:
-                    closure_complete = False
+            if total_bytes + len(raw) > _MAX_SLICE_BYTES:
+                if not truncation_reason:
                     truncation_reason = f"Exceeded MAX_SLICE_BYTES ({_MAX_SLICE_BYTES})"
-                    unresolved_edges.append(ArtifactEdge(source_path="closure_root", target_path=path, relation="size_overflow"))
+                unresolved_edges.append(
+                    UnresolvedArtifactEdge(
+                        source_id="closure_root",
+                        requested_target=path,
+                        relation="size_overflow",
+                        reason="MAX_SLICE_BYTES_EXCEEDED",
+                    )
+                )
                 continue
-
-            selected.append(path)
-            selected_set.add(path)
             contents[path] = raw
             total_bytes += len(raw)
 
-            text = raw.decode("utf-8", errors="replace")
-            kind = "java_source" if path.endswith(".java") else ("json_model" if path.endswith(".json") else "other")
-            local_declared = tuple(sorted(set(_TYPE_DECL.findall(text))))
-            local_referenced = tuple(sorted(set(_TOKEN.findall(text))))
-
-            artifact_nodes.append(
-                ArtifactNode(
-                    path=path,
-                    artifact_kind=kind,
-                    blob_sha=blobs[path],
-                    sha256="sha256:" + hashlib.sha256(raw).hexdigest(),
-                    size_bytes=len(raw),
-                    declared_symbols=local_declared,
-                    referenced_symbols=local_referenced[:64],
-                )
+        selected = [path for path in selected if path in contents]
+        selected_set = set(selected)
+        artifact_nodes = tuple(
+            graph.nodes[path]
+            for path in selected
+            if path in graph.nodes
+        )
+        artifact_edges = tuple(
+            ArtifactEdge(
+                source_id=source_id,
+                target_id=target_id,
+                dependency_type="reference",
             )
-
-            # Java symbol closure
-            if path.endswith(".java"):
-                for symbol in sorted(set(_TOKEN.findall(text))):
-                    dep_path = declarations.get(symbol)
-                    if dep_path:
-                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=dep_path, relation="type_ref"))
-                        if dep_path not in selected_set:
-                            pending.append(dep_path)
-
-                # Resource Identifier closure from Java code
-                for id_match in re.findall(r'"([a-z0-9_.-]+:[a-z0-9_/.-]+)"', text):
-                    parts = id_match.split(":", 1)
-                    if len(parts) == 2:
-                        ns, subpath = parts[0].casefold(), parts[1].casefold()
-                        if ns not in {"minecraft", "fabric", "forge", "neoforge", "c"}:
-                            res_name = subpath.split("/")[-1]
-                            if res_name in ambiguous_stems or f"{ns}:{res_name}" in ambiguous_stems:
-                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="ambiguous_registry_ref"))
-                                closure_complete = False
-                                if not truncation_reason:
-                                    truncation_reason = f"Ambiguous registry reference: {id_match}"
-                            else:
-                                matched_res = (
-                                    resource_index.get(id_match.casefold())
-                                    or resource_index.get(f"{ns}:{subpath}")
-                                    or resource_index.get(f"{ns}:{res_name}")
-                                    or resource_index.get(res_name)
-                                )
-                                if matched_res:
-                                    if matched_res not in selected_set:
-                                        artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_res, relation="registry_ref"))
-                                        pending.append(matched_res)
-                                else:
-                                    unresolved_edges.append(ArtifactEdge(source_path=path, target_path=id_match, relation="missing_internal_resource"))
-                                    closure_complete = False
-                                    if not truncation_reason:
-                                        truncation_reason = f"Missing internal resource: {id_match}"
-
-            # JSON model parent/texture closure
-            elif path.endswith(".json"):
-                # 1. Model Parent
-                for parent_match in re.findall(r'"parent"\s*:\s*"([^"]+)"', text):
-                    parts = parent_match.split(":", 1)
-                    ns = parts[0].casefold() if len(parts) == 2 else ""
-                    if ns not in {"minecraft", "builtin"}:
-                        sub = parts[1] if len(parts) == 2 else parent_match
-                        parent_stem = sub.split("/")[-1].casefold()
-                        if parent_stem in ambiguous_stems or f"{ns}:{parent_stem}" in ambiguous_stems:
-                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="ambiguous_model_parent"))
-                            closure_complete = False
-                            if not truncation_reason:
-                                truncation_reason = f"Ambiguous parent model reference: {parent_match}"
-                        else:
-                            matched_parent = (
-                                resource_index.get(f"model:{ns}:{parent_stem}")
-                                or resource_index.get(f"{ns}:{sub.casefold()}")
-                                or resource_index.get(parent_stem)
-                            )
-                            if matched_parent:
-                                if matched_parent not in selected_set:
-                                    artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_parent, relation="model_parent"))
-                                    pending.append(matched_parent)
-                            elif ns:
-                                unresolved_edges.append(ArtifactEdge(source_path=path, target_path=parent_match, relation="missing_model_parent"))
-                                closure_complete = False
-                                if not truncation_reason:
-                                    truncation_reason = f"Missing parent model: {parent_match}"
-
-                # 2. Textures in Model JSON
-                for tex_match in re.findall(r'"(?:layer[0-9]|texture|particle|all|top|bottom|side)"\s*:\s*"([^"]+)"', text):
-                    parts = tex_match.split(":", 1)
-                    ns = parts[0].casefold() if len(parts) == 2 else ""
-                    if ns not in {"minecraft"}:
-                        sub = parts[1] if len(parts) == 2 else tex_match
-                        tex_stem = sub.split("/")[-1].casefold()
-                        if tex_stem in ambiguous_stems or f"{ns}:{tex_stem}" in ambiguous_stems:
-                            unresolved_edges.append(ArtifactEdge(source_path=path, target_path=tex_match, relation="ambiguous_texture_ref"))
-                            closure_complete = False
-                            if not truncation_reason:
-                                truncation_reason = f"Ambiguous texture reference: {tex_match}"
-                        else:
-                            matched_tex = (
-                                resource_index.get(f"texture:{ns}:{tex_stem}")
-                                or resource_index.get(f"{ns}:{sub.casefold()}")
-                                or resource_index.get(tex_stem)
-                            )
-                            if matched_tex and matched_tex not in selected_set:
-                                artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_tex, relation="texture_ref"))
-                                pending.append(matched_tex)
-
-                # 3. Mixin JSON target classes with package resolution
-                if "mixin" in path.casefold():
-                    pkg_match = re.search(r'"package"\s*:\s*"([^"]+)"', text)
-                    pkg_prefix = (pkg_match.group(1).strip() + ".") if pkg_match else ""
-                    for mixin_class in re.findall(r'"([A-Za-z0-9_]+)"', text):
-                        full_class = f"{pkg_prefix}{mixin_class}"
-                        matched_class = declarations.get(full_class) or declarations.get(mixin_class)
-                        if matched_class and matched_class not in selected_set:
-                            artifact_edges.append(ArtifactEdge(source_path=path, target_path=matched_class, relation="mixin_target"))
-                            pending.append(matched_class)
+            for source_id in selected
+            for target_id in sorted(graph.adjacency.get(source_id, ()))
+            if target_id in selected_set
+        )
+        closure_complete = (
+            not truncation_reason
+            and not unresolved_edges
+            and graph.is_closure_complete(selected)
+        )
 
         if not selected:
             return None
@@ -560,12 +474,15 @@ def inspect_repository_slice(
                 )
             )
 
-        overlap = len({token.casefold() for token in symbols} & capability_tokens)
+        structural_seed_count = sum(
+            any(kind != "path_token_match" for kind in item.evidence_types)
+            for item in seed_evidence
+        )
         confidence = min(
             0.99,
             0.55
             + (0.25 if compatibility in {"exact", "metadata_exact"} else 0.05)
-            + min(0.15, 0.03 * overlap)
+            + min(0.15, 0.03 * structural_seed_count)
             + min(0.04, 0.01 * len(files))
             - (0.20 if not closure_complete else 0.0),
         )
@@ -595,8 +512,8 @@ def inspect_repository_slice(
             adaptation_cost=adaptation_cost,
             closure_complete=closure_complete,
             truncation_reason=truncation_reason,
-            artifact_nodes=tuple(artifact_nodes),
-            artifact_edges=tuple(artifact_edges),
+            artifact_nodes=artifact_nodes,
+            artifact_edges=artifact_edges,
             unresolved_edges=tuple(unresolved_edges),
             compatibility_evidence=ev,
         )
@@ -938,21 +855,9 @@ def _declared_dependencies(text: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _semantic_tokens(value: str) -> set[str]:
-    stop = {"minecraft", "fabric", "forge", "neoforge", "mod", "mods", "java", "system"}
-    return {
-        token.casefold()
-        for token in _TOKEN.findall(value.replace(".", " ").replace("-", " "))
-        if len(token) > 2 and token.casefold() not in stop
-    }
-
-
-def _path_score(path: str, tokens: set[str]) -> int:
-    haystack = set(_TOKEN.findall(path.replace("/", " ").replace(".", " ").casefold()))
-    return 4 * len(haystack & tokens) + sum(token in path.casefold() for token in tokens)
-
-
 __all__ = [
+    "ArtifactEdge",
+    "ArtifactNode",
     "DonorFile",
     "DonorSlice",
     "SourceTransplantError",

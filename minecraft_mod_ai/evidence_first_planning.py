@@ -24,7 +24,7 @@ _COMPONENT_ID_RE = re.compile(
 )
 _SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
 _CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
+    r"\s*(?:(?P<korean_action>면서|하며|해서|아서|어서|하고|고|며)(?=\s)|,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
     re.IGNORECASE | re.UNICODE,
 )
 _BRANCHES = (
@@ -139,6 +139,11 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
         cursor = sentence_start
         for separator in _CLAUSE_SEPARATOR.finditer(prompt, sentence_start, sentence_end):
             left, right = cursor, separator.start()
+            # Keep a Korean action connective (for example, "캐고") with the
+            # preceding authored clause.  Its verb is semantic evidence, not
+            # punctuation that can be discarded by the host parser.
+            if separator.group("korean_action") is not None:
+                right = separator.end("korean_action")
             while left < right and prompt[left].isspace():
                 left += 1
             while right > left and prompt[right - 1].isspace():
@@ -219,6 +224,70 @@ def _source_span(prompt: str, statement: str) -> dict[str, Any]:
         "char_end": end,
         "text": matched,
         "text_sha256": _sha(matched),
+    }
+
+
+def _semantic_capability_layers(
+    statement: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return gameplay roots, host-derived implementation nodes, and unknown spans.
+
+    The language model supplies descriptive content only.  The host owns the
+    Requirement -> gameplay capability -> implementation capability graph, so a
+    Minecraft API primitive can never replace an authored gameplay requirement.
+    """
+
+    resolution = resolve_capabilities_from_phrase_structured(statement)
+    gameplay = tuple(
+        dict.fromkeys(
+            node.capability_id
+            for node in resolution.nodes
+            if node.origin == "explicit"
+            and not node.capability_id.startswith("unresolved:")
+        )
+    )
+    implementation = tuple(
+        dict.fromkeys(
+            node.capability_id
+            for node in resolution.nodes
+            if node.origin == "dependency_required"
+            and not node.capability_id.startswith("unresolved:")
+        )
+    )
+    return gameplay, implementation, tuple(resolution.unresolved_spans)
+
+
+def _semantic_requirement_fields(
+    capability: str,
+    statement: str,
+    requirement_id: str,
+) -> dict[str, Any]:
+    """Build deterministic traceability fields without changing legacy English IDs."""
+
+    gameplay, implementation, unresolved = _semantic_capability_layers(statement)
+    is_korean = bool(re.search(r"[\u3131-\u318e\uac00-\ud7a3]", statement))
+    # Preserve explicit design/custom IDs verbatim.  Prompt-derived Korean clauses
+    # are the only place where the semantic compiler replaces a lossless temporary
+    # slug with the gameplay roots it can prove.
+    prompt_derived = capability == _capability_from_statement(statement)
+    selected = gameplay if is_korean and prompt_derived and gameplay else (capability,)
+    primary = selected[0]
+    artifact_tasks = tuple(
+        _stable_id(
+            "task",
+            implementation_capability,
+            {"requirement_id": requirement_id, "layer": "artifact"},
+        )
+        for implementation_capability in (*selected, *implementation)
+    )
+    return {
+        "capability": primary,
+        "provides": [_canonical_capability(item) for item in selected],
+        "gameplay_capabilities": list(selected),
+        "implementation_capabilities": list(implementation),
+        "artifact_task_ids": list(dict.fromkeys(artifact_tasks)),
+        "semantic_status": "UNRESOLVED" if unresolved and not gameplay else "RESOLVED",
+        "unresolved_spans": list(unresolved),
     }
 
 
@@ -368,14 +437,24 @@ def _merge_catalog_uncovered_prompt_requirements(
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
+        semantic = _semantic_requirement_fields(
+            capability, statement, requirement_id
+        )
         requirements.append(
             {
                 "requirement_id": requirement_id,
-                "capability": capability,
+                "capability": semantic["capability"],
                 "statement": statement,
                 "mandatory": True,
                 "source_span": span,
-                "provides": [_canonical_capability(capability)],
+                "provides": semantic["provides"],
+                "gameplay_capabilities": semantic["gameplay_capabilities"],
+                "implementation_capabilities": semantic[
+                    "implementation_capabilities"
+                ],
+                "artifact_task_ids": semantic["artifact_task_ids"],
+                "semantic_status": semantic["semantic_status"],
+                "unresolved_spans": semantic["unresolved_spans"],
                 "acceptance": list(
                     matching_acceptance
                     or (f"Verify the observable outcome for {capability}: {statement}",)
@@ -444,14 +523,24 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         acceptance = matching_acceptance or (
             f"Verify the observable outcome for {capability}: {statement}",
         )
+        semantic = _semantic_requirement_fields(
+            capability, statement, requirement_id
+        )
         requirements.append(
             {
                 "requirement_id": requirement_id,
-                "capability": capability,
+                "capability": semantic["capability"],
                 "statement": statement,
                 "mandatory": True,
                 "source_span": span,
-                "provides": [_canonical_capability(capability)],
+                "provides": semantic["provides"],
+                "gameplay_capabilities": semantic["gameplay_capabilities"],
+                "implementation_capabilities": semantic[
+                    "implementation_capabilities"
+                ],
+                "artifact_task_ids": semantic["artifact_task_ids"],
+                "semantic_status": semantic["semantic_status"],
+                "unresolved_spans": semantic["unresolved_spans"],
                 "acceptance": list(acceptance),
             }
         )
@@ -491,6 +580,38 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError("Pre-target request source span is invalid.")
         if prompt[start:end] != text or span.get("text_sha256") != _sha(text):
             raise EvidencePlanError("Pre-target request source receipt is stale.")
+        if bool(requirement.get("mandatory", True)) and requirement.get(
+            "semantic_status", "RESOLVED"
+        ) == "UNRESOLVED":
+            raise EvidencePlanError(
+                "Mandatory request text is unresolved; generation is blocked."
+            )
+        provides = tuple(
+            _canonical_capability(value).removeprefix("capability:")
+            for value in _strings(requirement.get("provides"))
+        )
+        if bool(requirement.get("mandatory", True)) and not provides:
+            raise EvidencePlanError("Mandatory request requirement has no capability.")
+        if provides and all(
+            value.startswith(("block_entity.", "packet.", "registry.", "screen."))
+            for value in provides
+        ):
+            raise EvidencePlanError(
+                "A technical implementation primitive cannot be a top-level user requirement."
+            )
+        # Korean semantic resolution has exact host-owned gameplay roots.  A
+        # catalog that drops those roots is malformed even if it still has a
+        # syntactically non-empty `provides` array.
+        if re.search(r"[\u3131-\u318e\uac00-\ud7a3]", text):
+            expected, _implementation, unresolved = _semantic_capability_layers(text)
+            if unresolved and not expected:
+                raise EvidencePlanError(
+                    "Mandatory Korean request text is unresolved; generation is blocked."
+                )
+            if expected and not set(expected).intersection(provides):
+                raise EvidencePlanError(
+                    "Requirement semantic binding lost a gameplay capability."
+                )
 
 
 def _word_overlap(left: str, right: str) -> bool:
@@ -1458,6 +1579,10 @@ def compile_evidence_first_plan(
     target_decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     request_catalog = build_request_catalog(prompt, game_design)
+    # Do not let an unresolved mandatory span or a primitive-only capability
+    # reach reuse discovery or coder generation.  Direct catalog inspection may
+    # expose unresolved work for review; production compilation may not proceed.
+    _validate_request_catalog(request_catalog, prompt=prompt)
     components = normalize_component_catalog(game_design, component_catalog)
     reuse_payload = dict(reuse_plan) if isinstance(reuse_plan, Mapping) else _reuse_payload(game_design)
     target = _target_decision(game_design, target_decision)

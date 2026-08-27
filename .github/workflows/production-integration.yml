@@ -159,6 +159,7 @@ jobs:
         run: |
           mmm execute "$MMM_COMPLETE_PROPOSAL_PATH" \
             --approve "$MMM_COMPLETE_APPROVAL_HASH" \
+            --json \
             --profile "$MMM_MODEL_PROFILE" \
             --output integration-output \
             --run-name complete-integration \
@@ -166,6 +167,20 @@ jobs:
             --accept-eula \
             ${MMM_COMPLETE_SCREENSHOT:+--screenshot "$MMM_COMPLETE_SCREENSHOT"} \
             > complete-result.json
+      - name: Verify final generated mod artifact
+        id: final_mod
+        run: |
+          python tools/verify_final_mod_artifact.py \
+            --result complete-result.json \
+            --bundle-dir integration-output/final-mod-download \
+            --require-runtime \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Upload downloadable mod and receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmm-final-mod
+          path: ${{ steps.final_mod.outputs.bundle_path }}
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

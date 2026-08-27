@@ -307,15 +307,14 @@ class GradleRunner:
 
     @staticmethod
     def _find_release_jar(project_root: Path) -> str | None:
-        candidates = [
-            path
-            for path in (project_root / "build" / "libs").glob("*.jar")
-            if not path.name.endswith(("-sources.jar", "-dev.jar"))
-        ]
-        if not candidates:
-            return None
-        candidates.sort(key=lambda path: (len(path.name), path.name))
-        return str(candidates[0].resolve())
+        from .final_artifact import FinalArtifactError, select_production_jar
+
+        try:
+            return str(select_production_jar(project_root))
+        except FinalArtifactError as exc:
+            if "found 0:" in str(exc):
+                return None
+            raise BuildRunnerError(str(exc)) from exc
 
     @staticmethod
     def _gametest_report(project_root: Path) -> str | None:

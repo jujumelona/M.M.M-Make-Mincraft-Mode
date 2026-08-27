@@ -16,6 +16,29 @@ from .canonical_capability_ontology import search_queries_for_capability
 from .repository_artifact_index import RepositoryArtifactIndex
 
 _TOKEN_SPLIT = re.compile(r"[._\-/ ]+")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "minecraft",
+        "fabric",
+        "forge",
+        "neoforge",
+        "mod",
+        "mods",
+        "custom",
+        "java",
+        "system",
+    }
+)
+
+
+def _tokens(value: str) -> set[str]:
+    expanded = _CAMEL_BOUNDARY.sub(" ", str(value or ""))
+    return {
+        token.casefold()
+        for token in _TOKEN_SPLIT.split(expanded)
+        if len(token) > 2 and token.casefold() not in _SEARCH_STOPWORDS
+    }
 
 
 @dataclass(frozen=True)
@@ -48,10 +71,14 @@ class CapabilityImplementationLocator:
         max_seeds: int = 8,
     ) -> tuple[CapabilitySeedEvidence, ...]:
         """Locate candidate implementation seeds using multi-evidence scoring."""
-        cap_tokens = [t.lower() for t in _TOKEN_SPLIT.split(capability) if len(t) > 2]
+        cap_tokens = _tokens(capability)
         search_terms = search_queries_for_capability(capability)
-        term_tokens = [t.lower() for query in search_terms for t in _TOKEN_SPLIT.split(query) if len(t) > 2]
-        all_tokens = set(cap_tokens + term_tokens)
+        term_tokens = {
+            token
+            for query in search_terms
+            for token in _tokens(query)
+        }
+        all_tokens = cap_tokens | term_tokens
 
         scores: dict[str, float] = {}
         ev_types: dict[str, list[str]] = {}
@@ -73,20 +100,34 @@ class CapabilityImplementationLocator:
 
         # 3. Symbol index match (+7)
         for sym, paths in index.symbol_to_paths.items():
-            sym_lower = sym.lower()
-            if any(tok == sym_lower or tok in sym_lower for tok in all_tokens):
+            symbol_tokens = _tokens(sym)
+            if symbol_tokens & all_tokens:
                 for p in paths:
                     scores[p] = scores.get(p, 0.0) + 7.0
                     ev_types.setdefault(p, []).append("symbol_declaration_match")
 
-        # 4. Resource logical ID match (+6)
+        # 4. Method declarations and API call-sites are structural body evidence.
+        # They locate implementations whose class and path names do not describe the
+        # gameplay feature (for example, an offer engine hidden in ``HandlerA``).
+        for method, paths in index.method_to_paths.items():
+            if _tokens(method) & all_tokens:
+                for path in paths:
+                    scores[path] = scores.get(path, 0.0) + 6.0
+                    ev_types.setdefault(path, []).append("method_signature_match")
+        for call, paths in index.api_call_to_paths.items():
+            if _tokens(call) & all_tokens:
+                for path in paths:
+                    scores[path] = scores.get(path, 0.0) + 4.0
+                    ev_types.setdefault(path, []).append("api_callsite_match")
+
+        # 5. Resource logical ID match (+6)
         for res_id, path in index.resource_to_path.items():
             res_lower = res_id.lower()
             if any(tok in res_lower for tok in all_tokens):
                 scores[path] = scores.get(path, 0.0) + 6.0
                 ev_types.setdefault(path, []).append("resource_dependency_match")
 
-        # 5. Path match (+2 diagnostic only)
+        # 6. Path match (+2 diagnostic only)
         for path in index.files_by_path:
             p_lower = path.lower()
             if any(tok in p_lower for tok in all_tokens):
@@ -110,5 +151,5 @@ class CapabilityImplementationLocator:
                 )
             )
 
-        ranked.sort(key=lambda s: s.score, reverse=True)
+        ranked.sort(key=lambda s: (-s.score, s.node_id))
         return tuple(ranked[:max_seeds])

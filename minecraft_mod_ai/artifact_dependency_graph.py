@@ -248,6 +248,18 @@ class ArtifactDependencyGraph:
         context = dict(target_context or {})
         self.target_modid = str(context.get("target_modid") or "").strip().casefold()
         self.target_package = str(context.get("target_package") or "").strip()
+        self.owned_namespaces = frozenset(
+            str(value).strip().casefold()
+            for value in context.get("owned_namespaces", ())
+            if str(value).strip()
+        )
+        self.owned_packages = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in context.get("owned_packages", ())
+                if str(value).strip()
+            )
+        )
 
     @property
     def edges(self) -> tuple[ArtifactEdge, ...]:
@@ -290,9 +302,17 @@ class ArtifactDependencyGraph:
         low = target.casefold()
 
         if edge.relation in {"import", "mixin_target", "entrypoint"}:
-            if self.target_package and (
-                target == self.target_package
-                or target.startswith(self.target_package + ".")
+            owned_packages = tuple(
+                dict.fromkeys(
+                    (
+                        *((self.target_package,) if self.target_package else ()),
+                        *self.owned_packages,
+                    )
+                )
+            )
+            if any(
+                target == package or target.startswith(package + ".")
+                for package in owned_packages
             ):
                 return True
             external_prefixes = (
@@ -312,9 +332,16 @@ class ArtifactDependencyGraph:
 
         if low.startswith("minecraft:"):
             return False
+        if edge.relation == "model_parent" and ":" not in low and low.startswith(
+            ("item/", "block/", "builtin/")
+        ):
+            return False
         if ":" in low:
             namespace = low.split(":", 1)[0]
-            return bool(self.target_modid and namespace == self.target_modid)
+            return namespace in (
+                self.owned_namespaces
+                | ({self.target_modid} if self.target_modid else set())
+            )
 
         if edge.relation in {
             "model_parent",
@@ -324,7 +351,7 @@ class ArtifactDependencyGraph:
             "data_ref",
             "tag_ref",
         }:
-            return bool(self.target_modid)
+            return bool(self.target_modid or self.owned_namespaces)
         return False
 
     def add_node(self, node: ArtifactNode) -> None:
@@ -349,7 +376,7 @@ class ArtifactDependencyGraph:
 
         node_set = set(node_ids)
         for edge in self.unresolved_edges:
-            if edge.source_id in node_set:
+            if edge.source_id in node_set and self.is_mandatory_unresolved(edge):
                 return False
         for edge in self.ambiguous_edges:
             if edge.source_id in node_set:
@@ -520,6 +547,14 @@ class ArtifactDependencyGraph:
                 )
                 for mod, path in re.findall(identifier_pattern, text):
                     resolve_and_link(source_id, f"{mod}:{path}", "registry")
+                for resource_id in re.findall(
+                    r'["\']([a-z0-9_.-]+:[a-z0-9_/.-]+)["\']',
+                    text,
+                ):
+                    if not resource_id.startswith(
+                        ("minecraft:", "fabric:", "forge:", "neoforge:", "c:")
+                    ):
+                        resolve_and_link(source_id, resource_id, "registry")
 
                 referenced_tokens = set(_IDENTIFIER_TOKEN.findall(text))
                 for symbol in referenced_tokens.intersection(simple_symbol_to_nodes):

@@ -12,10 +12,28 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from .artifact_dependency_graph import ArtifactDependencyGraph, ArtifactKind
+
 _PKG_RE = re.compile(r"(?m)^\s*package\s+([A-Za-z0-9_.]+)\s*;")
 _CLASS_RE = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _REGISTRY_CALL_RE = re.compile(r'Registry\.[A-Za-z0-9_]+\s*\([^,]+,\s*["\']([^"\']+)["\']')
+_NAMESPACED_ID_RE = re.compile(r'["\']([a-z0-9_.-]+:[a-z0-9_/.-]+)["\']')
+_METHOD_RE = re.compile(
+    r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
+    r"[A-Za-z_$][A-Za-z0-9_$<>?,.\[\]\s]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _RESOURCE_PATH_RE = re.compile(r"^src/main/resources/(assets|data)/([^/]+)/(.+)$")
+
+
+def _is_repository_artifact(path: str) -> bool:
+    """Return whether a repository path participates in the canonical graph."""
+
+    kind = ArtifactDependencyGraph.kind_for_path(path)
+    if kind is not ArtifactKind.OTHER:
+        return True
+    normalized = path.replace("\\", "/").casefold()
+    return normalized.startswith(("src/main/", "src/client/", "src/server/"))
 
 
 @dataclass
@@ -27,9 +45,14 @@ class RepositoryArtifactIndex:
     symbol_to_paths: dict[str, list[str]] = field(default_factory=dict)
     registry_to_path: dict[str, str] = field(default_factory=dict)
     resource_to_path: dict[str, str] = field(default_factory=dict)
+    declared_symbols_by_path: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    method_to_paths: dict[str, list[str]] = field(default_factory=dict)
+    api_call_to_paths: dict[str, list[str]] = field(default_factory=dict)
+    text_by_path: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     _blob_fetcher: Callable[[str, str], bytes] | None = None
     _blob_cache: dict[str, bytes] = field(default_factory=dict)
+    _dependency_graph: ArtifactDependencyGraph | None = None
 
     @classmethod
     def build_from_tree(
@@ -87,16 +110,106 @@ class RepositoryArtifactIndex:
 
     def populate_java_symbols(self, path: str, content: str) -> None:
         """Parse package and class declarations from a Java/Kotlin file."""
+        self.text_by_path[path] = content
         pkg_match = _PKG_RE.search(content)
         pkg = pkg_match.group(1) if pkg_match else ""
+        declared: list[str] = []
         for m in _CLASS_RE.finditer(content):
             cls_name = m.group(1)
             fqcn = f"{pkg}.{cls_name}" if pkg else cls_name
             self.fqcn_to_path[fqcn] = path
+            declared.extend((fqcn, cls_name))
             paths = self.symbol_to_paths.setdefault(cls_name, [])
+            if path not in paths:
+                paths.append(path)
+
+        self.declared_symbols_by_path[path] = tuple(dict.fromkeys(declared))
+
+        for method in _METHOD_RE.findall(content):
+            paths = self.method_to_paths.setdefault(method, [])
+            if path not in paths:
+                paths.append(path)
+
+        for call in _CALL_RE.findall(content):
+            paths = self.api_call_to_paths.setdefault(call, [])
             if path not in paths:
                 paths.append(path)
 
         for m_reg in _REGISTRY_CALL_RE.finditer(content):
             reg_id = m_reg.group(1)
             self.registry_to_path[reg_id] = path
+        for reg_id in _NAMESPACED_ID_RE.findall(content):
+            self.registry_to_path.setdefault(reg_id, path)
+
+    def build_dependency_graph(
+        self,
+        *,
+        target_context: Mapping[str, Any] | None = None,
+    ) -> ArtifactDependencyGraph:
+        """Materialize every relevant repository artifact and build one graph.
+
+        Seed selection is intentionally downstream of this method. This prevents a
+        filename shortlist from deciding which source bodies are even inspected.
+        """
+
+        if self._dependency_graph is not None:
+            return self._dependency_graph
+
+        files: dict[str, bytes] = {}
+        unreadable: list[str] = []
+        for path in sorted(self.files_by_path):
+            if not _is_repository_artifact(path):
+                continue
+            raw = self.get_blob(path)
+            if raw is None:
+                unreadable.append(path)
+                continue
+            files[path] = raw
+            kind = ArtifactDependencyGraph.kind_for_path(path)
+            if kind in {ArtifactKind.JAVA_SOURCE, ArtifactKind.KOTLIN_SOURCE}:
+                self.populate_java_symbols(
+                    path,
+                    raw.decode("utf-8", errors="replace"),
+                )
+
+        self.metadata["indexed_artifact_count"] = len(files)
+        self.metadata["unreadable_artifacts"] = tuple(unreadable)
+        graph_context = dict(target_context or {})
+        graph_context.setdefault(
+            "owned_packages",
+            tuple(
+                sorted(
+                    {
+                        fqcn.rsplit(".", 1)[0]
+                        for fqcn in self.fqcn_to_path
+                        if "." in fqcn
+                    }
+                )
+            ),
+        )
+        graph_context.setdefault(
+            "owned_namespaces",
+            tuple(
+                sorted(
+                    {
+                        logical_id.split(":", 1)[0]
+                        for logical_id in self.resource_to_path
+                        if ":" in logical_id and not logical_id.startswith("src/")
+                    }
+                )
+            ),
+        )
+        graph = ArtifactDependencyGraph.build_from_files(
+            files,
+            known_symbols=self.declared_symbols_by_path,
+            target_context=graph_context,
+        )
+        self._dependency_graph = graph
+        return graph
+
+    def artifact_bytes(self, path: str) -> bytes | None:
+        """Return bytes already admitted to the repository-wide artifact index."""
+
+        if path not in self.files_by_path or not _is_repository_artifact(path):
+            return None
+        return self.get_blob(path)

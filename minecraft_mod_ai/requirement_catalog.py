@@ -3,7 +3,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .canonical_capability_ontology import CapabilityResolution, resolve_capabilities_from_phrase_structured
+from .canonical_capability_ontology import (
+    CapabilityResolution,
+    resolve_capabilities_from_phrase_structured,
+)
+
+
+_IMPLEMENTATION_PRIMITIVE_PREFIXES = (
+    "block_entity.",
+    "packet.",
+    "registry.",
+    "screen.",
+)
+_KOREAN_ACTION_CONNECTIVE = re.compile(
+    r"(?:면서|하며|해서|아서|어서|하고|고|며)(?=\s)",
+    re.UNICODE,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +31,8 @@ class RequirementSpec:
     provides: tuple[str, ...] = ()
     confidence: float = 1.0
     status: str = "RESOLVED"  # "RESOLVED" | "UNRESOLVED"
+    gameplay_capabilities: tuple[str, ...] = ()
+    implementation_capabilities: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -27,6 +44,10 @@ class RequirementSpec:
             "provides": list(self.provides),
             "confidence": self.confidence,
             "status": self.status,
+            "gameplay_capabilities": list(
+                self.gameplay_capabilities or self.provides
+            ),
+            "implementation_capabilities": list(self.implementation_capabilities),
         }
 
 
@@ -76,6 +97,64 @@ class RequirementCatalog:
                 violations.append(f"Requirement {req.id} ({req.statement!r}) is mandatory but has 0 bound capabilities")
         return len(violations) == 0, violations
 
+    def validate_semantic_bindings(
+        self,
+        *,
+        prompt: str | None = None,
+    ) -> tuple[bool, list[str]]:
+        """Reject technical primitives posing as user-facing requirements.
+
+        Coverage alone only proves that a row has *some* capability.  This pass
+        requires a gameplay-level binding for every mandatory source span and
+        rejects a whole multi-action prompt collapsed onto one implementation API.
+        Unknown mandatory text remains explicitly unresolved; callers can use
+        ``generation_ready`` to prevent code generation from starting.
+        """
+
+        violations: list[str] = []
+        if prompt and len(self.get_mandatory_requirements()) == 1:
+            clauses = _split_into_semantic_clauses(prompt)
+            if len(clauses) > 1:
+                violations.append("COMPOSITE_PROMPT_COLLAPSED_TO_ONE_REQUIREMENT")
+        for requirement in self.get_mandatory_requirements():
+            if requirement.status == "UNRESOLVED":
+                violations.append(f"MANDATORY_UNRESOLVED: {requirement.id}")
+                continue
+            gameplay = tuple(
+                capability
+                for capability in (
+                    requirement.gameplay_capabilities or requirement.provides
+                )
+                if not capability.casefold().startswith(
+                    _IMPLEMENTATION_PRIMITIVE_PREFIXES
+                )
+            )
+            if not gameplay:
+                violations.append(
+                    f"GAMEPLAY_CAPABILITY_REQUIRED: {requirement.id}"
+                )
+                continue
+            resolved = resolve_capabilities_from_phrase_structured(
+                requirement.original_span or requirement.statement
+            )
+            expected = {
+                node.capability_id
+                for node in resolved.nodes
+                if node.origin == "explicit"
+                and not node.capability_id.startswith("unresolved:")
+            }
+            if expected and not expected.intersection(gameplay):
+                violations.append(
+                    f"SEMANTIC_CAPABILITY_LOST: {requirement.id}"
+                )
+        return not violations, violations
+
+    @property
+    def generation_ready(self) -> bool:
+        covered, _ = self.validate_coverage_invariants()
+        semantic, _ = self.validate_semantic_bindings()
+        return covered and semantic
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "requirements": [r.to_dict() for r in self.requirements],
@@ -100,7 +179,15 @@ def _split_into_semantic_clauses(text: str) -> list[str]:
     )
 
     for line in lines:
-        parts = [p.strip() for p in pattern.split(line) if p.strip()]
+        line = _KOREAN_ACTION_CONNECTIVE.sub(
+            lambda match: match.group(0) + "\n", line
+        )
+        parts = [
+            part.strip()
+            for unbroken in line.splitlines()
+            for part in pattern.split(unbroken)
+            if part.strip()
+        ]
         if parts:
             clauses.extend(parts)
         else:
@@ -175,6 +262,16 @@ def build_requirement_catalog(
                 provides=tuple(provides),
                 confidence=float(r.get("confidence", 1.0)),
                 status="RESOLVED" if provides else "UNRESOLVED",
+                gameplay_capabilities=tuple(
+                    str(value)
+                    for value in r.get("gameplay_capabilities", provides)
+                    if str(value).strip()
+                ),
+                implementation_capabilities=tuple(
+                    str(value)
+                    for value in r.get("implementation_capabilities", ())
+                    if str(value).strip()
+                ),
             )
             reqs.append(req_spec)
             for c in provides:
@@ -226,6 +323,18 @@ def build_requirement_catalog(
                 mandatory=True,
                 provides=tuple(dict.fromkeys(matched)),
                 status=status,
+                gameplay_capabilities=tuple(
+                    node.capability_id
+                    for node in nodes
+                    if node.capability_id in matched
+                    and node.origin == "explicit"
+                ),
+                implementation_capabilities=tuple(
+                    node.capability_id
+                    for node in nodes
+                    if node.capability_id in matched
+                    and node.origin == "dependency_required"
+                ),
             )
             reqs.append(req_spec)
             for c in req_spec.provides:
