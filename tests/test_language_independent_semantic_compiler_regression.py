@@ -12,8 +12,6 @@ These tests verify that the semantic compiler treats all UTF-8 input equally:
 
 import re
 
-import pytest
-
 from minecraft_mod_ai.canonical_capability_ontology import (
     resolve_capabilities_from_phrase_structured,
 )
