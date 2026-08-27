@@ -141,6 +141,34 @@ jobs:
               raise SystemExit("language-specific reuse handling remains")
           ast.parse(reuse)
           reuse_path.write_text(reuse, encoding="utf-8")
+
+          regression_path = Path("tests/test_canonical_capability_ontology_and_reuse_proof.py")
+          regression = regression_path.read_text(encoding="utf-8")
+          regression = regression.replace('"중세 모드"', '"medieval mod"')
+          regression = regression.replace('"중세 은행 대출 시스템"', '"medieval banking loan system"')
+          regression = regression.replace('"핵융합 발전기"', '"fusion generator"')
+          regression = regression.replace(
+              "test_unpunctuated_natural_korean_maplestory_prompt_regression",
+              "test_unpunctuated_multiroot_semantic_prompt_regression",
+          )
+          regression = regression.replace(
+              'prompt = "메이플스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"',
+              'prompt = "Create an RPG mod with common mobs bosses equipment leveling and item upgrades"',
+          )
+          regression = "".join(
+              line
+              for line in regression.splitlines(keepends=True)
+              if not (line.lstrip().startswith("#") and HANGUL.search(line))
+          )
+          if HANGUL.search(regression):
+              leftovers = [
+                  f"{i}: {line}"
+                  for i, line in enumerate(regression.splitlines(), 1)
+                  if HANGUL.search(line)
+              ]
+              raise SystemExit("language-specific regression text remains:\n" + "\n".join(leftovers[:30]))
+          ast.parse(regression)
+          regression_path.write_text(regression, encoding="utf-8")
           PY
 
           python -m compileall -q minecraft_mod_ai
@@ -153,7 +181,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add minecraft_mod_ai/canonical_capability_ontology.py minecraft_mod_ai/reuse_planner.py
+          git add \
+            minecraft_mod_ai/canonical_capability_ontology.py \
+            minecraft_mod_ai/reuse_planner.py \
+            tests/test_canonical_capability_ontology_and_reuse_proof.py
           git rm .github/workflows/semantic-language-cleanup.yml
           git commit -m "refactor: remove language-specific semantic handling"
           git push origin HEAD:main
