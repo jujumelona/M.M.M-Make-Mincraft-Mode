@@ -38,46 +38,39 @@ jobs:
                   remove.update(range(start - 1, end))
               return "".join(line for index, line in enumerate(lines) if index not in remove)
 
-          def collect_hangul_dict_entries(mapping: ast.Dict) -> list[tuple[int, int]]:
-              output: list[tuple[int, int]] = []
+          def hangul_dict_entries(mapping: ast.Dict) -> list[tuple[int, int]]:
+              ranges: list[tuple[int, int]] = []
               for key, value in zip(mapping.keys, mapping.values):
                   if (
                       isinstance(key, ast.Constant)
                       and isinstance(key.value, str)
                       and HANGUL.search(key.value)
                   ):
-                      output.append((key.lineno, value.end_lineno or value.lineno))
-              return output
+                      ranges.append((key.lineno, value.end_lineno or value.lineno))
+              return ranges
 
           ontology_path = Path("minecraft_mod_ai/canonical_capability_ontology.py")
           ontology = ontology_path.read_text(encoding="utf-8")
           tree = ast.parse(ontology)
           ranges: list[tuple[int, int]] = []
-          target_dicts = {"_THEME_ARCHETYPES", "_FUNCTIONAL_ARCHETYPES"}
-          remove_assignments = {
-              "_CHOSUNG",
-              "_JUNGSUNG",
-              "_JONGSUNG",
-              "_KOREAN_PARTICLES",
-          }
+          maps = {"_THEME_ARCHETYPES", "_FUNCTIONAL_ARCHETYPES"}
+          remove_names = {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG", "_KOREAN_PARTICLES"}
 
           for node in ast.walk(tree):
               if isinstance(node, ast.Assign):
                   names = {
-                      target.id
-                      for target in node.targets
-                      if isinstance(target, ast.Name)
+                      target.id for target in node.targets if isinstance(target, ast.Name)
                   }
-                  if names & remove_assignments:
+                  if names & remove_names:
                       ranges.append((node.lineno, node.end_lineno or node.lineno))
-                  if names & target_dicts and isinstance(node.value, ast.Dict):
-                      ranges.extend(collect_hangul_dict_entries(node.value))
+                  if names & maps and isinstance(node.value, ast.Dict):
+                      ranges.extend(hangul_dict_entries(node.value))
               elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
                   name = node.target.id
-                  if name in remove_assignments:
+                  if name in remove_names:
                       ranges.append((node.lineno, node.end_lineno or node.lineno))
-                  if name in target_dicts and isinstance(node.value, ast.Dict):
-                      ranges.extend(collect_hangul_dict_entries(node.value))
+                  if name in maps and isinstance(node.value, ast.Dict):
+                      ranges.extend(hangul_dict_entries(node.value))
               elif isinstance(node, ast.FunctionDef) and node.name == "romanize_korean_universal":
                   ranges.append((node.lineno, node.end_lineno or node.lineno))
               elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
@@ -91,7 +84,7 @@ jobs:
                       and call.args
                       and isinstance(call.args[0], ast.Dict)
                   ):
-                      ranges.extend(collect_hangul_dict_entries(call.args[0]))
+                      ranges.extend(hangul_dict_entries(call.args[0]))
 
           ontology = delete_line_ranges(ontology, ranges)
           ontology = ontology.replace(
@@ -113,12 +106,12 @@ jobs:
               ontology,
               count=1,
           )
-          ontology = ontology.replace(
-              '# Split only on language-neutral structural delimiters (comma, semicolon,\n'
-              '# arrows, bullets, newline).  Natural-language conjunctions ("and", "그리고",\n'
-              '# "면서", …) are NOT split points — that is the Semantic Model\'s job.\n',
-              '# Split only on structural delimiters. Natural-language conjunctions are\n'
-              '# Semantic Model territory and are never host-side split points.\n',
+          # Comments are documentation, not runtime semantics. Remove any remaining
+          # script-specific examples so the module itself contains no language carve-out.
+          ontology = "".join(
+              line
+              for line in ontology.splitlines(keepends=True)
+              if not (line.lstrip().startswith("#") and HANGUL.search(line))
           )
           if "romanize_korean_universal" in ontology or "_KOREAN_PARTICLES" in ontology:
               raise SystemExit("language-specific ontology helper still present after cleanup")
