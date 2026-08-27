@@ -145,8 +145,14 @@ jobs:
           regression_path = Path("tests/test_canonical_capability_ontology_and_reuse_proof.py")
           regression = regression_path.read_text(encoding="utf-8")
           regression = regression.replace('"중세 모드"', '"medieval mod"')
+          regression = regression.replace('"중세 모드 만들어줘"', '"create medieval mod"')
           regression = regression.replace('"중세 은행 대출 시스템"', '"medieval banking loan system"')
+          regression = regression.replace(
+              'assert "은행 대출" in res.unresolved_spans[0] or "eunhaeng" in res.nodes[-1].capability_id',
+              'assert "banking loan" in res.unresolved_spans[0]',
+          )
           regression = regression.replace('"핵융합 발전기"', '"fusion generator"')
+          regression = regression.replace('"핵융합 발전기 시스템"', '"fusion generator system"')
           regression = regression.replace(
               "test_unpunctuated_natural_korean_maplestory_prompt_regression",
               "test_unpunctuated_multiroot_semantic_prompt_regression",
@@ -154,6 +160,14 @@ jobs:
           regression = regression.replace(
               'prompt = "메이플스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"',
               'prompt = "Create an RPG mod with common mobs bosses equipment leveling and item upgrades"',
+          )
+          regression = regression.replace(
+              'prompt = "잡몹부터 보스까지 레벨에 따라 강해져야 한다\\n처치 시 전용 보스 전리품을 드롭한다"',
+              'prompt = "common mobs through bosses scale with level\\nbosses drop dedicated loot when defeated"',
+          )
+          regression = regression.replace(
+              'assert "잡몹부터 보스까지" in catalog.requirements[0].statement',
+              'assert "common mobs through bosses" in catalog.requirements[0].statement',
           )
           regression = "".join(
               line
