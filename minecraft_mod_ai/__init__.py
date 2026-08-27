@@ -11,6 +11,9 @@ from . import execution_feedback_replan_contract as _execution_feedback_replan_c
 from .execution_feedback_exception_scope_contract import (
     install as install_execution_feedback_exception_scope,
 )
+from .execution_feedback_owner_precision_contract import (
+    install as install_execution_feedback_owner_precision,
+)
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
@@ -28,6 +31,7 @@ from . import complete_orchestrator as _feedback_orchestrator
 from . import work_graph as _feedback_work_graph
 
 install_execution_feedback_exception_scope(_execution_feedback_replan_contract)
+install_execution_feedback_owner_precision(_execution_feedback_replan_contract)
 _execution_feedback_replan_contract.install(
     orchestrator_module=_feedback_orchestrator,
     work_graph_module=_feedback_work_graph,
