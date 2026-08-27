@@ -25,8 +25,8 @@ class _StrictSemanticRouterProxy:
     """Observe production semantic failures even if a downstream caller catches them.
 
     ``evidence_first_planning`` historically caught router/JSON failures and silently
-    substituted its deterministic stub.  That made a configured semantic model appear
-    successful while changing request meaning.  This proxy records the original model
+    substituted its deterministic stub. That made a configured semantic model appear
+    successful while changing request meaning. This proxy records the original model
     contract result so the request guard can fail closed after the legacy call returns.
     """
 
@@ -109,7 +109,6 @@ def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
             continue
 
         changed = True
-        statement = str(raw.get("statement") or "").strip()
         base_requirement_id = str(raw.get("requirement_id") or "requirement")
         for root_index, root in enumerate(roots):
             requirement_id = _evidence._stable_id(
@@ -132,8 +131,11 @@ def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
                     {"requirement_id": requirement_id, "layer": "artifact"},
                 )
             ]
+            # Raw authored text belongs in source_span/provenance, not repeated in
+            # every public acceptance criterion. Each semantic root gets a concise,
+            # independent observable contract instead.
             item["acceptance"] = [
-                f"Verify the observable outcome for {root}: {statement}"
+                f"Verify the observable player-facing behavior for capability {root}."
             ]
             expanded.append(item)
 
