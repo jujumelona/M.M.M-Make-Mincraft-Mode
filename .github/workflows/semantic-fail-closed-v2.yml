@@ -34,7 +34,7 @@ jobs:
               raise SystemExit('expected unresolved expression not found')
           text = text.replace(old, new, 1)
           old = '''    except Exception:\n        # On any model/parse failure fall back to stub — never crash catalog build.\n        return _stub_semantic_model(clause, source_start, source_end, prompt)\n'''
-          new = '''    except Exception:\n        # A configured production semantic router is authoritative.  If it fails or\n        # returns invalid structured output, do not silently replace its meaning with\n        # a deterministic ontology guess.  Preserve the authored clause as unresolved\n        # so generation/reuse is blocked instead of researching an opaque hash.\n        return SemanticRequirementIR(\n            source_start=source_start,\n            source_end=source_end,\n            source_sha256=_sha(prompt[source_start:source_end]),\n            intent=clause,\n            gameplay_capability_candidates=(),\n            confidence=0.0,\n            unresolved=True,\n        )\n'''
+          new = '''    except Exception:\n        # A configured production semantic router is authoritative.  If it fails or\n        # returns invalid structured output, do not silently replace its meaning with\n        # a deterministic ontology guess. Preserve the authored clause as unresolved\n        # so generation/reuse is blocked instead of researching an opaque hash.\n        return SemanticRequirementIR(\n            source_start=source_start,\n            source_end=source_end,\n            source_sha256=_sha(prompt[source_start:source_end]),\n            intent=clause,\n            gameplay_capability_candidates=(),\n            confidence=0.0,\n            unresolved=True,\n        )\n'''
           if old not in text:
               raise SystemExit('expected semantic exception fallback not found')
           text = text.replace(old, new, 1)
@@ -42,11 +42,17 @@ jobs:
 
           reuse = Path('minecraft_mod_ai/reuse_planner.py')
           text = reuse.read_text(encoding='utf-8')
-          anchor = '''    enriched_res = enrich_resolution_with_semantic_inference(\n        prompt_res,\n        router=semantic_router,\n    )\n'''
+          anchor = '    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)\n'
           insert = anchor + '''    if semantic_router is not None and enriched_res.unresolved_spans:\n        unresolved = " | ".join(str(span) for span in enriched_res.unresolved_spans)\n        raise ReusePlanningError(\n            "semantic decomposition unresolved; reuse discovery blocked before "\n            f"search/research: {unresolved}"\n        )\n'''
           if anchor not in text:
               raise SystemExit('expected reuse semantic enrichment call not found')
           text = text.replace(anchor, insert, 1)
+          # Production semantics must never fall through into provisional opaque search nodes.
+          old = '''    if not authoritative_scope:\n        inferred_spans = {\n'''
+          new = '''    if semantic_router is not None and enriched_res.unresolved_spans:\n        raise ReusePlanningError("unresolved production semantics cannot enter retrieval")\n\n    if not authoritative_scope:\n        inferred_spans = {\n'''
+          if old not in text:
+              raise SystemExit('expected opaque fallback section not found')
+          text = text.replace(old, new, 1)
           reuse.write_text(text, encoding='utf-8')
 
           test = Path('tests/test_semantic_fail_closed_regression.py')
