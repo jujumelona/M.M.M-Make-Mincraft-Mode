@@ -14,6 +14,9 @@ from .execution_feedback_exception_scope_contract import (
 from .execution_feedback_owner_precision_contract import (
     install as install_execution_feedback_owner_precision,
 )
+from .implementation_kind_boundary_contract import (
+    install as install_implementation_kind_boundary,
+)
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
@@ -28,8 +31,17 @@ install_production_boundary_contract()
 install_structured_repair_contract()
 
 from . import complete_orchestrator as _feedback_orchestrator
+from . import complete_orchestrator_support as _orchestrator_support
+from . import complete_spec as _complete_spec
+from . import planner_template_schema as _planner_template_schema
 from . import work_graph as _feedback_work_graph
 
+install_implementation_kind_boundary(
+    complete_spec_module=_complete_spec,
+    support_module=_orchestrator_support,
+    orchestrator_module=_feedback_orchestrator,
+    template_module=_planner_template_schema,
+)
 install_execution_feedback_exception_scope(_execution_feedback_replan_contract)
 install_execution_feedback_owner_precision(_execution_feedback_replan_contract)
 _execution_feedback_replan_contract.install(
