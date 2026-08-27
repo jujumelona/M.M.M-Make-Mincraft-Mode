@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
+from minecraft_mod_ai import complete_spec, planner_template_schema
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.implementation_kind_boundary_contract import (
     _is_evidence_owned,
     _route_evidence_owned_custom,
-    install,
 )
 
 
@@ -61,28 +59,7 @@ def test_integration_identity_is_preserved_when_evidence_owned():
     assert _route_evidence_owned_custom(module, ProductionModule) is module
 
 
-def test_installer_unifies_classifier_catalog_and_wraps_normalizer():
-    class DummyModuleType:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
-
-    def normalize(modules, spec):
-        return list(modules), []
-
-    complete_spec = SimpleNamespace(
-        MODULE_KINDS=frozenset({"quest", "custom_java", "integration"}),
-        ASSET_KINDS=frozenset({"item"}),
-        ProductionModule=DummyModuleType,
-    )
-    support = SimpleNamespace(_normalize_modules=normalize)
-    orchestrator = SimpleNamespace(_normalize_modules=normalize)
-    template = SimpleNamespace(MODULE_KINDS=frozenset({"stale"}), ASSET_KINDS=frozenset())
-
-    # The package-level installer is process-idempotent, so exercise a fresh copy of
-    # its routing invariant through the public helper and assert the catalog relation
-    # directly rather than mutating global install state in this test process.
-    assert template.MODULE_KINDS is not complete_spec.MODULE_KINDS
-    template.MODULE_KINDS = complete_spec.MODULE_KINDS
-    template.ASSET_KINDS = complete_spec.ASSET_KINDS
-    assert template.MODULE_KINDS is complete_spec.MODULE_KINDS
-    assert template.ASSET_KINDS is complete_spec.ASSET_KINDS
+def test_installed_template_uses_canonical_execution_classifier_catalog():
+    assert planner_template_schema.MODULE_KINDS is complete_spec.MODULE_KINDS
+    assert planner_template_schema.ASSET_KINDS is complete_spec.ASSET_KINDS
+    assert complete_spec.IMPLEMENTATION_KINDS is complete_spec.MODULE_KINDS
