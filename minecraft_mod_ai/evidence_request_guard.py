@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Freeze the user request contract before any model-owned planning can run.
+"""Freeze the authored request before model-owned design planning.
 
-This module deliberately sits outside model generation. Requirement identity, source
-spans, and hashes are derived from the raw user prompt once and then injected back into
-the design returned by ``GameDesignPlanner``. Downstream evidence planning therefore
-cannot promote model-invented modules or prose into mandatory user requirements.
+Raw request text, source spans, hashes, and mandatory scope remain host-owned. A
+semantic router may interpret each authored span into canonical gameplay capabilities,
+but it cannot invent source text or erase a span. Multi-capability spans are expanded
+into independent requirement records before reuse/gap/task planning so every semantic
+root receives its own proof and implementation path.
 """
 
 from functools import wraps
@@ -17,19 +18,87 @@ from .game_design import GameDesignPlanner
 _INSTALLED = False
 
 
-def build_authoritative_request_catalog(prompt: str) -> dict[str, Any]:
-    """Build a prompt-only immutable request catalog.
+def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
+    raw_requirements = catalog.get("requirements")
+    if not isinstance(raw_requirements, list):
+        return catalog
 
-    Passing an empty design is intentional: it prevents model-produced modules,
-    features, acceptance prose, or reuse hints from participating in requirement
-    identity. The existing evidence compiler still validates all prompt spans/hashes.
+    expanded: list[dict[str, Any]] = []
+    changed = False
+    for raw in raw_requirements:
+        if not isinstance(raw, dict):
+            expanded.append(raw)
+            continue
+        roots = tuple(
+            dict.fromkeys(
+                str(value).strip().removeprefix("capability:")
+                for value in raw.get("gameplay_capabilities", ())
+                if str(value).strip()
+            )
+        )
+        if len(roots) <= 1:
+            expanded.append(dict(raw))
+            continue
+
+        changed = True
+        statement = str(raw.get("statement") or "").strip()
+        base_requirement_id = str(raw.get("requirement_id") or "requirement")
+        for root_index, root in enumerate(roots):
+            requirement_id = _evidence._stable_id(
+                "req",
+                root,
+                {
+                    "semantic_parent": base_requirement_id,
+                    "root_index": root_index,
+                },
+            )
+            item = dict(raw)
+            item["requirement_id"] = requirement_id
+            item["capability"] = root
+            item["provides"] = [_evidence._canonical_capability(root)]
+            item["gameplay_capabilities"] = [root]
+            item["artifact_task_ids"] = [
+                _evidence._stable_id(
+                    "task",
+                    root,
+                    {"requirement_id": requirement_id, "layer": "artifact"},
+                )
+            ]
+            item["acceptance"] = [
+                f"Verify the observable outcome for {root}: {statement}"
+            ]
+            expanded.append(item)
+
+    if not changed:
+        return catalog
+
+    normalized = dict(catalog)
+    normalized["requirements"] = expanded
+    normalized["catalog_sha256"] = ""
+    normalized["catalog_sha256"] = _evidence._hash_without(
+        normalized, "catalog_sha256"
+    )
+    return normalized
+
+
+def build_authoritative_request_catalog(
+    prompt: str,
+    router: Any | None = None,
+) -> dict[str, Any]:
+    """Build an immutable prompt-span catalog with semantic-model interpretation.
+
+    Passing an empty design is intentional: model-produced design modules, features,
+    acceptance prose, and reuse hints cannot participate in requirement identity.
+    When a router is available it owns only semantic interpretation of the already
+    frozen authored spans.
     """
 
-    return _evidence.build_request_catalog(prompt, {})
+    catalog = _evidence.build_request_catalog(prompt, {}, router=router)
+    return _split_multi_root_requirements(catalog)
 
 
 def install_evidence_request_guard() -> None:
-    """Install the pre-model request freeze exactly once."""
+    """Install the pre-design request freeze exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -42,12 +111,12 @@ def install_evidence_request_guard() -> None:
 
     @wraps(original_plan)
     def guarded_plan(self: GameDesignPlanner, prompt: str, *args: Any, **kwargs: Any):
-        # Preserve the planner's established validation contract for requests that
-        # cannot reach model generation. Valid requests are frozen before any model
-        # output exists or can participate in requirement identity.
         if not prompt.strip():
             return original_plan(self, prompt, *args, **kwargs)
-        request_catalog = build_authoritative_request_catalog(prompt)
+        request_catalog = build_authoritative_request_catalog(
+            prompt,
+            router=self.router,
+        )
         result = original_plan(self, prompt, *args, **kwargs)
         if not isinstance(result, tuple) or len(result) != 2:
             return result
