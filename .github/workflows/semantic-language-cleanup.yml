@@ -26,7 +26,6 @@ jobs:
           from __future__ import annotations
 
           import ast
-          import hashlib
           import re
           from pathlib import Path
 
@@ -39,12 +38,23 @@ jobs:
                   remove.update(range(start - 1, end))
               return "".join(line for index, line in enumerate(lines) if index not in remove)
 
+          def collect_hangul_dict_entries(mapping: ast.Dict) -> list[tuple[int, int]]:
+              output: list[tuple[int, int]] = []
+              for key, value in zip(mapping.keys, mapping.values):
+                  if (
+                      isinstance(key, ast.Constant)
+                      and isinstance(key.value, str)
+                      and HANGUL.search(key.value)
+                  ):
+                      output.append((key.lineno, value.end_lineno or value.lineno))
+              return output
+
           ontology_path = Path("minecraft_mod_ai/canonical_capability_ontology.py")
           ontology = ontology_path.read_text(encoding="utf-8")
           tree = ast.parse(ontology)
           ranges: list[tuple[int, int]] = []
-
           target_dicts = {"_THEME_ARCHETYPES", "_FUNCTIONAL_ARCHETYPES"}
+
           for node in ast.walk(tree):
               if isinstance(node, ast.Assign):
                   names = {
@@ -55,13 +65,13 @@ jobs:
                   if names & {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG"}:
                       ranges.append((node.lineno, node.end_lineno or node.lineno))
                   if names & target_dicts and isinstance(node.value, ast.Dict):
-                      for key, value in zip(node.value.keys, node.value.values):
-                          if (
-                              isinstance(key, ast.Constant)
-                              and isinstance(key.value, str)
-                              and HANGUL.search(key.value)
-                          ):
-                              ranges.append((key.lineno, value.end_lineno or value.lineno))
+                      ranges.extend(collect_hangul_dict_entries(node.value))
+              elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                  name = node.target.id
+                  if name in {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG"}:
+                      ranges.append((node.lineno, node.end_lineno or node.lineno))
+                  if name in target_dicts and isinstance(node.value, ast.Dict):
+                      ranges.extend(collect_hangul_dict_entries(node.value))
               elif isinstance(node, ast.FunctionDef) and node.name == "romanize_korean_universal":
                   ranges.append((node.lineno, node.end_lineno or node.lineno))
               elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
@@ -75,29 +85,13 @@ jobs:
                       and call.args
                       and isinstance(call.args[0], ast.Dict)
                   ):
-                      mapping = call.args[0]
-                      removable = []
-                      retained = []
-                      for key, value in zip(mapping.keys, mapping.values):
-                          if (
-                              isinstance(key, ast.Constant)
-                              and isinstance(key.value, str)
-                              and HANGUL.search(key.value)
-                          ):
-                              removable.append((key.lineno, value.end_lineno or value.lineno))
-                          else:
-                              retained.append(key)
-                      if removable and not retained:
-                          ranges.append((node.lineno, node.end_lineno or node.lineno))
-                      else:
-                          ranges.extend(removable)
+                      ranges.extend(collect_hangul_dict_entries(call.args[0]))
 
           ontology = delete_line_ranges(ontology, ranges)
-          ontology = re.sub(
-              r"\n# Correct Unicode aliases\.[\s\S]*?(?=\n# Unified domain term mapping)",
-              "\n",
-              ontology,
-              count=1,
+          ontology = ontology.replace(
+              "# Correct Unicode aliases. Older entries are intentionally retained for backward\n"
+              "# compatibility with previously serialized requests that contained mojibake.\n",
+              "# Additional canonical aliases.\n",
           )
           ontology = re.sub(
               r"\n# ---------------------------------------------------------------------------\n# 3\. Universal Romanization & Token Helpers\n# ---------------------------------------------------------------------------\n+",
