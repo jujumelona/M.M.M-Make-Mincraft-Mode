@@ -16,6 +16,7 @@ from . import evidence_first_planning as _evidence
 from .game_design import GameDesignPlanner
 
 _INSTALLED = False
+_ORIGINAL_BUILD_REQUEST_CATALOG = _evidence.build_request_catalog
 
 
 def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +82,19 @@ def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _build_request_catalog_with_semantic_root_expansion(
+    prompt: str,
+    game_design: Any,
+    router: Any | None = None,
+) -> dict[str, Any]:
+    catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(
+        prompt,
+        game_design,
+        router=router,
+    )
+    return _split_multi_root_requirements(catalog)
+
+
 def build_authoritative_request_catalog(
     prompt: str,
     router: Any | None = None,
@@ -93,16 +107,24 @@ def build_authoritative_request_catalog(
     frozen authored spans.
     """
 
-    catalog = _evidence.build_request_catalog(prompt, {}, router=router)
+    catalog = _ORIGINAL_BUILD_REQUEST_CATALOG(prompt, {}, router=router)
     return _split_multi_root_requirements(catalog)
 
 
 def install_evidence_request_guard() -> None:
-    """Install the pre-design request freeze exactly once."""
+    """Install request freezing and semantic-root expansion exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
         return
+
+    if not getattr(
+        _evidence.build_request_catalog,
+        "__mmm_semantic_root_expansion__",
+        False,
+    ):
+        _build_request_catalog_with_semantic_root_expansion.__mmm_semantic_root_expansion__ = True  # type: ignore[attr-defined]
+        _evidence.build_request_catalog = _build_request_catalog_with_semantic_root_expansion  # type: ignore[assignment]
 
     original_plan = GameDesignPlanner.plan
     if getattr(original_plan, "__mmm_request_contract_guard__", False):
