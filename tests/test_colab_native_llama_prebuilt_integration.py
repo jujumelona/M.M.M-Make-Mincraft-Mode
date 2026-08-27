@@ -113,5 +113,5 @@ def test_bundle_loader_is_source_local_and_exposes_verified_installer() -> None:
     module = _load_setup_module()
     bundle = module._load_native_bundle_module()
     assert callable(bundle.ensure_prebuilt_native_server)
-    assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v3-max-t4"
-    assert bundle.BUNDLE_RELEASE_TAG == "native-llama-1d2869c-cuda12.4-max-v3"
+    assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v4-immutable"
+    assert bundle.BUNDLE_RELEASE_TAG == "native-llama-1d2869c-cuda12.4-max-v4-immutable"
