@@ -26,9 +26,28 @@ _DIMENSIONS: dict[str, dict[str, Any]] = {'correctness': {'title': 'Requirement 
 _CONDITIONAL_ORDER = ('visual_3d', 'state_save_migration', 'multiplayer', 'performance', 'accessibility')
 _COMPLETION_POLICY = {'owner': 'code', 'allowed_evidence_statuses': ['PASS', 'MISSING', 'FAIL'], 'all_dimensions_must_pass': True, 'fresh_receipt_required': True, 'proposal_hash_binding_required': True, 'independent_verifier_required': True, 'self_reported_completion_accepted': False, 'plateau_identical_failure_threshold': _PLATEAU_THRESHOLD}
 _SKIP_SOURCE_KEYS = {'schema_version', 'approval_hash', 'brief_sha256', 'evidence_sha256', 'route_sha256', 'page_sha256', 'query_sha256', 'content_sha256', 'sha256', 'hash', 'url', 'uri', 'retrieved_at', 'created_at', 'updated_at', 'timestamp', 'next_cursor', 'cursor', 'offset'}
+_PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = (
+    'all declared provides',
+    'declared_provides',
+    'owned anchor',
+    'owned_anchor',
+    'required gates',
+    'required_gates',
+    'task integrity',
+    'task_sha256',
+    'done_predicate',
+)
 
 class ProductionContractError(ValueError):
     """Raised when a code-owned production or quality contract is invalid."""
+
+def _validate_public_acceptance(statement: str) -> None:
+    """Reject implementation-internal invariants at the user-facing boundary."""
+    if not isinstance(statement, str) or not statement.strip():
+        raise ProductionContractError('public acceptance must be a non-empty string')
+    folded = statement.casefold()
+    if 'task_' in folded or any(marker in folded for marker in _PUBLIC_ACCEPTANCE_INTERNAL_MARKERS):
+        raise ProductionContractError('public acceptance contains internal task or integrity language')
 
 def bound_game_design(game_design: Mapping[str, Any]) -> dict[str, Any]:
     """Return user/design content that is stable across execution decoration."""
@@ -213,8 +232,6 @@ def validate_production_contract(
                 'evidence plan source binding does not match the current proposal'
             )
     elif source_bindings.get('evidence_plan_sha256') not in {'', None}:
-        # Standalone quality-report readers can validate the contract from its bound
-        # digest alone. Proposal validation always supplies the live plan as well.
         if not _SHA256.fullmatch(str(source_bindings['evidence_plan_sha256'])):
             raise ProductionContractError('invalid evidence plan source binding')
     requirements = _require_list(contract['requirement_catalog'], 'requirements')
@@ -628,11 +645,10 @@ def _compile_evidence_requirements(
     """Project the approved evidence graph without inventing new identities.
 
     ``requested_prompt`` is already bound by ``source_bindings`` and by every
-    requirement's exact source receipt.  Treating it as another requirement would
+    requirement's exact source receipt. Treating it as another requirement would
     add a synthetic eighth requirement to a seven-node request graph, so evidence
     mode preserves each original ``requirement_id`` verbatim and adds no root row.
     """
-
     if not requested_prompt.strip():
         raise ProductionContractError('requested prompt is empty')
     request_catalog = evidence_plan.get('request_catalog')
@@ -681,8 +697,6 @@ def _evidence_implementation_refs(
     *,
     implementation_refs: set[str],
 ) -> list[str]:
-    """Resolve one contract requirement to exact plan-owned implementation refs."""
-
     source_ref = str(requirement.get('source_ref') or '')
     prefix = 'evidence_plan:'
     if not source_ref.startswith(prefix):
@@ -802,12 +816,10 @@ def _validated_evidence_plan(value: Mapping[str, Any] | None) -> dict[str, Any] 
         raise ProductionContractError('evidence_plan must be an object')
     try:
         from .evidence_first_planning import validate_evidence_first_plan
-
         validate_evidence_first_plan(value)
     except (ImportError, ValueError, TypeError, RecursionError) as exc:
         raise ProductionContractError(f'invalid evidence plan: {exc}') from exc
     return _json_copy(dict(value), 'evidence_plan')
-
 
 def _implementation_catalog(
     modules: Sequence[Mapping[str, Any]],
@@ -829,22 +841,8 @@ def _implementation_catalog(
         add(f'implementation:asset:{asset_id}', 'asset', asset_id, item['kind'], item)
     if evidence_plan is not None:
         plan_sha256 = str(evidence_plan['plan_sha256'])
-        catalog.append(
-            {
-                'implementation_ref': 'implementation:evidence_plan',
-                'source_kind': 'evidence_plan',
-                'implementation_id': plan_sha256,
-                'kind': 'semantic_dependency_manifest',
-                'content_sha256': plan_sha256,
-            }
-        )
-        search['implementation:evidence_plan'] = _tokens(
-            ' '.join(
-                str(item.get('capability') or '')
-                for item in evidence_plan.get('request_catalog', {}).get('requirements', [])
-                if isinstance(item, Mapping)
-            )
-        )
+        catalog.append({'implementation_ref': 'implementation:evidence_plan', 'source_kind': 'evidence_plan', 'implementation_id': plan_sha256, 'kind': 'semantic_dependency_manifest', 'content_sha256': plan_sha256})
+        search['implementation:evidence_plan'] = _tokens(' '.join(str(item.get('capability') or '') for item in evidence_plan.get('request_catalog', {}).get('requirements', []) if isinstance(item, Mapping)))
         for component in evidence_plan.get('component_catalog', []):
             if not isinstance(component, Mapping):
                 continue
@@ -855,24 +853,8 @@ def _implementation_catalog(
             if not component_id or not _SHA256.fullmatch(content_sha256):
                 raise ProductionContractError('retained component has invalid evidence binding')
             ref = f'implementation:retained_component:{component_id}'
-            catalog.append(
-                {
-                    'implementation_ref': ref,
-                    'source_kind': 'retained_component',
-                    'implementation_id': component_id,
-                    'kind': str(component.get('kind') or 'project_component'),
-                    'content_sha256': content_sha256,
-                }
-            )
-            search[ref] = _tokens(
-                ' '.join(
-                    [
-                        component_id,
-                        str(component.get('kind') or ''),
-                        *(str(item) for item in component.get('provides', ())),
-                    ]
-                )
-            )
+            catalog.append({'implementation_ref': ref, 'source_kind': 'retained_component', 'implementation_id': component_id, 'kind': str(component.get('kind') or 'project_component'), 'content_sha256': content_sha256})
+            search[ref] = _tokens(' '.join([component_id, str(component.get('kind') or ''), *(str(item) for item in component.get('provides', ())) ]))
     return catalog, search
 
 def _scalar_text(value: Any) -> Iterable[str]:
