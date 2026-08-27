@@ -86,7 +86,7 @@ def test_compile_verified_requires_semantic_receipt_field() -> None:
         receipt={"compile_passed": True},
     )
     assert valid is True
-    assert reason == "valid_transition"
+    assert reason == "transition_valid"
 
 
 def test_resolved_dependency_receipt_is_the_only_kotlin_injection_authority() -> None:
