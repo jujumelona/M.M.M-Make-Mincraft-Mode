@@ -54,6 +54,12 @@ jobs:
           tree = ast.parse(ontology)
           ranges: list[tuple[int, int]] = []
           target_dicts = {"_THEME_ARCHETYPES", "_FUNCTIONAL_ARCHETYPES"}
+          remove_assignments = {
+              "_CHOSUNG",
+              "_JUNGSUNG",
+              "_JONGSUNG",
+              "_KOREAN_PARTICLES",
+          }
 
           for node in ast.walk(tree):
               if isinstance(node, ast.Assign):
@@ -62,13 +68,13 @@ jobs:
                       for target in node.targets
                       if isinstance(target, ast.Name)
                   }
-                  if names & {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG"}:
+                  if names & remove_assignments:
                       ranges.append((node.lineno, node.end_lineno or node.lineno))
                   if names & target_dicts and isinstance(node.value, ast.Dict):
                       ranges.extend(collect_hangul_dict_entries(node.value))
               elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
                   name = node.target.id
-                  if name in {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG"}:
+                  if name in remove_assignments:
                       ranges.append((node.lineno, node.end_lineno or node.lineno))
                   if name in target_dicts and isinstance(node.value, ast.Dict):
                       ranges.extend(collect_hangul_dict_entries(node.value))
@@ -101,8 +107,21 @@ jobs:
           )
           ontology = ontology.replace('    "romanize_korean_universal",\n', "")
           ontology = ontology.replace("    'romanize_korean_universal',\n", "")
-          if "romanize_korean_universal" in ontology:
-              raise SystemExit("romanization helper still present after cleanup")
+          ontology = re.sub(
+              r"def _extract_canonical_tokens\(word: str\) -> tuple\[str, \.\.\.\]:\n[\s\S]*?\n\ndef resolve_capabilities_from_phrase_structured",
+              '''def _extract_canonical_tokens(word: str) -> tuple[str, ...]:\n    """Extract canonical domain keys without language-specific morphology."""\n    low = word.casefold().strip()\n    if not low:\n        return ()\n    if low in _CANONICAL_DOMAIN_MAP or low in _THEME_ARCHETYPES or low in _FUNCTIONAL_ARCHETYPES:\n        return (low,)\n\n    matched_keys: list[str] = []\n    for key in sorted(_CANONICAL_DOMAIN_MAP.keys(), key=lambda item: -len(item)):\n        if len(key) >= 2 and key in low and key not in matched_keys:\n            matched_keys.append(key)\n    for theme_key in sorted(_THEME_ARCHETYPES.keys(), key=lambda item: -len(item)):\n        if len(theme_key) >= 2 and theme_key in low and theme_key not in matched_keys:\n            matched_keys.append(theme_key)\n    return tuple(matched_keys)\n\n\ndef resolve_capabilities_from_phrase_structured''',
+              ontology,
+              count=1,
+          )
+          ontology = ontology.replace(
+              '# Split only on language-neutral structural delimiters (comma, semicolon,\n'
+              '# arrows, bullets, newline).  Natural-language conjunctions ("and", "그리고",\n'
+              '# "면서", …) are NOT split points — that is the Semantic Model\'s job.\n',
+              '# Split only on structural delimiters. Natural-language conjunctions are\n'
+              '# Semantic Model territory and are never host-side split points.\n',
+          )
+          if "romanize_korean_universal" in ontology or "_KOREAN_PARTICLES" in ontology:
+              raise SystemExit("language-specific ontology helper still present after cleanup")
           if HANGUL.search(ontology):
               leftovers = [
                   f"{i}: {line}"
