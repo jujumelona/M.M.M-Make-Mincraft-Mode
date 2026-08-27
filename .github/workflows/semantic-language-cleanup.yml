@@ -1,0 +1,153 @@
+name: One-shot semantic language cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/semantic-language-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Remove language-specific semantic handling
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import hashlib
+          import re
+          from pathlib import Path
+
+          HANGUL = re.compile(r"[\u3131-\u318e\uac00-\ud7a3]")
+
+          def delete_line_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
+              lines = text.splitlines(keepends=True)
+              remove: set[int] = set()
+              for start, end in ranges:
+                  remove.update(range(start - 1, end))
+              return "".join(line for index, line in enumerate(lines) if index not in remove)
+
+          ontology_path = Path("minecraft_mod_ai/canonical_capability_ontology.py")
+          ontology = ontology_path.read_text(encoding="utf-8")
+          tree = ast.parse(ontology)
+          ranges: list[tuple[int, int]] = []
+
+          target_dicts = {"_THEME_ARCHETYPES", "_FUNCTIONAL_ARCHETYPES"}
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Assign):
+                  names = {
+                      target.id
+                      for target in node.targets
+                      if isinstance(target, ast.Name)
+                  }
+                  if names & {"_CHOSUNG", "_JUNGSUNG", "_JONGSUNG"}:
+                      ranges.append((node.lineno, node.end_lineno or node.lineno))
+                  if names & target_dicts and isinstance(node.value, ast.Dict):
+                      for key, value in zip(node.value.keys, node.value.values):
+                          if (
+                              isinstance(key, ast.Constant)
+                              and isinstance(key.value, str)
+                              and HANGUL.search(key.value)
+                          ):
+                              ranges.append((key.lineno, value.end_lineno or value.lineno))
+              elif isinstance(node, ast.FunctionDef) and node.name == "romanize_korean_universal":
+                  ranges.append((node.lineno, node.end_lineno or node.lineno))
+              elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                  call = node.value
+                  func = call.func
+                  if (
+                      isinstance(func, ast.Attribute)
+                      and func.attr == "update"
+                      and isinstance(func.value, ast.Name)
+                      and func.value.id == "_FUNCTIONAL_ARCHETYPES"
+                      and call.args
+                      and isinstance(call.args[0], ast.Dict)
+                  ):
+                      mapping = call.args[0]
+                      removable = []
+                      retained = []
+                      for key, value in zip(mapping.keys, mapping.values):
+                          if (
+                              isinstance(key, ast.Constant)
+                              and isinstance(key.value, str)
+                              and HANGUL.search(key.value)
+                          ):
+                              removable.append((key.lineno, value.end_lineno or value.lineno))
+                          else:
+                              retained.append(key)
+                      if removable and not retained:
+                          ranges.append((node.lineno, node.end_lineno or node.lineno))
+                      else:
+                          ranges.extend(removable)
+
+          ontology = delete_line_ranges(ontology, ranges)
+          ontology = re.sub(
+              r"\n# Correct Unicode aliases\.[\s\S]*?(?=\n# Unified domain term mapping)",
+              "\n",
+              ontology,
+              count=1,
+          )
+          ontology = re.sub(
+              r"\n# ---------------------------------------------------------------------------\n# 3\. Universal Romanization & Token Helpers\n# ---------------------------------------------------------------------------\n+",
+              "\n",
+              ontology,
+              count=1,
+          )
+          ontology = ontology.replace('    "romanize_korean_universal",\n', "")
+          ontology = ontology.replace("    'romanize_korean_universal',\n", "")
+          if "romanize_korean_universal" in ontology:
+              raise SystemExit("romanization helper still present after cleanup")
+          if HANGUL.search(ontology):
+              leftovers = [
+                  f"{i}: {line}"
+                  for i, line in enumerate(ontology.splitlines(), 1)
+                  if HANGUL.search(line)
+              ]
+              raise SystemExit("language-specific ontology text remains:\n" + "\n".join(leftovers[:30]))
+          ast.parse(ontology)
+          ontology_path.write_text(ontology, encoding="utf-8")
+
+          reuse_path = Path("minecraft_mod_ai/reuse_planner.py")
+          reuse = reuse_path.read_text(encoding="utf-8")
+          reuse = reuse.replace(
+              '_TOKEN = re.compile(r"[A-Za-z0-9_]+|[\\u3131-\\u318e\\uac00-\\ud7a3]+")',
+              '_TOKEN = re.compile(r"[\\w]+", re.UNICODE)',
+          )
+          reuse = reuse.replace("    romanize_korean_universal,\n", "")
+          old = '''    romanized = romanize_korean_universal(text)\n    clean = re.sub(r"[^a-z0-9_.-]+", "_", romanized.casefold()).strip("_.-")\n    clean = re.sub(r"_+", "_", clean)\n    if not clean or clean in {"minecraft", "mod", "module", "system", "feature"}:\n        return ""\n    return semantic_prefix + clean\n'''
+          new = '''    clean = re.sub(r"[^a-z0-9_.-]+", "_", text.casefold()).strip("_.-")\n    clean = re.sub(r"_+", "_", clean)\n    if not clean:\n        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]\n        clean = f"opaque_{digest}"\n    if clean in {"minecraft", "mod", "module", "system", "feature"}:\n        return ""\n    return semantic_prefix + clean\n'''
+          if old not in reuse:
+              raise SystemExit("expected reuse capability-id romanization block not found")
+          reuse = reuse.replace(old, new, 1)
+          if "romanize_korean_universal" in reuse or "\\u3131" in reuse or "\\uac00" in reuse:
+              raise SystemExit("language-specific reuse handling remains")
+          ast.parse(reuse)
+          reuse_path.write_text(reuse, encoding="utf-8")
+          PY
+
+          python -m compileall -q minecraft_mod_ai
+          python -m pytest -q \
+            tests/test_language_independent_semantic_compiler_regression.py \
+            tests/test_joint_reuse_planner_contract.py \
+            tests/test_canonical_capability_ontology_and_reuse_proof.py
+
+      - name: Commit cleanup directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/canonical_capability_ontology.py minecraft_mod_ai/reuse_planner.py
+          git rm .github/workflows/semantic-language-cleanup.yml
+          git commit -m "refactor: remove language-specific semantic handling"
+          git push origin HEAD:main
