@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Multi-donor joint composition and conflict solver.
+"""Multi-donor composition with static shortlist and executable joint proof.
 
-Static compatibility can shortlist a composition, but only a donor-bound executable
-build receipt can certify a subgraph.  Joint verification materializes all donors into
-one verified target scaffold, resolves every declared dependency, injects only resolved
-coordinates, and compiles the combined result.
+Static compatibility only selects candidates. A reusable donor subgraph must carry an
+executable receipt bound to its exact commit and artifact closure. Production joint
+verification then materializes those donors together, injects only dependency resolver
+receipts, and compiles the combined artifact on an attested host scaffold.
 """
 
 import hashlib
@@ -16,6 +16,7 @@ from typing import Any
 
 from .dependency_resolver import (
     DependencyResolutionReceipt,
+    inject_resolved_dependencies_into_build_gradle,
     parse_donor_build_metadata,
     resolve_dependency_for_target,
 )
@@ -92,6 +93,16 @@ class CompositionResult:
         }
 
 
+def _receipt_field(receipt: Any, name: str, default: Any = None) -> Any:
+    if isinstance(receipt, Mapping):
+        return receipt.get(name, default)
+    return getattr(receipt, name, default)
+
+
+def _donor_key(donor: DonorSlice) -> str:
+    return f"{donor.repository}@{donor.commit_sha}"
+
+
 def _donor_closure_hash(donor: DonorSlice) -> str:
     payload = "".join(
         f"{donor_file.path}:{donor_file.sha256}"
@@ -117,21 +128,30 @@ def _canonical_receipt_hash(receipt: Any) -> str:
 
 
 def _bound_compile_receipt(donor: DonorSlice, receipt: Any) -> bool:
-    """Accept only an executable receipt cryptographically bound to this donor closure."""
+    """Require executable proof bound to this exact donor commit and closure."""
 
-    if receipt is None or not bool(getattr(receipt, "compile_passed", False)):
+    if receipt is None or not bool(_receipt_field(receipt, "compile_passed", False)):
         return False
-    if str(getattr(receipt, "commit_sha", "")) != donor.commit_sha:
+    if str(_receipt_field(receipt, "commit_sha", "")) != donor.commit_sha:
         return False
-    if str(getattr(receipt, "closure_hash", "")) != _donor_closure_hash(donor):
+    if str(_receipt_field(receipt, "closure_hash", "")) != _donor_closure_hash(donor):
         return False
-    return str(getattr(receipt, "proof_level", "")) in {
+    return str(_receipt_field(receipt, "proof_level", "")) in {
         "COMPILE_VERIFIED",
         "BEHAVIOR_VERIFIED",
         "INTEGRATION_VERIFIED",
         "RUNTIME_BOOT_VERIFIED",
         "HOST_VERIFIED",
     }
+
+
+def _receipt_for_donor(
+    donor: DonorSlice,
+    receipts: Mapping[str, Any] | None,
+) -> Any:
+    if not receipts:
+        return None
+    return receipts.get(_donor_key(donor)) or receipts.get(donor.capability)
 
 
 def _host_build_infrastructure(path: str) -> bool:
@@ -147,39 +167,30 @@ def _host_build_infrastructure(path: str) -> bool:
     } or normalized.startswith("gradle/wrapper/")
 
 
-def solve_multi_donor_composition(
-    donors: Sequence[DonorSlice],
-    *,
-    target_loader: str = "fabric",
-    target_minecraft: str = "1.21.1",
-    required_capabilities: Sequence[str] = (),
-    build_receipts: Mapping[str, Any] | None = None,
-) -> CompositionResult:
-    """Evaluate one joint donor set for static compatibility and receipt truthfulness."""
-
+def _static_conflicts(donors: Sequence[DonorSlice]) -> list[CompositionConflict]:
     conflicts: list[CompositionConflict] = []
     seen_fqcns: dict[str, str] = {}
     seen_files: dict[str, str] = {}
     seen_registry_ids: dict[str, str] = {}
-    resolved_deps: list[DependencyResolutionReceipt] = []
 
     for donor in donors:
         for donor_file in donor.files:
             norm_path = donor_file.path.replace("\\", "/").strip("/")
             if _host_build_infrastructure(norm_path):
                 continue
-            if norm_path in seen_files:
+            prior_file_owner = seen_files.get(norm_path)
+            if prior_file_owner is not None:
                 conflicts.append(
                     CompositionConflict(
                         conflict_type="class_collision",
                         conflicting_items=(
                             norm_path,
-                            seen_files[norm_path],
+                            prior_file_owner,
                             donor.repository,
                         ),
                         message=(
                             f"Duplicate file path '{norm_path}' defined in multiple "
-                            f"donors: {seen_files[norm_path]} and {donor.repository}"
+                            f"donors: {prior_file_owner} and {donor.repository}"
                         ),
                     )
                 )
@@ -187,54 +198,68 @@ def solve_multi_donor_composition(
                 seen_files[norm_path] = donor.repository
 
             if norm_path.endswith((".java", ".kt")):
-                clean_fqcn = norm_path
+                fqcn = norm_path
                 for prefix in ("src/main/java/", "src/main/kotlin/", "src/"):
-                    if clean_fqcn.startswith(prefix):
-                        clean_fqcn = clean_fqcn[len(prefix) :]
-                clean_fqcn = clean_fqcn.replace("/", ".").rsplit(".", 1)[0]
-                if clean_fqcn in seen_fqcns:
+                    if fqcn.startswith(prefix):
+                        fqcn = fqcn[len(prefix) :]
+                        break
+                fqcn = fqcn.replace("/", ".").rsplit(".", 1)[0]
+                prior_fqcn_owner = seen_fqcns.get(fqcn)
+                if prior_fqcn_owner is not None:
                     conflicts.append(
                         CompositionConflict(
                             conflict_type="fqcn_collision",
                             conflicting_items=(
-                                clean_fqcn,
-                                seen_fqcns[clean_fqcn],
+                                fqcn,
+                                prior_fqcn_owner,
                                 donor.repository,
                             ),
                             message=(
-                                f"FQCN '{clean_fqcn}' collision between "
-                                f"{seen_fqcns[clean_fqcn]} and {donor.repository}"
+                                f"FQCN '{fqcn}' collision between "
+                                f"{prior_fqcn_owner} and {donor.repository}"
                             ),
                         )
                     )
                 else:
-                    seen_fqcns[clean_fqcn] = donor.repository
+                    seen_fqcns[fqcn] = donor.repository
 
             for symbol in donor_file.symbols:
                 if ":" not in symbol:
                     continue
+                prior_registry_owner = seen_registry_ids.get(symbol)
                 if (
-                    symbol in seen_registry_ids
-                    and seen_registry_ids[symbol] != donor.repository
+                    prior_registry_owner is not None
+                    and prior_registry_owner != donor.repository
                 ):
                     conflicts.append(
                         CompositionConflict(
                             conflict_type="registry_collision",
                             conflicting_items=(
                                 symbol,
-                                seen_registry_ids[symbol],
+                                prior_registry_owner,
                                 donor.repository,
                             ),
                             message=(
                                 f"Registry ID '{symbol}' collision between "
-                                f"{seen_registry_ids[symbol]} and {donor.repository}"
+                                f"{prior_registry_owner} and {donor.repository}"
                             ),
                         )
                     )
                 else:
                     seen_registry_ids[symbol] = donor.repository
+    return conflicts
 
-    dep_versions: dict[str, str] = {}
+
+def _resolve_declared_dependencies(
+    donors: Sequence[DonorSlice],
+    *,
+    target_loader: str,
+    target_minecraft: str,
+) -> tuple[list[DependencyResolutionReceipt], list[CompositionConflict]]:
+    receipts: list[DependencyResolutionReceipt] = []
+    conflicts: list[CompositionConflict] = []
+    selected_by_name: dict[str, str] = {}
+
     for donor in donors:
         for dependency in donor.required_dependencies:
             receipt = resolve_dependency_for_target(
@@ -242,7 +267,7 @@ def solve_multi_donor_composition(
                 target_loader=target_loader,
                 target_minecraft=target_minecraft,
             )
-            resolved_deps.append(receipt)
+            receipts.append(receipt)
             if not receipt.is_resolved:
                 conflicts.append(
                     CompositionConflict(
@@ -259,65 +284,67 @@ def solve_multi_donor_composition(
                         ),
                     )
                 )
-            elif (
-                dependency in dep_versions
-                and dep_versions[dependency] != receipt.selected_version
-            ):
+                continue
+            name = receipt.dependency_name
+            previous = selected_by_name.get(name)
+            if previous is not None and previous != receipt.resolved_coordinate:
                 conflicts.append(
                     CompositionConflict(
                         conflict_type="dependency_version_conflict",
                         conflicting_items=(
-                            dependency,
-                            dep_versions[dependency],
-                            receipt.selected_version,
+                            name,
+                            previous,
+                            receipt.resolved_coordinate,
                         ),
                         message=(
-                            f"Conflicting version requirements for dependency "
-                            f"'{dependency}': {dep_versions[dependency]} vs "
-                            f"{receipt.selected_version}"
+                            f"Conflicting resolved coordinates for dependency '{name}': "
+                            f"{previous} vs {receipt.resolved_coordinate}"
                         ),
                     )
                 )
             else:
-                dep_versions[dependency] = receipt.selected_version
+                selected_by_name[name] = receipt.resolved_coordinate
+    return receipts, conflicts
+
+
+def solve_multi_donor_composition(
+    donors: Sequence[DonorSlice],
+    *,
+    target_loader: str = "fabric",
+    target_minecraft: str = "1.21.1",
+    required_capabilities: Sequence[str] = (),
+    build_receipts: Mapping[str, Any] | None = None,
+) -> CompositionResult:
+    """Evaluate one donor set; static validity never fabricates compile proof."""
+
+    conflicts = _static_conflicts(donors)
+    resolved_deps, dep_conflicts = _resolve_declared_dependencies(
+        donors,
+        target_loader=target_loader,
+        target_minecraft=target_minecraft,
+    )
+    conflicts.extend(dep_conflicts)
 
     covered_caps = tuple(dict.fromkeys(donor.capability for donor in donors))
-    req_caps = tuple(required_capabilities) if required_capabilities else covered_caps
+    req_caps = tuple(dict.fromkeys(required_capabilities or covered_caps))
     residual_caps = tuple(cap for cap in req_caps if cap not in covered_caps)
     complete_coverage = not residual_caps
     is_valid = not conflicts and complete_coverage
 
     subgraph_receipts: list[SubgraphProofReceipt] = []
     for donor in donors:
-        donor_key = f"{donor.repository}@{donor.commit_sha}"
-        receipt = (build_receipts or {}).get(donor.capability) or (
-            build_receipts or {}
-        ).get(donor_key)
+        receipt = _receipt_for_donor(donor, build_receipts)
         verified = bool(
             is_valid
             and donor.closure_complete
             and donor.target_compatibility in {"exact", "metadata_exact"}
             and _bound_compile_receipt(donor, receipt)
         )
-        if verified:
-            proof_level = str(getattr(receipt, "proof_level", "COMPILE_VERIFIED"))
-            build_receipt_hash = _canonical_receipt_hash(receipt)
-        elif donor.closure_complete:
-            proof_level = "CLOSURE_COMPLETE"
-            build_receipt_hash = ""
-        elif donor.commit_sha:
-            proof_level = "PINNED"
-            build_receipt_hash = ""
-        else:
-            proof_level = "DISCOVERED"
-            build_receipt_hash = ""
-
         closure_hash = _donor_closure_hash(donor)
         subgraph_receipts.append(
             SubgraphProofReceipt(
                 subgraph_id=(
-                    f"{donor.repository}@{donor.commit_sha}:"
-                    f"{donor.capability}:{closure_hash}"
+                    f"{_donor_key(donor)}:{donor.capability}:{closure_hash}"
                 ),
                 capability=donor.capability,
                 repository=donor.repository,
@@ -329,8 +356,18 @@ def solve_multi_donor_composition(
                     if not _host_build_infrastructure(donor_file.path)
                 ),
                 is_verified=verified,
-                proof_level=proof_level,
-                build_receipt_hash=build_receipt_hash,
+                proof_level=(
+                    str(_receipt_field(receipt, "proof_level", "COMPILE_VERIFIED"))
+                    if verified
+                    else "CLOSURE_COMPLETE"
+                    if donor.closure_complete
+                    else "PINNED"
+                    if donor.commit_sha
+                    else "DISCOVERED"
+                ),
+                build_receipt_hash=(
+                    _canonical_receipt_hash(receipt) if verified else ""
+                ),
             )
         )
 
@@ -347,65 +384,87 @@ def solve_multi_donor_composition(
     )
 
 
+def _joint_artifact_hash(files: Mapping[str, str | bytes]) -> str:
+    payload = "".join(
+        f"{path}:{hashlib.sha256((value.encode('utf-8') if isinstance(value, str) else value)).hexdigest()}"
+        for path, value in sorted(files.items())
+    )
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def verify_joint_composition_sandbox(
     donors: Sequence[DonorSlice],
     target_context: Mapping[str, Any],
     compile_checker: Any = None,
+    *,
+    individual_build_receipts: Mapping[str, Any] | None = None,
+    required_capabilities: Sequence[str] = (),
+    require_individual_proof: bool = False,
 ) -> tuple[bool, Mapping[str, Any]]:
-    """Compile all selected donors together with exact resolved dependencies."""
+    """Compile selected donors together after exact individual proof and resolution."""
 
     if not donors:
         return False, {"compile_passed": False, "error": "NO_DONORS"}
 
+    required = tuple(dict.fromkeys(required_capabilities))
+    covered = {donor.capability for donor in donors}
+    missing = tuple(cap for cap in required if cap not in covered)
+    if missing:
+        return False, {
+            "compile_passed": False,
+            "error": "INCOMPLETE_JOINT_CAPABILITY_COVERAGE",
+            "missing_capabilities": list(missing),
+        }
+
+    donor_receipt_hashes: dict[str, str] = {}
+    if require_individual_proof:
+        for donor in donors:
+            receipt = _receipt_for_donor(donor, individual_build_receipts)
+            if not _bound_compile_receipt(donor, receipt):
+                return False, {
+                    "compile_passed": False,
+                    "error": "UNVERIFIED_JOINT_DONOR",
+                    "donor": _donor_key(donor),
+                }
+            donor_receipt_hashes[_donor_key(donor)] = _canonical_receipt_hash(receipt)
+
     import tempfile
     from pathlib import Path
 
-    from .reuse_adapters import (
-        DependencyAdaptationPlan,
-        apply_deterministic_adapters,
-    )
+    from .reuse_adapters import apply_deterministic_adapters
     from .reuse_build_verifier import verify_scratch_workspace_build
     from .source_transplant import materialize_pinned_donor
     from .verified_scaffold_registry import apply_verified_scaffold
 
     all_adapted_files: dict[str, str | bytes] = {}
-    all_raw_files: dict[str, str | bytes] = {}
     declared_dependencies: list[str] = []
 
     for donor in donors:
         raw_files: dict[str, str | bytes] = {}
         try:
             raw_map = materialize_pinned_donor(donor)
-            if not raw_map and donor.files:
-                return False, {
-                    "compile_passed": False,
-                    "error": (
-                        "DONOR_MATERIALIZATION_FAILED: "
-                        f"{donor.repository}@{donor.commit_sha}"
-                    ),
-                }
-            for rel_path, raw_bytes in raw_map.items():
-                try:
-                    raw_files[rel_path] = raw_bytes.decode("utf-8")
-                except UnicodeDecodeError:
-                    raw_files[rel_path] = raw_bytes
         except Exception as exc:
             return False, {
                 "compile_passed": False,
                 "error": (
-                    f"DONOR_MATERIALIZATION_ERROR: {donor.repository}@"
-                    f"{donor.commit_sha} - {exc}"
+                    f"DONOR_MATERIALIZATION_ERROR: {_donor_key(donor)} - {exc}"
                 ),
             }
+        if not raw_map and donor.files:
+            return False, {
+                "compile_passed": False,
+                "error": f"DONOR_MATERIALIZATION_FAILED: {_donor_key(donor)}",
+            }
+        for rel_path, raw_bytes in raw_map.items():
+            try:
+                raw_files[rel_path] = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                raw_files[rel_path] = raw_bytes
 
         declared_dependencies.extend(donor.required_dependencies)
         declared_dependencies.extend(parse_donor_build_metadata(raw_files))
-        for rel_path, content in raw_files.items():
-            if rel_path not in all_raw_files:
-                all_raw_files[rel_path] = content
-
-        files, _ = apply_deterministic_adapters(raw_files, target_context)
-        for rel_path, content in files.items():
+        adapted, _ = apply_deterministic_adapters(raw_files, target_context)
+        for rel_path, content in adapted.items():
             if _host_build_infrastructure(rel_path):
                 continue
             if rel_path in all_adapted_files:
@@ -419,53 +478,48 @@ def verify_joint_composition_sandbox(
             all_adapted_files[rel_path] = content
 
     loader = str(target_context.get("loader") or "fabric")
-    minecraft_version = str(
-        target_context.get("minecraft_version") or "1.21.1"
-    )
-    dependency_receipts: list[DependencyResolutionReceipt] = []
-    unresolved_dependencies: list[str] = []
-    resolved_coordinates: list[str] = []
-    for dependency in dict.fromkeys(declared_dependencies):
-        resolution = resolve_dependency_for_target(
+    minecraft_version = str(target_context.get("minecraft_version") or "1.21.1")
+    dependency_receipts = tuple(
+        resolve_dependency_for_target(
             dependency,
             target_loader=loader,
             target_minecraft=minecraft_version,
         )
-        dependency_receipts.append(resolution)
-        if not resolution.is_resolved or not resolution.resolved_coordinate:
-            unresolved_dependencies.append(
-                f"{dependency}:{resolution.resolution_reason}"
-            )
-        else:
-            resolved_coordinates.append(resolution.resolved_coordinate)
-
-    if unresolved_dependencies:
+        for dependency in dict.fromkeys(declared_dependencies)
+    )
+    unresolved = tuple(
+        f"{receipt.dependency_name}:{receipt.resolution_reason}"
+        for receipt in dependency_receipts
+        if not receipt.is_resolved
+    )
+    if unresolved:
         return False, {
             "compile_passed": False,
             "error": "UNRESOLVED_JOINT_DEPENDENCIES",
-            "unresolved_dependencies": unresolved_dependencies,
+            "unresolved_dependencies": list(unresolved),
             "resolved_dependencies": [
                 receipt.to_dict() for receipt in dependency_receipts
             ],
         }
 
+    joint_hash = _joint_artifact_hash(all_adapted_files)
     if callable(compile_checker):
         result = compile_checker(all_adapted_files, target_context)
-        passed = (
-            bool(result.get("compile_passed"))
-            if isinstance(result, Mapping)
-            else bool(result)
-        )
-        return (
-            passed,
-            result if isinstance(result, Mapping) else {"compile_passed": passed},
-        )
+        payload = dict(result) if isinstance(result, Mapping) else {
+            "compile_passed": bool(result)
+        }
+        payload["joint_artifact_hash"] = joint_hash
+        payload["donor_receipt_hashes"] = donor_receipt_hashes
+        payload["resolved_dependencies"] = [
+            receipt.to_dict() for receipt in dependency_receipts
+        ]
+        return bool(payload.get("compile_passed")), payload
 
     with tempfile.TemporaryDirectory() as temp_dir:
         sandbox_path = Path(temp_dir)
         apply_verified_scaffold(sandbox_path, target_context)
 
-        if resolved_coordinates:
+        if dependency_receipts:
             kts_file = sandbox_path / "build.gradle.kts"
             groovy_file = sandbox_path / "build.gradle"
             build_target = kts_file if kts_file.exists() else groovy_file
@@ -476,11 +530,9 @@ def verify_joint_composition_sandbox(
                 }
             try:
                 build_text = build_target.read_text(encoding="utf-8")
-                injected, _ = DependencyAdaptationPlan.inject_dependencies_into_build_gradle(
+                injected, _ = inject_resolved_dependencies_into_build_gradle(
                     build_text,
-                    tuple(dict.fromkeys(resolved_coordinates)),
-                    loader=loader,
-                    minecraft_version=minecraft_version,
+                    dependency_receipts,
                     is_kotlin_dsl=kts_file.exists(),
                 )
                 build_target.write_text(injected, encoding="utf-8")
@@ -503,12 +555,10 @@ def verify_joint_composition_sandbox(
         payload["resolved_dependencies"] = [
             receipt.to_dict() for receipt in dependency_receipts
         ]
-        payload["joint_artifact_hash"] = "sha256:" + hashlib.sha256(
-            "".join(
-                f"{path}:{hashlib.sha256((value.encode('utf-8') if isinstance(value, str) else value)).hexdigest()}"
-                for path, value in sorted(all_adapted_files.items())
-            ).encode("utf-8")
-        ).hexdigest()
+        payload["joint_artifact_hash"] = joint_hash
+        payload["donor_receipt_hashes"] = donor_receipt_hashes
+        payload["required_capabilities"] = list(required)
+        payload["covered_capabilities"] = sorted(covered)
         return build_receipt.compile_passed, payload
 
 
@@ -521,15 +571,13 @@ def _score_composition_beam(
     covered = len({donor.capability for donor in combo})
     coverage_score = (covered / max(1, total_caps)) * 100.0
     confidence_score = sum(donor.confidence for donor in combo) * 10.0
-    proof_score = sum(
-        20.0 if donor.closure_complete else 5.0 for donor in combo
-    )
+    closure_score = sum(20.0 if donor.closure_complete else 5.0 for donor in combo)
     cost_penalty = sum(donor.adaptation_cost for donor in combo) * 5.0
     donor_count_penalty = len(combo) * 2.0
     return (
         coverage_score
         + confidence_score
-        + proof_score
+        + closure_score
         - cost_penalty
         - donor_count_penalty
     )
@@ -541,13 +589,14 @@ def search_ranked_donor_composition_beams(
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
     beam_width: int = 6,
+    build_receipts: Mapping[str, Any] | None = None,
 ) -> tuple[CompositionResult, ...]:
-    """Return statically valid, complete donor beams ranked by proof-quality score."""
+    """Return complete, conflict-free beams; optionally require bound donor proofs."""
 
     if not candidates_by_capability:
         return (CompositionResult(is_valid=True),)
     caps = list(candidates_by_capability)
-    if any(not candidates_by_capability[cap] for cap in caps):
+    if any(not candidates_by_capability[capability] for capability in caps):
         return ()
 
     beams: list[tuple[DonorSlice, ...]] = [()]
@@ -563,6 +612,7 @@ def search_ranked_donor_composition_beams(
                     required_capabilities=tuple(
                         donor.capability for donor in new_combo
                     ),
+                    build_receipts=build_receipts,
                 )
                 if not evaluation.conflicts:
                     next_beams.append(new_combo)
@@ -581,9 +631,15 @@ def search_ranked_donor_composition_beams(
             target_loader=target_loader,
             target_minecraft=target_minecraft,
             required_capabilities=tuple(caps),
+            build_receipts=build_receipts,
         )
-        if result.is_valid:
-            results.append(result)
+        if not result.is_valid:
+            continue
+        if build_receipts is not None and not all(
+            receipt.is_verified for receipt in result.subgraph_receipts
+        ):
+            continue
+        results.append(result)
     return tuple(results)
 
 
@@ -593,12 +649,14 @@ def search_best_donor_composition(
     target_loader: str = "fabric",
     target_minecraft: str = "1.21.1",
     beam_width: int = 4,
+    build_receipts: Mapping[str, Any] | None = None,
 ) -> CompositionResult:
     ranked = search_ranked_donor_composition_beams(
         candidates_by_capability,
         target_loader=target_loader,
         target_minecraft=target_minecraft,
         beam_width=beam_width,
+        build_receipts=build_receipts,
     )
     if ranked:
         return ranked[0]
