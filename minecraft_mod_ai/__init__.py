@@ -4,6 +4,7 @@ from .evidence_request_guard import install_evidence_request_guard
 from .semantic_requirement_authority import install_semantic_requirement_authority
 from .evidence_obligation_contract import install_evidence_obligation_contract
 from .target_grounding_contract import install_target_grounding_contract
+from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
 from .task_artifact_contract import install_task_artifact_contract
 from .production_boundary_contract import install_production_boundary_contract
 from .structured_repair_contract import install_structured_repair_contract
@@ -26,6 +27,7 @@ install_evidence_request_guard()
 install_semantic_requirement_authority()
 install_evidence_obligation_contract()
 install_target_grounding_contract()
+install_requirement_branch_scope_contract()
 install_task_artifact_contract()
 install_production_boundary_contract()
 install_structured_repair_contract()
