@@ -24,19 +24,25 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
     from minecraft_mod_ai.platform_catalog import PlatformAdapter
 
     normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
+    mappings_version = f"{normalized}+test-mappings"
     return PlatformAdapter(
         adapter_id="fabric_unit_test_" + "_".join(part for part in normalized.replace("-", "_").split(".")),
         edition="java",
         loader=_TEST_LOADER,
         minecraft_version=normalized,
         java_version="21",
-        yarn_mappings=f"{normalized}+test-mappings",
+        yarn_mappings=mappings_version,
+        mappings_kind="yarn",
+        mappings_version=mappings_version,
         fabric_loader="test-loader",
         fabric_api="test-api",
         fabric_loom="test-loom",
         gradle="test-gradle",
-        gradle_sha256="sha256:" + "0" * 64,
-        resource_pack_format=0,
+        gradle_sha256="0" * 64,
+        data_pack_version="1",
+        resource_pack_version="1",
+        resource_pack_format=1,
+        release_metadata_url="https://www.minecraft.net/test-fixture/mmm-test-target",
         source_api_family="fabric_reviewed_test_template",
         deterministic_module_kinds=MODULE_KINDS,
     )
@@ -255,7 +261,7 @@ def _isolate_test_runtime_state(
                 "1.20.1": "1.20.1+build.1",
                 "1.21.1": "1.21.1+build.3",
             }.get(normalized, adapter.yarn_mappings)
-            return replace(adapter, yarn_mappings=mapping)
+            return replace(adapter, yarn_mappings=mapping, mappings_version=mapping)
 
         monkeypatch.setattr(
             central_research,
