@@ -1,0 +1,140 @@
+name: One-shot planner contract repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/planner-contract-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Repair planner contracts
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import re
+          from pathlib import Path
+
+          # 1) Reuse planner: authoritative designs suppress opaque prompt noise,
+          # while prompt-only unknown requirements survive as one opaque capability.
+          reuse_path = Path("minecraft_mod_ai/reuse_planner.py")
+          reuse = reuse_path.read_text(encoding="utf-8")
+
+          reuse, n = re.subn(
+              r'\n_DESIGN_REFERENCE_WORDS = frozenset\(\{[\s\S]*?\}\)\n\n\ndef _capability_graph_limit',
+              '\n\n\ndef _capability_graph_limit',
+              reuse,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit("expected design-reference word block not found")
+          reuse, n = re.subn(
+              r'\n\ndef _is_design_reference_span\(value: str\) -> bool:\n[\s\S]*?\n\n@dataclass\(frozen=True\)\nclass CapabilityGraph:',
+              '\n\n@dataclass(frozen=True)\nclass CapabilityGraph:',
+              reuse,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit("expected design-reference helper not found")
+
+          old = '''    prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))\n    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)\n    selected_nodes = list(enriched_res.nodes)\n    if ordered:\n'''
+          new = '''    # Capture whether a host-authored design/catalog/module already owns the\n    # requirement scope before prompt supplementation begins.  Unknown raw prompt\n    # text may never enlarge an authoritative graph unless semantic inference\n    # supplies an explicit proposal.\n    authoritative_scope = bool(ordered)\n    prompt_res = resolve_capabilities_from_phrase_structured(str(prompt or ""))\n    enriched_res = enrich_resolution_with_semantic_inference(prompt_res, router=semantic_router)\n    selected_nodes = list(enriched_res.nodes)\n    if authoritative_scope:\n'''
+          if old not in reuse:
+              raise SystemExit("expected prompt resolution block not found")
+          reuse = reuse.replace(old, new, 1)
+
+          old = '''        required_by_span: dict[str, list[Any]] = {}\n        for node in prompt_res.nodes:\n            if node.is_required and node.origin in {"explicit", "unresolved_concept"}:\n                # An EvidenceRequestCatalog supplies the non-ontology requirement\n                # identities itself.  Its prompt supplement is limited to explicit\n                # recognized capabilities, so incidental words in a theme/title\n                # cannot manufacture a competing provisional requirement.\n                if catalog_used and node.origin != "explicit":\n                    continue\n                if node.origin == "unresolved_concept" and _is_design_reference_span(\n                    node.source_span\n                ):\n                    continue\n                required_by_span.setdefault(node.source_span, []).append(node)\n'''
+          new = '''        required_by_span: dict[str, list[Any]] = {}\n        for node in enriched_res.nodes:\n            if not node.is_required:\n                continue\n            # Deterministic unresolved placeholders are bookkeeping only.  A\n            # design-scoped graph accepts prompt supplements only when they are\n            # canonical explicit capabilities or router-evidenced proposals.\n            if node.origin not in {"explicit", "provisional_inferred"}:\n                continue\n            if catalog_used and node.origin != "explicit":\n                continue\n            required_by_span.setdefault(node.source_span, []).append(node)\n'''
+          if old not in reuse:
+              raise SystemExit("expected required_by_span block not found")
+          reuse = reuse.replace(old, new, 1)
+
+          old = '''    for u, v in enriched_res.edges:\n        if u in seen and v in seen and (u, v) not in edges:\n            edges.append((u, v))\n\n    if not ordered:\n        add("gameplay.core", "fallback")\n'''
+          new = '''    for u, v in enriched_res.edges:\n        if u in seen and v in seen and (u, v) not in edges:\n            edges.append((u, v))\n\n    if not authoritative_scope:\n        inferred_spans = {\n            node.source_span\n            for node in enriched_res.nodes\n            if node.origin == "provisional_inferred" and node.source_span\n        }\n        for span in prompt_res.unresolved_spans:\n            clean_span = str(span or "").strip()\n            if not clean_span or clean_span in inferred_spans:\n                continue\n            # Preserve one unknown authored requirement as one opaque node.  Do\n            # not hallucinate primary/state/logic children or dependencies.\n            opaque_id = (\n                "provisional:semantic_"\n                + hashlib.sha256(clean_span.encode("utf-8")).hexdigest()[:12]\n            )\n            anchor = add(opaque_id, "prompt_resolution.provisional_opaque", expand=False)\n            if anchor:\n                register_search_terms(anchor, (clean_span,))\n\n    if not ordered:\n        add("gameplay.core", "fallback")\n'''
+          if old not in reuse:
+              raise SystemExit("expected reuse fallback block not found")
+          reuse = reuse.replace(old, new, 1)
+          ast.parse(reuse)
+          reuse_path.write_text(reuse, encoding="utf-8")
+
+          # 2) Evidence-first planner: raw source text remains provenance only.
+          # Public acceptance is capability-scoped; structural task invariants stay
+          # solely in done_predicate and never leak through task.acceptance.
+          evidence_path = Path("minecraft_mod_ai/evidence_first_planning.py")
+          evidence = evidence_path.read_text(encoding="utf-8")
+
+          marker = '''def _merge_catalog_uncovered_prompt_requirements(\n'''
+          helper = '''_INTERNAL_ACCEPTANCE_MARKERS = (\n    "owned anchors",\n    "owned_anchor",\n    "declared provides",\n    "declared_provides",\n    "required gates",\n    "required_gates",\n    "task_sha256",\n    "done_predicate",\n)\n\n\ndef _is_public_acceptance(value: Any) -> bool:\n    text = str(value or "").strip()\n    if not text:\n        return False\n    folded = text.casefold()\n    if re.match(r"^task_[a-z0-9_]+\\s*:", folded):\n        return False\n    return not any(marker in folded for marker in _INTERNAL_ACCEPTANCE_MARKERS)\n\n\ndef _requirement_acceptance(\n    capability: str,\n    candidates: Iterable[Any],\n) -> tuple[str, ...]:\n    claimed = tuple(\n        dict.fromkeys(\n            text\n            for item in candidates\n            if (text := str(item or "").strip()) and _is_public_acceptance(text)\n        )\n    )\n    if claimed:\n        return claimed\n    return (\n        f"Verify the observable player-facing behavior for capability {capability}.",\n    )\n\n\n'''
+          if helper.strip() not in evidence:
+              if marker not in evidence:
+                  raise SystemExit("merge catalog marker not found")
+              evidence = evidence.replace(marker, helper + marker, 1)
+
+          old = '''                "acceptance": list(\n                    matching_acceptance\n                    or (f"Verify the observable outcome for {capability}: {statement}",)\n                ),\n'''
+          new = '''                "acceptance": list(\n                    _requirement_acceptance(capability, matching_acceptance)\n                ),\n'''
+          if old not in evidence:
+              raise SystemExit("merge acceptance fallback not found")
+          evidence = evidence.replace(old, new, 1)
+
+          old = '''        acceptance = matching_acceptance or (\n            f"Verify the observable outcome for {capability}: {statement}",\n        )\n'''
+          new = '''        acceptance = _requirement_acceptance(\n            capability, matching_acceptance\n        )\n'''
+          if old not in evidence:
+              raise SystemExit("initial acceptance fallback not found")
+          evidence = evidence.replace(old, new, 1)
+
+          old = '''            acceptance = [\n                f"{task_id}: all declared provides exist and all owned anchors pass their integrity checks",\n                *(\n                    str(item)\n                    for item in gap.get("acceptance", ())\n                    if index == len(steps) - 1\n                ),\n            ]\n'''
+          new = '''            # Structural integrity is enforced by done_predicate below.\n            # task.acceptance carries only public requirement acceptance on the\n            # terminal semantic step, so downstream aggregation cannot expose\n            # task IDs, owned-anchor checks, or gate mechanics to the user.\n            acceptance = [\n                str(item)\n                for item in gap.get("acceptance", ())\n                if index == len(steps) - 1 and _is_public_acceptance(item)\n            ]\n'''
+          if old not in evidence:
+              raise SystemExit("task acceptance block not found")
+          evidence = evidence.replace(old, new, 1)
+          ast.parse(evidence)
+          evidence_path.write_text(evidence, encoding="utf-8")
+
+          # 3) Regression coverage for all connected failure modes.
+          test_path = Path("tests/test_planner_requirement_acceptance_contract.py")
+          test_path.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai.evidence_first_planning import (\n    _BRANCHES,\n    _compile_tasks,\n    build_request_catalog,\n)\nfrom minecraft_mod_ai.reuse_planner import decompose_capability_graph\n\n\ndef test_prompt_only_unknown_requirement_is_one_opaque_provisional() -> None:\n    graph = decompose_capability_graph("Add seasonal rune banking.")\n    provisional = [node for node in graph.nodes if node.startswith("provisional:")]\n    assert len(provisional) == 1\n    assert not any(part in provisional[0] for part in ("primary", "state", "logic"))\n    source_map = dict(graph.sources)\n    assert source_map[provisional[0]] == "prompt_resolution.provisional_opaque"\n\n\ndef test_authoritative_design_does_not_gain_opaque_prompt_noise() -> None:\n    design = {"capabilities": [f"system.feature_{index}" for index in range(96)]}\n    graph = decompose_capability_graph("Implement the declared systems.", design=design)\n    assert len(graph.nodes) == 96\n    assert not any(node.startswith("provisional:") for node in graph.nodes)\n\n\ndef test_requirement_acceptance_never_copies_whole_prompt() -> None:\n    prompt = (\n        "Build a space progression mod with mining, trading, modular ships, "\n        "colonies, bosses, and research across several planets."\n    )\n    design = {\n        "modules": [\n            {"capability": "resource.mining"},\n            {"capability": "economy.trade"},\n            {"capability": "spaceship.modular_build"},\n        ]\n    }\n    catalog = build_request_catalog(prompt, design)\n    acceptance = [\n        item\n        for requirement in catalog["requirements"]\n        for item in requirement["acceptance"]\n    ]\n    assert acceptance\n    assert all(prompt not in item for item in acceptance)\n    assert all("Verify the observable player-facing behavior for capability" in item for item in acceptance)\n\n\ndef test_task_acceptance_excludes_internal_integrity_checks() -> None:\n    public_acceptance = "Verify the observable player-facing behavior for capability economy.trade."\n    gaps = [\n        {\n            "gap_id": "gap_trade",\n            "requirement_ref": "req_trade",\n            "capability": "economy.trade",\n            "missing_provides": ["capability:economy.trade"],\n            "acceptance": [public_acceptance],\n        }\n    ]\n    reuse = [\n        {\n            "requirement_ref": "req_trade",\n            "component_refs": [],\n            "source_refs": [],\n        }\n    ]\n    target = {"coordinates": {"minecraft_version": "1.21.1", "loader": "neoforge"}}\n    branches = {name: {"status": "NOT_APPLICABLE"} for name in _BRANCHES}\n    ownership = {\n        "module_id": ":",\n        "source_set": "main",\n        "source_root": "src/main/java",\n        "resource_root": "src/main/resources",\n        "test_root": "src/test/java",\n        "namespace": "generated.test",\n        "mod_id": "test",\n        "extension": "java",\n        "topology_module_ids": [],\n        "topology_source_sets": [],\n    }\n    tasks = _compile_tasks(gaps, reuse, target, branches, ownership)\n    flattened = [item for task in tasks for item in task["acceptance"]]\n    assert flattened == [public_acceptance]\n    assert all(not item.startswith("task_") for item in flattened)\n    assert all("owned anchors" not in item.casefold() for item in flattened)\n    assert all("declared provides" not in item.casefold() for item in flattened)\n\n''', encoding="utf-8")
+
+          # Guard against the two exact leak signatures that caused the report.
+          if "Verify the observable outcome for {capability}: {statement}" in evidence:
+              raise SystemExit("raw-statement acceptance fallback still present")
+          if "all declared provides exist and all owned anchors pass their integrity checks" in evidence:
+              raise SystemExit("internal task acceptance leak still present")
+          if "_is_design_reference_span" in reuse or "_DESIGN_REFERENCE_WORDS" in reuse:
+              raise SystemExit("language-specific design-reference heuristic still present")
+
+          ast.parse(test_path.read_text(encoding="utf-8"))
+          PY
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run planner regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_planner_requirement_acceptance_contract.py \
+            tests/test_joint_reuse_planner_contract.py \
+            tests/test_canonical_capability_ontology_and_reuse_proof.py \
+            tests/test_language_independent_semantic_compiler_regression.py
+      - name: Commit repair directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            minecraft_mod_ai/reuse_planner.py \
+            minecraft_mod_ai/evidence_first_planning.py \
+            tests/test_planner_requirement_acceptance_contract.py
+          git rm .github/workflows/planner-contract-repair.yml
+          git commit -m "fix: enforce planner requirement and acceptance boundaries"
+          git push origin HEAD:main
