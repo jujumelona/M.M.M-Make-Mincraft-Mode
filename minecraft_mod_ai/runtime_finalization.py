@@ -40,8 +40,10 @@ def finalize_runtime() -> None:
             agent_capability_context,
             agent_tool_runtime,
             agentic_pre_design_rag,
+            agentic_research_game_design,
             complete_orchestrator,
             complete_orchestrator_support,
+            complete_planner,
             complete_spec,
             execution_feedback_replan_contract,
             external_agent_bridge,
@@ -50,6 +52,7 @@ def finalize_runtime() -> None:
             llama_server_autotune,
             llama_server_runtime_tuning,
             mcp_transport_pool,
+            minecraft_knowledge_contract,
             model_router,
             model_tool_aliases,
             parallel_runtime_contract,
@@ -184,6 +187,10 @@ def finalize_runtime() -> None:
         install_evidence_request_guard()
         install_semantic_requirement_authority()
         install_evidence_obligation_contract()
+        # Evidence-obligation routing replaces normalize_research_brief. Re-wrap that
+        # current function so the Minecraft knowledge contract remains the documented
+        # outermost target-aware expansion instead of being silently bypassed.
+        minecraft_knowledge_contract.install(agentic_research_game_design, complete_planner)
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
