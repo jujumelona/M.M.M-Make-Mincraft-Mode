@@ -1,0 +1,39 @@
+name: One-shot full main verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/full-main-verification.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run full test suite
+        id: tests
+        continue-on-error: true
+        run: python -m pytest -q
+      - name: Remove one-shot workflow from main
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/full-main-verification.yml
+          git commit -m "chore: remove one-shot full verification"
+          git push origin HEAD:main
+      - name: Preserve test failure conclusion
+        if: steps.tests.outcome != 'success'
+        run: exit 1
