@@ -8,12 +8,12 @@ def test_curseforge_lane_is_disabled_without_api_key(monkeypatch):
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     called = False
 
-    def fail_get(*args, **kwargs):
+    def fail_pool():
         nonlocal called
         called = True
-        raise AssertionError("CurseForge HTTP must not run without a key")
+        raise AssertionError("CurseForge HTTP pool must not run without a key")
 
-    monkeypatch.setattr(reuse_discovery.httpx, "get", fail_get)
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", fail_pool)
     assert reuse_discovery._search_curseforge("trade system", limit=8) == []
     assert called is False
 
@@ -30,12 +30,13 @@ def test_curseforge_lane_uses_host_key_and_resolves_github_source(monkeypatch):
         def json(self):
             return {"data": [{"links": {"sourceUrl": "https://github.com/example/trade-mod"}}]}
 
-    def fake_get(url, **kwargs):
-        observed["url"] = url
-        observed["headers"] = dict(kwargs["headers"])
-        return Response()
+    class FakeClient:
+        def get(self, url, **kwargs):
+            observed["url"] = url
+            observed["headers"] = dict(kwargs["headers"])
+            return Response()
 
-    monkeypatch.setattr(reuse_discovery.httpx, "get", fake_get)
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: FakeClient())
     assert reuse_discovery._search_curseforge("trade system", limit=8) == [("example/trade-mod", 1.0)]
     assert observed["url"] == "https://api.curseforge.com/v1/mods/search"
     assert observed["headers"]["x-api-key"] == "secret-test-key"
