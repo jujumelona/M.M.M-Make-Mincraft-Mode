@@ -4,8 +4,9 @@ from __future__ import annotations
 
 Static compatibility only selects candidates. A reusable donor subgraph must carry an
 executable receipt bound to its exact commit and artifact closure. Production joint
-verification then materializes those donors together, injects only dependency resolver
-receipts, and compiles the combined artifact on an attested host scaffold.
+verification first proves every donor independently, then materializes those donors
+together, injects only dependency resolver receipts, and compiles the combined artifact
+on an attested host scaffold.
 """
 
 import hashlib
@@ -128,8 +129,6 @@ def _canonical_receipt_hash(receipt: Any) -> str:
 
 
 def _bound_compile_receipt(donor: DonorSlice, receipt: Any) -> bool:
-    """Require executable proof bound to this exact donor commit and closure."""
-
     if receipt is None or not bool(_receipt_field(receipt, "compile_passed", False)):
         return False
     if str(_receipt_field(receipt, "commit_sha", "")) != donor.commit_sha:
@@ -182,13 +181,9 @@ def _static_conflicts(donors: Sequence[DonorSlice]) -> list[CompositionConflict]
             if prior_file_owner is not None:
                 conflicts.append(
                     CompositionConflict(
-                        conflict_type="class_collision",
-                        conflicting_items=(
-                            norm_path,
-                            prior_file_owner,
-                            donor.repository,
-                        ),
-                        message=(
+                        "class_collision",
+                        (norm_path, prior_file_owner, donor.repository),
+                        (
                             f"Duplicate file path '{norm_path}' defined in multiple "
                             f"donors: {prior_file_owner} and {donor.repository}"
                         ),
@@ -208,13 +203,9 @@ def _static_conflicts(donors: Sequence[DonorSlice]) -> list[CompositionConflict]
                 if prior_fqcn_owner is not None:
                     conflicts.append(
                         CompositionConflict(
-                            conflict_type="fqcn_collision",
-                            conflicting_items=(
-                                fqcn,
-                                prior_fqcn_owner,
-                                donor.repository,
-                            ),
-                            message=(
+                            "fqcn_collision",
+                            (fqcn, prior_fqcn_owner, donor.repository),
+                            (
                                 f"FQCN '{fqcn}' collision between "
                                 f"{prior_fqcn_owner} and {donor.repository}"
                             ),
@@ -233,13 +224,9 @@ def _static_conflicts(donors: Sequence[DonorSlice]) -> list[CompositionConflict]
                 ):
                     conflicts.append(
                         CompositionConflict(
-                            conflict_type="registry_collision",
-                            conflicting_items=(
-                                symbol,
-                                prior_registry_owner,
-                                donor.repository,
-                            ),
-                            message=(
+                            "registry_collision",
+                            (symbol, prior_registry_owner, donor.repository),
+                            (
                                 f"Registry ID '{symbol}' collision between "
                                 f"{prior_registry_owner} and {donor.repository}"
                             ),
@@ -259,7 +246,6 @@ def _resolve_declared_dependencies(
     receipts: list[DependencyResolutionReceipt] = []
     conflicts: list[CompositionConflict] = []
     selected_by_name: dict[str, str] = {}
-
     for donor in donors:
         for dependency in donor.required_dependencies:
             receipt = resolve_dependency_for_target(
@@ -271,13 +257,9 @@ def _resolve_declared_dependencies(
             if not receipt.is_resolved:
                 conflicts.append(
                     CompositionConflict(
-                        conflict_type="unresolved_dependency",
-                        conflicting_items=(
-                            dependency,
-                            donor.repository,
-                            receipt.resolution_reason,
-                        ),
-                        message=(
+                        "unresolved_dependency",
+                        (dependency, donor.repository, receipt.resolution_reason),
+                        (
                             f"Mandatory dependency '{dependency}' could not be resolved "
                             f"for {target_loader}@{target_minecraft}: "
                             f"{receipt.resolution_reason}"
@@ -285,25 +267,25 @@ def _resolve_declared_dependencies(
                     )
                 )
                 continue
-            name = receipt.dependency_name
-            previous = selected_by_name.get(name)
+            previous = selected_by_name.get(receipt.dependency_name)
             if previous is not None and previous != receipt.resolved_coordinate:
                 conflicts.append(
                     CompositionConflict(
-                        conflict_type="dependency_version_conflict",
-                        conflicting_items=(
-                            name,
+                        "dependency_version_conflict",
+                        (
+                            receipt.dependency_name,
                             previous,
                             receipt.resolved_coordinate,
                         ),
-                        message=(
-                            f"Conflicting resolved coordinates for dependency '{name}': "
-                            f"{previous} vs {receipt.resolved_coordinate}"
+                        (
+                            "Conflicting resolved coordinates for dependency "
+                            f"'{receipt.dependency_name}': {previous} vs "
+                            f"{receipt.resolved_coordinate}"
                         ),
                     )
                 )
             else:
-                selected_by_name[name] = receipt.resolved_coordinate
+                selected_by_name[receipt.dependency_name] = receipt.resolved_coordinate
     return receipts, conflicts
 
 
@@ -315,8 +297,6 @@ def solve_multi_donor_composition(
     required_capabilities: Sequence[str] = (),
     build_receipts: Mapping[str, Any] | None = None,
 ) -> CompositionResult:
-    """Evaluate one donor set; static validity never fabricates compile proof."""
-
     conflicts = _static_conflicts(donors)
     resolved_deps, dep_conflicts = _resolve_declared_dependencies(
         donors,
@@ -343,9 +323,7 @@ def solve_multi_donor_composition(
         closure_hash = _donor_closure_hash(donor)
         subgraph_receipts.append(
             SubgraphProofReceipt(
-                subgraph_id=(
-                    f"{_donor_key(donor)}:{donor.capability}:{closure_hash}"
-                ),
+                subgraph_id=f"{_donor_key(donor)}:{donor.capability}:{closure_hash}",
                 capability=donor.capability,
                 repository=donor.repository,
                 commit_sha=donor.commit_sha,
@@ -392,6 +370,33 @@ def _joint_artifact_hash(files: Mapping[str, str | bytes]) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _ensure_individual_proofs(
+    donors: Sequence[DonorSlice],
+    target_context: Mapping[str, Any],
+    supplied: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Return donor-bound executable receipts, proving any missing donor now."""
+
+    receipts: dict[str, Any] = dict(supplied or {})
+    failures: list[str] = []
+    from .reuse_proof_executor import execute_reuse_proof
+
+    for donor in donors:
+        key = _donor_key(donor)
+        receipt = _receipt_for_donor(donor, receipts)
+        if not _bound_compile_receipt(donor, receipt):
+            receipt = execute_reuse_proof(
+                donor,
+                target_workspace="",
+                target_context=target_context,
+                run_tests=False,
+            )
+            receipts[key] = receipt
+        if not _bound_compile_receipt(donor, receipt):
+            failures.append(key)
+    return receipts, tuple(failures)
+
+
 def verify_joint_composition_sandbox(
     donors: Sequence[DonorSlice],
     target_context: Mapping[str, Any],
@@ -399,9 +404,9 @@ def verify_joint_composition_sandbox(
     *,
     individual_build_receipts: Mapping[str, Any] | None = None,
     required_capabilities: Sequence[str] = (),
-    require_individual_proof: bool = False,
+    require_individual_proof: bool | None = None,
 ) -> tuple[bool, Mapping[str, Any]]:
-    """Compile selected donors together after exact individual proof and resolution."""
+    """Prove donors independently, then compile their exact combined artifact."""
 
     if not donors:
         return False, {"compile_passed": False, "error": "NO_DONORS"}
@@ -416,10 +421,32 @@ def verify_joint_composition_sandbox(
             "missing_capabilities": list(missing),
         }
 
+    # Production (real build verifier) always requires independent donor proof.
+    # Synthetic compile_checker seams remain opt-in so legacy unit tests do not gain
+    # authority over production proof semantics.
+    must_prove = (
+        compile_checker is None
+        if require_individual_proof is None
+        else bool(require_individual_proof)
+    )
+    effective_receipts = dict(individual_build_receipts or {})
+    if must_prove:
+        effective_receipts, proof_failures = _ensure_individual_proofs(
+            donors,
+            target_context,
+            effective_receipts,
+        )
+        if proof_failures:
+            return False, {
+                "compile_passed": False,
+                "error": "UNVERIFIED_JOINT_DONOR",
+                "donors": list(proof_failures),
+            }
+
     donor_receipt_hashes: dict[str, str] = {}
-    if require_individual_proof:
+    if must_prove:
         for donor in donors:
-            receipt = _receipt_for_donor(donor, individual_build_receipts)
+            receipt = _receipt_for_donor(donor, effective_receipts)
             if not _bound_compile_receipt(donor, receipt):
                 return False, {
                     "compile_passed": False,
@@ -438,7 +465,6 @@ def verify_joint_composition_sandbox(
 
     all_adapted_files: dict[str, str | bytes] = {}
     declared_dependencies: list[str] = []
-
     for donor in donors:
         raw_files: dict[str, str | bytes] = {}
         try:
@@ -446,9 +472,7 @@ def verify_joint_composition_sandbox(
         except Exception as exc:
             return False, {
                 "compile_passed": False,
-                "error": (
-                    f"DONOR_MATERIALIZATION_ERROR: {_donor_key(donor)} - {exc}"
-                ),
+                "error": f"DONOR_MATERIALIZATION_ERROR: {_donor_key(donor)} - {exc}",
             }
         if not raw_map and donor.files:
             return False, {
@@ -518,7 +542,6 @@ def verify_joint_composition_sandbox(
     with tempfile.TemporaryDirectory() as temp_dir:
         sandbox_path = Path(temp_dir)
         apply_verified_scaffold(sandbox_path, target_context)
-
         if dependency_receipts:
             kts_file = sandbox_path / "build.gradle.kts"
             groovy_file = sandbox_path / "build.gradle"
@@ -562,24 +585,16 @@ def verify_joint_composition_sandbox(
         return build_receipt.compile_passed, payload
 
 
-def _score_composition_beam(
-    combo: Sequence[DonorSlice],
-    total_caps: int,
-) -> float:
+def _score_composition_beam(combo: Sequence[DonorSlice], total_caps: int) -> float:
     if not combo:
         return 0.0
     covered = len({donor.capability for donor in combo})
-    coverage_score = (covered / max(1, total_caps)) * 100.0
-    confidence_score = sum(donor.confidence for donor in combo) * 10.0
-    closure_score = sum(20.0 if donor.closure_complete else 5.0 for donor in combo)
-    cost_penalty = sum(donor.adaptation_cost for donor in combo) * 5.0
-    donor_count_penalty = len(combo) * 2.0
     return (
-        coverage_score
-        + confidence_score
-        + closure_score
-        - cost_penalty
-        - donor_count_penalty
+        (covered / max(1, total_caps)) * 100.0
+        + sum(donor.confidence for donor in combo) * 10.0
+        + sum(20.0 if donor.closure_complete else 5.0 for donor in combo)
+        - sum(donor.adaptation_cost for donor in combo) * 5.0
+        - len(combo) * 2.0
     )
 
 
@@ -591,8 +606,6 @@ def search_ranked_donor_composition_beams(
     beam_width: int = 6,
     build_receipts: Mapping[str, Any] | None = None,
 ) -> tuple[CompositionResult, ...]:
-    """Return complete, conflict-free beams; optionally require bound donor proofs."""
-
     if not candidates_by_capability:
         return (CompositionResult(is_valid=True),)
     caps = list(candidates_by_capability)
@@ -675,8 +688,6 @@ def generate_reuse_manifest(
     *,
     selected_bundles: Sequence[Any] = (),
 ) -> dict[str, Any]:
-    """Generate one provenance SBOM for legacy donors and canonical bundles."""
-
     manifest_files: list[dict[str, Any]] = []
     for donor in selected_donors:
         for donor_file in donor.files:
@@ -696,22 +707,19 @@ def generate_reuse_manifest(
 
     bundle_values: list[dict[str, Any]] = []
     for bundle in selected_bundles:
-        bundle_dict = (
+        bundle_values.append(
             bundle.to_dict() if hasattr(bundle, "to_dict") else dict(bundle)
         )
-        bundle_values.append(bundle_dict)
         provenance = getattr(bundle, "provenance", {})
         if not isinstance(provenance, Mapping):
             provenance = {}
         file_hashes = getattr(bundle, "file_hashes", {})
-        protected_paths = getattr(bundle, "protected_paths", ())
-        for path in protected_paths:
+        for path in getattr(bundle, "protected_paths", ()):
             manifest_files.append(
                 {
                     "path": path,
                     "origin_repo": provenance.get(
-                        "repository",
-                        getattr(bundle, "source_ref", ""),
+                        "repository", getattr(bundle, "source_ref", "")
                     ),
                     "origin_commit": provenance.get("commit_sha", ""),
                     "origin_blob_sha": "",
