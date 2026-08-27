@@ -57,8 +57,22 @@ def test_medieval_banking_unresolved_concept_preservation() -> None:
     assert len(res.unresolved_spans) >= 1
     assert "은행 대출" in res.unresolved_spans[0] or "eunhaeng" in res.nodes[-1].capability_id
 
-    # Semantic enrichment converts unresolved concept to provisional capabilities
-    enriched = enrich_resolution_with_semantic_inference(res)
+    # Unknown concepts are not promoted without semantic evidence.
+    unevidenced = enrich_resolution_with_semantic_inference(res)
+    assert not any(node.capability_id.startswith("provisional:") for node in unevidenced.nodes)
+
+    # An explicit semantic router may promote the unresolved concept and declare dependencies.
+    enriched = enrich_resolution_with_semantic_inference(
+        res,
+        router=lambda _prompt: (
+            {
+                "name": "bank.loan",
+                "category": "finance",
+                "description": "Bank lending system",
+                "dependencies": ("persistence.state_store",),
+            },
+        ),
+    )
     assert any(node.capability_id.startswith("provisional:") for node in enriched.nodes)
     assert any("persistence.state_store" in edge[1] for edge in enriched.edges)
 
@@ -236,10 +250,27 @@ def test_reuse_proof_executor_fallback_loop() -> None:
 def test_unpunctuated_natural_korean_maplestory_prompt_regression() -> None:
     # Verbatim exact user failure prompt without punctuation or explicit arrow separators
     prompt = "메이플스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"
+    capabilities = (
+        "mob.spawning",
+        "boss.entity",
+        "item.equipment",
+        "progression.level",
+        "item.upgrade",
+    )
 
-    # 1. Request Catalog must contain all decomposed requirements, not collapsed to caps[0]
+    # 1. The semantic-model boundary, not the structural parser, owns meaning in an
+    # unpunctuated clause. Supply explicit semantic evidence for the complete clause.
     from minecraft_mod_ai.evidence_first_planning import build_request_catalog
-    catalog = build_request_catalog(prompt, {})
+    semantic_router = SimpleNamespace(
+        generate_text=lambda *_args, **_kwargs: (
+            '{"intent":"maplestory progression systems",'
+            '"gameplay_capability_candidates":['
+            '"mob.spawning","boss.entity","item.equipment",'
+            '"progression.level","item.upgrade"],'
+            '"unresolved":false}'
+        )
+    )
+    catalog = build_request_catalog(prompt, {}, router=semantic_router)
     req_caps = {req["capability"] for req in catalog["requirements"]}
 
     assert "mob.spawning" in req_caps
@@ -248,8 +279,11 @@ def test_unpunctuated_natural_korean_maplestory_prompt_regression() -> None:
     assert "progression.level" in req_caps
     assert "item.upgrade" in req_caps
 
-    # 2. Decompose Capability Graph must retain all subsystems
-    graph = decompose_capability_graph(prompt)
+    # 2. Reuse decomposition receives equivalent explicit semantic evidence.
+    graph = decompose_capability_graph(
+        prompt,
+        semantic_router=lambda _prompt: tuple({"name": cap} for cap in capabilities),
+    )
     assert len(graph.nodes) >= 5
     assert any("mob" in n for n in graph.nodes)
     assert any("boss" in n for n in graph.nodes)
