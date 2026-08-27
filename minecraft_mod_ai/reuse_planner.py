@@ -42,7 +42,7 @@ REUSE_MODES = (
     "adapt",
     "fresh",
 )
-_TOKEN = re.compile(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+")
+_TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _CAPABILITY_KEYS = frozenset({
     "capabilities", "systems", "features", "requirements", "behaviors", "services",
     "subsystems", "modules", "actions", "operations",
@@ -52,7 +52,6 @@ from .canonical_capability_ontology import (
 )
 from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase,
-    romanize_korean_universal,
     search_queries_for_capability,
 )
 
@@ -337,10 +336,12 @@ def _capability_id(raw: Any) -> str:
         text = text[len(semantic_prefix) :]
     if text in _CAPABILITY_HINTS:
         return semantic_prefix + text
-    romanized = romanize_korean_universal(text)
-    clean = re.sub(r"[^a-z0-9_.-]+", "_", romanized.casefold()).strip("_.-")
+    clean = re.sub(r"[^a-z0-9_.-]+", "_", text.casefold()).strip("_.-")
     clean = re.sub(r"_+", "_", clean)
-    if not clean or clean in {"minecraft", "mod", "module", "system", "feature"}:
+    if not clean:
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        clean = f"opaque_{digest}"
+    if clean in {"minecraft", "mod", "module", "system", "feature"}:
         return ""
     return semantic_prefix + clean
 

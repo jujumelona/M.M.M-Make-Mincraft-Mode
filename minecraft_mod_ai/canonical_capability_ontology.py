@@ -469,16 +469,7 @@ _THEME_ARCHETYPES: dict[str, tuple[str, ...]] = {
         "item.armor", "combat.damage", "quest.state", "crafting.upgrade",
         "worldgen.structure", "loot.drop_table", "ui.menu",
     ),
-    "중세": (
-        "trade.shop_registry", "economy.currency", "item.equipment", "item.weapon",
-        "item.armor", "combat.damage", "quest.state", "crafting.upgrade",
-        "worldgen.structure", "loot.drop_table", "ui.menu",
-    ),
     "fantasy": (
-        "skill.ability", "skill.magic", "item.equipment", "boss.entity",
-        "mob.spawning", "worldgen.dungeon", "loot.drop_table", "progression.level",
-    ),
-    "판타지": (
         "skill.ability", "skill.magic", "item.equipment", "boss.entity",
         "mob.spawning", "worldgen.dungeon", "loot.drop_table", "progression.level",
     ),
@@ -493,21 +484,9 @@ _THEME_ARCHETYPES: dict[str, tuple[str, ...]] = {
         "boss.entity", "mob.spawning", "item.equipment", "progression.level",
         "item.upgrade", "loot.drop_table", "skill.ability", "ui.menu",
     ),
-    "메이플": (
-        "boss.entity", "mob.spawning", "item.equipment", "progression.level",
-        "item.upgrade", "loot.drop_table", "skill.ability", "ui.menu",
-    ),
-    "메이플스토리": (
-        "boss.entity", "mob.spawning", "item.equipment", "progression.level",
-        "item.upgrade", "loot.drop_table", "skill.ability", "ui.menu",
-    ),
 
     # Sci-Fi / Space / Cybernetics
     "space": (
-        "entity.vehicle", "worldgen.dimension", "energy.generator",
-        "energy.storage", "block_entity.tick", "ui.container", "item.equipment",
-    ),
-    "우주": (
         "entity.vehicle", "worldgen.dimension", "energy.generator",
         "energy.storage", "block_entity.tick", "ui.container", "item.equipment",
     ),
@@ -519,29 +498,13 @@ _THEME_ARCHETYPES: dict[str, tuple[str, ...]] = {
         "stat.growth", "item.equipment", "item.weapon", "energy.storage",
         "skill.ability", "ui.menu", "combat.damage",
     ),
-    "사이버": (
-        "stat.growth", "item.equipment", "item.weapon", "energy.storage",
-        "skill.ability", "ui.menu", "combat.damage",
-    ),
 
     # Tech / Nuclear / Energy / Industry
     "nuclear": (
         "energy.generator", "energy.production", "energy.storage",
         "block_entity.tick", "ui.container", "automation.machine",
     ),
-    "핵융합": (
-        "energy.generator", "energy.production", "energy.storage",
-        "block_entity.tick", "ui.container", "automation.machine",
-    ),
-    "원자로": (
-        "energy.generator", "energy.production", "energy.storage",
-        "block_entity.tick", "ui.container", "automation.machine",
-    ),
     "industry": (
-        "energy.generator", "energy.storage", "automation.machine",
-        "block_entity.tick", "inventory.transfer", "ui.container",
-    ),
-    "산업": (
         "energy.generator", "energy.storage", "automation.machine",
         "block_entity.tick", "inventory.transfer", "ui.container",
     ),
@@ -550,101 +513,44 @@ _THEME_ARCHETYPES: dict[str, tuple[str, ...]] = {
 _FUNCTIONAL_ARCHETYPES: dict[str, tuple[str, ...]] = {
     # Generators / Machines / Reactors
     "generator": ("energy.generator", "energy.production", "block_entity.tick", "energy.storage", "ui.container"),
-    "발전기": ("energy.generator", "energy.production", "block_entity.tick", "energy.storage", "ui.container"),
     "machine": ("automation.machine", "block_entity.tick", "inventory.transfer", "ui.container"),
-    "기계": ("automation.machine", "block_entity.tick", "inventory.transfer", "ui.container"),
     "reactor": ("energy.generator", "energy.production", "energy.storage", "block_entity.tick"),
     "battery": ("energy.storage", "block_entity.tick", "network.action_sync"),
-    "배터리": ("energy.storage", "block_entity.tick", "network.action_sync"),
 
     # Weapons / Combat / Guns
     "weapon": ("item.weapon", "combat.damage"),
-    "무기": ("item.weapon", "combat.damage"),
     "gun": ("item.weapon", "combat.damage", "network.action_sync"),
-    "총기": ("item.weapon", "combat.damage", "network.action_sync"),
     "sword": ("item.weapon", "combat.damage"),
-    "검": ("item.weapon", "combat.damage"),
     "armor": ("item.armor", "item.equipment"),
-    "방어구": ("item.armor", "item.equipment"),
     "equipment": ("item.equipment", "inventory.transfer"),
-    "장비": ("item.equipment", "inventory.transfer"),
 
     # Bosses / Mobs / Entities
     "boss": ("boss.entity", "combat.boss", "loot.drop_table"),
-    "보스": ("boss.entity", "combat.boss", "loot.drop_table"),
     "mob": ("mob.spawning", "entity.lifecycle"),
-    "잡몹": ("mob.spawning", "entity.lifecycle"),
-    "몬스터": ("mob.spawning", "entity.lifecycle"),
     "monster": ("mob.spawning", "entity.lifecycle"),
 
     # Progression / Leveling / Upgrades
     "level": ("progression.level", "stat.growth"),
-    "레벨": ("progression.level", "stat.growth"),
-    "성장": ("progression.level", "stat.growth"),
     "upgrade": ("item.upgrade", "crafting.upgrade"),
-    "강화": ("item.upgrade", "crafting.upgrade"),
-    "제련": ("item.upgrade", "crafting.upgrade"),
     "loot": ("loot.drop_table", "inventory.transfer"),
-    "드롭": ("loot.drop_table", "inventory.transfer"),
-    "드랍": ("loot.drop_table", "inventory.transfer"),
 
     # Vehicles / Space / Portals / Dimensions
     "spaceship": ("entity.vehicle", "network.action_sync"),
-    "우주선": ("entity.vehicle", "network.action_sync"),
     "vehicle": ("entity.vehicle", "network.action_sync"),
-    "탈것": ("entity.vehicle", "network.action_sync"),
     "portal": ("teleport.portal", "worldgen.dimension"),
-    "포탈": ("teleport.portal", "worldgen.dimension"),
-    "게이트": ("teleport.portal", "worldgen.dimension"),
     "dimension": ("worldgen.dimension", "teleport.portal"),
-    "디멘션": ("worldgen.dimension", "teleport.portal"),
 
     # Economy / Shops / Quests
     "trade": ("trade.transaction", "trade.validation", "trade.offer_model", "trade.shop_registry", "economy.currency"),
-    "거래": ("trade.transaction", "trade.validation", "trade.offer_model", "trade.shop_registry", "economy.currency"),
     "shop": ("ui.shop_menu", "trade.shop_registry", "ui.menu", "economy.currency"),
-    "상점": ("ui.shop_menu", "trade.shop_registry", "ui.menu", "economy.currency"),
     "quest": ("quest.state", "quest.progression", "quest.reward"),
-    "퀘스트": ("quest.state", "quest.progression", "quest.reward"),
     "dungeon": ("worldgen.dungeon", "worldgen.structure", "loot.drop_table"),
-    "던전": ("worldgen.dungeon", "worldgen.structure", "loot.drop_table"),
     "skill": ("skill.ability", "skill.magic", "combat.damage"),
-    "스킬": ("skill.ability", "skill.magic", "combat.damage"),
 }
 
-# Correct Unicode aliases. Older entries are intentionally retained for backward
-# compatibility with previously serialized requests that contained mojibake.
+# Additional canonical aliases.
 _FUNCTIONAL_ARCHETYPES.update(
     {
-        "광물": ("resource.mining",),
-        "채굴": ("resource.mining",),
-        "캐다": ("resource.mining",),
-        "캐고": ("resource.mining",),
-        "돈": ("economy.currency",),
-        "화폐": ("economy.currency",),
-        "벌다": ("economy.reward",),
-        "벌어": ("economy.reward",),
-        "거래": (
-            "economy.trade",
-            "economy.currency",
-            "ui.shop",
-            "network.transaction",
-            "persistence.balance",
-        ),
-        "상점": ("ui.shop", "economy.trade", "economy.currency"),
-        "우주선": ("spaceship.vehicle", "entity.vehicle", "network.action_sync"),
-        "부품": ("spaceship.component_crafting", "crafting.recipe"),
-        "선원": ("crew.npc", "crew.recruitment"),
-        "모아서": ("crew.recruitment",),
-        "우주로": ("space.travel",),
-        "나가고": ("space.travel",),
-        "행성": ("worldgen.planet",),
-        "특수": ("resource.special_ore",),
-        "외계인": ("alien.entity",),
-        "싸우고": ("combat.weapon",),
-        "식민지": ("colony.settlement", "colony.progression"),
-        "화면": ("ui.menu",),
-        "블록": ("gameplay.block",),
         "block": ("gameplay.block",),
         "screen": ("ui.menu",),
         "packet": ("network.action_sync",),
@@ -665,41 +571,6 @@ for _cap_id, _cap_def in _ATOMIC_CAPABILITIES.items():
     short_stem = _cap_id.split(".")[-1]
     if short_stem not in _CANONICAL_DOMAIN_MAP:
         _CANONICAL_DOMAIN_MAP[short_stem] = (_cap_id,)
-
-# ---------------------------------------------------------------------------
-# 3. Universal Romanization & Token Helpers
-# ---------------------------------------------------------------------------
-
-_CHOSUNG = (
-    "g", "gg", "n", "d", "dd", "r", "m", "b", "bb", "s",
-    "ss", "", "j", "jj", "c", "k", "t", "p", "h"
-)
-_JUNGSUNG = (
-    "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa",
-    "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i"
-)
-_JONGSUNG = (
-    "", "g", "gg", "gs", "n", "nj", "nh", "d", "l", "lg",
-    "lm", "lb", "ls", "lt", "lp", "lh", "m", "b", "bs", "s",
-    "ss", "ng", "j", "c", "k", "t", "p", "h"
-)
-
-
-def romanize_korean_universal(text: str) -> str:
-    """Universal dependency-free Romanization of Korean hangul and Unicode normalization."""
-    result = []
-    for char in str(text or ""):
-        code = ord(char)
-        if 0xAC00 <= code <= 0xD7A3:
-            offset = code - 0xAC00
-            cho = offset // 588
-            jung = (offset % 588) // 28
-            jong = offset % 28
-            result.append(_CHOSUNG[cho] + _JUNGSUNG[jung] + _JONGSUNG[jong])
-        else:
-            result.append(char)
-    return "".join(result)
-
 
 @dataclass(frozen=True)
 class CapabilityResolutionNode:
@@ -738,13 +609,6 @@ class CapabilityResolution:
         }
 
 
-_KOREAN_PARTICLES = (
-    "으로부터", "에게서", "에서는", "부터", "까지", "에게", "한테", "에서", "으로", "로",
-    "에는", "에도", "에", "은", "는", "이", "가", "을", "를",
-    "와", "과", "도", "만", "의", "등", "및", "하고", "하며", "이며", "이랑", "랑",
-    "시스템", "모드", "기능", "구현", "해줘", "만들어줘", "넣어줘",
-    "해야해", "하게해줘",
-)
 
 _CLAUSE_SPLIT = re.compile(
     r"\s*(?:,|;|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014|\n|\r)\s*",
@@ -753,42 +617,21 @@ _CLAUSE_SPLIT = re.compile(
 
 
 def _extract_canonical_tokens(word: str) -> tuple[str, ...]:
-    """Extract canonical domain keywords by prioritizing exact match, particle stripping, and compound segmentation."""
+    """Extract canonical domain keys without language-specific morphology."""
     low = word.casefold().strip()
     if not low:
         return ()
-
-    # 1. Exact match
     if low in _CANONICAL_DOMAIN_MAP or low in _THEME_ARCHETYPES or low in _FUNCTIONAL_ARCHETYPES:
         return (low,)
 
-    # 2. Particle / suffix stripping (e.g. 잡몹부터 -> 잡몹, 보스까지 -> 보스, 레벨도 -> 레벨)
-    stripped = low
-    changed = True
-    while changed and len(stripped) >= 2:
-        changed = False
-        for p in _KOREAN_PARTICLES:
-            if stripped.endswith(p) and len(stripped) > len(p):
-                stripped = stripped[:-len(p)]
-                changed = True
-                break
-    if stripped in _CANONICAL_DOMAIN_MAP or stripped in _THEME_ARCHETYPES or stripped in _FUNCTIONAL_ARCHETYPES:
-        return (stripped,)
-
-    # 3. Compound segmentation and longest-key substring matching
     matched_keys: list[str] = []
-    for key in sorted(_CANONICAL_DOMAIN_MAP.keys(), key=lambda k: -len(k)):
-        if len(key) >= 2 and key in low:
-            if key not in matched_keys:
-                matched_keys.append(key)
-    for theme_key in sorted(_THEME_ARCHETYPES.keys(), key=lambda k: -len(k)):
-        if len(theme_key) >= 2 and theme_key in low:
-            if theme_key not in matched_keys:
-                matched_keys.append(theme_key)
-    if matched_keys:
-        return tuple(matched_keys)
-
-    return ()
+    for key in sorted(_CANONICAL_DOMAIN_MAP.keys(), key=lambda item: -len(item)):
+        if len(key) >= 2 and key in low and key not in matched_keys:
+            matched_keys.append(key)
+    for theme_key in sorted(_THEME_ARCHETYPES.keys(), key=lambda item: -len(item)):
+        if len(theme_key) >= 2 and theme_key in low and theme_key not in matched_keys:
+            matched_keys.append(theme_key)
+    return tuple(matched_keys)
 
 
 def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolution:
@@ -811,8 +654,6 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
     ignored: frozenset[str] = frozenset()
 
     # Split only on language-neutral structural delimiters (comma, semicolon,
-    # arrows, bullets, newline).  Natural-language conjunctions ("and", "그리고",
-    # "면서", …) are NOT split points — that is the Semantic Model's job.
     raw_clauses = [
         clause.strip()
         for clause in _CLAUSE_SPLIT.split(clean)

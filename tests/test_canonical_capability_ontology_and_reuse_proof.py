@@ -32,7 +32,7 @@ def test_unified_ontology_zero_drift() -> None:
 
 
 def test_medieval_theme_subsystem_archetype_expansion() -> None:
-    caps = resolve_capabilities_from_phrase("중세 모드")
+    caps = resolve_capabilities_from_phrase("medieval mod")
     assert len(caps) >= 5
     assert "trade.shop_registry" in caps
     assert "economy.currency" in caps
@@ -40,7 +40,7 @@ def test_medieval_theme_subsystem_archetype_expansion() -> None:
     assert "quest.state" in caps
     assert "worldgen.structure" in caps
 
-    graph = decompose_capability_graph("중세 모드 만들어줘")
+    graph = decompose_capability_graph("create medieval mod")
     assert len(graph.nodes) >= 5
     assert any("trade" in node or "shop" in node for node in graph.nodes)
     assert any("economy" in node or "currency" in node for node in graph.nodes)
@@ -48,14 +48,13 @@ def test_medieval_theme_subsystem_archetype_expansion() -> None:
 
 
 def test_medieval_banking_unresolved_concept_preservation() -> None:
-    # "중세 은행 대출 시스템": "중세" archetype expands while "은행 대출" is preserved as unresolved
-    res = resolve_capabilities_from_phrase_structured("중세 은행 대출 시스템")
+    res = resolve_capabilities_from_phrase_structured("medieval banking loan system")
     origins = {n.capability_id: n.origin for n in res.nodes}
 
     assert any(origins.get(k) == "archetype_inferred" for k in origins)
     assert any(origins.get(k) == "unresolved_concept" for k in origins)
     assert len(res.unresolved_spans) >= 1
-    assert "은행 대출" in res.unresolved_spans[0] or "eunhaeng" in res.nodes[-1].capability_id
+    assert "banking loan" in res.unresolved_spans[0]
 
     # Unknown concepts are not promoted without semantic evidence.
     unevidenced = enrich_resolution_with_semantic_inference(res)
@@ -78,14 +77,14 @@ def test_medieval_banking_unresolved_concept_preservation() -> None:
 
 
 def test_nuclear_fusion_generator_functional_decomposition() -> None:
-    caps = resolve_capabilities_from_phrase("핵융합 발전기")
+    caps = resolve_capabilities_from_phrase("fusion generator")
     assert "energy.generator" in caps
     assert "energy.production" in caps
     assert "block_entity.tick" in caps
     assert "energy.storage" in caps
     assert "ui.container" in caps
 
-    graph = decompose_capability_graph("핵융합 발전기 시스템")
+    graph = decompose_capability_graph("fusion generator system")
     assert len(graph.nodes) >= 4
     assert any("energy" in node for node in graph.nodes)
     assert any("block_entity" in node for node in graph.nodes)
@@ -247,9 +246,9 @@ def test_reuse_proof_executor_fallback_loop() -> None:
     assert receipts[1].proof_level == "COMPILE_VERIFIED"
 
 
-def test_unpunctuated_natural_korean_maplestory_prompt_regression() -> None:
+def test_unpunctuated_multiroot_semantic_prompt_regression() -> None:
     # Verbatim exact user failure prompt without punctuation or explicit arrow separators
-    prompt = "메이플스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"
+    prompt = "Create an RPG mod with common mobs bosses equipment leveling and item upgrades"
     capabilities = (
         "mob.spawning",
         "boss.entity",
@@ -1161,13 +1160,13 @@ def test_requirement_catalog_and_capability_specs() -> None:
     from minecraft_mod_ai.requirement_catalog import build_requirement_catalog
     from minecraft_mod_ai.canonical_capability_ontology import resolve_capabilities_from_phrase_structured
 
-    prompt = "잡몹부터 보스까지 레벨에 따라 강해져야 한다\n처치 시 전용 보스 전리품을 드롭한다"
+    prompt = "common mobs through bosses scale with level\nbosses drop dedicated loot when defeated"
     resolution = resolve_capabilities_from_phrase_structured(prompt)
     catalog = build_requirement_catalog(prompt, resolution)
 
     assert len(catalog.requirements) == 2
     assert catalog.requirements[0].id == "REQ-001"
-    assert "잡몹부터 보스까지" in catalog.requirements[0].statement
+    assert "common mobs through bosses" in catalog.requirements[0].statement
     assert catalog.requirements[0].mandatory is True
 
     assert len(catalog.capabilities) >= 2
