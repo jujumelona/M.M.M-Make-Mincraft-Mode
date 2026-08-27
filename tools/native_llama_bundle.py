@@ -12,8 +12,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v3-max-t4"
-BUNDLE_RELEASE_TAG = "native-llama-1d2869c-cuda12.4-max-v3"
+BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v4-immutable"
+BUNDLE_RELEASE_TAG = "native-llama-1d2869c-cuda12.4-max-v4-immutable"
 BUNDLE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + BUNDLE_RELEASE_TAG
@@ -63,7 +63,7 @@ def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "M.M.M-Colab-native-llama/2",
+            "User-Agent": "M.M.M-Colab-native-llama/3",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
         },
@@ -119,11 +119,11 @@ def _write_cache_receipt(install_dir: Path, archive_sha256: str) -> None:
 
 
 def _published_archive_sha256(url: str, cache_parent: Path) -> str | None:
-    """Return the currently published bundle SHA when GitHub is reachable.
+    """Return the published immutable bundle SHA when GitHub is reachable.
 
     A temporary network failure must not make an already cryptographically validated
-    local bundle unusable. When the checksum endpoint is reachable, however, it is the
-    cache-generation authority: any changed release asset invalidates the old cache.
+    local bundle unusable. When the checksum endpoint is reachable, it is authoritative
+    for the immutable release generation and must agree with the local cache receipt.
     """
 
     try:
@@ -175,8 +175,6 @@ def _bundle_path(root: Path, relative: str, *, kind: str) -> Path:
     member = Path(relative)
     if member.is_absolute() or ".." in member.parts or not member.parts:
         raise RuntimeError(f"prebuilt native llama {kind} path is unsafe: {relative}")
-    # Runtime artifacts and aliases are intentionally restricted to bin/. This keeps
-    # manifest-driven alias creation unable to touch arbitrary cache paths.
     if len(member.parts) != 2 or member.parts[0] != "bin":
         raise RuntimeError(
             f"prebuilt native llama {kind} path must be a direct bin/ member: {relative}"
@@ -228,8 +226,6 @@ def _materialize_aliases(
         try:
             alias.symlink_to(expected_link)
         except OSError:
-            import shutil
-
             shutil.copyfile(target, alias)
 
 
@@ -277,9 +273,6 @@ def _validate_bundle(root: Path, *, cuda_arch: str, source_ref: str) -> Path:
                 f"prebuilt native llama checksum mismatch: {relative}"
             )
 
-    # The tar itself contains regular files only. Recreate build-system aliases only
-    # after every real file passed SHA-256 verification. Cached aliases are checked on
-    # every validation and can never point outside the verified bin/ file set.
     _materialize_aliases(root, manifest, files)
 
     binary = root / "bin" / "llama-server"
@@ -359,7 +352,7 @@ def ensure_prebuilt_native_server(
     source_ref: str,
     verify: Callable[[Path], tuple[bool, str]],
 ) -> str | None:
-    """Install and return the newest verified native CUDA llama-server bundle."""
+    """Install and return the verified immutable native CUDA llama-server bundle."""
 
     if not _env_enabled("MMM_LLAMA_PREBUILT", True):
         return None
@@ -377,9 +370,6 @@ def ensure_prebuilt_native_server(
     cache_parent.mkdir(parents=True, exist_ok=True)
     url = _archive_url(cuda_arch)
 
-    # The release checksum is the cache generation. A rebuilt/clobbered release asset
-    # automatically invalidates an older local extraction even when the stable release
-    # tag and asset filename stay unchanged.
     published_archive_sha = _published_archive_sha256(url, cache_parent)
     cached = _cached_bundle(
         install_dir,
