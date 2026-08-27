@@ -47,7 +47,6 @@ jobs:
           if anchor not in text:
               raise SystemExit('expected reuse semantic enrichment call not found')
           text = text.replace(anchor, insert, 1)
-          # Production semantics must never fall through into provisional opaque search nodes.
           old = '''    if not authoritative_scope:\n        inferred_spans = {\n'''
           new = '''    if semantic_router is not None and enriched_res.unresolved_spans:\n        raise ReusePlanningError("unresolved production semantics cannot enter retrieval")\n\n    if not authoritative_scope:\n        inferred_spans = {\n'''
           if old not in text:
@@ -62,7 +61,7 @@ jobs:
         shell: bash
         run: |
           python -m py_compile minecraft_mod_ai/evidence_first_planning.py minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/capability_semantic_inference.py tests/test_semantic_fail_closed_regression.py
-          python -m pip install -q pytest
+          python -m pip install -q -e . pytest
           pytest -q tests/test_semantic_fail_closed_regression.py
       - name: Commit repair directly to main
         shell: bash
