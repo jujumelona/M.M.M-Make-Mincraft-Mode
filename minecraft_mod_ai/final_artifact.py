@@ -8,7 +8,6 @@ here. A filename heuristic is never sufficient authority for selecting a mod JAR
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import tomllib
