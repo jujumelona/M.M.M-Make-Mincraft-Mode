@@ -18,7 +18,6 @@ from typing import Any
 from .canonical_capability_ontology import (
     CapabilityResolution,
     CapabilityResolutionNode,
-    romanize_korean_universal,
 )
 
 
@@ -81,13 +80,13 @@ def infer_provisional_capabilities(
             except Exception:
                 proposals = []
 
-        # 2. Deterministic atomic breakdown fallback
+        # Deterministic atomic breakdown fallback
         if not proposals:
-            raw_slug = romanize_korean_universal(clean)
-            slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
+            slug = re.sub(r"[^a-z0-9_]+", "_", clean.casefold()).strip("_")
             slug = re.sub(r"_+", "_", slug)
             if not slug:
-                slug = "unresolved_feature"
+                import hashlib
+                slug = hashlib.sha256(clean.encode("utf-8")).hexdigest()[:12]
 
             primary_id = f"provisional:{slug[:40]}"
             state_id = f"provisional:{slug[:30]}.state"

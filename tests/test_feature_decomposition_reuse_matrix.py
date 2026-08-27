@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from minecraft_mod_ai import reuse_discovery
 from minecraft_mod_ai.evidence_first_planning import (
     build_request_catalog,
+)
+from minecraft_mod_ai.canonical_capability_ontology import (
     romanize_korean_universal,
 )
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph

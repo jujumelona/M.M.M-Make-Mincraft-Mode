@@ -9,6 +9,7 @@ Single source of truth for:
 4. Standard English search query templates for GitHub, Modrinth, and CurseForge.
 """
 
+import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -837,7 +838,7 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
     unresolved_spans: list[str] = []
 
     for clause in raw_clauses:
-        words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", clause)
+        words = re.findall(r"[\w]+", clause, re.UNICODE)
         clause_unresolved_words: list[str] = []
 
         for word in words:
@@ -902,9 +903,10 @@ def resolve_capabilities_from_phrase_structured(phrase: str) -> CapabilityResolu
 
         if clause_unresolved_words:
             clause_unresolved = " ".join(clause_unresolved_words)
-            raw_slug = romanize_korean_universal(clause_unresolved)
-            slug = re.sub(r"[^a-z0-9_]+", "_", raw_slug.casefold()).strip("_")
+            slug = re.sub(r"[^a-z0-9_]+", "_", clause_unresolved.casefold()).strip("_")
             slug = re.sub(r"_+", "_", slug)
+            if not slug:
+                slug = hashlib.sha256(clause_unresolved.encode("utf-8")).hexdigest()[:12]
             if slug:
                 cap_id = f"unresolved:{slug[:48]}"
                 if cap_id not in seen_caps:

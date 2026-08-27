@@ -24,7 +24,7 @@ _COMPONENT_ID_RE = re.compile(
 )
 _SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
 _CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:(?P<korean_action>면서|하며|해서|아서|어서|하고|고|며)(?=\s)|,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
+    r"\s*(?:(?P<verbal_connective>면서|하며|해서|아서|어서|하고|고|며)(?=\s)|,|;|\band\b|\bthen\b|그리고|\s및\s|\s다음\s|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
     re.IGNORECASE | re.UNICODE,
 )
 _BRANCHES = (
@@ -43,7 +43,6 @@ from .canonical_capability_ontology import (
 )
 from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase_structured,
-    romanize_korean_universal,
 )
 
 _DOMAIN_TERM_MAP = _canonical_domain_map()
@@ -75,11 +74,13 @@ def _hash_without(value: Mapping[str, Any], field: str) -> str:
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
-    text = romanize_korean_universal(str(value or ""))
-    text = re.sub(r"[^a-z0-9_]+", "_", text.casefold()).strip("_")
+    raw = str(value or "")
+    text = re.sub(r"[^a-z0-9_]+", "_", raw.casefold()).strip("_")
     text = re.sub(r"_+", "_", text)
     if not text:
-        text = fallback
+        # Non-Latin input: use a stable hash prefix instead of script-specific romanization.
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+        text = f"{fallback}_{digest}"
     if not text[0].isalpha():
         text = f"{fallback}_{text}"
     return text[:36]
@@ -139,11 +140,10 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
         cursor = sentence_start
         for separator in _CLAUSE_SEPARATOR.finditer(prompt, sentence_start, sentence_end):
             left, right = cursor, separator.start()
-            # Keep a Korean action connective (for example, "캐고") with the
-            # preceding authored clause.  Its verb is semantic evidence, not
-            # punctuation that can be discarded by the host parser.
-            if separator.group("korean_action") is not None:
-                right = separator.end("korean_action")
+            # Keep a verbal connective (e.g. "캐고", "하며") with the preceding
+            # authored clause — its verb is semantic evidence, not punctuation.
+            if separator.group("verbal_connective") is not None:
+                right = separator.end("verbal_connective")
             while left < right and prompt[left].isspace():
                 left += 1
             while right > left and prompt[right - 1].isspace():
@@ -162,7 +162,7 @@ def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
 
 
 def _capability_from_statement(statement: str) -> str:
-    words = re.findall(r"[A-Za-z0-9_]+|[\u3131-\u318e\uac00-\ud7a3]+", statement)
+    words = re.findall(r"[\w]+", statement, re.UNICODE)
     ignored = {
         "a", "an", "the", "add", "create", "make", "build", "implement", "keep",
         "minecraft", "mod", "with", "to", "for", "that", "and", "then", "그리고",
@@ -172,9 +172,12 @@ def _capability_from_statement(statement: str) -> str:
     # Requirement identity is a lossless semantic slug, not the first ontology hit.
     # Ontology expansion belongs downstream and may never replace the authored scope.
     value = "_".join(semantic) or statement
-    romanized = romanize_korean_universal(value)
-    normalized = re.sub(r"[^a-z0-9_]+", "_", romanized.casefold()).strip("_")
-    return re.sub(r"_+", "_", normalized) or "semantic"
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_")
+    normalized = re.sub(r"_+", "_", normalized)
+    if not normalized:
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        return f"semantic_{digest}"
+    return normalized
 
 
 def _matched_source_span(prompt: str, statement: str) -> tuple[int, int] | None:
@@ -261,16 +264,24 @@ def _semantic_requirement_fields(
     capability: str,
     statement: str,
     requirement_id: str,
+    *,
+    is_design_module: bool = False,
 ) -> dict[str, Any]:
-    """Build deterministic traceability fields without changing legacy English IDs."""
+    """Build deterministic traceability fields without changing legacy English IDs.
+
+    Design-module capabilities are authoritative domain IDs (e.g. "trade", "quests")
+    that must never be replaced by ontology gameplay roots — the design module is the
+    single-authority source.  Only pure prompt-derived requirements (where no design
+    module covered the clause) get language-neutral gameplay root promotion.
+    """
 
     gameplay, implementation, unresolved = _semantic_capability_layers(statement)
-    is_korean = bool(re.search(r"[\u3131-\u318e\uac00-\ud7a3]", statement))
-    # Preserve explicit design/custom IDs verbatim.  Prompt-derived Korean clauses
-    # are the only place where the semantic compiler replaces a lossless temporary
-    # slug with the gameplay roots it can prove.
-    prompt_derived = capability == _capability_from_statement(statement)
-    selected = gameplay if is_korean and prompt_derived and gameplay else (capability,)
+    if is_design_module:
+        # Design module IDs are authority — preserve verbatim, no promotion.
+        selected: tuple[str, ...] = (capability,)
+    else:
+        prompt_derived = capability == _capability_from_statement(statement)
+        selected = gameplay if prompt_derived and gameplay else (capability,)
     primary = selected[0]
     artifact_tasks = tuple(
         _stable_id(
@@ -479,32 +490,44 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
         return _merge_catalog_uncovered_prompt_requirements(
             catalog, prompt, game_design
         )
-    records = _capability_records(game_design)
+    # _capability_records returns design-module-backed entries; prompt clauses are not.
+    records_raw = _capability_records(game_design)
     covered_spans = {
         span
-        for _capability, statement in records
+        for _capability, statement in records_raw
         for span in (_matched_source_span(prompt, statement),)
         if span is not None
     }
-    merged_records = list(records)
+    # 3-tuple: (capability, statement, is_design_module)
+    merged_records: list[tuple[str, str, bool]] = [
+        (cap, stmt, True) for cap, stmt in records_raw
+    ]
     for start, end in _semantic_clause_spans(prompt):
         if (start, end) in covered_spans:
             continue
         statement = prompt[start:end]
-        merged_records.append((_capability_from_statement(statement), statement))
+        merged_records.append((_capability_from_statement(statement), statement, False))
         # Theme archetypes are useful decompositions, but remain additive: the
         # authored clause above is never replaced by an inferred subsystem.
         resolution = resolve_capabilities_from_phrase_structured(statement)
         for node in resolution.nodes:
             if node.origin == "archetype_inferred":
-                merged_records.append((node.capability_id, node.source_span or statement))
-    records = tuple(merged_records)
+                merged_records.append((node.capability_id, node.source_span or statement, False))
+    # Deduplicate by normalized capability while preserving order.
+    seen: set[str] = set()
+    records_deduped: list[tuple[str, str, bool]] = []
+    for cap, stmt, from_dm in merged_records:
+        normalized = cap.strip().casefold()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            records_deduped.append((cap.strip(), stmt.strip() or cap.strip(), from_dm))
+    records: tuple[tuple[str, str, bool], ...] = tuple(records_deduped)
     if not records:
         raise EvidencePlanError("The request did not yield any semantic requirement.")
 
     acceptance_source = _strings(game_design.get("acceptance_tests"))
     requirements: list[dict[str, Any]] = []
-    for index, (capability, statement) in enumerate(records):
+    for index, (capability, statement, from_design_module) in enumerate(records):
         span = _source_span(prompt, statement)
         requirement_id = _stable_id(
             "req",
@@ -524,7 +547,8 @@ def build_request_catalog(prompt: str, game_design: Mapping[str, Any]) -> dict[s
             f"Verify the observable outcome for {capability}: {statement}",
         )
         semantic = _semantic_requirement_fields(
-            capability, statement, requirement_id
+            capability, statement, requirement_id,
+            is_design_module=from_design_module,
         )
         requirements.append(
             {
@@ -599,14 +623,21 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError(
                 "A technical implementation primitive cannot be a top-level user requirement."
             )
-        # Korean semantic resolution has exact host-owned gameplay roots.  A
-        # catalog that drops those roots is malformed even if it still has a
-        # syntactically non-empty `provides` array.
-        if re.search(r"[\u3131-\u318e\uac00-\ud7a3]", text):
+        # Gameplay binding check: only applies to prompt-derived requirements where
+        # gameplay root promotion actually occurred (gameplay_capabilities differ from
+        # the provides set).  Design-module requirements have gameplay_capabilities
+        # equal to their provides — no promotion occurred, no re-validation needed.
+        gameplay_caps = frozenset(
+            str(v).removeprefix("capability:") for v in requirement.get("gameplay_capabilities", ())
+            if str(v).strip()
+        )
+        provides_set = frozenset(provides)
+        promotion_occurred = bool(gameplay_caps) and gameplay_caps != provides_set
+        if promotion_occurred:
             expected, _implementation, unresolved = _semantic_capability_layers(text)
             if unresolved and not expected:
                 raise EvidencePlanError(
-                    "Mandatory Korean request text is unresolved; generation is blocked."
+                    "Mandatory request text is unresolved; generation is blocked."
                 )
             if expected and not set(expected).intersection(provides):
                 raise EvidencePlanError(
@@ -615,7 +646,7 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
 
 
 def _word_overlap(left: str, right: str) -> bool:
-    token = re.compile(r"[a-z0-9_]{2,}|[\u3131-\u318e\uac00-\ud7a3]{2,}", re.IGNORECASE)
+    token = re.compile(r"[\w]{2,}", re.UNICODE)
     a = {item.casefold() for item in token.findall(left)}
     b = {item.casefold() for item in token.findall(right)}
     return bool(a & b)

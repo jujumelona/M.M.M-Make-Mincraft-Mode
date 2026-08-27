@@ -15,10 +15,6 @@ _IMPLEMENTATION_PRIMITIVE_PREFIXES = (
     "registry.",
     "screen.",
 )
-_KOREAN_ACTION_CONNECTIVE = re.compile(
-    r"(?:면서|하며|해서|아서|어서|하고|고|며)(?=\s)",
-    re.UNICODE,
-)
 
 
 @dataclass(frozen=True)
@@ -163,31 +159,35 @@ class RequirementCatalog:
 
 
 def _split_into_semantic_clauses(text: str) -> list[str]:
-    """Split natural language prompt into distinct semantic requirement clauses."""
+    """Split natural language prompt into distinct semantic requirement clauses.
+
+    Only language-independent structural boundaries are used:
+    - Newlines / list items
+    - Comma and semicolon
+    - Bullet characters and arrows
+
+    Semantic sub-clause splitting within a sentence (conjunction-based) is left
+    to the model layer; the host deterministic parser only handles explicit
+    authored boundaries that are valid in every script.
+    """
     cleaned = str(text or "").strip()
     if not cleaned:
         return []
 
-    # First split by linebreaks
+    # Split on explicit structural boundaries (newlines, bullets, numbered items)
     lines = [line.strip() for line in cleaned.replace("\r", "\n").split("\n") if line.strip()]
     clauses: list[str] = []
 
-    # Conjunction and clause boundary delimiters (Korean & English)
+    # Language-neutral intra-line delimiters: comma, semicolon, bullet, arrow
     pattern = re.compile(
-        r"(?<=[^\s])(?:\s*,\s*|\s*;\s*|\s+그리고\s+|\s+또한\s+|\s+하고\s+|\s+하며\s+|\s+and\s+)(?=[^\s])",
-        re.IGNORECASE,
+        r"(?<=[^\s])(?:\s*,\s*|\s*;\s*|\s*[•→\u2022\u25b6\u25cf\u2013\u2014]\s*|\s+->\s*|\s+=>\s*)(?=[^\s])",
+        re.UNICODE,
     )
 
     for line in lines:
-        line = _KOREAN_ACTION_CONNECTIVE.sub(
-            lambda match: match.group(0) + "\n", line
-        )
-        parts = [
-            part.strip()
-            for unbroken in line.splitlines()
-            for part in pattern.split(unbroken)
-            if part.strip()
-        ]
+        # Strip leading list markers (e.g. "1. ", "- ", "• ")
+        line = re.sub(r"^\s*(?:\d+\.|[-*•])\s+", "", line)
+        parts = [part.strip() for part in pattern.split(line) if part.strip()]
         if parts:
             clauses.extend(parts)
         else:

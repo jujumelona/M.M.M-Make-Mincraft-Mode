@@ -246,7 +246,7 @@ def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
-    from .evidence_first_planning import romanize_korean_universal
+    from .canonical_capability_ontology import romanize_korean_universal
 
     clean_query = romanize_korean_universal(query.strip())
     clean_query = re.sub(r"[^a-zA-Z0-9\s_-]+", " ", clean_query).strip()
