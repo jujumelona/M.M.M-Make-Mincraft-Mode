@@ -15,11 +15,14 @@ exact directional transitive closures for atomic, isolated subgraph compilation 
 
 import json
 import re
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+_IDENTIFIER_TOKEN = re.compile(r"\b[A-Za-z_$][A-Za-z0-9_$]*\b")
 
 
 class ArtifactKind(str, Enum):
@@ -224,6 +227,10 @@ def _infer_namespace_and_logical_id(
     return "common", stem, env
 
 
+def _simple_symbol(value: str) -> str:
+    return str(value or "").rsplit(".", 1)[-1].rsplit("$", 1)[-1]
+
+
 class ArtifactDependencyGraph:
     """Directed multi-layer dependency graph for complete mod artifact linkages."""
 
@@ -361,6 +368,7 @@ class ArtifactDependencyGraph:
         graph = cls(target_context=target_context)
         fqcn_to_node: dict[str, str] = {}
         symbol_to_nodes: dict[str, list[str]] = {}
+        simple_symbol_to_nodes: dict[str, list[str]] = {}
         logical_res_to_nodes: dict[str, list[str]] = {}
 
         for rel_path, content in files.items():
@@ -395,6 +403,9 @@ class ArtifactDependencyGraph:
                 fqcn_to_node[logical_id] = node_id
                 for symbol in node.symbols_defined:
                     symbol_to_nodes.setdefault(symbol, []).append(node_id)
+                    simple = _simple_symbol(symbol)
+                    if simple:
+                        simple_symbol_to_nodes.setdefault(simple, []).append(node_id)
 
             if namespace and logical_id:
                 resource_key = f"{namespace}:{logical_id}".lower()
@@ -457,11 +468,11 @@ class ArtifactDependencyGraph:
                 return
 
             symbol_key = clean_ref.split(".")[-1]
-            if symbol_key in symbol_to_nodes:
+            exact_nodes = symbol_to_nodes.get(symbol_key)
+            target_nodes = exact_nodes or simple_symbol_to_nodes.get(symbol_key)
+            if target_nodes:
                 valid_matches = [
-                    match
-                    for match in symbol_to_nodes[symbol_key]
-                    if match != source_id
+                    match for match in target_nodes if match != source_id
                 ]
                 if len(valid_matches) == 1:
                     graph.add_edge(source_id, valid_matches[0])
@@ -510,13 +521,11 @@ class ArtifactDependencyGraph:
                 for mod, path in re.findall(identifier_pattern, text):
                     resolve_and_link(source_id, f"{mod}:{path}", "registry")
 
-                for symbol, target_nodes in symbol_to_nodes.items():
-                    if symbol in text and any(
-                        target != source_id for target in target_nodes
-                    ):
-                        for target in target_nodes:
-                            if target != source_id:
-                                graph.add_edge(source_id, target)
+                referenced_tokens = set(_IDENTIFIER_TOKEN.findall(text))
+                for symbol in referenced_tokens.intersection(simple_symbol_to_nodes):
+                    for target in simple_symbol_to_nodes[symbol]:
+                        if target != source_id:
+                            graph.add_edge(source_id, target)
 
             elif kind == ArtifactKind.MODEL_JSON:
                 try:
@@ -565,11 +574,11 @@ class ArtifactDependencyGraph:
                         resolve_and_link(source_id, ref, "data_ref")
 
             elif kind in {ArtifactKind.MOD_METADATA, ArtifactKind.MIXIN_CONFIG}:
-                for symbol, target_nodes in symbol_to_nodes.items():
-                    if symbol in text:
-                        for target in target_nodes:
-                            if target != source_id:
-                                graph.add_edge(source_id, target)
+                referenced_tokens = set(_IDENTIFIER_TOKEN.findall(text))
+                for symbol in referenced_tokens.intersection(simple_symbol_to_nodes):
+                    for target in simple_symbol_to_nodes[symbol]:
+                        if target != source_id:
+                            graph.add_edge(source_id, target)
 
         return graph
 
@@ -618,7 +627,12 @@ class ArtifactDependencyGraph:
         self,
         seed_nodes: Sequence[str] | None = None,
     ) -> list[list[str]]:
-        """Compute directional transitive closures on the SCC condensation DAG."""
+        """Compute directional transitive closures on the SCC condensation DAG.
+
+        For the unseeded case only SCC roots can produce maximal directional
+        closures, so non-root closure construction and pairwise subset scans are
+        skipped entirely.
+        """
 
         sccs = self.compute_scc()
         node_to_scc: dict[str, int] = {}
@@ -629,20 +643,26 @@ class ArtifactDependencyGraph:
         scc_dag_adj: dict[int, set[int]] = {
             index: set() for index in range(len(sccs))
         }
+        incoming = [0 for _ in sccs]
         for source, targets in self.adjacency.items():
             source_scc = node_to_scc.get(source)
             if source_scc is None:
                 continue
             for target in targets:
                 target_scc = node_to_scc.get(target)
-                if target_scc is not None and source_scc != target_scc:
+                if (
+                    target_scc is not None
+                    and source_scc != target_scc
+                    and target_scc not in scc_dag_adj[source_scc]
+                ):
                     scc_dag_adj[source_scc].add(target_scc)
+                    incoming[target_scc] += 1
 
         def reachable_sccs(start_scc: int) -> set[int]:
             visited: set[int] = {start_scc}
-            queue = [start_scc]
+            queue: deque[int] = deque((start_scc,))
             while queue:
-                current = queue.pop(0)
+                current = queue.popleft()
                 for neighbor in scc_dag_adj.get(current, ()):
                     if neighbor not in visited:
                         visited.add(neighbor)
@@ -653,37 +673,24 @@ class ArtifactDependencyGraph:
         seen_closures: set[tuple[str, ...]] = set()
 
         if seed_nodes is not None:
-            for seed in seed_nodes:
-                seed_scc = node_to_scc.get(seed)
-                if seed_scc is None:
-                    continue
-                reachable = reachable_sccs(seed_scc)
-                closure_nodes: list[str] = []
-                for scc_index in reachable:
-                    closure_nodes.extend(sccs[scc_index])
-                sorted_closure = tuple(sorted(closure_nodes))
-                if sorted_closure not in seen_closures:
-                    seen_closures.add(sorted_closure)
-                    subgraphs.append(list(sorted_closure))
-            return subgraphs
+            start_sccs = [
+                node_to_scc[seed]
+                for seed in seed_nodes
+                if seed in node_to_scc
+            ]
+        else:
+            start_sccs = [
+                index for index, count in enumerate(incoming) if count == 0
+            ]
 
-        all_closures: list[set[str]] = []
-        for scc_index in range(len(sccs)):
-            reachable = reachable_sccs(scc_index)
-            closure_nodes_set: set[str] = set()
-            for reachable_index in reachable:
-                closure_nodes_set.update(sccs[reachable_index])
-            all_closures.append(closure_nodes_set)
+        for start_scc in dict.fromkeys(start_sccs):
+            reachable = reachable_sccs(start_scc)
+            closure_nodes: list[str] = []
+            for scc_index in reachable:
+                closure_nodes.extend(sccs[scc_index])
+            sorted_closure = tuple(sorted(closure_nodes))
+            if sorted_closure not in seen_closures:
+                seen_closures.add(sorted_closure)
+                subgraphs.append(list(sorted_closure))
 
-        maximal_closures: list[list[str]] = []
-        for index, closure in enumerate(all_closures):
-            is_subsumed = any(
-                index != other_index and closure < other_closure
-                for other_index, other_closure in enumerate(all_closures)
-            )
-            if not is_subsumed:
-                sorted_component = sorted(closure)
-                if sorted_component not in maximal_closures:
-                    maximal_closures.append(sorted_component)
-
-        return maximal_closures
+        return subgraphs
