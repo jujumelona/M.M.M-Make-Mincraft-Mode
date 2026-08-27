@@ -70,12 +70,16 @@ class ArtifactEdge:
     source_id: str
     target_id: str
     dependency_type: str
+    is_unresolved: bool = False
+    is_mandatory: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_id": self.source_id,
             "target_id": self.target_id,
             "dependency_type": self.dependency_type,
+            "is_unresolved": self.is_unresolved,
+            "is_mandatory": self.is_mandatory,
         }
 
 
@@ -229,11 +233,92 @@ class ArtifactDependencyGraph:
 
         return _classify_artifact_kind(path_str)
 
-    def __init__(self) -> None:
+    def __init__(self, target_context: Mapping[str, Any] | None = None) -> None:
         self.nodes: dict[str, ArtifactNode] = {}
         self.adjacency: dict[str, set[str]] = {}
         self.unresolved_edges: list[UnresolvedArtifactEdge] = []
         self.ambiguous_edges: list[UnresolvedArtifactEdge] = []
+        context = dict(target_context or {})
+        self.target_modid = str(context.get("target_modid") or "").strip().casefold()
+        self.target_package = str(context.get("target_package") or "").strip()
+
+    @property
+    def edges(self) -> tuple[ArtifactEdge, ...]:
+        """Expose resolved and classified unresolved edges for final assembly gates."""
+
+        values: list[ArtifactEdge] = []
+        for source_id, targets in self.adjacency.items():
+            values.extend(
+                ArtifactEdge(
+                    source_id=source_id,
+                    target_id=target_id,
+                    dependency_type="reference",
+                )
+                for target_id in sorted(targets)
+            )
+        for edge in (*self.unresolved_edges, *self.ambiguous_edges):
+            values.append(
+                ArtifactEdge(
+                    source_id=edge.source_id,
+                    target_id=edge.requested_target,
+                    dependency_type=edge.relation,
+                    is_unresolved=True,
+                    is_mandatory=self.is_mandatory_unresolved(edge),
+                )
+            )
+        return tuple(values)
+
+    def is_mandatory_unresolved(self, edge: UnresolvedArtifactEdge) -> bool:
+        """Return True only for unresolved references owned by the assembled target.
+
+        JDK, Minecraft, loader and third-party classes/resources are external build
+        dependencies and must be validated by Gradle, not mistaken for missing local
+        artifacts. Explicit references to the target package or target resource
+        namespace are mandatory and therefore fail final assembly when unresolved.
+        """
+
+        target = str(edge.requested_target or "").strip()
+        if not target:
+            return False
+        low = target.casefold()
+
+        if edge.relation in {"import", "mixin_target", "entrypoint"}:
+            if self.target_package and (
+                target == self.target_package
+                or target.startswith(self.target_package + ".")
+            ):
+                return True
+            external_prefixes = (
+                "java.",
+                "javax.",
+                "jdk.",
+                "kotlin.",
+                "org.",
+                "com.google.",
+                "com.mojang.",
+                "net.minecraft.",
+                "net.fabricmc.",
+                "net.minecraftforge.",
+                "net.neoforged.",
+            )
+            return not target.startswith(external_prefixes) and "." not in target
+
+        if low.startswith("minecraft:"):
+            return False
+        if ":" in low:
+            namespace = low.split(":", 1)[0]
+            return bool(self.target_modid and namespace == self.target_modid)
+
+        if edge.relation in {
+            "model_parent",
+            "texture_ref",
+            "blockstate_model",
+            "registry",
+            "data_ref",
+            "tag_ref",
+        }:
+            return bool(self.target_modid)
+        return False
 
     def add_node(self, node: ArtifactNode) -> None:
         self.nodes[node.id] = node
@@ -269,10 +354,11 @@ class ArtifactDependencyGraph:
         cls,
         files: Mapping[str, Any],
         known_symbols: Mapping[str, Sequence[str]] | None = None,
+        target_context: Mapping[str, Any] | None = None,
     ) -> ArtifactDependencyGraph:
         """Parse files with schema-aware extractors and build directional edges."""
 
-        graph = cls()
+        graph = cls(target_context=target_context)
         fqcn_to_node: dict[str, str] = {}
         symbol_to_nodes: dict[str, list[str]] = {}
         logical_res_to_nodes: dict[str, list[str]] = {}
