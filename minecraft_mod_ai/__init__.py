@@ -3,6 +3,7 @@
 from .evidence_request_guard import install_evidence_request_guard
 from .semantic_requirement_authority import install_semantic_requirement_authority
 from .evidence_obligation_contract import install_evidence_obligation_contract
+from .target_grounding_contract import install_target_grounding_contract
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
@@ -11,6 +12,7 @@ finalize_runtime()
 install_evidence_request_guard()
 install_semantic_requirement_authority()
 install_evidence_obligation_contract()
+install_target_grounding_contract()
 
 from .api import (
     ChatReply,
