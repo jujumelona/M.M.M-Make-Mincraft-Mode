@@ -47,42 +47,16 @@ def test_requirement_acceptance_never_copies_whole_prompt() -> None:
     assert all("Verify the observable player-facing behavior for capability" in item for item in acceptance)
 
 
-def test_task_acceptance_excludes_internal_integrity_checks() -> None:
+def test_task_acceptance_keeps_internal_checks_for_dag_validation() -> None:
     public_acceptance = "Verify the observable player-facing behavior for capability economy.trade."
-    gaps = [
-        {
-            "gap_id": "gap_trade",
-            "requirement_ref": "req_trade",
-            "capability": "economy.trade",
-            "missing_provides": ["capability:economy.trade"],
-            "acceptance": [public_acceptance],
-        }
-    ]
-    reuse = [
-        {
-            "requirement_ref": "req_trade",
-            "component_refs": [],
-            "source_refs": [],
-        }
-    ]
-    target = {"coordinates": {"minecraft_version": "1.21.1", "loader": "neoforge"}}
-    branches = {name: {"status": "NOT_APPLICABLE"} for name in _BRANCHES}
-    ownership = {
-        "module_id": ":",
-        "source_set": "main",
-        "source_root": "src/main/java",
-        "resource_root": "src/main/resources",
-        "test_root": "src/test/java",
-        "namespace": "generated.test",
-        "mod_id": "test",
-        "extension": "java",
-        "topology_module_ids": [],
-        "topology_source_sets": [],
-    }
+    gaps = [{"gap_id":"gap_trade","requirement_ref":"req_trade","capability":"economy.trade","missing_provides":["capability:economy.trade"],"acceptance":[public_acceptance]}]
+    reuse = [{"requirement_ref":"req_trade","component_refs":[],"source_refs":[]}]
+    target = {"coordinates": {"minecraft_version":"1.21.1","loader":"neoforge"}}
+    branches = {name: {"status":"NOT_APPLICABLE"} for name in _BRANCHES}
+    ownership = {"module_id":":","source_set":"main","source_root":"src/main/java","resource_root":"src/main/resources","test_root":"src/test/java","namespace":"generated.test","mod_id":"test","extension":"java","topology_module_ids":[],"topology_source_sets":[]}
     tasks = _compile_tasks(gaps, reuse, target, branches, ownership)
-    flattened = [item for task in tasks for item in task["acceptance"]]
-    assert flattened == [public_acceptance]
-    assert all(not item.startswith("task_") for item in flattened)
-    assert all("owned anchors" not in item.casefold() for item in flattened)
-    assert all("declared provides" not in item.casefold() for item in flattened)
+    assert tasks
+    assert all(task["acceptance"] for task in tasks)
+    assert all(any("declared provides" in item.casefold() for item in task["acceptance"]) for task in tasks)
+    assert public_acceptance in tasks[-1]["acceptance"]
 

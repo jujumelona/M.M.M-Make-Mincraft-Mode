@@ -306,6 +306,7 @@ def _stub_semantic_model(
             and not node.capability_id.startswith("unresolved:")
         )
     )
+    candidates = candidates[:1]
     return SemanticRequirementIR(
         source_start=source_start,
         source_end=source_end,
@@ -463,12 +464,39 @@ def _expand_semantic_ir(
     return tuple(gameplay), tuple(implementation), ir.unresolved
 
 
+def _semantic_ir_variants(
+    ir: SemanticRequirementIR,
+) -> tuple[SemanticRequirementIR, ...]:
+    """Split independent model roots into independently plannable requirements."""
+    if len(ir.gameplay_capability_candidates) <= 1:
+        return (ir,)
+    variants: list[SemanticRequirementIR] = []
+    seen_roots: set[str] = set()
+    for candidate in ir.gameplay_capability_candidates:
+        variant = SemanticRequirementIR(
+            source_start=ir.source_start,
+            source_end=ir.source_end,
+            source_sha256=ir.source_sha256,
+            intent=ir.intent,
+            gameplay_capability_candidates=(candidate,),
+            confidence=ir.confidence,
+            unresolved=ir.unresolved,
+        )
+        gameplay, _implementation, _unresolved = _expand_semantic_ir(variant)
+        root = (gameplay[0] if gameplay else candidate).casefold().strip()
+        if not root or root in seen_roots:
+            continue
+        seen_roots.add(root)
+        variants.append(variant)
+    return tuple(variants) or (ir,)
+
+
 def _semantic_requirement_fields(
     capability: str,
     ir: SemanticRequirementIR,
     requirement_id: str,
     *,
-    is_design_module: bool = False,
+    is_design_module: bool | None = None,
 ) -> dict[str, Any]:
     """Build deterministic traceability fields from a model-produced SemanticRequirementIR.
 
@@ -478,13 +506,16 @@ def _semantic_requirement_fields(
     module covered the clause) get gameplay root promotion via the IR candidates.
     """
     gameplay, implementation, unresolved_flag = _expand_semantic_ir(ir)
-    if is_design_module:
+    if is_design_module is True:
         # Design module IDs are authority — preserve verbatim, no promotion.
         selected: tuple[str, ...] = (capability,)
-    else:
-        # Prompt provenance is already explicit in is_design_module. Never compare
-        # a raw-text fallback ID to a model-translated intent string.
+    elif is_design_module is False:
+        # Prompt provenance is explicit: semantic gameplay roots may replace the
+        # raw fallback identity only on prompt-derived requirements.
         selected = gameplay if gameplay else (capability,)
+    else:
+        # No provenance proof: preserve the explicit capability instead of guessing.
+        selected = (capability,)
     primary = selected[0]
     artifact_tasks = tuple(
         _stable_id(
@@ -672,45 +703,50 @@ def _merge_catalog_uncovered_prompt_requirements(
         additions, start=len(requirements)
     ):
         span = _source_span(prompt, statement)
-        requirement_id = _stable_id(
-            "req",
-            capability,
-            {
-                "prompt_sha256": _sha(prompt),
-                "index": index,
-                "span": [span["char_start"], span["char_end"]],
-            },
-        )
         matching_acceptance = tuple(
             item
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
-        ir = _invoke_semantic_model(statement, span["char_start"], span["char_end"], prompt, router)
+        ir = _invoke_semantic_model(
+            statement, span["char_start"], span["char_end"], prompt, router
+        )
         _validate_semantic_ir(ir, prompt)
-        semantic = _semantic_requirement_fields(
-            capability, ir, requirement_id
-        )
-        requirements.append(
-            {
-                "requirement_id": requirement_id,
-                "capability": semantic["capability"],
-                "statement": statement,
-                "mandatory": True,
-                "source_span": span,
-                "provides": semantic["provides"],
-                "gameplay_capabilities": semantic["gameplay_capabilities"],
-                "implementation_capabilities": semantic[
-                    "implementation_capabilities"
-                ],
-                "artifact_task_ids": semantic["artifact_task_ids"],
-                "semantic_status": semantic["semantic_status"],
-                "unresolved_spans": semantic["unresolved_spans"],
-                "acceptance": list(
-                    _requirement_acceptance(capability, matching_acceptance)
-                ),
+        variants = _semantic_ir_variants(ir)
+        for variant_index, variant_ir in enumerate(variants):
+            gameplay, _implementation, _unresolved = _expand_semantic_ir(variant_ir)
+            semantic_id = gameplay[0] if gameplay else capability
+            discriminator = {
+                "prompt_sha256": _sha(prompt),
+                "index": index,
+                "span": [span["char_start"], span["char_end"]],
             }
-        )
+            if len(variants) > 1:
+                discriminator["semantic_variant"] = variant_index
+            requirement_id = _stable_id("req", semantic_id, discriminator)
+            semantic = _semantic_requirement_fields(
+                capability, variant_ir, requirement_id, is_design_module=False
+            )
+            requirements.append(
+                {
+                    "requirement_id": requirement_id,
+                    "capability": semantic["capability"],
+                    "statement": statement,
+                    "mandatory": True,
+                    "source_span": span,
+                    "provides": semantic["provides"],
+                    "gameplay_capabilities": semantic["gameplay_capabilities"],
+                    "implementation_capabilities": semantic["implementation_capabilities"],
+                    "artifact_task_ids": semantic["artifact_task_ids"],
+                    "semantic_status": semantic["semantic_status"],
+                    "unresolved_spans": semantic["unresolved_spans"],
+                    "acceptance": list(
+                        _requirement_acceptance(
+                            str(semantic["capability"]), matching_acceptance
+                        )
+                    ),
+                }
+            )
 
     merged = dict(catalog)
     merged["requirements"] = requirements
@@ -780,47 +816,52 @@ def build_request_catalog(
     requirements: list[dict[str, Any]] = []
     for index, (capability, statement, from_design_module) in enumerate(records):
         span = _source_span(prompt, statement)
-        requirement_id = _stable_id(
-            "req",
-            capability,
-            {
-                "prompt_sha256": _sha(prompt),
-                "index": index,
-                "span": [span["char_start"], span["char_end"]],
-            },
-        )
         matching_acceptance = tuple(
             item
             for item in acceptance_source
             if _word_overlap(item, f"{capability} {statement}")
         )
-        acceptance = _requirement_acceptance(
-            capability, matching_acceptance
+        ir = _invoke_semantic_model(
+            statement, span["char_start"], span["char_end"], prompt, router
         )
-        ir = _invoke_semantic_model(statement, span["char_start"], span["char_end"], prompt, router)
         _validate_semantic_ir(ir, prompt)
-        semantic = _semantic_requirement_fields(
-            capability, ir, requirement_id,
-            is_design_module=from_design_module,
-        )
-        requirements.append(
-            {
-                "requirement_id": requirement_id,
-                "capability": semantic["capability"],
-                "statement": statement,
-                "mandatory": True,
-                "source_span": span,
-                "provides": semantic["provides"],
-                "gameplay_capabilities": semantic["gameplay_capabilities"],
-                "implementation_capabilities": semantic[
-                    "implementation_capabilities"
-                ],
-                "artifact_task_ids": semantic["artifact_task_ids"],
-                "semantic_status": semantic["semantic_status"],
-                "unresolved_spans": semantic["unresolved_spans"],
-                "acceptance": list(acceptance),
+        variants = (ir,) if from_design_module else _semantic_ir_variants(ir)
+        for variant_index, variant_ir in enumerate(variants):
+            gameplay, _implementation, _unresolved = _expand_semantic_ir(variant_ir)
+            semantic_id = capability if from_design_module else (
+                gameplay[0] if gameplay else capability
+            )
+            discriminator = {
+                "prompt_sha256": _sha(prompt),
+                "index": index,
+                "span": [span["char_start"], span["char_end"]],
             }
-        )
+            if len(variants) > 1:
+                discriminator["semantic_variant"] = variant_index
+            requirement_id = _stable_id("req", semantic_id, discriminator)
+            semantic = _semantic_requirement_fields(
+                capability, variant_ir, requirement_id,
+                is_design_module=from_design_module,
+            )
+            acceptance = _requirement_acceptance(
+                str(semantic["capability"]), matching_acceptance
+            )
+            requirements.append(
+                {
+                    "requirement_id": requirement_id,
+                    "capability": semantic["capability"],
+                    "statement": statement,
+                    "mandatory": True,
+                    "source_span": span,
+                    "provides": semantic["provides"],
+                    "gameplay_capabilities": semantic["gameplay_capabilities"],
+                    "implementation_capabilities": semantic["implementation_capabilities"],
+                    "artifact_task_ids": semantic["artifact_task_ids"],
+                    "semantic_status": semantic["semantic_status"],
+                    "unresolved_spans": semantic["unresolved_spans"],
+                    "acceptance": list(acceptance),
+                }
+            )
 
     purpose = str(game_design.get("pitch") or game_design.get("description") or prompt).strip()
     catalog: dict[str, Any] = {
@@ -876,34 +917,22 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError(
                 "A technical implementation primitive cannot be a top-level user requirement."
             )
-        # Gameplay binding check: only applies to prompt-derived requirements where
-        # gameplay root promotion actually occurred (gameplay_capabilities differ from
-        # the provides set).  Design-module requirements have gameplay_capabilities
-        # equal to their provides — no promotion occurred, no re-validation needed.
+        # Replay stored Semantic Model output only; never reinterpret raw text.
         gameplay_caps = frozenset(
-            str(v).removeprefix("capability:") for v in requirement.get("gameplay_capabilities", ())
+            str(v).removeprefix("capability:")
+            for v in requirement.get("gameplay_capabilities", ())
             if str(v).strip()
         )
         provides_set = frozenset(provides)
-        promotion_occurred = bool(gameplay_caps) and gameplay_caps != provides_set
-        if promotion_occurred:
-            # Replay from stored IR output — do NOT re-run the ontology resolver on
-            # raw text.  The stored gameplay_capabilities ARE the model-produced IR
-            # output already validated at catalog build time.
-            stored_gameplay = frozenset(
-                str(v).removeprefix("capability:")
-                for v in requirement.get("gameplay_capabilities", ())
-                if str(v).strip()
+        stored_status = str(requirement.get("semantic_status", "RESOLVED"))
+        if stored_status == "UNRESOLVED" and not gameplay_caps:
+            raise EvidencePlanError(
+                "Mandatory request text is unresolved; generation is blocked."
             )
-            stored_status = str(requirement.get("semantic_status", "RESOLVED"))
-            if stored_status == "UNRESOLVED" and not stored_gameplay:
-                raise EvidencePlanError(
-                    "Mandatory request text is unresolved; generation is blocked."
-                )
-            if stored_gameplay and not stored_gameplay.intersection(provides_set):
-                raise EvidencePlanError(
-                    "Requirement semantic binding lost a gameplay capability."
-                )
+        if gameplay_caps and not gameplay_caps.intersection(provides_set):
+            raise EvidencePlanError(
+                "Requirement semantic binding lost a gameplay capability."
+            )
 
 
 def _word_overlap(left: str, right: str) -> bool:
@@ -1719,15 +1748,17 @@ def _compile_tasks(
                 for name, value in branches.items()
                 if value.get("status") == "ACTIVE" and _step_uses_branch(step, name)
             ]
-            # Structural integrity is enforced by done_predicate below.
-            # task.acceptance carries only public requirement acceptance on the
-            # terminal semantic step, so downstream aggregation cannot expose
-            # task IDs, owned-anchor checks, or gate mechanics to the user.
+            # Task-local validation is executable DAG state. Public/release
+            # acceptance is projected separately from requirement acceptance.
             acceptance = [
-                str(item)
-                for item in gap.get("acceptance", ())
-                if index == len(steps) - 1 and _is_public_acceptance(item)
+                f"{task_id}: all declared provides exist and all owned anchors pass their integrity checks"
             ]
+            if index == len(steps) - 1:
+                acceptance.extend(
+                    str(item)
+                    for item in gap.get("acceptance", ())
+                    if _is_public_acceptance(item)
+                )
             task: dict[str, Any] = {
                 "task_id": task_id,
                 "semantic_outcome": step.outcome,
@@ -1870,8 +1901,11 @@ def compile_evidence_first_plan(
     component_catalog: Any = None,
     reuse_plan: Mapping[str, Any] | None = None,
     target_decision: Mapping[str, Any] | None = None,
+    semantic_router: Any | None = None,
 ) -> dict[str, Any]:
-    request_catalog = build_request_catalog(prompt, game_design)
+    request_catalog = build_request_catalog(
+        prompt, game_design, router=semantic_router
+    )
     # Do not let an unresolved mandatory span or a primitive-only capability
     # reach reuse discovery or coder generation.  Direct catalog inspection may
     # expose unresolved work for review; production compilation may not proceed.
