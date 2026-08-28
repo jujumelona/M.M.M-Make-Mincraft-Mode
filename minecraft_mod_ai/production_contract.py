@@ -129,6 +129,30 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         ref = 'acceptance:' + requirement_ref
         if requirement['source'] == 'research_brief':
             statement = f"[{requirement_ref}] Verify the scoped research item is current, compatible, licensed, and used only within its evidence scope: {requirement['statement']}"
+        elif requirement['source'] == 'evidence_plan':
+            if normalized_evidence_plan is None:
+                raise ProductionContractError('evidence requirement has no validated evidence plan')
+            bindings = normalized_evidence_plan.get('acceptance_release_bindings')
+            if not isinstance(bindings, list):
+                raise ProductionContractError('evidence plan acceptance bindings are missing')
+            matching_bindings = [
+                item
+                for item in bindings
+                if isinstance(item, Mapping)
+                and item.get('requirement_ref') == requirement_ref
+            ]
+            if len(matching_bindings) != 1:
+                raise ProductionContractError(
+                    f'evidence requirement needs exactly one release acceptance binding: {requirement_ref}'
+                )
+            public_checks = _require_string_list(
+                matching_bindings[0].get('acceptance'),
+                f'evidence public acceptance: {requirement_ref}',
+                nonempty=True,
+            )
+            for public_check in public_checks:
+                _validate_public_acceptance(public_check)
+            statement = f"[{requirement_ref}] " + '; '.join(public_checks)
         else:
             statement = f"[{requirement_ref}] Demonstrate observable behavior or output satisfying: {requirement['statement']}"
         statement = _unique_acceptance_statement(statement, used_acceptance_statements)
