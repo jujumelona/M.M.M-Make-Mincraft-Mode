@@ -1,0 +1,89 @@
+name: One-shot localization bottleneck fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/localization-bottleneck-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Remove repeated localization work
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one replacement, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''    attempted_queries: set[str] = field(default_factory=set)\n    attempted_sources: set[str] = field(default_factory=set)\n    evidence_fingerprints: set[str] = field(default_factory=set)\n''',
+              '''    attempted_queries: set[str] = field(default_factory=set)\n    attempted_sources: set[str] = field(default_factory=set)\n    localization_attempted_sources: set[str] = field(default_factory=set)\n    evidence_fingerprints: set[str] = field(default_factory=set)\n''',
+          )
+
+          replace_once(
+              '''    def record_attempted_source(self, tool_name: str, arguments: Mapping[str, Any]) -> None:\n        source = retrieval_source_key(tool_name, arguments)\n        with self._lock:\n            self.attempted_sources.add(source)\n\n    def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:\n''',
+              '''    def record_attempted_source(\n        self,\n        tool_name: str,\n        arguments: Mapping[str, Any],\n        *,\n        localization_stage: LocalizationStage | None = None,\n    ) -> None:\n        source = retrieval_source_key(tool_name, arguments)\n        with self._lock:\n            self.attempted_sources.add(source)\n            if localization_stage is not None:\n                self.localization_attempted_sources.add(\n                    f"{localization_stage.value}:{source}"\n                )\n\n    def attempted_sources_for_localization_stage(\n        self,\n        localization_stage: LocalizationStage,\n    ) -> frozenset[str]:\n        prefix = f"{localization_stage.value}:"\n        with self._lock:\n            return frozenset(\n                item[len(prefix):]\n                for item in self.localization_attempted_sources\n                if item.startswith(prefix)\n            )\n\n    def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:\n''',
+          )
+
+          replace_once(
+              '''    def next_untried_internal_tool(\n        self,\n        exposed_tools: Sequence[str] | set[str] | frozenset[str],\n        *,\n        preferred: Sequence[str],\n    ) -> str | None:\n        exposed = set(exposed_tools)\n        with self._lock:\n            for name in preferred:\n                if name in exposed and name not in self.attempted_sources:\n                    return name\n        return None\n''',
+              '''    def next_untried_internal_tool(\n        self,\n        exposed_tools: Sequence[str] | set[str] | frozenset[str],\n        *,\n        preferred: Sequence[str],\n        localization_stage: LocalizationStage | None = None,\n    ) -> str | None:\n        exposed = set(exposed_tools)\n        attempted = (\n            self.attempted_sources_for_localization_stage(localization_stage)\n            if localization_stage is not None\n            else frozenset(self.attempted_sources)\n        )\n        for name in preferred:\n            if name in exposed and name not in attempted:\n                return name\n        return None\n''',
+          )
+
+          replace_once(
+              '''        if stage == LocalizationStage.NEED_FILE:\n            preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]\n            if not selected_names:\n                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]\n        elif stage == LocalizationStage.NEED_SYMBOL:\n            preferred = ("java_workspace_symbols", "java_diagnostics", "search_code_rag", "search_project_rag")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]\n            if not selected_names:\n                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]\n        elif stage == LocalizationStage.NEED_BODY:\n            preferred = ("search_code_rag", "inspect_existing_mod")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]\n            if not selected_names:\n                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]\n''',
+              '''        if stage == LocalizationStage.NEED_FILE:\n            preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else []\n        elif stage == LocalizationStage.NEED_SYMBOL:\n            preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else []\n        elif stage == LocalizationStage.NEED_BODY:\n            preferred = ("search_code_rag", "inspect_existing_mod")\n            untried = [name for name in preferred if name in by_name and name not in attempted_sources]\n            selected_names = [untried[0]] if untried else []\n''',
+          )
+
+          replace_once(
+              '''        phase_tools = _filter_tools_for_phase(\n            all_exposed_tools,\n            state.phase,\n            role,\n            mutation_context=state.mutation_context,\n            attempted_sources=state.attempted_sources,\n        )\n        phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))\n''',
+              '''        current_localization_stage = (\n            state.mutation_context.localization_stage\n            if state.mutation_context is not None\n            else LocalizationStage.NEED_FILE\n        )\n        phase_attempted_sources = (\n            state.attempted_sources_for_localization_stage(current_localization_stage)\n            if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE\n            else frozenset(state.attempted_sources)\n        )\n        phase_tools = _filter_tools_for_phase(\n            all_exposed_tools,\n            state.phase,\n            role,\n            mutation_context=state.mutation_context,\n            attempted_sources=phase_attempted_sources,\n        )\n        phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))\n        if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:\n            state.termination_reason = "MUTATION_LOCALIZATION_STALLED"\n            raise ModelConfigurationError(\n                "MUTATION_LOCALIZATION_STALLED: no untried reviewed localization source remains "\n                f"for stage {current_localization_stage.value}; refusing a repeated retrieval/model round."\n            )\n''',
+          )
+
+          replace_once(
+              '''                    forced_tool = state.next_untried_internal_tool(\n                        all_exposed_names,\n                        preferred=preferred,\n                    )\n''',
+              '''                    forced_tool = state.next_untried_internal_tool(\n                        all_exposed_names,\n                        preferred=preferred,\n                        localization_stage=loc_stage,\n                    )\n''',
+          )
+
+          replace_once(
+              '''                state.record_attempted_source(call.name, call.arguments)\n\n            try:\n''',
+              '''                localization_attempt_stage = (\n                    current_localization_stage\n                    if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE\n                    else None\n                )\n                state.record_attempted_source(\n                    call.name,\n                    call.arguments,\n                    localization_stage=localization_attempt_stage,\n                )\n\n            try:\n''',
+          )
+
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_localization_bottleneck_contract.py')
+          test.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai import progress_aware_tool_loop as loop\n\n\ndef _schema(name: str) -> dict:\n    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}\n\n\ndef _names(schemas) -> tuple[str, ...]:\n    return tuple(schema["function"]["name"] for schema in schemas)\n\n\ndef test_need_symbol_never_uses_diagnostics_or_reexposes_exhausted_source() -> None:\n    tools = tuple(\n        _schema(name)\n        for name in (\n            "java_workspace_symbols",\n            "java_diagnostics",\n            "search_code_rag",\n            "search_project_rag",\n        )\n    )\n    ctx = loop.TargetMutationContext(target_path="src/main/java/example/Foo.java")\n\n    first = loop._filter_tools_for_phase(\n        tools, loop.LoopPhase.OBSERVE, "coder", mutation_context=ctx\n    )\n    assert _names(first) == ("java_workspace_symbols",)\n\n    second = loop._filter_tools_for_phase(\n        tools,\n        loop.LoopPhase.OBSERVE,\n        "coder",\n        mutation_context=ctx,\n        attempted_sources={"java_workspace_symbols"},\n    )\n    assert _names(second) == ("search_code_rag",)\n    assert "java_diagnostics" not in _names(second)\n\n    exhausted = loop._filter_tools_for_phase(\n        tools,\n        loop.LoopPhase.OBSERVE,\n        "coder",\n        mutation_context=ctx,\n        attempted_sources={\n            "java_workspace_symbols",\n            "search_code_rag",\n            "search_project_rag",\n        },\n    )\n    assert exhausted == ()\n\n\ndef test_localization_attempt_memory_is_stage_scoped() -> None:\n    state = loop.HostRunState()\n    args = {"query": "Foo service"}\n    state.record_attempted_source(\n        "search_code_rag",\n        args,\n        localization_stage=loop.LocalizationStage.NEED_FILE,\n    )\n\n    assert state.attempted_sources_for_localization_stage(\n        loop.LocalizationStage.NEED_FILE\n    ) == frozenset({"search_code_rag"})\n    assert state.attempted_sources_for_localization_stage(\n        loop.LocalizationStage.NEED_BODY\n    ) == frozenset()\n    assert state.next_untried_internal_tool(\n        {"search_code_rag"},\n        preferred=("search_code_rag",),\n        localization_stage=loop.LocalizationStage.NEED_FILE,\n    ) is None\n    assert state.next_untried_internal_tool(\n        {"search_code_rag"},\n        preferred=("search_code_rag",),\n        localization_stage=loop.LocalizationStage.NEED_BODY,\n    ) == "search_code_rag"\n\n\ndef test_verify_keeps_java_diagnostics_available() -> None:\n    tools = (_schema("java_diagnostics"), _schema("search_code_rag"))\n    selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.VERIFY, "coder")\n    assert "java_diagnostics" in _names(selected)\n''', encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_localization_bottleneck_contract.py tests/test_agent_runtime_hot_paths.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit localization bottleneck fix directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_localization_bottleneck_contract.py
+          git rm .github/workflows/localization-bottleneck-fix.yml
+          git commit -m "perf: stop repeated mutation localization work"
+          git push origin HEAD:main
