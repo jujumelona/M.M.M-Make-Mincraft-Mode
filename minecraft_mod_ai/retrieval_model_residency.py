@@ -7,11 +7,15 @@ rerank repeatedly. Constructing a fresh adapter for every call defeats the adapt
 lazy model cache and repeatedly reloads the same Hugging Face weights. Broad lexical or
 ANN candidate discovery is cheap and may remain large, but a local CPU cross-encoder
 must only score the already-ranked shortlist rather than hundreds of repository chunks.
+
+The canonical ``ModelRouter.rerank`` CPU opt-in policy remains authoritative. This
+residency layer mirrors that early scheduling gate before it constructs or retrieves a
+resident adapter; residency must never turn a disabled dense path back on.
 """
 
 import os
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
@@ -19,6 +23,7 @@ _INIT_LOCK = threading.RLock()
 _DEFAULT_LOCAL_RERANK_DOCUMENTS = 8
 _MIN_LOCAL_RERANK_DOCUMENTS = 1
 _MAX_LOCAL_RERANK_DOCUMENTS = 64
+_DENSE_OPT_IN = "MMM_RAG_ENABLE_CPU_DENSE"
 
 
 def _cache_for(router: Any) -> tuple[threading.RLock, dict[tuple[str, str], Any]]:
@@ -61,6 +66,15 @@ def _local_rerank_document_limit() -> int:
     return max(_MIN_LOCAL_RERANK_DOCUMENTS, min(value, _MAX_LOCAL_RERANK_DOCUMENTS))
 
 
+def _cpu_dense_disabled(config: Any) -> bool:
+    extra = config.extra if isinstance(getattr(config, "extra", None), Mapping) else {}
+    device = str(extra.get("device", "cpu") or "cpu").strip().casefold()
+    return (
+        device.startswith("cpu")
+        and os.environ.get(_DENSE_OPT_IN, "").strip() != "1"
+    )
+
+
 def _bounded_rerank_scores(
     adapter: Any,
     query: str,
@@ -69,14 +83,7 @@ def _bounded_rerank_scores(
     instruction: str,
     local_cpu: bool,
 ) -> list[float]:
-    """Score only the pre-ranked local shortlist while preserving caller cardinality.
-
-    RAG callers present documents in cheap lexical/semantic rank order. When that list
-    is larger than the CPU budget, scoring the entire tail adds minutes of latency while
-    contributing progressively weaker candidates. The unscored tail receives a strict
-    floor below every scored item, so downstream zip/cardinality contracts stay intact
-    and no unseen tail item is accidentally promoted by the cross-encoder stage.
-    """
+    """Score only the pre-ranked local shortlist while preserving caller cardinality."""
 
     values = tuple(documents)
     if not values:
@@ -146,6 +153,8 @@ def install(*, model_router_module: Any) -> None:
                 raise model_router_module.ModelConfigurationError(
                     f"Role {role!r} does not expose a reranker adapter."
                 )
+            if _cpu_dense_disabled(config):
+                return []
             adapter = _resident_adapter(
                 self,
                 kind="reranker",
@@ -153,15 +162,14 @@ def install(*, model_router_module: Any) -> None:
                 config=config,
                 factory=model_router_module.RerankerAdapter,
             )
+            extra = config.extra if isinstance(getattr(config, "extra", None), Mapping) else {}
+            device = str(extra.get("device", "cpu") or "cpu").strip().casefold()
             return _bounded_rerank_scores(
                 adapter,
                 query,
                 documents,
                 instruction=instruction,
-                local_cpu=(
-                    str(getattr(config, "provider", "")) == "local"
-                    and not bool(getattr(config, "exclusive_gpu", False))
-                ),
+                local_cpu=device.startswith("cpu"),
             )
 
         rerank_resident._mmm_resident_reranker_adapter = True  # type: ignore[attr-defined]
