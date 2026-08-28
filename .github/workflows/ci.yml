@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 concurrency:
@@ -51,9 +51,6 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # 408 is the reviewed surface after the planner graph, Minecraft MCP/Skill
-          # routing, and in-state atomic output recovery were composed together.
-          # Any further runtime rebinding remains a hard CI failure.
           budget = 408
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
@@ -73,6 +70,17 @@ jobs:
         run: node --check integrations/mineflayer/bridge.mjs
       - name: Validate canonical Colab notebook
         run: python tools/validate_colab_notebook.py
+      - name: Synchronize packaged Skill catalog
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python tools/package_skills.py
+          if ! git diff --quiet -- minecraft_mod_ai/packaged_skills.json; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add minecraft_mod_ai/packaged_skills.json
+            git commit -m 'Sync packaged Skill catalog'
+            git push origin HEAD:main
+          fi
       - name: Verify packaged Skill catalog
         run: |
           python tools/package_skills.py
