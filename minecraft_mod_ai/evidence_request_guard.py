@@ -100,7 +100,55 @@ def _original_catalog_strict(
     return catalog
 
 
+def _normalize_public_acceptance_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Re-establish the public/internal acceptance boundary for every requirement.
+
+    Stored or intermediate catalogs are not trusted to keep task-local integrity text
+    out of public acceptance. Normalize every requirement through the host-owned public
+    acceptance predicate and rebind the catalog hash whenever anything changes.
+    """
+
+    raw_requirements = catalog.get("requirements")
+    if not isinstance(raw_requirements, list):
+        return dict(catalog)
+
+    requirements: list[Any] = []
+    changed = False
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            requirements.append(raw)
+            continue
+        item = dict(raw)
+        raw_acceptance = item.get("acceptance")
+        candidates = (
+            raw_acceptance
+            if isinstance(raw_acceptance, Sequence)
+            and not isinstance(raw_acceptance, (str, bytes, bytearray))
+            else ()
+        )
+        capability = str(item.get("capability") or "requested behavior").strip()
+        public_acceptance = list(
+            _evidence._requirement_acceptance(capability, candidates)
+        )
+        if item.get("acceptance") != public_acceptance:
+            item["acceptance"] = public_acceptance
+            changed = True
+        requirements.append(item)
+
+    if not changed:
+        return dict(catalog)
+
+    normalized = dict(catalog)
+    normalized["requirements"] = requirements
+    normalized["catalog_sha256"] = ""
+    normalized["catalog_sha256"] = _evidence._hash_without(
+        normalized, "catalog_sha256"
+    )
+    return normalized
+
+
 def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
+    catalog = _normalize_public_acceptance_catalog(catalog)
     raw_requirements = catalog.get("requirements")
     if not isinstance(raw_requirements, list):
         return catalog
@@ -175,8 +223,6 @@ def _build_request_catalog_with_semantic_root_expansion(
         game_design,
         router=router,
     )
-    if router is None:
-        return catalog
     return _split_multi_root_requirements(catalog)
 
 
@@ -194,7 +240,7 @@ def build_authoritative_request_catalog(
     """
 
     catalog = _original_catalog_strict(prompt, {}, router=router)
-    return _split_multi_root_requirements(catalog) if router is not None else catalog
+    return _split_multi_root_requirements(catalog)
 
 
 def install_evidence_request_guard() -> None:
