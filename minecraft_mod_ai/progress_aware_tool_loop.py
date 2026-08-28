@@ -361,6 +361,7 @@ class HostRunState:
     no_progress_streak: int = 0
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
+    localization_attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
@@ -383,10 +384,32 @@ class HostRunState:
         with self._lock:
             return sig in self.attempted_queries
 
-    def record_attempted_source(self, tool_name: str, arguments: Mapping[str, Any]) -> None:
+    def record_attempted_source(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        *,
+        localization_stage: LocalizationStage | None = None,
+    ) -> None:
         source = retrieval_source_key(tool_name, arguments)
         with self._lock:
             self.attempted_sources.add(source)
+            if localization_stage is not None:
+                self.localization_attempted_sources.add(
+                    f"{localization_stage.value}:{source}"
+                )
+
+    def attempted_sources_for_localization_stage(
+        self,
+        localization_stage: LocalizationStage,
+    ) -> frozenset[str]:
+        prefix = f"{localization_stage.value}:"
+        with self._lock:
+            return frozenset(
+                item[len(prefix):]
+                for item in self.localization_attempted_sources
+                if item.startswith(prefix)
+            )
 
     def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
         source = retrieval_source_key(tool_name, arguments)
@@ -444,12 +467,17 @@ class HostRunState:
         exposed_tools: Sequence[str] | set[str] | frozenset[str],
         *,
         preferred: Sequence[str],
+        localization_stage: LocalizationStage | None = None,
     ) -> str | None:
         exposed = set(exposed_tools)
-        with self._lock:
-            for name in preferred:
-                if name in exposed and name not in self.attempted_sources:
-                    return name
+        attempted = (
+            self.attempted_sources_for_localization_stage(localization_stage)
+            if localization_stage is not None
+            else frozenset(self.attempted_sources)
+        )
+        for name in preferred:
+            if name in exposed and name not in attempted:
+                return name
         return None
 
 
@@ -828,21 +856,15 @@ def _filter_tools_for_phase(
         if stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
             untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
-            if not selected_names:
-                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+            selected_names = [untried[0]] if untried else []
         elif stage == LocalizationStage.NEED_SYMBOL:
-            preferred = ("java_workspace_symbols", "java_diagnostics", "search_code_rag", "search_project_rag")
+            preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")
             untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
-            if not selected_names:
-                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+            selected_names = [untried[0]] if untried else []
         elif stage == LocalizationStage.NEED_BODY:
             preferred = ("search_code_rag", "inspect_existing_mod")
             untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else [name for name in preferred if name in by_name][:1]
-            if not selected_names:
-                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+            selected_names = [untried[0]] if untried else []
         else:
             selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
     elif phase == LoopPhase.ACT:
@@ -1077,14 +1099,30 @@ def generate_with_tools(
         )
         ctx_before = _mutation_context_dict(state.mutation_context)
 
+        current_localization_stage = (
+            state.mutation_context.localization_stage
+            if state.mutation_context is not None
+            else LocalizationStage.NEED_FILE
+        )
+        phase_attempted_sources = (
+            state.attempted_sources_for_localization_stage(current_localization_stage)
+            if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE
+            else frozenset(state.attempted_sources)
+        )
         phase_tools = _filter_tools_for_phase(
             all_exposed_tools,
             state.phase,
             role,
             mutation_context=state.mutation_context,
-            attempted_sources=state.attempted_sources,
+            attempted_sources=phase_attempted_sources,
         )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
+        if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:
+            state.termination_reason = "MUTATION_LOCALIZATION_STALLED"
+            raise ModelConfigurationError(
+                "MUTATION_LOCALIZATION_STALLED: no untried reviewed localization source remains "
+                f"for stage {current_localization_stage.value}; refusing a repeated retrieval/model round."
+            )
 
         tool_choice = request.tool_choice
         parallel_tool_calls = request.parallel_tool_calls
@@ -1275,6 +1313,7 @@ def generate_with_tools(
                     forced_tool = state.next_untried_internal_tool(
                         all_exposed_names,
                         preferred=preferred,
+                        localization_stage=loc_stage,
                     )
                     if forced_tool is not None:
                         forced_rag_tool = forced_tool
@@ -1387,7 +1426,16 @@ def generate_with_tools(
                         **route_metadata,
                         "error": err_msg,
                     }
-                state.record_attempted_source(call.name, call.arguments)
+                localization_attempt_stage = (
+                    current_localization_stage
+                    if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE
+                    else None
+                )
+                state.record_attempted_source(
+                    call.name,
+                    call.arguments,
+                    localization_stage=localization_attempt_stage,
+                )
 
             try:
                 if call.name.startswith("external_mcp_"):
