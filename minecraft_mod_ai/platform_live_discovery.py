@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import logging
+import os
 import re
 import threading
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -15,6 +18,47 @@ from typing import Any
 
 class PlatformDiscoveryError(RuntimeError):
     pass
+
+
+_LOGGER = logging.getLogger(__name__)
+_DEFAULT_DISCOVERY_RETRIES = 4
+_MAX_DISCOVERY_RETRIES = 6
+_RETRY_DELAYS = (0.25, 0.75, 1.5, 2.5, 4.0)
+
+
+def _emit_discovery_log(message: str, *, exc_info: bool = False) -> None:
+    """Make discovery failures visible in both normal Python and Colab output."""
+
+    _LOGGER.warning("%s", message, exc_info=exc_info)
+    print(f"platform discovery: {message}", flush=True)
+
+
+def _discovery_retries() -> int:
+    raw = os.environ.get(
+        "MMM_PLATFORM_DISCOVERY_RETRIES",
+        str(_DEFAULT_DISCOVERY_RETRIES),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_DISCOVERY_RETRIES
+    return max(1, min(_MAX_DISCOVERY_RETRIES, value))
+
+
+def _retry_request_url(url: str, attempt: int, exc: BaseException) -> str:
+    """Bust stale edge-cache responses while preserving the recorded source URL."""
+
+    status = getattr(exc, "code", None)
+    if attempt <= 1 or status not in {404, 408, 429, 500, 502, 503, 504}:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}mmm_platform_retry={attempt}"
+
+
+def _error_summary(exc: BaseException) -> str:
+    status = getattr(exc, "code", None)
+    status_text = f" status={status}" if status is not None else ""
+    return f"{type(exc).__name__}{status_text}: {exc}"
 
 
 @dataclass(frozen=True)
@@ -76,21 +120,61 @@ _PACK_VERSION = re.compile(
 
 
 def _fetch(url: str, *, timeout: int = 20) -> bytes:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "MMM-platform-discovery/1"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except Exception as exc:  # pragma: no cover - network-specific
-        raise PlatformDiscoveryError(f"official platform discovery failed: {url}: {exc}") from exc
+    retries = _discovery_retries()
+    last_error: BaseException | None = None
+    for attempt in range(1, retries + 1):
+        request_url = url
+        if last_error is not None:
+            request_url = _retry_request_url(url, attempt, last_error)
+        request = urllib.request.Request(
+            request_url,
+            headers={
+                "User-Agent": (
+                    "MMM-platform-discovery/2 "
+                    "(+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
+                ),
+                "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = response.read()
+            if attempt > 1:
+                _emit_discovery_log(
+                    f"recovered GET {url} on attempt {attempt}/{retries}"
+                )
+            return payload
+        except Exception as exc:  # noqa: BLE001 - bounded retry must see transport failures
+            last_error = exc
+            _emit_discovery_log(
+                f"GET {url} failed attempt {attempt}/{retries}; "
+                f"request_url={request_url}; {_error_summary(exc)}",
+                exc_info=attempt == retries,
+            )
+            if attempt >= retries:
+                break
+            delay = _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
+            _emit_discovery_log(
+                f"retrying GET {url} in {delay:.2f}s "
+                f"(next attempt {attempt + 1}/{retries})"
+            )
+            time.sleep(delay)
+
+    assert last_error is not None
+    raise PlatformDiscoveryError(
+        f"official platform discovery failed after {retries} attempt(s): "
+        f"{url}: {_error_summary(last_error)}"
+    ) from last_error
 
 
 def _json(url: str) -> Any:
     try:
         return json.loads(_fetch(url).decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _emit_discovery_log(f"invalid official JSON response: {url}: {exc}", exc_info=True)
         raise PlatformDiscoveryError(f"official JSON response was invalid: {url}") from exc
 
 
@@ -142,7 +226,7 @@ def _start_game_version_prefetch() -> Future[tuple[dict[str, Any], ...]]:
         def worker() -> None:
             try:
                 future.set_result(_discover_game_versions())
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 - propagate worker failure to caller
                 future.set_exception(exc)
 
         threading.Thread(
@@ -178,7 +262,11 @@ def start_platform_prefetch() -> None:
         try:
             _common_platform_metadata()
             _stable_java_versions()
-        except BaseException:
+        except BaseException as exc:  # noqa: BLE001 - background prefetch must not escape
+            _emit_discovery_log(
+                f"background platform metadata prefetch failed: {_error_summary(exc)}",
+                exc_info=True,
+            )
             return
 
     threading.Thread(
@@ -308,7 +396,10 @@ def _stable_java_versions() -> tuple[tuple[str, str], ...]:
             return version, ""
         try:
             return version, _java_from_detail(version, target_url)
-        except PlatformDiscoveryError:
+        except PlatformDiscoveryError as exc:
+            _emit_discovery_log(
+                f"Mojang Java metadata unavailable for Minecraft {version}: {exc}"
+            )
             return version, ""
 
     workers = min(8, len(versions))
@@ -352,7 +443,10 @@ def _release_article_url(version: str) -> str:
     value = str(version).strip()
     if not value or not re.fullmatch(r"[0-9A-Za-z_.-]+", value):
         raise PlatformDiscoveryError(f"invalid Minecraft version for release metadata: {version!r}")
-    return _MINECRAFT_ARTICLE.format(value.casefold())
+    # Minecraft's release article slugs use hyphens between numeric version
+    # components (for example, 26.2 -> minecraft-java-edition-26-2).
+    slug = value.casefold().replace(".", "-")
+    return _MINECRAFT_ARTICLE.format(slug)
 
 
 @lru_cache(maxsize=64)

@@ -19,7 +19,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
+from .platform_catalog import (
+    PlatformAdapter,
+    _emit_discovery_log,
+    adapter_for_target,
+    discover_target_keys,
+)
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]{2,}")
 _DEPENDENCY_NODE_BUDGET = 64
@@ -256,25 +261,42 @@ def optimize_platform(
     """
 
     queries = capability_queries(prompt, design=design, module_kinds=module_kinds)
+    platform_diagnostics: list[str] = []
     target_keys = discover_target_keys(
         loader=loader_constraint,
         minecraft_version=version_constraint,
         limit_per_loader=12,
+        diagnostics=platform_diagnostics,
     )
     if not target_keys:
         target = "/".join(
             value for value in (version_constraint, loader_constraint) if value
         ) or "automatic"
-        raise ValueError(f"No executable platform provider can satisfy target {target!r}.")
+        detail = "; ".join(platform_diagnostics) or "no provider-discovered target was returned"
+        raise ValueError(
+            f"No executable platform provider can satisfy target {target!r}. "
+            f"Diagnostics: {detail}"
+        )
 
     adapters: list[PlatformAdapter] = []
+    resolution_errors: list[str] = []
     for loader, version in target_keys:
         try:
             adapters.append(adapter_for_target(version, loader))
-        except ValueError:
+        except Exception as exc:  # noqa: BLE001 - one target must not abort target evaluation
+            message = (
+                f"target resolution skipped loader={loader} version={version}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            resolution_errors.append(message)
+            _emit_discovery_log(message, exc_info=True)
             continue
     if not adapters:
-        raise ValueError("Executable platform targets were discovered but none resolved.")
+        detail = "; ".join((*platform_diagnostics, *resolution_errors))
+        raise ValueError(
+            "Executable platform targets were discovered but none resolved. "
+            f"Diagnostics: {detail or 'provider resolution returned no adapter'}"
+        )
 
     if search_fn is not None or version_fn is not None:
         return _optimize_fixture_path(
@@ -384,9 +406,11 @@ def _parallel_neutral_shallow(
             try:
                 key, ids = future.result()
                 found[key] = ids
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - optional search failure is recorded
                 found[query] = ()
-                errors.append(f"neutral:{query}: {type(exc).__name__}: {exc}")
+                message = f"neutral:{query}: {type(exc).__name__}: {exc}"
+                errors.append(message)
+                _emit_discovery_log(f"discovery {message}", exc_info=True)
     return found, tuple(sorted(errors))
 
 
@@ -425,12 +449,14 @@ def _parallel_support_matrix(
             try:
                 adapter_id, key, ids = future.result()
                 matrix[adapter_id][key] = ids
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - optional matrix failure is recorded
                 matrix[adapter.adapter_id][query] = ()
-                errors.append(
+                message = (
                     f"matrix:{adapter.minecraft_version}/{adapter.loader}:{query}: "
                     f"{type(exc).__name__}: {exc}"
                 )
+                errors.append(message)
+                _emit_discovery_log(f"discovery {message}", exc_info=True)
     return matrix, tuple(sorted(errors))
 
 
@@ -476,7 +502,21 @@ def _parallel_deep(
         for future in as_completed(futures):
             try:
                 result.append(future.result())
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - one target gets fresh-only evidence
+                adapter = futures[future]
+                message = (
+                    f"deep:{adapter.minecraft_version}/{adapter.loader}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                _emit_discovery_log(f"discovery {message}; using fresh-only evidence", exc_info=True)
+                result.append(
+                    _fresh_only_evidence(
+                        adapter,
+                        queries,
+                        errors=(*inherited_errors, message),
+                        shallow_candidate_count=shallow_candidate_count,
+                    )
+                )
                 continue
     return tuple(result)
 
@@ -525,18 +565,22 @@ def _deep_evidence(
                     value = future.result()
                     if isinstance(value, Mapping):
                         root_inspections[project_id] = dict(value)
-                except Exception as exc:
-                    errors.append(f"inspect:{project_id}: {type(exc).__name__}: {exc}")
+                except Exception as exc:  # noqa: BLE001 - one inspection may be unavailable
+                    message = f"inspect:{project_id}: {type(exc).__name__}: {exc}"
+                    errors.append(message)
+                    _emit_discovery_log(f"discovery {message}; continuing", exc_info=True)
             if research_future is not None:
                 try:
                     value = research_future.result()
                     if isinstance(value, Mapping):
                         research_payload = dict(value)
-                except Exception as exc:
-                    errors.append(
+                except Exception as exc:  # noqa: BLE001 - research is optional evidence
+                    message = (
                         f"rag:{adapter.minecraft_version}/{adapter.loader}: "
                         f"{type(exc).__name__}: {exc}"
                     )
+                    errors.append(message)
+                    _emit_discovery_log(f"discovery {message}; continuing", exc_info=True)
 
     verified_roots: list[str] = []
     verified_queries: set[str] = set()
@@ -709,9 +753,11 @@ def _resolve_dependency_closure(
                 seen.add(project_id)
                 try:
                     inspection = future.result()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - dependency evidence is optional
                     unresolved += 1
-                    errors.append(f"dependency:{project_id}: {type(exc).__name__}: {exc}")
+                    message = f"dependency:{project_id}: {type(exc).__name__}: {exc}"
+                    errors.append(message)
+                    _emit_discovery_log(f"discovery {message}; continuing", exc_info=True)
                     continue
                 if not isinstance(inspection, Mapping):
                     unresolved += 1
@@ -831,6 +877,35 @@ def _research_quality(payload: Mapping[str, Any] | None) -> tuple[float, int]:
     else:
         score = 0.0 if unresolved else 0.5
     return max(0.0, min(1.0, score)), unresolved
+
+
+def _fresh_only_evidence(
+    adapter: PlatformAdapter,
+    queries: Sequence[str],
+    *,
+    errors: Sequence[str],
+    shallow_candidate_count: int,
+) -> TargetEvidence:
+    """Keep an exact provider target usable when optional evidence I/O fails."""
+
+    return TargetEvidence(
+        adapter=adapter,
+        requested_capabilities=tuple(queries),
+        covered_capabilities=(),
+        exact_projects=(),
+        exact_versions=0,
+        verified_hash_files=0,
+        dependency_edges=0,
+        maintenance_signals=0,
+        adoption=0,
+        freshness=0.0,
+        evidence_quality=0.0,
+        integration_risk=float(len(queries)),
+        residual_cost=len(queries),
+        dependency_complexity=len(errors),
+        discovery_errors=tuple(sorted(set(errors))),
+        shallow_candidate_count=shallow_candidate_count,
+    )
 
 
 def _candidate_ids(page: Mapping[str, Any]) -> tuple[str, ...]:

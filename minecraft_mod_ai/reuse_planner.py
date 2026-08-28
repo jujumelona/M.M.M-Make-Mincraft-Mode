@@ -24,10 +24,15 @@ from .component_registry import (
     load_verified_components,
 )
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .platform_catalog import PlatformAdapter, adapter_for_target, discover_target_keys
+from .platform_catalog import (
+    PlatformAdapter,
+    _emit_discovery_log,
+    adapter_for_target,
+    discover_target_keys,
+)
+from .proof_level import ProofLevel
 from .residual_generation_contract import ResidualGenerationContract
 from .reuse_artifacts import ReusableArtifactBundle, bundle_proof_allows_reuse
-from .proof_level import ProofLevel
 from .reuse_discovery import discover_repositories_for_graph
 from .source_transplant import (
     DonorSlice,
@@ -683,6 +688,20 @@ class ReuseAwareOptimization:
         }
 
 
+def _load_verified_components_or_empty() -> tuple[VerifiedComponent, ...]:
+    """Treat the remote reuse registry as optional evidence, never a plan blocker."""
+
+    try:
+        return load_verified_components()
+    except Exception as exc:  # noqa: BLE001 - unavailable registry means fresh-only reuse
+        _emit_discovery_log(
+            f"verified reuse registry unavailable: {type(exc).__name__}: {exc}; "
+            "continuing with fresh-only reuse where needed",
+            exc_info=True,
+        )
+        return ()
+
+
 def optimize_platform_and_reuse(
     prompt: str,
     *,
@@ -703,24 +722,48 @@ def optimize_platform_and_reuse(
         semantic_router=semantic_router,
     )
     queries = graph.nodes
+    platform_diagnostics: list[str] = []
     target_keys = discover_target_keys(
         loader=loader_constraint,
         minecraft_version=version_constraint,
         limit_per_loader=32,
+        diagnostics=platform_diagnostics,
     )
     adapters: list[PlatformAdapter] = []
+    resolution_errors: list[str] = []
     for loader, version in target_keys:
         try:
             adapters.append(adapter_for_target(version, loader))
-        except ValueError:
+        except Exception as exc:  # noqa: BLE001 - one target must not abort reuse planning
+            message = (
+                f"target resolution skipped loader={loader} version={version}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            resolution_errors.append(message)
+            _emit_discovery_log(message, exc_info=True)
             continue
     if not adapters:
-        raise ValueError("No executable platform provider can satisfy the requested target constraints.")
+        detail = "; ".join((*platform_diagnostics, *resolution_errors))
+        raise ValueError(
+            "No executable platform provider can satisfy the requested target constraints. "
+            f"Diagnostics: {detail or 'provider discovery returned no executable target'}"
+        )
 
     discovery_mode = os.environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
     if discovery_mode not in {"auto", "on", "off"}:
         raise ValueError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
-    client = discovery_client or EcosystemDiscoveryClient()
+    client = discovery_client
+    evidence_discovery_enabled = discovery_mode != "off"
+    if client is None and evidence_discovery_enabled:
+        try:
+            client = EcosystemDiscoveryClient()
+        except Exception as exc:  # noqa: BLE001 - optional ecosystem client is recoverable
+            _emit_discovery_log(
+                f"ecosystem discovery client unavailable: {type(exc).__name__}: {exc}; "
+                "using provider receipt and fresh-only planning",
+                exc_info=True,
+            )
+            evidence_discovery_enabled = False
     if discovery_mode == "off" and len(adapters) != 1:
         raise ValueError(
             "Reuse-aware automatic version selection requires ecosystem discovery when multiple "
@@ -730,13 +773,21 @@ def optimize_platform_and_reuse(
     # Source search is capability-level and target-neutral. Do it once, then evaluate
     # every executable target against the same pinned donor candidates. This avoids
     # the old capability x version public-search cross product.
-    repository_candidates = (
-        _parallel_donor_repository_discovery(queries, client, capability_graph=graph.to_dict())
-        if discovery_mode != "off"
-        else {capability: () for capability in queries}
-    )
+    if evidence_discovery_enabled:
+        try:
+            repository_candidates = _parallel_donor_repository_discovery(
+                queries, client, capability_graph=graph.to_dict()
+            )
+        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence
+            message = (
+                f"donor repository discovery failed: {type(exc).__name__}: {exc}"
+            )
+            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)
+            repository_candidates = {capability: () for capability in queries}
+    else:
+        repository_candidates = {capability: () for capability in queries}
 
-    registry = load_verified_components()
+    registry = _load_verified_components_or_empty()
     same_project = _declared_same_project_capabilities(design)
     plan_results: list[TargetImplementationPlan] = []
 
@@ -749,27 +800,55 @@ def optimize_platform_and_reuse(
             registry=registry,
             same_project=same_project,
             discovery_client=client,
-            allow_network=discovery_mode != "off",
+            allow_network=evidence_discovery_enabled,
             capability_graph=graph.to_dict(),
             repository_candidates=repository_candidates,
         )
 
+    def build_with_fallback(adapter: PlatformAdapter) -> TargetImplementationPlan:
+        try:
+            return build(adapter)
+        except Exception as exc:  # noqa: BLE001 - donor analysis has a fresh-only fallback
+            message = (
+                f"target implementation analysis failed loader={adapter.loader} "
+                f"version={adapter.minecraft_version}: {type(exc).__name__}: {exc}"
+            )
+            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)
+            return _fresh_only_plan(
+                adapter,
+                queries,
+                None,
+                len(registry),
+                capability_graph=graph.to_dict(),
+                discovery_errors=(message,),
+            )
+
     workers = min(_workers(), len(adapters))
     if workers <= 1:
-        plan_results = [build(adapter) for adapter in adapters]
+        plan_results = [build_with_fallback(adapter) for adapter in adapters]
     else:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-reuse-target") as pool:
             futures = {pool.submit(build, adapter): adapter for adapter in adapters}
             for future in as_completed(futures):
                 try:
                     plan_results.append(future.result())
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - one target has a fresh-only fallback
                     # An individual target can lose its donor evidence without making
                     # all other executable targets unusable.
                     adapter = futures[future]
+                    message = (
+                        f"target implementation analysis failed loader={adapter.loader} "
+                        f"version={adapter.minecraft_version}: {type(exc).__name__}: {exc}"
+                    )
+                    _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)
                     plan_results.append(
                         _fresh_only_plan(
-                            adapter, queries, None, len(registry), capability_graph=graph.to_dict()
+                            adapter,
+                            queries,
+                            None,
+                            len(registry),
+                            capability_graph=graph.to_dict(),
+                            discovery_errors=(message,),
                         )
                     )
     initial_ranked = tuple(
@@ -792,20 +871,44 @@ def optimize_platform_and_reuse(
     # candidates, and an unverified candidate is never allowed to win.
     evidence_targets = _near_cost_targets(initial_ranked)
     evidence_by_id: dict[str, _platform.TargetEvidence] = {}
-    if discovery_mode != "off" and evidence_targets:
-        matrix, matrix_errors = _platform._parallel_support_matrix(evidence_targets, queries, client)
-        deep = _platform._parallel_deep(
-            evidence_targets,
-            queries=queries,
-            matrix=matrix,
-            client=client,
-            target_research_fn=None,
-            inherited_errors=matrix_errors,
-            shallow_candidate_count=sum(len(v) for v in repository_candidates.values()),
-        )
+    if evidence_discovery_enabled and evidence_targets:
+        try:
+            matrix, matrix_errors = _platform._parallel_support_matrix(
+                evidence_targets, queries, client
+            )
+        except Exception as exc:  # noqa: BLE001 - optional matrix failure is recoverable
+            message = f"support matrix failed: {type(exc).__name__}: {exc}"
+            _emit_discovery_log(f"discovery {message}; using empty matrix", exc_info=True)
+            matrix = {adapter.adapter_id: {} for adapter in evidence_targets}
+            matrix_errors = (message,)
+        try:
+            deep = _platform._parallel_deep(
+                evidence_targets,
+                queries=queries,
+                matrix=matrix,
+                client=client,
+                target_research_fn=None,
+                inherited_errors=matrix_errors,
+                shallow_candidate_count=sum(len(v) for v in repository_candidates.values()),
+            )
+        except Exception as exc:  # noqa: BLE001 - optional evidence failure is recoverable
+            message = f"deep target evidence failed: {type(exc).__name__}: {exc}"
+            _emit_discovery_log(f"discovery {message}; using fresh-only evidence", exc_info=True)
+            deep = ()
+        if not deep:
+            message = "deep target evidence returned no candidates"
+            _emit_discovery_log(f"discovery {message}; using fresh-only evidence")
+            deep = tuple(
+                _fresh_evidence(
+                    adapter,
+                    queries,
+                    discovery_errors=(*matrix_errors, message),
+                )
+                for adapter in evidence_targets
+            )
         evidence_by_id = {item.adapter.adapter_id: item for item in deep}
 
-    if discovery_mode == "off":
+    if not evidence_discovery_enabled:
         selectable = initial_ranked
     else:
         selectable = tuple(
@@ -841,9 +944,19 @@ def optimize_platform_and_reuse(
         for candidate in ranked:
             try:
                 selected_research = target_research_fn(candidate.adapter)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - try the next research candidate
+                _emit_discovery_log(
+                    f"target research failed loader={candidate.adapter.loader} "
+                    f"version={candidate.adapter.minecraft_version}: "
+                    f"{type(exc).__name__}: {exc}; trying next candidate",
+                    exc_info=True,
+                )
                 selected_research = None
             if not _valid_target_research_receipt(selected_research, candidate.adapter):
+                _emit_discovery_log(
+                    f"target research rejected loader={candidate.adapter.loader} "
+                    f"version={candidate.adapter.minecraft_version}; trying next candidate"
+                )
                 rejected_ids.add(candidate.adapter.adapter_id)
                 continue
             evidence = candidate.platform_evidence
@@ -904,8 +1017,18 @@ def plan_fixed_target(
     capability_graph: Mapping[str, Any] | None = None,
     repository_candidates: Mapping[str, Sequence[str]] | None = None,
 ) -> TargetImplementationPlan:
-    client = discovery_client or EcosystemDiscoveryClient()
-    registry = load_verified_components()
+    client = discovery_client
+    if client is None and allow_network:
+        try:
+            client = EcosystemDiscoveryClient()
+        except Exception as exc:  # noqa: BLE001 - optional ecosystem client is recoverable
+            _emit_discovery_log(
+                f"ecosystem discovery client unavailable: {type(exc).__name__}: {exc}; "
+                "using fresh-only planning",
+                exc_info=True,
+            )
+            allow_network = False
+    registry = _load_verified_components_or_empty()
     repositories = (
         dict(repository_candidates)
         if isinstance(repository_candidates, Mapping)
@@ -939,7 +1062,7 @@ def _plan_target(
     platform_evidence: _platform.TargetEvidence | None,
     registry: Sequence[VerifiedComponent],
     same_project: set[str],
-    discovery_client: EcosystemDiscoveryClient,
+    discovery_client: EcosystemDiscoveryClient | None,
     allow_network: bool,
     capability_graph: Mapping[str, Any] | None = None,
     repository_candidates: Mapping[str, Sequence[str]] | None = None,
@@ -1392,12 +1515,20 @@ def _discover_donor_candidates(
         return ()
 
     def inspect(repository: str) -> DonorSlice | None:
-        return inspect_repository_slice(
-            repository=repository,
-            capability=capability,
-            adapter=adapter,
-            discovery_client=discovery_client,
-        )
+        try:
+            return inspect_repository_slice(
+                repository=repository,
+                capability=capability,
+                adapter=adapter,
+                discovery_client=discovery_client,
+            )
+        except Exception as exc:  # noqa: BLE001 - one donor is independently recoverable
+            _emit_discovery_log(
+                f"donor inspection failed repository={repository} "
+                f"capability={capability}: {type(exc).__name__}: {exc}; continuing",
+                exc_info=True,
+            )
+            return None
 
     donors: list[DonorSlice] = []
     workers = min(_workers(), len(ordered))
@@ -1405,11 +1536,20 @@ def _discover_donor_candidates(
         donors = [donor for donor in (inspect(repository) for repository in ordered) if donor is not None]
     else:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-donor-inspect") as pool:
-            futures = [pool.submit(inspect, repository) for repository in ordered]
+            futures = {
+                pool.submit(inspect, repository): repository
+                for repository in ordered
+            }
             for future in as_completed(futures):
                 try:
                     donor = future.result()
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - one donor is independently recoverable
+                    repository = futures[future]
+                    _emit_discovery_log(
+                        f"donor inspection failed repository={repository} "
+                        f"capability={capability}: {type(exc).__name__}: {exc}; continuing",
+                        exc_info=True,
+                    )
                     continue
                 if donor is not None:
                     donors.append(donor)
@@ -1689,7 +1829,11 @@ def _fresh_only_plan(
     registry_count: int,
     *,
     capability_graph: Mapping[str, Any] | None = None,
+    discovery_errors: Sequence[str] = (),
 ) -> TargetImplementationPlan:
+    rationale = "Target donor analysis failed; fresh generation remains available."
+    if discovery_errors:
+        rationale += " See platform discovery diagnostics for the failed optional stages."
     decisions = tuple(
         ReuseDecision(
             capability=cap,
@@ -1697,7 +1841,7 @@ def _fresh_only_plan(
             confidence=1.0,
             fresh_implementation_cost=_fresh_cost(cap)[0],
             fresh_verification_cost=_fresh_cost(cap)[1],
-            rationale="Target donor analysis failed; fresh generation remains available.",
+            rationale=rationale,
         )
         for cap in capabilities
     )
@@ -1720,7 +1864,12 @@ def _fresh_only_plan(
     )
 
 
-def _fresh_evidence(adapter: PlatformAdapter, queries: Sequence[str]) -> _platform.TargetEvidence:
+def _fresh_evidence(
+    adapter: PlatformAdapter,
+    queries: Sequence[str],
+    *,
+    discovery_errors: Sequence[str] = (),
+) -> _platform.TargetEvidence:
     return _platform.TargetEvidence(
         adapter=adapter,
         requested_capabilities=tuple(queries),
@@ -1735,7 +1884,8 @@ def _fresh_evidence(adapter: PlatformAdapter, queries: Sequence[str]) -> _platfo
         evidence_quality=0.0,
         integration_risk=float(len(queries)),
         residual_cost=len(queries),
-        dependency_complexity=0,
+        dependency_complexity=len(discovery_errors),
+        discovery_errors=tuple(sorted(set(discovery_errors))),
     )
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 from .platform_live_discovery import (
     PlatformDiscoveryError,
+    _emit_discovery_log,
     discover_fabric_target,
     latest_stable_versions,
 )
@@ -176,6 +177,7 @@ def discover_target_keys(
     loader: str | None = None,
     minecraft_version: str | None = None,
     limit_per_loader: int = 12,
+    diagnostics: list[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
     limit = max(1, int(limit_per_loader))
@@ -183,11 +185,33 @@ def discover_target_keys(
     result: list[tuple[str, str]] = []
     for loader_id in loaders:
         provider = provider_for_loader(loader_id)
-        versions = provider.discover_versions(limit)
+        try:
+            versions = provider.discover_versions(limit)
+        except Exception as exc:  # noqa: BLE001 - one provider must not hide other providers
+            message = (
+                f"version discovery failed loader={loader_id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if diagnostics is not None:
+                diagnostics.append(message)
+            _emit_discovery_log(message, exc_info=True)
+            continue
+        if not versions:
+            message = f"provider returned no discoverable Minecraft versions loader={loader_id}"
+            if diagnostics is not None:
+                diagnostics.append(message)
+            _emit_discovery_log(message)
         for version in versions[:limit]:
             if requested_version and version != requested_version:
                 continue
             result.append((loader_id, version))
+    if requested_version and not result:
+        message = (
+            f"no provider-discovered target matched minecraft_version={requested_version!r}"
+        )
+        if diagnostics is not None:
+            diagnostics.append(message)
+        _emit_discovery_log(message)
     return tuple(result)
 
 
@@ -197,7 +221,11 @@ def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
     for loader in executable_loaders():
         try:
             result.append(adapter_for_target(version, loader))
-        except ValueError:
+        except ValueError as exc:
+            _emit_discovery_log(
+                f"adapter resolution skipped loader={loader} version={version}: "
+                f"{type(exc).__name__}: {exc}"
+            )
             continue
     return tuple(result)
 
@@ -206,9 +234,18 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
     version = str(minecraft_version).strip()
     if not version:
         raise ValueError("Minecraft version must not be empty when resolving an exact target.")
-    adapter = provider_for_loader(loader).resolve(version)
-    adapter.validate()
-    return adapter
+    normalized_loader = _loader_id(loader)
+    try:
+        adapter = provider_for_loader(normalized_loader).resolve(version)
+        adapter.validate()
+        return adapter
+    except Exception as exc:
+        _emit_discovery_log(
+            f"target resolution failed loader={normalized_loader} version={version}: "
+            f"{type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
+        raise
 
 
 def newest_adapter(*, loader: str) -> PlatformAdapter:
@@ -319,8 +356,12 @@ def platform_catalog_receipt() -> dict[str, Any]:
 def _fabric_versions(limit: int) -> tuple[str, ...]:
     try:
         return latest_stable_versions(limit=max(1, int(limit)))
-    except PlatformDiscoveryError:
-        return ()
+    except PlatformDiscoveryError as exc:
+        _emit_discovery_log(
+            f"Fabric stable-version discovery failed: {type(exc).__name__}: {exc}",
+            exc_info=True,
+        )
+        raise
 
 
 def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
