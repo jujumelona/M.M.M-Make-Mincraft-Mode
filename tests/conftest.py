@@ -64,12 +64,53 @@ def _platform_lock_from_adapter(adapter):
     )
 
 
+def _complete_partial_test_target(target):
+    """Model the host provider receipt for legacy unit tests of unrelated contracts.
+
+    Production now requires a complete executable target receipt before semantic
+    implementation planning. A small set of older tests intentionally construct the
+    planning layer directly and therefore bypass the normal provider-resolution owner.
+    For those modules only, fill missing receipt metadata with deterministic synthetic
+    evidence while preserving every explicitly supplied coordinate, including invalid
+    values that a test may be exercising.
+    """
+
+    if not isinstance(target, dict):
+        return target
+    version = str(target.get("minecraft_version") or "").strip()
+    loader = str(target.get("loader") or "").strip()
+    if not version or not loader:
+        return target
+    completed = dict(target)
+    mappings_version = str(
+        completed.get("mappings_version")
+        or completed.get("yarn_mappings")
+        or f"{version}+test-mappings"
+    )
+    completed.setdefault("java_version", 21)
+    completed.setdefault("mappings_kind", "yarn")
+    completed.setdefault("mappings_version", mappings_version)
+    completed.setdefault("yarn_mappings", mappings_version)
+    completed.setdefault("fabric_loader", "test-loader")
+    completed.setdefault("fabric_api", "test-api")
+    completed.setdefault("fabric_loom", "test-loom")
+    completed.setdefault("gradle", "test-gradle")
+    completed.setdefault("gradle_sha256", "0" * 64)
+    completed.setdefault("data_pack_version", "1")
+    completed.setdefault("resource_pack_version", "1")
+    completed.setdefault("resource_pack_format", 1)
+    completed.setdefault(
+        "release_metadata_url",
+        "https://www.minecraft.net/test-fixture/mmm-test-target",
+    )
+    return completed
+
+
 @pytest.fixture
 def synthetic_platform_lock():
     """Resolved non-release target for version-independent generation tests."""
 
     return _platform_lock_from_adapter(_synthetic_test_adapter())
-
 
 
 @pytest.fixture(autouse=True)
@@ -190,6 +231,47 @@ def _isolate_test_runtime_state(
         "generate",
         generate_with_explicit_test_target,
     )
+
+    # Direct evidence-planning tests predate the complete target receipt barrier and
+    # bypass the host platform resolver entirely. Complete only those legacy fixtures;
+    # dedicated target-grounding tests continue to exercise the strict production gate.
+    legacy_partial_target_modules = {
+        "test_evidence_first_planning",
+        "test_evidence_first_session_integration",
+        "test_planner_structural_repair_contract",
+        "test_resource_asset_backend_contract",
+        "test_target_snapshot_hardening",
+    }
+    if request.module.__name__ in legacy_partial_target_modules:
+        from minecraft_mod_ai import evidence_first_planning as planning
+
+        original_target_decision = planning._target_decision
+
+        def target_decision_with_synthetic_receipt(game_design, target_decision=None):
+            design = dict(game_design) if isinstance(game_design, dict) else game_design
+            decision = dict(target_decision) if isinstance(target_decision, dict) else target_decision
+            if isinstance(decision, dict):
+                if isinstance(decision.get("coordinates"), dict):
+                    decision["coordinates"] = _complete_partial_test_target(decision["coordinates"])
+                elif isinstance(decision.get("target"), dict):
+                    decision["target"] = _complete_partial_test_target(decision["target"])
+                elif "minecraft_version" in decision or "loader" in decision:
+                    decision = _complete_partial_test_target(decision)
+            elif isinstance(design, dict):
+                selection = design.get("_platform_selection")
+                if isinstance(selection, dict):
+                    selection_copy = dict(selection)
+                    target = selection_copy.get("target")
+                    if isinstance(target, dict):
+                        selection_copy["target"] = _complete_partial_test_target(target)
+                        design["_platform_selection"] = selection_copy
+            return original_target_decision(design, decision)
+
+        monkeypatch.setattr(
+            planning,
+            "_target_decision",
+            target_decision_with_synthetic_receipt,
+        )
 
     # These unit tests exercise technology semantics directly. Supply an explicit
     # executable fixture target instead of depending on a production-wide default.
