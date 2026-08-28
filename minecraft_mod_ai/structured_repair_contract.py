@@ -278,8 +278,8 @@ def _generate_section_local(
             prior_candidate=None,
         ),
         media_paths=media_paths,
-        response_format="json",
-        response_schema=full_schema,
+        response_format="text",
+        response_schema=None,
         enable_tools=False,
     )
     candidate = _candidate_from_raw(raw, fields)
@@ -328,8 +328,8 @@ def _generate_section_local(
                 research=research,
             ),
             media_paths=media_paths,
-            response_format="json",
-            response_schema=_repair_schema(repair_fields, properties),
+            response_format="text",
+            response_schema=None,
             enable_tools=False,
         )
         patch = _repair_from_raw(repair_raw, repair_fields)

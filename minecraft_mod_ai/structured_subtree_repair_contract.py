@@ -366,8 +366,8 @@ def _generate_section_exact(
             prior_candidate=None,
         ),
         media_paths=media_paths,
-        response_format="json",
-        response_schema=full_schema,
+        response_format="text",
+        response_schema=None,
         enable_tools=False,
     )
     candidate = _base._candidate_from_raw(raw, fields)
@@ -459,8 +459,8 @@ def _generate_section_exact(
                 research=research,
             ),
             media_paths=media_paths,
-            response_format="json",
-            response_schema=_repair_schema(target_schema),
+            response_format="text",
+            response_schema=None,
             enable_tools=False,
         )
         value = _repair_value(repair_raw)

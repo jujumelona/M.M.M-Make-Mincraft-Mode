@@ -77,8 +77,10 @@ def test_nested_leaf_repair_preserves_valid_siblings():
         "machine": {"name": "forge", "power": {"min": 2, "max": 8}}
     }
     assert len(router.calls) == 2
-    repair_schema = router.calls[1]["response_schema"]
-    assert repair_schema["properties"]["repair"] == {"type": "number"}
+    assert router.calls[0]["response_format"] == "text"
+    assert router.calls[0]["response_schema"] is None
+    assert router.calls[1]["response_format"] == "text"
+    assert router.calls[1]["response_schema"] is None
     payload = json.loads(router.calls[1]["messages"][1]["content"])
     assert payload["repair_path"] == "$.section.machine.power.max"
     assert payload["frozen_parent_context"]["min"] == 2
