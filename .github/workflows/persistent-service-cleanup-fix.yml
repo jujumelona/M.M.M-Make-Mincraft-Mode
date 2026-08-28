@@ -1,0 +1,59 @@
+name: One-shot persistent service cleanup fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/persistent-service-cleanup-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Close persistent child services on MCP exit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          prod_path = Path('minecraft_mod_ai/production_tools.py')
+          prod = prod_path.read_text(encoding='utf-8')
+          marker = '''    @cached_property\n    def model_router(self) -> ModelRouter:\n        """Reuse one lazy model owner across semantic/reranked RAG calls."""\n        return ModelRouter(profile=self.profile)\n\n'''
+          addition = marker + '''    def close(self) -> None:\n        """Release lazily-created persistent subprocess owners without creating new ones."""\n        java = self.__dict__.get("java")\n        if java is not None:\n            java.close()\n            self.__dict__.pop("java", None)\n\n'''
+          if prod.count(marker) != 1:
+              raise SystemExit('production_tools close insertion target drifted')
+          prod_path.write_text(prod.replace(marker, addition, 1), encoding='utf-8')
+
+          server_path = Path('minecraft_mod_ai/mcp_server.py')
+          server = server_path.read_text(encoding='utf-8')
+          if 'import atexit\n' not in server:
+              server = server.replace('import json\n', 'import atexit\nimport json\n', 1)
+          marker = '''@lru_cache(maxsize=1)\ndef _production() -> ProductionToolService:\n    return ProductionToolService(workspace_root=os.environ.get('MMM_WORKSPACE', 'mmm-output'), profile=os.environ.get('MMM_MODEL_PROFILE', 't4_local'))\n'''
+          replacement = marker + '''\n\ndef _close_cached_services() -> None:\n    # Never instantiate a service only to close it. The MCP child owns at most one\n    # cached ProductionToolService, and that service owns persistent JDT resources.\n    if _production.cache_info().currsize:\n        _production().close()\n\n\natexit.register(_close_cached_services)\n'''
+          if server.count(marker) != 1:
+              raise SystemExit('mcp_server cached production target drifted')
+          server_path.write_text(server.replace(marker, replacement, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_persistent_service_cleanup.py')
+          test_path.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai import production_tools\n\n\ndef test_production_service_close_only_closes_materialized_java_owner(tmp_path, monkeypatch) -> None:\n    events = []\n\n    class FakeJava:\n        def __init__(self):\n            events.append("created")\n\n        def close(self):\n            events.append("closed")\n\n    monkeypatch.setattr(production_tools, "JavaLanguageService", FakeJava)\n    service = production_tools.ProductionToolService(workspace_root=tmp_path)\n\n    service.close()\n    assert events == []\n\n    assert service.java is service.java\n    assert events == ["created"]\n    service.close()\n    assert events == ["created", "closed"]\n    service.close()\n    assert events == ["created", "closed"]\n''', encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_persistent_service_cleanup.py tests/test_java_lsp_scaling.py tests/test_agent_runtime_hot_paths.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit cleanup contract directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/production_tools.py minecraft_mod_ai/mcp_server.py tests/test_persistent_service_cleanup.py
+          git rm .github/workflows/persistent-service-cleanup-fix.yml
+          git commit -m "perf: close persistent MCP child services cleanly"
+          git push origin HEAD:main
