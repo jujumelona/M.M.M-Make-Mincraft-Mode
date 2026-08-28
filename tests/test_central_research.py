@@ -68,7 +68,7 @@ def test_targetless_official_research_is_deferred_without_retrieval() -> None:
     assert evidence['unresolved_official_domains'] == []
     assert evidence['domains'][0]['strategy'] == 'deferred_until_platform_selected'
 
-def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> None:
+def test_retrieve_domain_evidence_covers_authored_and_declared_criteria_without_speculative_corrections() -> None:
     official_queries = ('official query alpha', 'official query beta', 'official query gamma')
     brief = normalize_research_brief('Research all routed facts.', _selected_design(), _candidate([{**_domain('official_one', providers=['official_docs']), 'queries': list(official_queries[:2])}, {**_domain('official_two', providers=['official_docs', 'github']), 'queries': [official_queries[2]], 'depends_on': ['official_one']}, {**_domain('external_only', query='must not use official retrieval', providers=['github'], depends_on=['official_one']), 'evidence_kinds': ['source_code']}]))
     calls: list[tuple[str, dict[str, object]]] = []
@@ -76,21 +76,26 @@ def test_retrieve_domain_evidence_calls_every_query_and_every_correction() -> No
     def fake_retrieve(query: str, **kwargs: object) -> RetrievalReceipt:
         calls.append((query, kwargs))
         if query in official_queries:
+            # Baseline authored queries are seeds only; their correction suggestions
+            # must not trigger speculative fan-out under the coverage-driven policy.
             return _receipt(query, correction_queries=(f'{query} correction one', f'{query} correction two'))
         return _receipt(query)
     evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
-    expected_queries: list[str] = []
-    for query in official_queries:
-        expected_queries.extend([query, f'{query} correction one', f'{query} correction two'])
-    assert [query for query, _ in calls] == expected_queries
-    assert all((kwargs['minecraft_version'] == '1.20.1' and kwargs['loader'] == 'fabric' and (kwargs['mappings'] == '1.20.1+build.1') for _, kwargs in calls))
-    assert [kwargs['limit'] for _, kwargs in calls] == [8, 4, 4] * 3
+    called_queries = [query for query, _ in calls]
+    assert all(called_queries.count(query) == 1 for query in official_queries)
+    assert not any(' correction ' in query for query in called_queries)
+    assert 'Preserve the requested official_one capability.' in called_queries
+    assert 'Preserve the requested official_two capability.' in called_queries
+    assert any('dependency official_one' in query for query in called_queries)
+    assert any('compatibility official_one' in query for query in called_queries)
+    assert any('license official_one' in query for query in called_queries)
+    assert all((kwargs['minecraft_version'] == '1.20.1' and kwargs['loader'] == 'fabric' and kwargs['mappings'] == '1.20.1+build.1' and kwargs['limit'] == 8 for _, kwargs in calls))
     assert evidence['target'] == {'minecraft_version': '1.20.1', 'loader': 'fabric', 'mappings': '1.20.1+build.1'}
     assert evidence['deferred_official_domains'] == []
     assert evidence['unresolved_official_domains'] == []
     assert evidence['retrieval_is_authority'] is False
 
-def test_selected_target_drives_rag_coordinates_without_model_choice() -> None:
+def test_selected_target_drives_every_rag_route_without_model_choice() -> None:
     brief = normalize_research_brief('Research exact target evidence.', _selected_design('1.21.1', 'fabric'), _candidate([_domain('official_one', providers=['official_docs'])]))
     calls: list[dict[str, object]] = []
 
@@ -98,5 +103,7 @@ def test_selected_target_drives_rag_coordinates_without_model_choice() -> None:
         calls.append(kwargs)
         return _receipt(query)
     evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
-    assert calls == [{'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3', 'limit': 8}]
+    expected = {'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3', 'limit': 8}
+    assert calls
+    assert all(call == expected for call in calls)
     assert evidence['target'] == {'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3'}
