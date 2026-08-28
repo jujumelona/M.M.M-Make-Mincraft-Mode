@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import io
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
@@ -367,6 +369,18 @@ def _mojang_version_index() -> tuple[tuple[str, str], ...]:
     )
 
 
+def _mojang_target_url(version: str) -> str:
+    target_url = next(
+        (url for version_id, url in _mojang_version_index() if version_id == version),
+        "",
+    )
+    if not target_url:
+        raise PlatformDiscoveryError(
+            f"Mojang version manifest does not contain Minecraft {version}"
+        )
+    return target_url
+
+
 def _java_from_detail(version: str, target_url: str) -> str:
     detail = _json(target_url)
     java = detail.get("javaVersion", {}) if isinstance(detail, dict) else {}
@@ -380,15 +394,7 @@ def _java_from_detail(version: str, target_url: str) -> str:
 
 @lru_cache(maxsize=64)
 def _mojang_java_version(version: str) -> str:
-    target_url = next(
-        (url for version_id, url in _mojang_version_index() if version_id == version),
-        "",
-    )
-    if not target_url:
-        raise PlatformDiscoveryError(
-            f"Mojang version manifest does not contain Minecraft {version}"
-        )
-    return _java_from_detail(version, target_url)
+    return _java_from_detail(version, _mojang_target_url(version))
 
 
 @lru_cache(maxsize=1)
@@ -491,8 +497,14 @@ def _parse_pack_versions(text: str, *, version: str, source_url: str) -> tuple[s
     return data_pack, resource_pack, source_url
 
 
-def _feedback_pack_versions(version: str) -> tuple[str, str, str]:
-    """Resolve the exact stable release from Minecraft's structured feedback API."""
+def _normalized_release_title(value: str) -> str:
+    plain = html.unescape(str(value or "")).casefold()
+    plain = re.sub(r"[:\-\u2013\u2014]+", " ", plain)
+    return " ".join(plain.split())
+
+
+def _feedback_release_article(version: str) -> dict[str, Any]:
+    """Resolve one exact stable release article from Minecraft's structured API."""
 
     query = urllib.parse.urlencode(
         {
@@ -513,16 +525,14 @@ def _feedback_pack_versions(version: str) -> tuple[str, str, str]:
             "official Minecraft feedback search returned invalid JSON"
         ) from exc
     results = payload.get("results", ()) if isinstance(payload, dict) else ()
-    expected = re.compile(
-        rf"^Minecraft\s+Java\s+Edition\s*(?:-\s*)?{re.escape(version)}$",
-        re.IGNORECASE,
-    )
+    expected = _normalized_release_title(f"Minecraft Java Edition {version}")
+    accepted_titles = {expected, f"{expected} hotfix"}
     article = next(
         (
             item
             for item in results
             if isinstance(item, dict)
-            and expected.fullmatch(str(item.get("title") or "").strip())
+            and _normalized_release_title(str(item.get("title") or "")) in accepted_titles
             and not bool(item.get("draft"))
         ),
         None,
@@ -532,46 +542,146 @@ def _feedback_pack_versions(version: str) -> tuple[str, str, str]:
             f"official Minecraft feedback search found no exact stable release article for {version}"
         )
     source_url = str(article.get("html_url") or "").strip()
-    body = str(article.get("body") or "")
     if not source_url.startswith("https://feedback.minecraft.net/"):
         raise PlatformDiscoveryError(
             "official Minecraft feedback result exposed an invalid article URL"
         )
-    return _parse_pack_versions(body, version=version, source_url=source_url)
+    return article
+
+
+def _feedback_pack_versions(version: str) -> tuple[str, str, str]:
+    article = _feedback_release_article(version)
+    source_url = str(article.get("html_url") or "").strip()
+    return _parse_pack_versions(
+        str(article.get("body") or ""),
+        version=version,
+        source_url=source_url,
+    )
+
+
+def _format_pack_version(pack: Any, kind: str, *, version: str) -> str:
+    if isinstance(pack, int) and not isinstance(pack, bool):
+        return str(pack)
+    if not isinstance(pack, dict):
+        raise PlatformDiscoveryError(
+            f"Mojang version.json exposed an invalid pack_version for Minecraft {version}"
+        )
+
+    direct = pack.get(kind)
+    if isinstance(direct, int) and not isinstance(direct, bool):
+        return str(direct)
+    if isinstance(direct, float):
+        return format(direct, "g")
+
+    major = pack.get(f"{kind}_major")
+    minor = pack.get(f"{kind}_minor")
+    if not isinstance(major, int) or isinstance(major, bool) or major < 0:
+        raise PlatformDiscoveryError(
+            f"Mojang version.json exposed no {kind} pack major for Minecraft {version}"
+        )
+    if minor is None:
+        return str(major)
+    if not isinstance(minor, int) or isinstance(minor, bool) or minor < 0:
+        raise PlatformDiscoveryError(
+            f"Mojang version.json exposed an invalid {kind} pack minor for Minecraft {version}"
+        )
+    return f"{major}.{minor}"
+
+
+@lru_cache(maxsize=64)
+def _mojang_pack_versions(version: str) -> tuple[str, str]:
+    """Read exact pack versions from Mojang's checksummed client version.json."""
+
+    detail = _json(_mojang_target_url(version))
+    downloads = detail.get("downloads", {}) if isinstance(detail, dict) else {}
+    client = downloads.get("client", {}) if isinstance(downloads, dict) else {}
+    jar_url = str(client.get("url") or "") if isinstance(client, dict) else ""
+    expected_sha1 = str(client.get("sha1") or "").strip().casefold() if isinstance(client, dict) else ""
+    if not jar_url.startswith(("https://piston-data.mojang.com/", "https://launcher.mojang.com/")):
+        raise PlatformDiscoveryError(
+            f"Mojang metadata exposed no official client JAR URL for Minecraft {version}"
+        )
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_sha1):
+        raise PlatformDiscoveryError(
+            f"Mojang metadata exposed no valid client JAR SHA-1 for Minecraft {version}"
+        )
+
+    jar = _fetch(jar_url, timeout=90, retries=2)
+    actual_sha1 = hashlib.sha1(jar, usedforsecurity=False).hexdigest()
+    if actual_sha1 != expected_sha1:
+        raise PlatformDiscoveryError(
+            f"Mojang client JAR checksum mismatch for Minecraft {version}"
+        )
+    try:
+        with zipfile.ZipFile(io.BytesIO(jar)) as archive:
+            raw_version_json = archive.read("version.json")
+        version_json = json.loads(raw_version_json.decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+        raise PlatformDiscoveryError(
+            f"Mojang client JAR exposed no valid version.json for Minecraft {version}"
+        ) from exc
+
+    pack = version_json.get("pack_version") if isinstance(version_json, dict) else None
+    data_pack = _format_pack_version(pack, "data", version=version)
+    resource_pack = _format_pack_version(pack, "resource", version=version)
+    return data_pack, resource_pack
 
 
 @lru_cache(maxsize=64)
 def _official_pack_versions(version: str) -> tuple[str, str, str]:
-    """Read exact pack versions from two official, independently served sources.
+    """Resolve release identity and exact pack versions from independent official data.
 
-    The structured Minecraft Feedback API is tried first because the public
-    ``minecraft.net`` presentation page can stall behind an edge proxy.  The canonical
-    presentation article remains a bounded fallback.  Neither path guesses numbers.
+    Minecraft Feedback supplies the human release URL. Mojang's checksummed client JAR
+    supplies the authoritative ``version.json`` pack numbers. Article prose remains only
+    a fallback because hotfix articles often omit unchanged pack-version declarations.
     """
 
     errors: list[str] = []
+    release_url = ""
+    release_body = ""
     try:
-        return _feedback_pack_versions(version)
+        article = _feedback_release_article(version)
+        release_url = str(article.get("html_url") or "").strip()
+        release_body = str(article.get("body") or "")
     except PlatformDiscoveryError as exc:
         errors.append(f"feedback.minecraft.net: {exc}")
         _emit_discovery_log(
-            f"structured official pack metadata unavailable for {version}: {exc}; "
+            f"structured official release metadata unavailable for {version}: {exc}; "
             "trying the canonical release article"
         )
+        release_url = _release_article_url(version)
+        try:
+            release_body = _fetch(
+                release_url,
+                timeout=_article_timeout(),
+                retries=1,
+            ).decode("utf-8", errors="replace")
+        except PlatformDiscoveryError as article_exc:
+            errors.append(f"minecraft.net: {article_exc}")
+            release_url = ""
 
-    url = _release_article_url(version)
     try:
-        raw = _fetch(
-            url,
-            timeout=_article_timeout(),
-            retries=1,
-        ).decode("utf-8", errors="replace")
-        return _parse_pack_versions(raw, version=version, source_url=url)
+        data_pack, resource_pack = _mojang_pack_versions(version)
     except PlatformDiscoveryError as exc:
-        errors.append(f"minecraft.net: {exc}")
+        errors.append(f"piston-data.mojang.com: {exc}")
+        if release_url and release_body:
+            try:
+                return _parse_pack_versions(
+                    release_body,
+                    version=version,
+                    source_url=release_url,
+                )
+            except PlatformDiscoveryError as article_exc:
+                errors.append(f"release article pack metadata: {article_exc}")
         raise PlatformDiscoveryError(
             f"official pack metadata unavailable for {version}; " + "; ".join(errors)
         ) from exc
+
+    if not release_url:
+        raise PlatformDiscoveryError(
+            f"official release metadata unavailable for {version}; " + "; ".join(errors)
+        )
+    return data_pack, resource_pack, release_url
 
 
 @lru_cache(maxsize=32)
@@ -604,7 +714,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
     mappings_kind = "mojang"
     mappings_version = "mojang"
     payload = {
-        "source": "official-live-discovery-v3",
+        "source": "official-live-discovery-v4",
         "minecraft_version": version,
         "stable": bool(row["stable"]),
         "loader_version": loader,
