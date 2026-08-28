@@ -196,19 +196,25 @@ def test_live_lowering_preserves_validated_retain_only_plan_with_base_content(
 
 def _adapter(index: int) -> PlatformAdapter:
     version = f"candidate-{index:02d}"
+    mappings = f"{version}+build.1"
     return PlatformAdapter(
         adapter_id=f"fabric-{version}",
         edition="java",
         loader="fabric",
         minecraft_version=version,
         java_version="21",
-        yarn_mappings=f"{version}+build.1",
+        yarn_mappings=mappings,
+        mappings_kind="yarn",
+        mappings_version=mappings,
         fabric_loader="0.16.10",
         fabric_api="1.0.0",
         fabric_loom="1.8",
         gradle="8.10.2",
-        gradle_sha256="sha256:" + "b" * 64,
+        gradle_sha256="b" * 64,
+        data_pack_version="34",
+        resource_pack_version="34",
         resource_pack_format=34,
+        release_metadata_url="https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21",
         source_api_family="fabric_live_ai",
         deterministic_module_kinds=frozenset(),
     )
