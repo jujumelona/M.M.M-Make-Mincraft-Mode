@@ -83,3 +83,39 @@ def test_verify_keeps_java_diagnostics_available() -> None:
     tools = (_schema("java_diagnostics"), _schema("search_code_rag"))
     selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.VERIFY, "coder")
     assert "java_diagnostics" in _names(selected)
+
+
+def test_non_mutation_observe_keeps_reviewed_external_mcp_available() -> None:
+    tools = (
+        _schema("external_mcp_call"),
+        _schema("external_mcp_schema"),
+        _schema("search_code_rag"),
+        _schema("apply_source_edit"),
+    )
+    selected = loop._filter_tools_for_phase(
+        tools,
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        localization_active=False,
+    )
+    assert _names(selected) == (
+        "external_mcp_call",
+        "external_mcp_schema",
+        "search_code_rag",
+    )
+
+
+def test_mutation_need_file_still_narrows_observe_tools_without_context() -> None:
+    tools = (
+        _schema("external_mcp_call"),
+        _schema("search_code_rag"),
+        _schema("search_project_rag"),
+    )
+    selected = loop._filter_tools_for_phase(
+        tools,
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        mutation_context=None,
+        localization_active=True,
+    )
+    assert _names(selected) == ("search_code_rag",)

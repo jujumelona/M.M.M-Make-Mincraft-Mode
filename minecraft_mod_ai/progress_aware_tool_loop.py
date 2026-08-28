@@ -841,6 +841,7 @@ def _filter_tools_for_phase(
     *,
     mutation_context: TargetMutationContext | None = None,
     attempted_sources: Sequence[str] | set[str] | frozenset[str] = frozenset(),
+    localization_active: bool | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
@@ -848,25 +849,30 @@ def _filter_tools_for_phase(
         return ()
 
     if phase == LoopPhase.OBSERVE:
-        stage = (
-            mutation_context.localization_stage
-            if mutation_context is not None
-            else LocalizationStage.NEED_FILE
-        )
-        if stage == LocalizationStage.NEED_FILE:
-            preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
-            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else []
-        elif stage == LocalizationStage.NEED_SYMBOL:
-            preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")
-            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else []
-        elif stage == LocalizationStage.NEED_BODY:
-            preferred = ("search_code_rag", "inspect_existing_mod")
-            untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-            selected_names = [untried[0]] if untried else []
-        else:
+        if localization_active is None:
+            localization_active = mutation_context is not None
+        if not localization_active:
             selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+        else:
+            stage = (
+                mutation_context.localization_stage
+                if mutation_context is not None
+                else LocalizationStage.NEED_FILE
+            )
+            if stage == LocalizationStage.NEED_FILE:
+                preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
+                untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+                selected_names = [untried[0]] if untried else []
+            elif stage == LocalizationStage.NEED_SYMBOL:
+                preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")
+                untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+                selected_names = [untried[0]] if untried else []
+            elif stage == LocalizationStage.NEED_BODY:
+                preferred = ("search_code_rag", "inspect_existing_mod")
+                untried = [name for name in preferred if name in by_name and name not in attempted_sources]
+                selected_names = [untried[0]] if untried else []
+            else:
+                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
     elif phase == LoopPhase.ACT:
         selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
     elif phase in (LoopPhase.VERIFY, LoopPhase.RECOVER):
@@ -1118,6 +1124,7 @@ def generate_with_tools(
             role,
             mutation_context=(state.mutation_context if mutation_localization_active else None),
             attempted_sources=phase_attempted_sources,
+            localization_active=mutation_localization_active,
         )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
         if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:
