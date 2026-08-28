@@ -89,9 +89,16 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
             "TARGET_RESOURCE_PACK_FORMAT: format major disagrees with exact resource pack version."
         )
     release_url = _text(coordinates.get("release_metadata_url"))
-    if not release_url.startswith("https://www.minecraft.net/"):
+    if not release_url.startswith(
+        (
+            "https://www.minecraft.net/",
+            "https://feedback.minecraft.net/",
+            "https://piston-meta.mojang.com/",
+            "https://launcher.mojang.com/",
+        )
+    ):
         raise _planning.EvidencePlanError(
-            "TARGET_PACK_PROVENANCE: pack metadata is not grounded in an official Minecraft release URL."
+            "TARGET_PACK_PROVENANCE: pack metadata is not grounded in an official Minecraft/Mojang metadata URL."
         )
 
     result = dict(coordinates)
