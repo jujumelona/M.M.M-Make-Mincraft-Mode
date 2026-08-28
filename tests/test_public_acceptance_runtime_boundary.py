@@ -75,3 +75,67 @@ def test_canonical_requirement_acceptance_remains_fail_closed() -> None:
         match="approved public acceptance contains internal task/integrity language",
     ):
         _approved_acceptance(dirty_requirement)
+
+def test_evidence_plan_public_acceptance_is_sanitized_before_production_compile():
+    from minecraft_mod_ai.production_boundary_contract import (
+        _sanitize_evidence_plan_public_acceptance,
+    )
+
+    plan = {
+        "request_catalog": {
+            "requirements": [
+                {
+                    "requirement_id": "req_visible",
+                    "source_span": {"text": "Show the requested visible behavior"},
+                    "acceptance": [
+                        "The requested block is visible in game; task_sha256 must match"
+                    ],
+                }
+            ]
+        },
+        "acceptance_release_bindings": [
+            {
+                "requirement_ref": "req_visible",
+                "acceptance": ["required_gates must pass"],
+            }
+        ],
+    }
+
+    sanitized = _sanitize_evidence_plan_public_acceptance(plan)
+    expected = ["The requested block is visible in game"]
+
+    assert sanitized["request_catalog"]["requirements"][0]["acceptance"] == expected
+    assert sanitized["acceptance_release_bindings"][0]["acceptance"] == expected
+
+
+def test_public_acceptance_sanitizer_falls_back_without_internal_integrity_language():
+    from minecraft_mod_ai.production_boundary_contract import (
+        _sanitize_evidence_plan_public_acceptance,
+    )
+    from minecraft_mod_ai.production_contract import _validate_public_acceptance
+
+    plan = {
+        "request_catalog": {
+            "requirements": [
+                {
+                    "requirement_id": "req_fallback",
+                    "source_span": {"text": "Show a visible block in game"},
+                    "acceptance": ["task_sha256 must match required_gates"],
+                }
+            ]
+        },
+        "acceptance_release_bindings": [
+            {
+                "requirement_ref": "req_fallback",
+                "acceptance": ["done_predicate must pass"],
+            }
+        ],
+    }
+
+    sanitized = _sanitize_evidence_plan_public_acceptance(plan)
+    values = sanitized["request_catalog"]["requirements"][0]["acceptance"]
+    assert values
+    for value in values:
+        _validate_public_acceptance(value)
+    assert sanitized["acceptance_release_bindings"][0]["acceptance"] == values
+

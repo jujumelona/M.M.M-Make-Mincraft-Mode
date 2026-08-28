@@ -47,7 +47,18 @@ def _validate_public_acceptance(statement: str) -> None:
         raise ProductionContractError('public acceptance must be a non-empty string')
     folded = statement.casefold()
     if 'task_' in folded or any(marker in folded for marker in _PUBLIC_ACCEPTANCE_INTERNAL_MARKERS):
-        raise ProductionContractError('public acceptance contains internal task or integrity language')
+        matched_marker = (
+            'task_'
+            if 'task_' in folded
+            else next(
+                (marker for marker in _PUBLIC_ACCEPTANCE_INTERNAL_MARKERS if marker in folded),
+                'unknown',
+            )
+        )
+        raise ProductionContractError(
+            'public acceptance contains internal task or integrity language: '
+            f'marker={matched_marker!r}; value={folded!r}'
+        )
 
 def bound_game_design(game_design: Mapping[str, Any]) -> dict[str, Any]:
     """Return user/design content that is stable across execution decoration."""
