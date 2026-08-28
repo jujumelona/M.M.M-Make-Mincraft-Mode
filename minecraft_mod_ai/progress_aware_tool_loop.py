@@ -16,6 +16,7 @@ from typing import Any
 from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
+    OUTPUT_EXHAUSTED,
     completion_boundary_kind,
     mark_context_recovery_exhausted,
 )
@@ -221,7 +222,7 @@ class TargetMutationContext:
     """Target-bound mutation context enforcing hierarchical localization before ACT phase entry.
 
     Adheres to Agentless (file -> symbol -> edit location -> concrete source span)
-    and 2026 repository-scale function-level repair findings.
+    and repository-scale function-level repair findings.
     """
 
     target_path: str | None = None
@@ -568,6 +569,67 @@ def _is_new_file_creation(payload: Any) -> bool:
     return False
 
 
+def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
+    """Resolve an evidence planner's host-reserved fresh source target.
+
+    Fresh work is creation, not localization of an existing file. The evidence plan is
+    the authoritative source of that target; incidental project observations must never
+    override it. Adapt/reuse work deliberately stays on the normal file->symbol->body
+    localization path.
+    """
+
+    if not isinstance(payload, Mapping):
+        return None
+    module = payload.get("module")
+    if not isinstance(module, Mapping):
+        return None
+    config = module.get("config")
+    if not isinstance(config, Mapping):
+        return None
+    task = config.get("evidence_task")
+    if not isinstance(task, Mapping):
+        return None
+    bindings = task.get("production_bindings")
+    if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes, bytearray)):
+        return None
+
+    production_bindings = tuple(item for item in bindings if isinstance(item, Mapping))
+    if not production_bindings:
+        return None
+    actions = {
+        str(item.get("reuse_action") or "").strip().casefold()
+        for item in production_bindings
+        if str(item.get("reuse_action") or "").strip()
+    }
+    if actions != {"fresh"}:
+        return None
+
+    for binding in production_bindings:
+        anchors = binding.get("owned_anchors")
+        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
+            continue
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping) or str(anchor.get("kind") or "") != "symbol":
+                continue
+            locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
+            target_path, separator, target_symbol = locator.partition("#")
+            target_path = target_path.strip()
+            if (
+                not target_path
+                or target_path.startswith("/")
+                or ".." in target_path.split("/")
+                or not _is_workspace_file_path(target_path)
+            ):
+                continue
+            return TargetMutationContext(
+                target_path=target_path,
+                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
+                is_new_file=True,
+                evidence_source="evidence_fresh_owned_anchor",
+            )
+    return None
+
+
 def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContext | None:
     """Extract a target-bound MutationContext from a message payload or tool return.
 
@@ -584,6 +646,10 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                 if ctx is not None:
                     return ctx
         return None
+
+    fresh = _fresh_owned_symbol_context(payload)
+    if fresh is not None:
+        return fresh
 
     # Recursively unwrap envelope fields if present (e.g. MCP structured_content, _mmm_observation)
     for wrapper_key in ("structured_content", "result", "data", "body", "_mmm_observation", "raw_result", "structured", "observation"):
@@ -608,7 +674,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
     # 2. Hits with snippet/code/lines from search_code_rag
     hits = payload.get("hits") or payload.get("results")
     if isinstance(hits, (list, tuple)):
-        # Look for a hit with concrete code snippet / text
         for hit in hits:
             if isinstance(hit, Mapping):
                 meta = hit.get("metadata") if isinstance(hit.get("metadata"), Mapping) else {}
@@ -652,7 +717,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                             end_line=int(end_line) if isinstance(end_line, int) else None,
                             evidence_source="search_code_rag",
                         )
-        # If no snippet, record bare path hit
         for hit in hits:
             if isinstance(hit, Mapping):
                 meta = hit.get("metadata") if isinstance(hit.get("metadata"), Mapping) else {}
@@ -853,10 +917,6 @@ def _filter_tools_for_phase(
             localization_active = mutation_context is not None
         if not localization_active:
             selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
-            # Workspace-symbol inspection is causally downstream of locating source.
-            # Keep broad research/external evidence available, but never ask the model
-            # to choose between code retrieval and symbol inspection on the same
-            # frontier before a concrete source location exists.
             if (
                 mutation_context is None
                 and "search_code_rag" in selected_names
@@ -907,6 +967,63 @@ def _replace_live_messages(
     return True
 
 
+def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
+    names = frozenset(_tool_name(schema) for schema in request.tools if _tool_name(schema))
+    if names & _MUTATION_ACT_TOOLS:
+        return (
+            "The preceding assistant action exceeded the bounded output allowance and is discarded. "
+            "Do not continue, reproduce, or complete that oversized payload. Call exactly one visible "
+            "source-mutation tool now with one small semantic edit and no prose. For a new Java file, "
+            "the first action must be create_java_type with only package_name and an empty type "
+            "declaration; never create a complete Java file with create_file. After each tool "
+            "observation, add at most one import with add_java_import or one field/constructor/method/"
+            "nested declaration with insert_java_member. For an existing file, use one bounded "
+            "replace_exact/insert action. The host will preserve the same mutation target and workspace "
+            "state between actions."
+        )
+    return (
+        "The preceding assistant action exceeded the bounded output allowance and is discarded. "
+        "Do not continue that oversized payload. Produce exactly one concise visible tool call or one "
+        "concise final answer using the already-grounded state; do not emit a long reconstruction."
+    )
+
+
+def _retry_atomic_after_output_exhaustion(
+    router: Any,
+    *,
+    config: Any,
+    adapter: Any,
+    request: GenerationRequest,
+    messages: list[dict[str, Any]],
+    media_paths: tuple[Any, ...],
+) -> Any:
+    """Regenerate one bounded action without leaving the current HostRunState."""
+
+    messages.append({"role": "system", "content": _atomic_output_recovery_instruction(request)})
+    retry_request = replace(
+        request,
+        messages=tuple(messages),
+        media_paths=media_paths,
+        parallel_tool_calls=False if request.tools else request.parallel_tool_calls,
+    )
+    print(
+        "agent output: atomic-action recovery",
+        f"tools={sorted(_tool_name(schema) for schema in request.tools if _tool_name(schema))}",
+        flush=True,
+    )
+    try:
+        with router._generation_scope(config):
+            return adapter.generate_turn(retry_request)
+    except BaseException as retry_exc:
+        if completion_boundary_kind(retry_exc) == OUTPUT_EXHAUSTED:
+            raise ModelConfigurationError(
+                "ATOMIC_ACTION_OUTPUT_STALLED: the model exceeded the output allowance twice "
+                "without completing one bounded semantic action; refusing to reset the agent state "
+                "or restart an oversized action."
+            ) from retry_exc
+        raise
+
+
 def _generate_turn_with_context_recovery(
     router: Any,
     *,
@@ -918,7 +1035,7 @@ def _generate_turn_with_context_recovery(
     tool_choice: Any,
     parallel_tool_calls: bool,
 ) -> Any:
-    """Fit one live agent turn and retry context pressure exactly once."""
+    """Fit one live agent turn and recover bounded completion failures in-place."""
 
     fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
     _replace_live_messages(messages, fitted)
@@ -933,7 +1050,17 @@ def _generate_turn_with_context_recovery(
         with router._generation_scope(config):
             return adapter.generate_turn(turn_request)
     except BaseException as exc:
-        if completion_boundary_kind(exc) != CONTEXT_PRESSURE:
+        boundary_kind = completion_boundary_kind(exc)
+        if boundary_kind == OUTPUT_EXHAUSTED:
+            return _retry_atomic_after_output_exhaustion(
+                router,
+                config=config,
+                adapter=adapter,
+                request=turn_request,
+                messages=messages,
+                media_paths=media_paths,
+            )
+        if boundary_kind != CONTEXT_PRESSURE:
             raise
 
         emergency_budget = min(
@@ -967,7 +1094,17 @@ def _generate_turn_with_context_recovery(
             with router._generation_scope(config):
                 return adapter.generate_turn(retry_request)
         except BaseException as retry_exc:
-            if completion_boundary_kind(retry_exc) == CONTEXT_PRESSURE:
+            retry_kind = completion_boundary_kind(retry_exc)
+            if retry_kind == OUTPUT_EXHAUSTED:
+                return _retry_atomic_after_output_exhaustion(
+                    router,
+                    config=config,
+                    adapter=adapter,
+                    request=retry_request,
+                    messages=messages,
+                    media_paths=media_paths,
+                )
+            if retry_kind == CONTEXT_PRESSURE:
                 if len(messages) > 3:
                     forced = [messages[0], messages[-2], messages[-1]]
                     if _replace_live_messages(messages, tuple(forced)):
@@ -979,8 +1116,16 @@ def _generate_turn_with_context_recovery(
                         try:
                             with router._generation_scope(config):
                                 return adapter.generate_turn(ultra_request)
-                        except BaseException:
-                            pass
+                        except BaseException as ultra_exc:
+                            if completion_boundary_kind(ultra_exc) == OUTPUT_EXHAUSTED:
+                                return _retry_atomic_after_output_exhaustion(
+                                    router,
+                                    config=config,
+                                    adapter=adapter,
+                                    request=ultra_request,
+                                    messages=messages,
+                                    media_paths=media_paths,
+                                )
                 mark_context_recovery_exhausted(exc)
                 raise exc from retry_exc
             raise
