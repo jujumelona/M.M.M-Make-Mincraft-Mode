@@ -63,6 +63,9 @@ def _future_live(version: str = "27.0") -> LiveFabricTarget:
         gradle_sha256="a" * 64,
         mappings_kind="mojang",
         mappings_version="mojang",
+        data_pack_version="100.0",
+        resource_pack_version="100.0",
+        release_metadata_url="https://www.minecraft.net/en-us/article/minecraft-java-edition-27-0",
         discovery_sha256="sha256:" + "b" * 64,
     )
 
