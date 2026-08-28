@@ -119,3 +119,17 @@ def test_mutation_need_file_still_narrows_observe_tools_without_context() -> Non
         localization_active=True,
     )
     assert _names(selected) == ("search_code_rag",)
+
+
+def test_non_mutation_observe_keeps_retrieval_before_workspace_symbol_inspection() -> None:
+    tools = (
+        _schema("search_code_rag"),
+        _schema("java_workspace_symbols"),
+    )
+    selected = loop._filter_tools_for_phase(
+        tools,
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        localization_active=False,
+    )
+    assert _names(selected) == ("search_code_rag",)

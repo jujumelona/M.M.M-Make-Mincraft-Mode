@@ -853,6 +853,16 @@ def _filter_tools_for_phase(
             localization_active = mutation_context is not None
         if not localization_active:
             selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+            # Workspace-symbol inspection is causally downstream of locating source.
+            # Keep broad research/external evidence available, but never ask the model
+            # to choose between code retrieval and symbol inspection on the same
+            # frontier before a concrete source location exists.
+            if (
+                mutation_context is None
+                and "search_code_rag" in selected_names
+                and "java_workspace_symbols" in selected_names
+            ):
+                selected_names.remove("java_workspace_symbols")
         else:
             stage = (
                 mutation_context.localization_stage
