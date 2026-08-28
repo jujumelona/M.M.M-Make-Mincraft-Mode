@@ -25,25 +25,39 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
-          paths = [
-              Path('minecraft_mod_ai/structured_repair_contract.py'),
-              Path('minecraft_mod_ai/structured_subtree_repair_contract.py'),
-          ]
-          total = 0
-          for path in paths:
+          expected = {
+              'minecraft_mod_ai/structured_repair_contract.py': 2,
+              'minecraft_mod_ai/structured_subtree_repair_contract.py': 2,
+          }
+          for raw_path, expected_count in expected.items():
+              path = Path(raw_path)
               text = path.read_text(encoding='utf-8')
-              # Planner repair must see the raw candidate before any schema-wide router
-              # validator can throw it away and trigger a whole-response regeneration.
-              text, count_format = re.subn(
-                  r'response_format="json",\n(?P<indent>\s*)response_schema=[^,\n]+,',
-                  'response_format="text",\n\\g<indent>response_schema=None,',
-                  text,
-              )
-              if count_format < 1:
-                  raise SystemExit(f'{path}: no structured router calls were rewritten')
-              total += count_format
+              if text.count('response_format="json",') != expected_count:
+                  raise SystemExit(f'{path}: structured call count drifted')
+              text = text.replace('response_format="json",', 'response_format="text",')
+              if raw_path.endswith('structured_repair_contract.py'):
+                  if text.count('response_schema=full_schema,') != 1:
+                      raise SystemExit(f'{path}: full schema target drifted')
+                  if text.count('response_schema=_repair_schema(repair_fields, properties),') != 1:
+                      raise SystemExit(f'{path}: repair schema target drifted')
+                  text = text.replace('response_schema=full_schema,', 'response_schema=None,', 1)
+                  text = text.replace(
+                      'response_schema=_repair_schema(repair_fields, properties),',
+                      'response_schema=None,',
+                      1,
+                  )
+              else:
+                  if text.count('response_schema=full_schema,') != 1:
+                      raise SystemExit(f'{path}: full schema target drifted')
+                  if text.count('response_schema=_repair_schema(target_schema),') != 1:
+                      raise SystemExit(f'{path}: leaf schema target drifted')
+                  text = text.replace('response_schema=full_schema,', 'response_schema=None,', 1)
+                  text = text.replace(
+                      'response_schema=_repair_schema(target_schema),',
+                      'response_schema=None,',
+                      1,
+                  )
               path.write_text(text, encoding='utf-8')
 
           test_path = Path('tests/test_structured_subtree_repair_contract.py')
@@ -52,15 +66,12 @@ jobs:
           new = '''    assert router.calls[0]["response_format"] == "text"\n    assert router.calls[0]["response_schema"] is None\n    assert router.calls[1]["response_format"] == "text"\n    assert router.calls[1]["response_schema"] is None\n'''
           if test.count(old) != 1:
               raise SystemExit('structured subtree test expectation drifted')
-          test = test.replace(old, new, 1)
-          test_path.write_text(test, encoding='utf-8')
+          test_path.write_text(test.replace(old, new, 1), encoding='utf-8')
 
-          contract_test = Path('tests/test_host_local_structured_recovery.py')
-          contract_test.write_text('''from __future__ import annotations\n\nimport json\n\nfrom minecraft_mod_ai import structured_repair_contract as field_local\nfrom minecraft_mod_ai import structured_subtree_repair_contract as exact\n\n\nclass Router:\n    def __init__(self, outputs):\n        self.outputs = list(outputs)\n        self.calls = []\n\n    def generate_text(self, role, messages, **kwargs):\n        self.calls.append(kwargs)\n        if kwargs.get("response_format") != "text" or kwargs.get("response_schema") is not None:\n            raise AssertionError("router-level structured validation must not own planner repair")\n        return self.outputs.pop(0)\n\n\ndef test_exact_repair_keeps_invalid_candidate_available_for_leaf_repair():\n    router = Router([\n        json.dumps({"section": {"x": {"a": "keep", "b": "bad"}}}),\n        json.dumps({"repair": 4}),\n    ])\n    result = exact._generate_section_exact(\n        router,\n        prompt="x",\n        section_id="x",\n        fields=("x",),\n        properties={\n            "x": {\n                "type": "object",\n                "properties": {"a": {"type": "string"}, "b": {"type": "number"}},\n                "required": ["a", "b"],\n                "additionalProperties": False,\n            }\n        },\n        research={},\n        media_paths=(),\n        trace_metadata=None,\n    )\n    assert result == {"x": {"a": "keep", "b": 4}}\n    assert len(router.calls) == 2\n\n\ndef test_field_local_repair_also_uses_raw_text_boundary():\n    router = Router([\n        json.dumps({"section": {"name": 3}}),\n        json.dumps({"repair": {"name": "ok"}}),\n    ])\n    result = field_local._generate_section_local(\n        router,\n        prompt="x",\n        section_id="x",\n        fields=("name",),\n        properties={"name": {"type": "string", "minLength": 1}},\n        research={},\n        media_paths=(),\n        trace_metadata=None,\n    )\n    assert result == {"name": "ok"}\n    assert len(router.calls) == 2\n''', encoding='utf-8')
-          print(f'rewritten_router_calls={total}')
+          Path('tests/test_host_local_structured_recovery.py').write_text('''from __future__ import annotations\n\nimport json\n\nfrom minecraft_mod_ai import structured_repair_contract as field_local\nfrom minecraft_mod_ai import structured_subtree_repair_contract as exact\n\n\nclass Router:\n    def __init__(self, outputs):\n        self.outputs = list(outputs)\n        self.calls = []\n\n    def generate_text(self, role, messages, **kwargs):\n        self.calls.append(kwargs)\n        if kwargs.get("response_format") != "text" or kwargs.get("response_schema") is not None:\n            raise AssertionError("router-level structured validation must not own planner repair")\n        return self.outputs.pop(0)\n\n\ndef test_exact_repair_keeps_invalid_candidate_available_for_leaf_repair():\n    router = Router([\n        json.dumps({"section": {"x": {"a": "keep", "b": "bad"}}}),\n        json.dumps({"repair": 4}),\n    ])\n    result = exact._generate_section_exact(\n        router, prompt="x", section_id="x", fields=("x",),\n        properties={"x": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "number"}}, "required": ["a", "b"], "additionalProperties": False}},\n        research={}, media_paths=(), trace_metadata=None,\n    )\n    assert result == {"x": {"a": "keep", "b": 4}}\n    assert len(router.calls) == 2\n\n\ndef test_field_local_repair_also_uses_raw_text_boundary():\n    router = Router([json.dumps({"section": {"name": 3}}), json.dumps({"repair": {"name": "ok"}})])\n    result = field_local._generate_section_local(\n        router, prompt="x", section_id="x", fields=("name",),\n        properties={"name": {"type": "string", "minLength": 1}},\n        research={}, media_paths=(), trace_metadata=None,\n    )\n    assert result == {"name": "ok"}\n    assert len(router.calls) == 2\n''', encoding='utf-8')
           PY
-          python -m pytest -q tests/test_structured_subtree_repair_contract.py tests/test_host_local_structured_recovery.py
           python -m compileall -q minecraft_mod_ai
+          python -m pytest -q tests/test_structured_subtree_repair_contract.py tests/test_host_local_structured_recovery.py
       - name: Commit fix directly to main
         run: |
           git config user.name "github-actions[bot]"
