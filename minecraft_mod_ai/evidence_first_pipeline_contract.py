@@ -140,7 +140,10 @@ def _batches_from_handoff(
                 exports=(task_ref,),
                 task_contract=task,
                 evidence_plan_sha256=plan_sha256,
-                acceptance_tests=_strings(task.get("acceptance")),
+                # Task acceptance is an internal integrity predicate. Public/release
+                # acceptance is projected only from request_catalog requirements and
+                # acceptance_release_bindings by CompleteGameDesignPlanner.
+                acceptance_tests=(),
             )
         )
     return tuple(batches)
