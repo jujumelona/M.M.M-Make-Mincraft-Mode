@@ -12,9 +12,24 @@ from minecraft_mod_ai.production_contract import (
 def _target() -> dict[str, object]:
     return {
         'target': {
-            'minecraft_version': '1.21.11',
+            'minecraft_version': '26.1.2',
             'loader': 'fabric',
-            'source_api_family': 'fabric',
+            'java_version': '21',
+            'yarn_mappings': 'mojang',
+            'mappings_kind': 'mojang',
+            'mappings_version': 'mojang',
+            'fabric_loader': '0.18.4',
+            'fabric_api': '0.140.2+26.1',
+            'fabric_loom': '1.14.10',
+            'gradle': '9.2.1',
+            'gradle_sha256': 'a' * 64,
+            'data_pack_version': '101.1',
+            'resource_pack_version': '84.0',
+            'resource_pack_format': 84,
+            'release_metadata_url': (
+                'https://piston-meta.mojang.com/v1/packages/deadbeef/26.1.2.json'
+            ),
+            'source_api_family': 'fabric_live_ai',
         }
     }
 

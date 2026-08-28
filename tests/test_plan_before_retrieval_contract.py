@@ -114,6 +114,9 @@ def test_installed_platform_search_consumes_authoritative_plan_first(
     search_graph = observed["graph"]
     assert isinstance(search_graph, reuse.CapabilityGraph)
     assert search_graph.source_plan_sha256 == frozen["plan_sha256"]
+    graph_payload = search_graph.to_dict()
+    graph_payload.pop("source_plan_sha256")
+    assert graph_payload == frozen["capability_graph"]
     assert design["_pre_retrieval_plan"] == frozen
 
 
@@ -151,7 +154,7 @@ def test_tampered_pre_retrieval_plan_fails_before_search() -> None:
         reuse.decompose_capability_graph(prompt, design=design)
 
 
-def test_pack_versions_use_bounded_structured_official_source_first(
+def test_pack_versions_use_mojang_primary_then_bounded_official_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, int, int | None]] = []
@@ -184,12 +187,13 @@ def test_pack_versions_use_bounded_structured_official_source_first(
     finally:
         live._official_pack_versions.cache_clear()
 
-    assert len(calls) == 1
-    assert calls[0][0].startswith(
+    assert len(calls) == 2
+    assert calls[0][0].startswith("https://piston-meta.mojang.com/")
+    assert calls[1][0].startswith(
         "https://feedback.minecraft.net/api/v2/help_center/articles/search.json?"
     )
-    assert calls[0][1] <= 6
-    assert calls[0][2] <= 2
+    assert calls[1][1] <= 6
+    assert calls[1][2] <= 2
 
 
 def test_live_target_resolution_has_a_bounded_default_window(
