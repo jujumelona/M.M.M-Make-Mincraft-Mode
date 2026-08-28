@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..generation_output_budget import apply_payload_generation_budget
 from .base import (
     GenerationRequest,
     GenerationResponse,
@@ -135,6 +136,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 payload["tool_choice"] = request.tool_choice or "auto"
                 payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
 
+            payload = apply_payload_generation_budget(payload, config=cfg)
             response = _http_client(base_url, purpose="completion").post(
                 f"{base_url}/chat/completions",
                 headers={

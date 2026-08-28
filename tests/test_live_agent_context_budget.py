@@ -5,6 +5,11 @@ import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from minecraft_mod_ai.generation_output_budget import (
+    apply_payload_generation_budget,
+    generation_output_token_budget,
+    tools_require_expansive_output,
+)
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
@@ -30,12 +35,13 @@ def _qwen35_config() -> SimpleNamespace:
         exclusive_gpu=False,
         max_context=262144,
         max_input_tokens=0,
-        max_new_tokens=-1,
+        max_new_tokens=8192,
         model_id="test/qwen",
         extra={
             "runtime_contract": "qwen",
             "decode_hotpath": "t4_mtp",
             "runtime_context_default": 32768,
+            "dynamic_output_budget": True,
         },
     )
 
@@ -62,6 +68,69 @@ def test_live_context_not_registry_max_owns_qwen_tool_budget(monkeypatch) -> Non
     assert tool_action_token_budget(config) == 8192
     budget = request_message_budget(config, (tool,))
     assert 12 * 1024 <= budget < 48 * 1024
+
+
+def test_dynamic_output_budget_keeps_compact_tools_bounded_but_not_source_mutations(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("MMM_GENERATION_MAX_TOKENS", raising=False)
+    config = _qwen35_config()
+    compact = _tool_schema("work_status")
+    mutation = _tool_schema("apply_source_patch")
+
+    assert tools_require_expansive_output((compact,)) is False
+    assert tools_require_expansive_output((mutation,)) is True
+
+    plain_budget = generation_output_token_budget(
+        config,
+        input_tokens=2048,
+        tools=(),
+    )
+    compact_budget = generation_output_token_budget(
+        config,
+        input_tokens=2048,
+        tools=(compact,),
+    )
+    mutation_budget = generation_output_token_budget(
+        config,
+        input_tokens=2048,
+        tools=(mutation,),
+    )
+
+    assert plain_budget > 8192
+    assert compact_budget == 8192
+    assert mutation_budget == plain_budget
+
+
+def test_payload_budget_ignores_registry_reservation_for_expansive_tool(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("MMM_GENERATION_MAX_TOKENS", raising=False)
+    config = _qwen35_config()
+
+    mutation_payload = apply_payload_generation_budget(
+        {
+            "messages": [{"role": "user", "content": "apply the exact source patch"}],
+            "max_tokens": 8192,
+            "tools": [_tool_schema("apply_source_patch")],
+        },
+        config=config,
+    )
+    compact_payload = apply_payload_generation_budget(
+        {
+            "messages": [{"role": "user", "content": "read current status"}],
+            "max_tokens": 8192,
+            "tools": [_tool_schema("work_status")],
+        },
+        config=config,
+    )
+
+    assert int(mutation_payload["max_tokens"]) > 8192
+    assert int(compact_payload["max_tokens"]) == 8192
 
 
 def test_oversized_tool_observation_is_archived_with_mutation_proof(

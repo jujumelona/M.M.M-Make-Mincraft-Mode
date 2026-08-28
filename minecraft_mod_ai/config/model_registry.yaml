@@ -50,6 +50,7 @@ _qwen36_35b: &qwen36_35b
   qwen_reasoning_effort: false
   qwen_assistant_prefill: true
   agent_thinking: true
+  dynamic_output_budget: true
   mtp_widths: "1,2"
   sampling_profiles:
     general_thinking: &qwen36_general_thinking
@@ -93,6 +94,7 @@ _qwen38_27b_q4: &qwen38_27b_q4
   qwen_reasoning_effort: true
   qwen_assistant_prefill: true
   agent_thinking: true
+  dynamic_output_budget: true
   thinking_reasoning_effort: xhigh
   native_mtp: true
   sampling_profiles:
@@ -131,6 +133,7 @@ _qwen35_9b: &qwen35_9b
   qwen_reasoning_effort: false
   qwen_assistant_prefill: true
   agent_thinking: true
+  dynamic_output_budget: true
   request_policy: task_aware_sampling
   decode_hotpath: t4_mtp
   runtime_context_default: 32768
@@ -265,8 +268,9 @@ profiles:
         recommended_models:
           - Qwen/Qwen3-Coder-30B-A3B-Instruct
           - Qwen/Qwen3-Coder-Next
+        dynamic_output_budget: true
         max_context: 131072
-        max_new_tokens: -1
+        max_new_tokens: 16384
       coder_safe:
         provider: openai_compatible
         adapter: openai_compatible

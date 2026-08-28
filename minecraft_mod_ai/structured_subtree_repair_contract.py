@@ -336,19 +336,6 @@ def _generate_section_exact(
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    full_schema = {
-        "type": "object",
-        "properties": {
-            "section": {
-                "type": "object",
-                "properties": dict(properties),
-                "required": list(fields),
-                "additionalProperties": False,
-            }
-        },
-        "required": ["section"],
-        "additionalProperties": False,
-    }
     trace = _trace.PlannerStageTrace(
         stage=f"game_design_{section_id}",
         prompt=prompt,
