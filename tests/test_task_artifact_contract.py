@@ -123,7 +123,14 @@ def test_design_choices_and_implementation_obligations_have_separate_provenance(
     task["artifact_obligations"] = contract._artifact_obligations(task)
     resolution = contract._design_resolution({"tasks": [task]})
 
-    assert resolution["selected_design_alternatives"][0]["provenance_role"] == "selected_design_alternative"
+    # A derived implementation branch is not a user-authored or evidence-selected
+    # design alternative. Selection claims require an explicit comparative receipt.
+    assert resolution["selected_design_alternatives"] == []
+    assert resolution["derived_architecture_decisions"]
+    assert all(
+        item["provenance_role"] == "derived_architecture_decision"
+        for item in resolution["derived_architecture_decisions"]
+    )
     assert all(
         item["provenance_role"] == "implementation_obligation"
         for item in resolution["implementation_obligations"]
