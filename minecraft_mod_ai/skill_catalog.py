@@ -80,6 +80,7 @@ class SkillContract:
     description: str
     activate_when: tuple[str, ...]
     stages: tuple[str, ...]
+    required_rag: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     tool_routes: Mapping[str, str]
     validators: tuple[str, ...]
@@ -105,7 +106,7 @@ class SkillContract:
         return tuple(validator for validator in self.validators if context.get(validator) is not True)
 
     def to_dict(self) -> dict[str, Any]:
-        return {'name': self.name, 'description': self.description, 'activate_when': list(self.activate_when), 'stages': list(self.stages), 'allowed_tools': list(self.allowed_tools), 'tool_routes': dict(self.tool_routes), 'validators': list(self.validators), 'retry': self.retry.to_dict(), 'approvals': dict(self.approvals), 'forbidden_actions': list(self.forbidden_actions), 'exit': self.exit.to_dict()}
+        return {'name': self.name, 'description': self.description, 'activate_when': list(self.activate_when), 'stages': list(self.stages), 'required_rag': list(self.required_rag), 'allowed_tools': list(self.allowed_tools), 'tool_routes': dict(self.tool_routes), 'validators': list(self.validators), 'retry': self.retry.to_dict(), 'approvals': dict(self.approvals), 'forbidden_actions': list(self.forbidden_actions), 'exit': self.exit.to_dict()}
 
 def compile_skill_contract(skill: str, root: str | Path | None=None) -> SkillContract:
     if skill not in CANONICAL_SKILLS:
@@ -114,6 +115,7 @@ def compile_skill_contract(skill: str, root: str | Path | None=None) -> SkillCon
     if text is None:
         raise SkillPolicyError(f'Missing Skill file: {skill}')
     frontmatter, policy = _parse_skill(text, skill)
+    required_rag = _string_tuple(policy.get('required_rag'), 'required_rag', skill)
     tools = _string_tuple(policy.get('allowed_tools'), 'allowed_tools', skill)
     unknown_tools = sorted(set(tools) - set(REVIEWED_TOOL_STAGES))
     if unknown_tools:
@@ -159,7 +161,7 @@ def compile_skill_contract(skill: str, root: str | Path | None=None) -> SkillCon
     approvals = {key: _bool_field(approvals_raw, key, skill) for key in ('writes', 'runtime', 'read_only_research')}
     exit_raw = _mapping(policy.get('exit_conditions'), 'exit_conditions', skill)
     exit_contract = ExitContract(success=_string_tuple(exit_raw.get('success'), 'exit.success', skill), blocked=_string_tuple(exit_raw.get('blocked'), 'exit.blocked', skill), failed=_string_tuple(exit_raw.get('failed'), 'exit.failed', skill))
-    return SkillContract(name=skill, description=str(frontmatter['description']).strip(), activate_when=_string_tuple(policy.get('activate_when'), 'activate_when', skill), stages=tuple(stage for stage in _STAGE_PRIORITY if stage in stage_set), allowed_tools=tools, tool_routes=tool_routes, validators=tuple(validator_ids), retry=retry, approvals=approvals, forbidden_actions=_string_tuple(policy.get('forbidden_actions'), 'forbidden_actions', skill), exit=exit_contract)
+    return SkillContract(name=skill, description=str(frontmatter['description']).strip(), activate_when=_string_tuple(policy.get('activate_when'), 'activate_when', skill), stages=tuple(stage for stage in _STAGE_PRIORITY if stage in stage_set), required_rag=required_rag, allowed_tools=tools, tool_routes=tool_routes, validators=tuple(validator_ids), retry=retry, approvals=approvals, forbidden_actions=_string_tuple(policy.get('forbidden_actions'), 'forbidden_actions', skill), exit=exit_contract)
 
 def compile_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:
     return {skill: compile_skill_contract(skill, root) for skill in CANONICAL_SKILLS}
