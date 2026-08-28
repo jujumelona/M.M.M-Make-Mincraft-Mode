@@ -1,0 +1,60 @@
+name: One-shot RAG router bottleneck fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/rag-router-bottleneck-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Reuse semantic RAG router owner
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/production_tools.py')
+          text = path.read_text(encoding='utf-8')
+          marker = '''    @cached_property\n    def java(self) -> JavaLanguageService:\n        """Keep one initialized JDT LS owner per persistent production service."""\n        return JavaLanguageService()\n\n'''
+          replacement = marker + '''    @cached_property\n    def model_router(self) -> ModelRouter:\n        """Reuse one lazy model owner across semantic/reranked RAG calls."""\n        return ModelRouter(profile=self.profile)\n\n'''
+          if text.count(marker) != 1:
+              raise SystemExit('production_tools model-router insertion target drifted')
+          text = text.replace(marker, replacement, 1)
+          text = text.replace(
+              '''        router = ModelRouter(profile=self.profile) if effective_semantic else None\n''',
+              '''        router = self.model_router if effective_semantic else None\n''',
+              1,
+          )
+          text = text.replace(
+              '''        router = ModelRouter(profile=self.profile) if semantic or rerank else None\n''',
+              '''        router = self.model_router if semantic or rerank else None\n''',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_production_tool_router_cache.py')
+          test.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai import production_tools\n\n\ndef test_semantic_rag_calls_reuse_one_model_router(tmp_path, monkeypatch) -> None:\n    created = []\n\n    class FakeRouter:\n        def __init__(self, *, profile: str):\n            self.profile = profile\n            created.append(self)\n\n    seen = []\n\n    class FakeIndex:\n        def __init__(self, path):\n            self.path = path\n\n        def build(self, roots, *, metadata, router, semantic, max_files=None):\n            seen.append(router)\n            return {"ok": True}\n\n    monkeypatch.setattr(production_tools, "ModelRouter", FakeRouter)\n    monkeypatch.setattr(production_tools, "ProjectRAGIndex", FakeIndex)\n    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")\n    service = production_tools.ProductionToolService(\n        workspace_root=tmp_path,\n        profile="test-profile",\n    )\n\n    for index in range(2):\n        root = tmp_path / f"source-{index}"\n        root.mkdir()\n        service.index_project_rag(\n            [str(root)],\n            metadata={"kind": "project"},\n            semantic=True,\n        )\n\n    assert len(created) == 1\n    assert created[0].profile == "test-profile"\n    assert seen == [created[0], created[0]]\n''', encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_production_tool_router_cache.py tests/test_retrieval_runtime_bottlenecks.py tests/test_retrieval_overlap_cache.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit RAG router bottleneck fix directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/production_tools.py tests/test_production_tool_router_cache.py
+          git rm .github/workflows/rag-router-bottleneck-fix.yml
+          git commit -m "perf: reuse semantic RAG model router"
+          git push origin HEAD:main
