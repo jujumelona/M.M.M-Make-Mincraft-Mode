@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import central_research
+from . import central_research, production_contract
 from .complete_spec import (
     AssetRequest,
     CompleteProposal,
@@ -16,7 +16,6 @@ from .evidence_first_planning import compile_evidence_first_plan, task_batches
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
 from .planner_template_schema import build_batch_skeleton
-from .production_contract import compile_production_contract
 from .spec import SpecValidationError
 
 
@@ -115,7 +114,10 @@ class CompleteGameDesignPlanner:
             for key, value in internal_design.items()
             if not str(key).startswith("_")
         }
-        compiled = compile_production_contract(
+        # Resolve through the module at call time so late runtime-finalization wrappers
+        # (notably production_boundary_contract) are not bypassed by a stale imported
+        # function alias captured before finalization completed.
+        compiled = production_contract.compile_production_contract(
             requested_prompt=prompt,
             game_design=contract_design,
             research_brief=research_brief,
