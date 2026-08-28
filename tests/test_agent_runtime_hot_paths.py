@@ -4,8 +4,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-import anyio
-
 import minecraft_mod_ai.agent_capability_context as capability_context
 import minecraft_mod_ai.runtime_hotpath_consolidation as hotpath
 from minecraft_mod_ai import agent_tool_runtime
@@ -44,14 +42,29 @@ def test_first_party_execution_does_not_repeat_schema_listing(monkeypatch) -> No
             return False
 
     monkeypatch.setattr(runtime, "_session", lambda _stage: Context())
-    result = anyio.run(
+    first = runtime._run_async(
         runtime._call_tool_async,
         "generation",
         "search_code_rag",
         {"query": "block registry"},
     )
-    assert result["structured_content"] == {"ok": True}
-    assert events == ["enter", "execute:search_code_rag:block registry", "exit"]
+    second = runtime._run_async(
+        runtime._call_tool_async,
+        "generation",
+        "search_code_rag",
+        {"query": "item registry"},
+    )
+    assert first["structured_content"] == {"ok": True}
+    assert second["structured_content"] == {"ok": True}
+    assert events == [
+        "enter",
+        "execute:search_code_rag:block registry",
+        "execute:search_code_rag:item registry",
+    ]
+    runtime.close()
+    assert events[-1] == "exit"
+    assert events.count("enter") == 1
+    assert events.count("exit") == 1
 
 
 def test_manifest_router_is_reused_but_request_target_stays_dynamic(monkeypatch) -> None:

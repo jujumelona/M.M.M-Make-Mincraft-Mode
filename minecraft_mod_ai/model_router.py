@@ -121,6 +121,11 @@ class ModelRouter:
             )
         with self._generation_lock:
             if root != self._agent_workspace_root:
+                old_runtime = self._agent_tool_runtime
+                if old_runtime is not None:
+                    close_runtime = getattr(old_runtime, "close", None)
+                    if callable(close_runtime):
+                        close_runtime()
                 self._agent_workspace_root = root
                 self._agent_tool_runtime = None
             self._agent_require_fresh_evidence = bool(require_fresh_evidence)

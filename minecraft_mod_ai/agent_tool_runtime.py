@@ -157,6 +157,12 @@ class AgentToolRuntime:
         self._allowed_tool_cache: dict[str, frozenset[str]] = {}
         self._external_bridge = ExternalAgentBridge(timeout_seconds=timeout_seconds)
         self._lock = threading.RLock()
+        self._async_loop: asyncio.AbstractEventLoop | None = None
+        self._async_thread: threading.Thread | None = None
+        self._async_ready = threading.Event()
+        self._mcp_sessions: dict[str, tuple[Any, Any]] = {}
+        self._mcp_session_locks: dict[str, asyncio.Lock] = {}
+        self._closed = False
 
     def tool_schemas(self, stage: str) -> tuple[dict[str, Any], ...]:
         selected = self._stage(stage)
@@ -344,49 +350,139 @@ class AgentToolRuntime:
         )
         return env
 
+    def _ensure_async_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._closed:
+                raise AgentToolRuntimeError("Agent tool runtime is closed")
+            loop = self._async_loop
+            if loop is not None and loop.is_running():
+                return loop
+            thread = self._async_thread
+            if thread is None or not thread.is_alive():
+                self._async_ready.clear()
+
+                def worker() -> None:
+                    event_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(event_loop)
+                    self._async_loop = event_loop
+                    self._async_ready.set()
+                    try:
+                        event_loop.run_forever()
+                    finally:
+                        pending = asyncio.all_tasks(event_loop)
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            event_loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                        event_loop.run_until_complete(event_loop.shutdown_asyncgens())
+                        event_loop.close()
+
+                thread = threading.Thread(
+                    target=worker,
+                    name="mmm-agent-tool-runtime",
+                    daemon=True,
+                )
+                self._async_thread = thread
+                thread.start()
+            ready = self._async_ready
+        if not ready.wait(self.timeout_seconds + 5.0):
+            raise AgentToolRuntimeError("MCP event-loop startup timed out")
+        loop = self._async_loop
+        if loop is None or not loop.is_running():
+            raise AgentToolRuntimeError("MCP event loop failed to start")
+        return loop
+
     def _run_async(self, function: Any, *args: Any) -> Any:
-        async def runner() -> Any:
-            return await function(*args)
-
+        loop = self._ensure_async_loop()
+        future = asyncio.run_coroutine_threadsafe(function(*args), loop)
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return anyio.run(runner)
+            return future.result(timeout=self.timeout_seconds + 5.0)
+        except TimeoutError as exc:
+            future.cancel()
+            raise AgentToolRuntimeError("MCP synchronous bridge timed out") from exc
+        except AgentToolRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentToolRuntimeError(str(exc)) from exc
 
-        value: dict[str, Any] = {}
-        errors: list[BaseException] = []
+    async def _persistent_session(self, stage: str) -> Any:
+        cached = self._mcp_sessions.get(stage)
+        if cached is not None:
+            return cached[1]
+        lock = self._mcp_session_locks.get(stage)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._mcp_session_locks[stage] = lock
+        async with lock:
+            cached = self._mcp_sessions.get(stage)
+            if cached is not None:
+                return cached[1]
+            context = self._session(stage)
+            session = await context.__aenter__()
+            self._mcp_sessions[stage] = (context, session)
+            return session
 
-        def worker() -> None:
+    async def _close_mcp_sessions_async(self) -> None:
+        sessions = tuple(reversed(tuple(self._mcp_sessions.values())))
+        self._mcp_sessions.clear()
+        self._mcp_session_locks.clear()
+        first_error: BaseException | None = None
+        for context, _session in sessions:
             try:
-                value["result"] = anyio.run(runner)
-            except BaseException as exc:  # pragma: no cover - event-loop bridge
-                errors.append(exc)
+                await context.__aexit__(None, None, None)
+            except BaseException as exc:  # pragma: no cover - defensive cleanup
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join(self.timeout_seconds + 5.0)
-        if thread.is_alive():
-            raise AgentToolRuntimeError("MCP synchronous bridge timed out")
-        if errors:
-            raise AgentToolRuntimeError(str(errors[0])) from errors[0]
-        return value["result"]
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            loop = self._async_loop
+            thread = self._async_thread
+        cleanup_error: BaseException | None = None
+        if loop is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                self._close_mcp_sessions_async(),
+                loop,
+            )
+            try:
+                future.result(timeout=self.timeout_seconds + 5.0)
+            except BaseException as exc:  # pragma: no cover - defensive cleanup
+                cleanup_error = exc
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(self.timeout_seconds + 5.0)
+        with self._lock:
+            self._async_loop = None
+            self._async_thread = None
+        if cleanup_error is not None:
+            raise AgentToolRuntimeError(
+                f"MCP session cleanup failed: {cleanup_error}"
+            ) from cleanup_error
 
     async def _list_tools_async(self, stage: str) -> list[dict[str, Any]]:
-        async with self._session(stage) as session:
-            listed = await session.list_tools()
-            result: list[dict[str, Any]] = []
-            for item in getattr(listed, "tools", ()) or ():
-                schema = getattr(item, "inputSchema", None)
-                if schema is None:
-                    schema = getattr(item, "input_schema", None)
-                result.append(
-                    {
-                        "name": str(getattr(item, "name", "")),
-                        "description": str(getattr(item, "description", "") or ""),
-                        "input_schema": _jsonable(schema),
-                    }
-                )
-            return result
+        session = await self._persistent_session(stage)
+        listed = await session.list_tools()
+        result: list[dict[str, Any]] = []
+        for item in getattr(listed, "tools", ()) or ():
+            schema = getattr(item, "inputSchema", None)
+            if schema is None:
+                schema = getattr(item, "input_schema", None)
+            result.append(
+                {
+                    "name": str(getattr(item, "name", "")),
+                    "description": str(getattr(item, "description", "") or ""),
+                    "input_schema": _jsonable(schema),
+                }
+            )
+        return result
 
     async def _call_tool_async(
         self,
@@ -394,16 +490,16 @@ class AgentToolRuntime:
         name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        async with self._session(stage) as session:
-            raw = await session.call_tool(name, arguments=dict(arguments))
-            normalized = _normalize_tool_result(raw)
-            if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
-                detail = _mcp_error_detail(normalized)
-                message = f"MCP tool {name!r} returned an error"
-                if detail:
-                    message = f"{message}: {detail}"
-                raise AgentToolRuntimeError(message)
-            return normalized
+        session = await self._persistent_session(stage)
+        raw = await session.call_tool(name, arguments=dict(arguments))
+        normalized = _normalize_tool_result(raw)
+        if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
+            detail = _mcp_error_detail(normalized)
+            message = f"MCP tool {name!r} returned an error"
+            if detail:
+                message = f"{message}: {detail}"
+            raise AgentToolRuntimeError(message)
+        return normalized
 
     def _session(self, stage: str):
         return _MCPStdioSession(
@@ -437,7 +533,6 @@ class _MCPStdioSession:
         stack = AsyncExitStack()
         self._stack = stack
         try:
-            stack.enter_context(anyio.fail_after(self.timeout_seconds))
             errlog = stack.enter_context(
                 tempfile.TemporaryFile(mode="w+", encoding="utf-8")
             )
@@ -446,13 +541,14 @@ class _MCPStdioSession:
                 args=["-m", "minecraft_mod_ai.mcp_server"],
                 env=self.env,
             )
-            read_stream, write_stream = await stack.enter_async_context(
-                stdio_client(params, errlog=errlog)
-            )
-            self.session = await stack.enter_async_context(
-                ClientSession(read_stream, write_stream)
-            )
-            await self.session.initialize()
+            with anyio.fail_after(self.timeout_seconds):
+                read_stream, write_stream = await stack.enter_async_context(
+                    stdio_client(params, errlog=errlog)
+                )
+                self.session = await stack.enter_async_context(
+                    ClientSession(read_stream, write_stream)
+                )
+                await self.session.initialize()
             return self.session
         except BaseException as original:
             try:
