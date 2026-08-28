@@ -205,6 +205,69 @@ class JavaLanguageService:
             diagnostic_page_max_source_bytes
         )
         self.diagnostic_quiet_seconds = diagnostic_quiet_seconds
+        self._session_lock = threading.RLock()
+        self._rpc: _JsonRpcProcess | None = None
+        self._project_root: Path | None = None
+
+    @staticmethod
+    def _rpc_alive(rpc: _JsonRpcProcess) -> bool:
+        process = getattr(rpc, "process", None)
+        poll = getattr(process, "poll", None)
+        return not callable(poll) or poll() is None
+
+    def _close_rpc_locked(self) -> None:
+        rpc = self._rpc
+        self._rpc = None
+        self._project_root = None
+        if rpc is not None:
+            rpc.close()
+
+    def _ensure_rpc_locked(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+    ) -> _JsonRpcProcess:
+        rpc = self._rpc
+        if (
+            rpc is not None
+            and self._project_root == root
+            and self._rpc_alive(rpc)
+        ):
+            return rpc
+        if rpc is not None:
+            self._close_rpc_locked()
+        rpc = _JsonRpcProcess(self.command, root)
+        try:
+            rpc.request(
+                "initialize",
+                {
+                    "processId": os.getpid(),
+                    "rootUri": root.as_uri(),
+                    "capabilities": {
+                        "textDocument": {
+                            "publishDiagnostics": {"relatedInformation": True}
+                        },
+                        "workspace": {
+                            "workspaceFolders": True,
+                            "symbol": {},
+                        },
+                    },
+                    "workspaceFolders": list(rpc.workspace_folders),
+                },
+                timeout=min(timeout_seconds, 45),
+            )
+            rpc.notify("initialized", {})
+        except BaseException:
+            rpc.close()
+            raise
+        self._rpc = rpc
+        self._project_root = root
+        return rpc
+
+    def close(self) -> None:
+        with self._session_lock:
+            self._close_rpc_locked()
 
     def diagnostics(
         self,
@@ -237,24 +300,8 @@ class JavaLanguageService:
                 timeout_seconds=timeout_seconds,
             )
 
-        rpc = _JsonRpcProcess(self.command, root)
-        try:
-            rpc.request(
-                "initialize",
-                {
-                    "processId": os.getpid(),
-                    "rootUri": root.as_uri(),
-                    "capabilities": {
-                        "textDocument": {
-                            "publishDiagnostics": {"relatedInformation": True}
-                        },
-                        "workspace": {"workspaceFolders": True},
-                    },
-                    "workspaceFolders": list(rpc.workspace_folders),
-                },
-                timeout=min(timeout_seconds, 45),
-            )
-            rpc.notify("initialized", {})
+        with self._session_lock:
+            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
             diagnostics: dict[str, list[dict[str, Any]]] = {}
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
@@ -264,36 +311,36 @@ class JavaLanguageService:
                     max_source_bytes=self.diagnostic_page_max_source_bytes,
                 )
                 expected_uris = {path.as_uri() for path, _text in sources}
-                for path, text in sources:
+                for source_path, source_text in sources:
                     rpc.notify(
                         "textDocument/didOpen",
                         {
                             "textDocument": {
-                                "uri": path.as_uri(),
+                                "uri": source_path.as_uri(),
                                 "languageId": "java",
                                 "version": 1,
-                                "text": text,
+                                "text": source_text,
                             }
                         },
                     )
-                page_diagnostics = _collect_diagnostics(
-                    rpc,
-                    expected_uris=expected_uris,
-                    timeout_seconds=timeout_seconds,
-                    quiet_seconds=self.diagnostic_quiet_seconds,
-                )
-                for path, _text in sources:
-                    rpc.notify(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": path.as_uri()}},
+                try:
+                    page_diagnostics = _collect_diagnostics(
+                        rpc,
+                        expected_uris=expected_uris,
+                        timeout_seconds=timeout_seconds,
+                        quiet_seconds=self.diagnostic_quiet_seconds,
                     )
+                finally:
+                    for source_path, _source_text in sources:
+                        rpc.notify(
+                            "textDocument/didClose",
+                            {"textDocument": {"uri": source_path.as_uri()}},
+                        )
                 diagnostics.update(page_diagnostics)
-                page_errors, page_warnings = _diagnostic_counts(
-                    page_diagnostics
-                )
+                page_errors, page_warnings = _diagnostic_counts(page_diagnostics)
                 relative_paths = [
-                    path.relative_to(root).as_posix()
-                    for path, _text in sources
+                    source_path.relative_to(root).as_posix()
+                    for source_path, _source_text in sources
                 ]
                 page_receipts.append(
                     {
@@ -319,8 +366,6 @@ class JavaLanguageService:
                 max_source_bytes=self.diagnostic_page_max_source_bytes,
                 timeout_seconds=timeout_seconds,
             )
-        finally:
-            rpc.close()
 
     def workspace_symbols(
         self,
@@ -330,19 +375,12 @@ class JavaLanguageService:
         timeout_seconds: int = 60,
     ) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
-        rpc = _JsonRpcProcess(self.command, root)
-        try:
-            rpc.request(
-                "initialize",
-                {
-                    "processId": os.getpid(),
-                    "rootUri": root.as_uri(),
-                    "capabilities": {"workspace": {"symbol": {}}},
-                    "workspaceFolders": list(rpc.workspace_folders),
-                },
-                timeout=min(timeout_seconds, 45),
-            )
-            rpc.notify("initialized", {})
+        if not root.is_dir():
+            raise FileNotFoundError(root)
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive.")
+        with self._session_lock:
+            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
             result = rpc.request(
                 "workspace/symbol",
                 {"query": query},
@@ -353,8 +391,6 @@ class JavaLanguageService:
                 "query": query,
                 "symbols": result or [],
             }
-        finally:
-            rpc.close()
 
 
 def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:

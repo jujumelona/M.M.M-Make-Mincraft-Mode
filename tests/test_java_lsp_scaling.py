@@ -19,6 +19,7 @@ class _FakeJsonRpcProcess:
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr = ["stable fake stderr"]
         self.request_timeouts: list[float] = []
+        self.request_methods: list[str] = []
         self.opened_uris: list[str] = []
         self.workspace_folders: tuple[dict[str, str], ...] = ()
         self.closed = False
@@ -31,8 +32,12 @@ class _FakeJsonRpcProcess:
         timeout: float,
     ) -> dict[str, Any]:
         self.request_timeouts.append(timeout)
-        assert method == "initialize"
-        return {}
+        self.request_methods.append(method)
+        if method == "initialize":
+            return {}
+        if method == "workspace/symbol":
+            return {"query": params.get("query", "")}
+        raise AssertionError(f"unexpected fake JDT request: {method}")
 
     def notify(self, method: str, params: dict[str, Any]) -> None:
         if method == "textDocument/didOpen":
@@ -107,6 +112,8 @@ def test_diagnostics_pages_every_java_file_without_a_total_count_cap(
     rpc = _FakeJsonRpcProcess.instances[0]
     assert len(rpc.opened_uris) == 300
     assert rpc.request_timeouts == [3]
+    assert rpc.closed is False
+    service.close()
     assert rpc.closed is True
 
 
@@ -206,3 +213,46 @@ def test_each_page_quietly_settles_when_no_uri_publishes() -> None:
         quiet_seconds=1.0,
     )
     assert result == {}
+
+
+def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeJsonRpcProcess.instances.clear()
+    monkeypatch.setattr(java_lsp, "_JsonRpcProcess", _FakeJsonRpcProcess)
+    service = JavaLanguageService("fake-jdtls")
+
+    first = service.workspace_symbols(tmp_path, "Alpha", timeout_seconds=3)
+    second = service.workspace_symbols(tmp_path, "Beta", timeout_seconds=3)
+
+    assert first["symbols"] == {"query": "Alpha"}
+    assert second["symbols"] == {"query": "Beta"}
+    assert len(_FakeJsonRpcProcess.instances) == 1
+    rpc = _FakeJsonRpcProcess.instances[0]
+    assert rpc.request_methods == ["initialize", "workspace/symbol", "workspace/symbol"]
+    assert rpc.closed is False
+    service.close()
+    assert rpc.closed is True
+
+
+def test_switching_project_root_restarts_the_jdt_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    _FakeJsonRpcProcess.instances.clear()
+    monkeypatch.setattr(java_lsp, "_JsonRpcProcess", _FakeJsonRpcProcess)
+    service = JavaLanguageService("fake-jdtls")
+
+    service.workspace_symbols(first_root, "One", timeout_seconds=3)
+    first_rpc = _FakeJsonRpcProcess.instances[0]
+    service.workspace_symbols(second_root, "Two", timeout_seconds=3)
+
+    assert len(_FakeJsonRpcProcess.instances) == 2
+    assert first_rpc.closed is True
+    assert _FakeJsonRpcProcess.instances[1].closed is False
+    service.close()

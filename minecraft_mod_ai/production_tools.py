@@ -40,6 +40,11 @@ class ProductionToolService:
         from .mineflayer_bridge import MineflayerBridge
         return MineflayerBridge()
 
+    @cached_property
+    def java(self) -> JavaLanguageService:
+        """Keep one initialized JDT LS owner per persistent production service."""
+        return JavaLanguageService()
+
     def index_project_rag(self, roots: Sequence[str], *, index_path: str='rag/project-index.json', metadata: dict[str, Any], semantic: bool=False) -> dict[str, Any]:
         resolved = [str(self._existing_path(root)) for root in roots]
         target = self._replaceable_file(index_path)
@@ -142,10 +147,10 @@ class ProductionToolService:
 
     def java_diagnostics(self, project_root: str, relative_files: list[str] | None=None, timeout_seconds: int=60) -> dict[str, Any]:
         root = self._existing_dir(project_root)
-        return JavaLanguageService().diagnostics(root, relative_files=relative_files, timeout_seconds=timeout_seconds)
+        return self.java.diagnostics(root, relative_files=relative_files, timeout_seconds=timeout_seconds)
 
     def java_workspace_symbols(self, project_root: str, query: str, timeout_seconds: int=60) -> dict[str, Any]:
-        return JavaLanguageService().workspace_symbols(self._existing_dir(project_root), query, timeout_seconds=timeout_seconds)
+        return self.java.workspace_symbols(self._existing_dir(project_root), query, timeout_seconds=timeout_seconds)
 
     def blockbench_list_tools(self, timeout_seconds: int=60) -> dict[str, Any]:
         client = BlockbenchMCPClient(timeout_seconds=timeout_seconds)
