@@ -95,9 +95,16 @@ class PlatformAdapter:
                 "Resource pack format major disagrees with the exact provider resource-pack version."
             )
         if not self.release_metadata_url.startswith(
-            ("https://www.minecraft.net/", "https://feedback.minecraft.net/")
+            (
+                "https://www.minecraft.net/",
+                "https://feedback.minecraft.net/",
+                "https://piston-meta.mojang.com/",
+                "https://launcher.mojang.com/",
+            )
         ):
-            raise ValueError("Pack metadata must be grounded in an official Minecraft release URL.")
+            raise ValueError(
+                "Pack metadata must be grounded in an official Minecraft/Mojang metadata URL."
+            )
 
     def public_dict(self) -> dict[str, Any]:
         self.validate()

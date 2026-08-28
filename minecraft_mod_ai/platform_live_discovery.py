@@ -629,59 +629,46 @@ def _mojang_pack_versions(version: str) -> tuple[str, str]:
 
 @lru_cache(maxsize=64)
 def _official_pack_versions(version: str) -> tuple[str, str, str]:
-    """Resolve release identity and exact pack versions from independent official data.
+    """Resolve exact pack versions from official machine-readable metadata first.
 
-    Minecraft Feedback supplies the human release URL. Mojang's checksummed client JAR
-    supplies the authoritative ``version.json`` pack numbers. Article prose remains only
-    a fallback because hotfix articles often omit unchanged pack-version declarations.
+    Mojang's version manifest plus checksummed client ``version.json`` is the primary
+    evidence path. Human release articles are bounded fallbacks only, so an unavailable
+    Feedback or minecraft.net presentation endpoint cannot invalidate valid Mojang data.
     """
 
     errors: list[str] = []
-    release_url = ""
-    release_body = ""
     try:
-        article = _feedback_release_article(version)
-        release_url = str(article.get("html_url") or "").strip()
-        release_body = str(article.get("body") or "")
+        data_pack, resource_pack = _mojang_pack_versions(version)
+        return data_pack, resource_pack, _mojang_target_url(version)
+    except PlatformDiscoveryError as exc:
+        errors.append(f"mojang version metadata: {exc}")
+        _emit_discovery_log(
+            f"Mojang pack metadata unavailable for {version}: {exc}; "
+            "trying official release article metadata"
+        )
+
+    try:
+        return _feedback_pack_versions(version)
     except PlatformDiscoveryError as exc:
         errors.append(f"feedback.minecraft.net: {exc}")
         _emit_discovery_log(
-            f"structured official release metadata unavailable for {version}: {exc}; "
+            f"structured official pack metadata unavailable for {version}: {exc}; "
             "trying the canonical release article"
         )
-        release_url = _release_article_url(version)
-        try:
-            release_body = _fetch(
-                release_url,
-                timeout=_article_timeout(),
-                retries=1,
-            ).decode("utf-8", errors="replace")
-        except PlatformDiscoveryError as article_exc:
-            errors.append(f"minecraft.net: {article_exc}")
-            release_url = ""
 
+    url = _release_article_url(version)
     try:
-        data_pack, resource_pack = _mojang_pack_versions(version)
+        raw = _fetch(
+            url,
+            timeout=_article_timeout(),
+            retries=1,
+        ).decode("utf-8", errors="replace")
+        return _parse_pack_versions(raw, version=version, source_url=url)
     except PlatformDiscoveryError as exc:
-        errors.append(f"piston-data.mojang.com: {exc}")
-        if release_url and release_body:
-            try:
-                return _parse_pack_versions(
-                    release_body,
-                    version=version,
-                    source_url=release_url,
-                )
-            except PlatformDiscoveryError as article_exc:
-                errors.append(f"release article pack metadata: {article_exc}")
+        errors.append(f"minecraft.net: {exc}")
         raise PlatformDiscoveryError(
             f"official pack metadata unavailable for {version}; " + "; ".join(errors)
         ) from exc
-
-    if not release_url:
-        raise PlatformDiscoveryError(
-            f"official release metadata unavailable for {version}; " + "; ".join(errors)
-        )
-    return data_pack, resource_pack, release_url
 
 
 @lru_cache(maxsize=32)
@@ -714,7 +701,7 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
     mappings_kind = "mojang"
     mappings_version = "mojang"
     payload = {
-        "source": "official-live-discovery-v4",
+        "source": "official-live-discovery-v5",
         "minecraft_version": version,
         "stable": bool(row["stable"]),
         "loader_version": loader,
