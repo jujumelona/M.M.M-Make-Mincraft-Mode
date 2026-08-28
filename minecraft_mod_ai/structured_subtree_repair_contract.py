@@ -19,7 +19,6 @@ from . import planner_stage_trace as _trace
 from . import structured_repair_contract as _base
 from .spec import SpecValidationError
 
-_INSTALLED = False
 _STAGNATION_LIMIT = 3
 _MISSING = object()
 
@@ -494,19 +493,8 @@ def _generate_section_exact(
     return result
 
 
-def install_structured_subtree_repair_contract() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    if not getattr(_design._generate_section, "_mmm_field_local_repair", False):
-        raise RuntimeError("structured subtree repair requires the field-local repair contract")
-    _base._generate_section_local = _generate_section_exact
-    _INSTALLED = True
-
-
 __all__ = [
     "_diagnostics",
     "_generate_section_exact",
     "_schema_at",
-    "install_structured_subtree_repair_contract",
 ]
