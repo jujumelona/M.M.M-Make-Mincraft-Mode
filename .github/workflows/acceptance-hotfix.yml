@@ -31,3 +31,4 @@ jobs:
           git add -A
           git commit -m "fix: sanitize public acceptance before production compile"
           git push origin main
+
