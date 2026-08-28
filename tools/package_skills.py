@@ -9,6 +9,7 @@ from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / "skills"
 OUTPUT = ROOT / "minecraft_mod_ai" / "packaged_skills.json"
+PLUGIN_SKILLS_ROOT = ROOT / "plugins" / "mmm-minecraft-mod-ai" / "skills"
 
 
 def _compile_raw_skill_catalog():
@@ -51,6 +52,15 @@ def build_payload() -> dict[str, object]:
     }
 
 
+def _sync_plugin_skills() -> None:
+    """Keep the Codex plugin copy byte-identical to canonical Skill sources."""
+
+    for name in CANONICAL_SKILLS:
+        destination = PLUGIN_SKILLS_ROOT / name / "SKILL.md"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(_read_skill_source(name), encoding="utf-8")
+
+
 def main() -> None:
     OUTPUT.write_text(
         json.dumps(
@@ -62,6 +72,7 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
+    _sync_plugin_skills()
 
 
 if __name__ == "__main__":
