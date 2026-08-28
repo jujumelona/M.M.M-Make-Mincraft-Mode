@@ -24,6 +24,16 @@ jobs:
       - name: Make semantic approval clause-local and bounded
         run: |
           python .github/scripts/semantic_clause_authority_fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_semantic_requirement_authority.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    router = TextRouter([{"requirements": [\n        _item("resource.gathering", "gather crystals"),\n        _item("economy.trade", "trade crystals"),\n    ]}])\n'''
+          new = '''    router = TextRouter([\n        {"requirements": [_item("resource.gathering", "gather crystals")]},\n        {"requirements": [_item("economy.trade", "trade crystals")]},\n    ])\n'''
+          if text.count(old) != 1:
+              raise SystemExit('semantic clause fixture drifted')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python -m compileall -q minecraft_mod_ai
           python -m pytest -q tests/test_semantic_requirement_authority.py
       - name: Commit fix directly to main
