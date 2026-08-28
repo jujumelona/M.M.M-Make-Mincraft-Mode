@@ -143,21 +143,24 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         elif requirement['source'] == 'evidence_plan':
             if normalized_evidence_plan is None:
                 raise ProductionContractError('evidence requirement has no validated evidence plan')
-            bindings = normalized_evidence_plan.get('acceptance_release_bindings')
-            if not isinstance(bindings, list):
-                raise ProductionContractError('evidence plan acceptance bindings are missing')
-            matching_bindings = [
+            request_catalog = normalized_evidence_plan.get('request_catalog')
+            if not isinstance(request_catalog, Mapping):
+                raise ProductionContractError('evidence plan request catalog is missing')
+            approved_requirements = request_catalog.get('requirements')
+            if not isinstance(approved_requirements, list):
+                raise ProductionContractError('evidence plan request requirements are missing')
+            matching_requirements = [
                 item
-                for item in bindings
+                for item in approved_requirements
                 if isinstance(item, Mapping)
-                and item.get('requirement_ref') == requirement_ref
+                and item.get('requirement_id') == requirement_ref
             ]
-            if len(matching_bindings) != 1:
+            if len(matching_requirements) != 1:
                 raise ProductionContractError(
-                    f'evidence requirement needs exactly one release acceptance binding: {requirement_ref}'
+                    f'evidence requirement needs exactly one approved request requirement: {requirement_ref}'
                 )
             public_checks = _require_string_list(
-                matching_bindings[0].get('acceptance'),
+                matching_requirements[0].get('acceptance'),
                 f'evidence public acceptance: {requirement_ref}',
                 nonempty=True,
             )
