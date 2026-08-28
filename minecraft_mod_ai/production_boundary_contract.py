@@ -34,24 +34,77 @@ def _install_planner_public_acceptance_guard() -> None:
     The evidence planner has additional testability checks that remain authoritative.
     This guard only tightens its result with the production leak detector so a plan
     accepted upstream cannot fail later solely because task/integrity language crossed
-    the public boundary.
+    the public boundary. Reused request catalogs are authenticated by the planner first,
+    then migrated through the same public-acceptance normalizer and rehashed.
     """
     from . import evidence_first_planning as _evidence
 
     original = _evidence._is_public_acceptance
-    if getattr(original, "_mmm_production_public_acceptance_guard", False):
+    if not getattr(original, "_mmm_production_public_acceptance_guard", False):
+        @wraps(original)
+        def is_public_acceptance(value: Any) -> bool:
+            if not original(value):
+                return False
+            normalize = getattr(_evidence, "_normalize_public_acceptance", None)
+            candidate = normalize(value) if callable(normalize) else str(value or "").strip()
+            return _strict_public_acceptance(candidate)
+
+        is_public_acceptance._mmm_production_public_acceptance_guard = True
+        _evidence._is_public_acceptance = is_public_acceptance
+
+    original_build = _evidence.build_request_catalog
+    if getattr(original_build, "_mmm_public_acceptance_catalog_migration", False):
         return
 
-    @wraps(original)
-    def is_public_acceptance(value: Any) -> bool:
-        if not original(value):
-            return False
-        normalize = getattr(_evidence, "_normalize_public_acceptance", None)
-        candidate = normalize(value) if callable(normalize) else str(value or "").strip()
-        return _strict_public_acceptance(candidate)
+    @wraps(original_build)
+    def build_request_catalog(
+        prompt: str,
+        game_design: Mapping[str, Any],
+        router: Any | None = None,
+    ) -> dict[str, Any]:
+        # The original builder validates any reused catalog hash and prompt binding
+        # before returning. Only after that integrity gate may legacy public text be
+        # migrated, so this cannot turn a tampered catalog into an accepted one.
+        catalog = original_build(prompt, game_design, router=router)
+        requirements = catalog.get("requirements")
+        if not isinstance(requirements, list):
+            return catalog
 
-    is_public_acceptance._mmm_production_public_acceptance_guard = True
-    _evidence._is_public_acceptance = is_public_acceptance
+        migrated_requirements: list[dict[str, Any]] = []
+        changed = False
+        for raw in requirements:
+            if not isinstance(raw, Mapping):
+                migrated_requirements.append(raw)
+                continue
+            requirement = dict(raw)
+            current_raw = requirement.get("acceptance")
+            current = list(current_raw) if isinstance(current_raw, list) else []
+            canonical = list(
+                _evidence._requirement_acceptance(
+                    str(requirement.get("capability") or ""),
+                    current,
+                )
+            )
+            if canonical != current:
+                requirement["acceptance"] = canonical
+                changed = True
+            migrated_requirements.append(requirement)
+
+        if not changed:
+            return catalog
+
+        migrated = dict(catalog)
+        migrated["requirements"] = migrated_requirements
+        migrated["catalog_sha256"] = ""
+        migrated["catalog_sha256"] = _evidence._hash_without(
+            migrated,
+            "catalog_sha256",
+        )
+        _evidence._validate_request_catalog(migrated, prompt=prompt)
+        return migrated
+
+    build_request_catalog._mmm_public_acceptance_catalog_migration = True
+    _evidence.build_request_catalog = build_request_catalog
 
 
 def _filter_evidence_input_acceptance(
