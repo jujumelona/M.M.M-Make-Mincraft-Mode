@@ -59,13 +59,7 @@ def _migrate_verified_evidence_public_acceptance(
     *,
     requested_prompt: str,
 ) -> Mapping[str, Any] | None:
-    """Migrate legacy public acceptance only after verifying the original plan.
-
-    Older cached request catalogs and release bindings may contain task-local integrity
-    prose that was valid before the public boundary was tightened. The original plan is
-    authenticated first; then only public acceptance fields are normalized and the two
-    affected aggregate hashes are renewed. A tampered plan therefore still fails closed.
-    """
+    """Migrate legacy public acceptance only after verifying the original plan."""
     if not isinstance(evidence_plan, Mapping):
         return evidence_plan
 
@@ -109,6 +103,8 @@ def _migrate_verified_evidence_public_acceptance(
         migrated_requirements.append(requirement)
 
     migrated_request: Mapping[str, Any] = request
+    migrated_gaps: Any = evidence_plan.get("gap_catalog")
+    migrated_tasks: Any = evidence_plan.get("tasks")
     if request_changed:
         request_copy = dict(request)
         request_copy["requirements"] = migrated_requirements
@@ -118,6 +114,35 @@ def _migrate_verified_evidence_public_acceptance(
             "catalog_sha256",
         )
         migrated_request = request_copy
+
+        raw_gaps = evidence_plan.get("gap_catalog")
+        if not isinstance(raw_gaps, list):
+            raise _evidence.EvidencePlanError("Gap catalog must be a list.")
+        gap_values: list[Any] = []
+        for raw in raw_gaps:
+            if not isinstance(raw, Mapping):
+                gap_values.append(raw)
+                continue
+            gap = dict(raw)
+            requirement_ref = str(gap.get("requirement_ref") or "")
+            canonical = canonical_by_ref.get(requirement_ref)
+            if canonical is not None:
+                gap["acceptance"] = list(canonical)
+                gap["gap_sha256"] = ""
+                gap["gap_sha256"] = _evidence._hash_without(gap, "gap_sha256")
+            gap_values.append(gap)
+        migrated_gaps = gap_values
+
+        rebuilt_tasks = _evidence._compile_tasks(
+            migrated_gaps,
+            evidence_plan.get("reuse_decisions") or (),
+            evidence_plan.get("target_decision") or {},
+            evidence_plan.get("branch_predicates") or {},
+            evidence_plan.get("ownership_context") or {},
+        )
+        order = _evidence._topological(rebuilt_tasks)
+        tasks_by_id = {str(task["task_id"]): task for task in rebuilt_tasks}
+        migrated_tasks = [tasks_by_id[task_id] for task_id in order]
 
     raw_bindings = evidence_plan.get("acceptance_release_bindings")
     migrated_bindings: Any = raw_bindings
@@ -146,8 +171,23 @@ def _migrate_verified_evidence_public_acceptance(
     migrated_plan = dict(evidence_plan)
     if request_changed:
         migrated_plan["request_catalog"] = migrated_request
+        migrated_plan["gap_catalog"] = migrated_gaps
+        migrated_plan["tasks"] = migrated_tasks
     if bindings_changed:
         migrated_plan["acceptance_release_bindings"] = migrated_bindings
+    boundary = migrated_plan.get("acceptance_boundary")
+    if request_changed and isinstance(boundary, Mapping):
+        boundary_copy = dict(boundary)
+        boundary_copy["public_acceptance"] = [
+            {
+                "requirement_ref": requirement.get("requirement_id"),
+                "capability": requirement.get("capability"),
+                "acceptance": list(requirement.get("acceptance") or ()),
+            }
+            for requirement in migrated_requirements
+            if isinstance(requirement, Mapping)
+        ]
+        migrated_plan["acceptance_boundary"] = boundary_copy
     migrated_plan["plan_sha256"] = ""
     migrated_plan["plan_sha256"] = _evidence._hash_without(
         migrated_plan,
