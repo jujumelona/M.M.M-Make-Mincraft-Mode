@@ -57,7 +57,6 @@ class PlatformSelection:
         return lock_from_adapter(self.adapter)
 
     def to_dict(self) -> dict[str, Any]:
-        mappings_kind = "mojang" if self.adapter.yarn_mappings == "mojang" else "yarn"
         payload: dict[str, Any] = {
             "schema_version": "mmm/platform-selection-v4",
             "adapter_id": self.adapter.adapter_id,
@@ -68,16 +67,24 @@ class PlatformSelection:
             "preserved_existing_target": self.preserved_existing_target,
             "migration_requested": self.migration_requested,
             "target": {
+                "adapter_id": self.adapter.adapter_id,
                 "edition": self.adapter.edition,
                 "loader": self.adapter.loader,
                 "minecraft_version": self.adapter.minecraft_version,
                 "java_version": self.adapter.java_version,
-                "mappings_kind": mappings_kind,
+                "yarn_mappings": self.adapter.yarn_mappings,
+                "mappings_kind": self.adapter.mappings_kind,
+                "mappings_version": self.adapter.mappings_version,
                 "mappings": self.adapter.yarn_mappings,
                 "fabric_loader": self.adapter.fabric_loader,
                 "fabric_api": self.adapter.fabric_api,
                 "fabric_loom": self.adapter.fabric_loom,
                 "gradle": self.adapter.gradle,
+                "gradle_sha256": self.adapter.gradle_sha256,
+                "data_pack_version": self.adapter.data_pack_version,
+                "resource_pack_version": self.adapter.resource_pack_version,
+                "resource_pack_format": self.adapter.resource_pack_format,
+                "release_metadata_url": self.adapter.release_metadata_url,
                 "source_api_family": self.adapter.source_api_family,
             },
         }
