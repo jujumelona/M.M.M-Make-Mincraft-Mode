@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.complete_planner import _implementation_prompt
+from minecraft_mod_ai.complete_planner import _implementation_research_outline
 from minecraft_mod_ai.research_coordinator import (
     collect_ecosystem_seed_bundle,
     collect_technology_radar,
@@ -268,7 +268,7 @@ def test_ecosystem_coordinator_rejects_bad_cursor_progress(failure: str) -> None
         )
 
 
-def test_planning_prompt_excludes_old_unbounded_aggregate_contracts() -> None:
+def test_implementation_outline_excludes_old_unbounded_aggregate_contracts() -> None:
     requirements = [
         {
             "requirement_id": f"same_kind_{index}",
@@ -286,10 +286,10 @@ def test_planning_prompt_excludes_old_unbounded_aggregate_contracts() -> None:
         }
         for index in range(500)
     ]
-    rendered = _implementation_prompt(
-        "Build every requested large-system capability.",
+    outline = _implementation_research_outline(
         {
-            "title": "Large",
+            "mod_id": "large_system",
+            "description": "Build every requested large-system capability.",
             "_technology_radar": {
                 "requirements": requirements,
                 "pagination": {"total_requirements": 500},
@@ -300,9 +300,14 @@ def test_planning_prompt_excludes_old_unbounded_aggregate_contracts() -> None:
                 "pages": pages,
                 "errors": [],
             },
-        },
+        }
     )
-    assert "host-owned production template" in rendered
+
+    assert outline == {
+        "mod_id": "large_system",
+        "description": "Build every requested large-system capability.",
+    }
+    rendered = repr(outline)
     assert "same_kind_0" not in rendered
     assert "same_kind_499" not in rendered
     assert "github:owner/repo-0" not in rendered
