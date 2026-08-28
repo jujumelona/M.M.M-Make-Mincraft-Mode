@@ -322,6 +322,38 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
     return tuple(batches)
 
 
+def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the bounded design outline expected by runtime platform contracts.
+
+    This is a deterministic compatibility helper only. It performs no model call and
+    does not reintroduce structured/JSON planner generation.
+    """
+    keys = (
+        "mod_id",
+        "mod_name",
+        "description",
+        "features",
+        "systems",
+        "constraints",
+        "acceptance_tests",
+        "modules",
+        "assets",
+        "_platform_selection",
+        "_platform_evidence",
+        "_research_brief",
+        "_technical_evidence",
+        "_pre_design_research",
+    )
+    outline = {key: game_design[key] for key in keys if key in game_design}
+    if (
+        "_technical_evidence" in outline
+        and "_platform_evidence" in outline
+        and outline["_technical_evidence"] == outline["_platform_evidence"]
+    ):
+        outline.pop("_technical_evidence")
+    return outline
+
+
 def _retrieve_implementation_evidence(
     prompt: str,
     game_design: dict[str, Any],
