@@ -459,6 +459,13 @@ class ModelRouter:
             raise ModelConfigurationError(
                 f"Role {role!r} does not expose a reranker adapter."
             )
+        extra = config.extra if isinstance(config.extra, dict) else {}
+        device = str(extra.get("device", "cpu") or "cpu").strip().casefold()
+        if (
+            device.startswith("cpu")
+            and os.environ.get("MMM_RAG_ENABLE_CPU_DENSE", "").strip() != "1"
+        ):
+            return []
         return RerankerAdapter(config).score(
             query,
             documents,
