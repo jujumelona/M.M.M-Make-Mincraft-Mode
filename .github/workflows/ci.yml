@@ -28,9 +28,9 @@ jobs:
         run: >-
           gh api --method POST
           "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
-          -f state=pending
+          -f state=success
           -f context='ci/run-locator'
-          -f description='Temporary CI run locator'
+          -f description='Diagnostic CI run locator published'
           -f target_url="$RUN_URL"
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
