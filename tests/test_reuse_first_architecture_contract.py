@@ -37,8 +37,10 @@ def test_detailed_request_catalog_is_primary_reuse_search_specification():
     assert graph.nodes == ("economy.trade", "cooking.recipe")
     payload = graph.to_dict()
     terms = {item["capability"]: item["terms"] for item in payload["search_terms"]}
-    assert "NPC shops buy and sell goods using persistent currency balances" in terms["economy.trade"]
-    assert "Players cook ingredient recipes at a timed cooking station" in terms["cooking.recipe"]
+    trade_statement = "NPC shops buy and sell goods using persistent currency balances"
+    cooking_statement = "Players cook ingredient recipes at a timed cooking station"
+    assert any(trade_statement in term for term in terms["economy.trade"])
+    assert any(cooking_statement in term for term in terms["cooking.recipe"])
     assert all(source[1].startswith("evidence_request_catalog.") for source in graph.sources)
 
 

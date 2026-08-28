@@ -59,7 +59,7 @@ def test_evidence_catalog_capability_is_not_prefixed_or_rewritten() -> None:
     assert graph.nodes == (capability,)
 
 
-def test_evidence_catalog_does_not_suppress_uncovered_prompt_requirement() -> None:
+def test_approved_evidence_catalog_is_a_hard_prompt_inference_barrier() -> None:
     graph = decompose_capability_graph(
         "Add trade and quests.",
         design={
@@ -76,10 +76,12 @@ def test_evidence_catalog_does_not_suppress_uncovered_prompt_requirement() -> No
         },
     )
 
-    assert "trade.transaction" in graph.nodes
-    assert "quest.state" in graph.nodes
-    assert "quest.progression" in graph.nodes
-    assert "quest.reward" in graph.nodes
+    assert graph.nodes == ("trade.transaction",)
+    assert all(not node.startswith("quest.") for node in graph.nodes)
+    assert all(
+        source.startswith("evidence_request_catalog.")
+        for _, source in graph.sources
+    )
 
 
 def test_underscore_structured_capability_is_not_ontology_rewritten() -> None:

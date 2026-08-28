@@ -35,7 +35,8 @@ class _SectionRouter:
                 "enable_tools": enable_tools,
             }
         )
-        required = tuple(response_schema["properties"]["section"]["required"])
+        request_payload = json.loads(messages[-1]["content"])
+        required = tuple(request_payload["required_fields"])
         values = {
             "title": "연구 기반 모드",
             "pitch": "검색 근거를 바탕으로 설계한다.",
@@ -79,7 +80,7 @@ class _ResearchRouter:
         )
 
 
-def test_sectioned_game_design_uses_four_small_schema_calls() -> None:
+def test_sectioned_game_design_uses_four_host_validated_text_calls() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -97,9 +98,9 @@ def test_sectioned_game_design_uses_four_small_schema_calls() -> None:
 
     assert len(router.calls) == 4
     assert all(call["role"] == "planner" for call in router.calls)
-    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(call["response_format"] == "text" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
-    assert all(call["response_schema"] for call in router.calls)
+    assert all(call["response_schema"] is None for call in router.calls)
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
