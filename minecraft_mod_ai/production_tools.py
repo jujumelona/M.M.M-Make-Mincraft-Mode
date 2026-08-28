@@ -50,6 +50,13 @@ class ProductionToolService:
         """Reuse one lazy model owner across semantic/reranked RAG calls."""
         return ModelRouter(profile=self.profile)
 
+    def close(self) -> None:
+        """Release lazily-created persistent subprocess owners without creating new ones."""
+        java = self.__dict__.get("java")
+        if java is not None:
+            java.close()
+            self.__dict__.pop("java", None)
+
     def index_project_rag(self, roots: Sequence[str], *, index_path: str='rag/project-index.json', metadata: dict[str, Any], semantic: bool=False) -> dict[str, Any]:
         resolved = [str(self._existing_path(root)) for root in roots]
         target = self._replaceable_file(index_path)

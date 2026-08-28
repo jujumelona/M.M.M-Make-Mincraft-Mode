@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import os
 from collections.abc import Callable
@@ -61,6 +62,16 @@ def _core() -> MMMToolService:
 @lru_cache(maxsize=1)
 def _production() -> ProductionToolService:
     return ProductionToolService(workspace_root=os.environ.get('MMM_WORKSPACE', 'mmm-output'), profile=os.environ.get('MMM_MODEL_PROFILE', 't4_local'))
+
+
+def _close_cached_services() -> None:
+    # Never instantiate a service only to close it. The MCP child owns at most one
+    # cached ProductionToolService, and that service owns persistent JDT resources.
+    if _production.cache_info().currsize:
+        _production().close()
+
+
+atexit.register(_close_cached_services)
 
 def _ledger_for_run(run_name: str) -> DurableWorkLedger:
     if not run_name or any(character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name):
