@@ -34,77 +34,127 @@ def _install_planner_public_acceptance_guard() -> None:
     The evidence planner has additional testability checks that remain authoritative.
     This guard only tightens its result with the production leak detector so a plan
     accepted upstream cannot fail later solely because task/integrity language crossed
-    the public boundary. Reused request catalogs are authenticated by the planner first,
-    then migrated through the same public-acceptance normalizer and rehashed.
+    the public boundary.
     """
     from . import evidence_first_planning as _evidence
 
     original = _evidence._is_public_acceptance
-    if not getattr(original, "_mmm_production_public_acceptance_guard", False):
-        @wraps(original)
-        def is_public_acceptance(value: Any) -> bool:
-            if not original(value):
-                return False
-            normalize = getattr(_evidence, "_normalize_public_acceptance", None)
-            candidate = normalize(value) if callable(normalize) else str(value or "").strip()
-            return _strict_public_acceptance(candidate)
-
-        is_public_acceptance._mmm_production_public_acceptance_guard = True
-        _evidence._is_public_acceptance = is_public_acceptance
-
-    original_build = _evidence.build_request_catalog
-    if getattr(original_build, "_mmm_public_acceptance_catalog_migration", False):
+    if getattr(original, "_mmm_production_public_acceptance_guard", False):
         return
 
-    @wraps(original_build)
-    def build_request_catalog(
-        prompt: str,
-        game_design: Mapping[str, Any],
-        router: Any | None = None,
-    ) -> dict[str, Any]:
-        # The original builder validates any reused catalog hash and prompt binding
-        # before returning. Only after that integrity gate may legacy public text be
-        # migrated, so this cannot turn a tampered catalog into an accepted one.
-        catalog = original_build(prompt, game_design, router=router)
-        requirements = catalog.get("requirements")
-        if not isinstance(requirements, list):
-            return catalog
+    @wraps(original)
+    def is_public_acceptance(value: Any) -> bool:
+        if not original(value):
+            return False
+        normalize = getattr(_evidence, "_normalize_public_acceptance", None)
+        candidate = normalize(value) if callable(normalize) else str(value or "").strip()
+        return _strict_public_acceptance(candidate)
 
-        migrated_requirements: list[dict[str, Any]] = []
-        changed = False
-        for raw in requirements:
-            if not isinstance(raw, Mapping):
-                migrated_requirements.append(raw)
-                continue
-            requirement = dict(raw)
-            current_raw = requirement.get("acceptance")
-            current = list(current_raw) if isinstance(current_raw, list) else []
-            canonical = list(
-                _evidence._requirement_acceptance(
-                    str(requirement.get("capability") or ""),
-                    current,
-                )
+    is_public_acceptance._mmm_production_public_acceptance_guard = True
+    _evidence._is_public_acceptance = is_public_acceptance
+
+
+def _migrate_verified_evidence_public_acceptance(
+    evidence_plan: Mapping[str, Any] | None,
+    *,
+    requested_prompt: str,
+) -> Mapping[str, Any] | None:
+    """Migrate legacy public acceptance only after verifying the original plan.
+
+    Older cached request catalogs and release bindings may contain task-local integrity
+    prose that was valid before the public boundary was tightened. The original plan is
+    authenticated first; then only public acceptance fields are normalized and the two
+    affected aggregate hashes are renewed. A tampered plan therefore still fails closed.
+    """
+    if not isinstance(evidence_plan, Mapping):
+        return evidence_plan
+
+    from . import evidence_first_planning as _evidence
+
+    _evidence.validate_evidence_first_plan(evidence_plan, prompt=requested_prompt)
+    request = evidence_plan.get("request_catalog")
+    if not isinstance(request, Mapping):
+        return evidence_plan
+    raw_requirements = request.get("requirements")
+    if not isinstance(raw_requirements, list):
+        return evidence_plan
+
+    canonical_by_ref: dict[str, list[str]] = {}
+    migrated_requirements: list[Any] = []
+    request_changed = False
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            migrated_requirements.append(raw)
+            continue
+        requirement = dict(raw)
+        current_raw = requirement.get("acceptance")
+        current = list(current_raw) if isinstance(current_raw, list) else []
+        canonical = list(
+            _evidence._requirement_acceptance(
+                str(requirement.get("capability") or ""),
+                current,
             )
-            if canonical != current:
-                requirement["acceptance"] = canonical
-                changed = True
-            migrated_requirements.append(requirement)
+        )
+        canonical = [value for value in canonical if _strict_public_acceptance(value)]
+        if not canonical:
+            canonical = [
+                "Verify the observable player-facing behavior for the approved requirement."
+            ]
+        requirement_ref = str(requirement.get("requirement_id") or "")
+        if requirement_ref:
+            canonical_by_ref[requirement_ref] = canonical
+        if canonical != current:
+            requirement["acceptance"] = canonical
+            request_changed = True
+        migrated_requirements.append(requirement)
 
-        if not changed:
-            return catalog
-
-        migrated = dict(catalog)
-        migrated["requirements"] = migrated_requirements
-        migrated["catalog_sha256"] = ""
-        migrated["catalog_sha256"] = _evidence._hash_without(
-            migrated,
+    migrated_request: Mapping[str, Any] = request
+    if request_changed:
+        request_copy = dict(request)
+        request_copy["requirements"] = migrated_requirements
+        request_copy["catalog_sha256"] = ""
+        request_copy["catalog_sha256"] = _evidence._hash_without(
+            request_copy,
             "catalog_sha256",
         )
-        _evidence._validate_request_catalog(migrated, prompt=prompt)
-        return migrated
+        migrated_request = request_copy
 
-    build_request_catalog._mmm_public_acceptance_catalog_migration = True
-    _evidence.build_request_catalog = build_request_catalog
+    raw_bindings = evidence_plan.get("acceptance_release_bindings")
+    migrated_bindings: Any = raw_bindings
+    bindings_changed = False
+    if isinstance(raw_bindings, list):
+        binding_values: list[Any] = []
+        for raw in raw_bindings:
+            if not isinstance(raw, Mapping):
+                binding_values.append(raw)
+                continue
+            binding = dict(raw)
+            requirement_ref = str(binding.get("requirement_ref") or "")
+            canonical = canonical_by_ref.get(requirement_ref)
+            current_raw = binding.get("acceptance")
+            current = list(current_raw) if isinstance(current_raw, list) else []
+            if canonical is not None and canonical != current:
+                binding["acceptance"] = list(canonical)
+                bindings_changed = True
+            binding_values.append(binding)
+        if bindings_changed:
+            migrated_bindings = binding_values
+
+    if not request_changed and not bindings_changed:
+        return evidence_plan
+
+    migrated_plan = dict(evidence_plan)
+    if request_changed:
+        migrated_plan["request_catalog"] = migrated_request
+    if bindings_changed:
+        migrated_plan["acceptance_release_bindings"] = migrated_bindings
+    migrated_plan["plan_sha256"] = ""
+    migrated_plan["plan_sha256"] = _evidence._hash_without(
+        migrated_plan,
+        "plan_sha256",
+    )
+    _evidence.validate_evidence_first_plan(migrated_plan, prompt=requested_prompt)
+    return migrated_plan
 
 
 def _filter_evidence_input_acceptance(
@@ -367,9 +417,13 @@ def install_production_boundary_contract() -> None:
             acceptance_tests=(),
             evidence_plan: Mapping[str, Any] | None = None,
         ):
+            effective_plan = _migrate_verified_evidence_public_acceptance(
+                evidence_plan,
+                requested_prompt=requested_prompt,
+            )
             effective_acceptance = _filter_evidence_input_acceptance(
                 acceptance_tests,
-                evidence_plan,
+                effective_plan,
             )
             compilation = original(
                 requested_prompt,
@@ -378,13 +432,13 @@ def install_production_boundary_contract() -> None:
                 modules,
                 assets,
                 effective_acceptance,
-                evidence_plan,
+                effective_plan,
             )
             return _rewrite_compilation(
                 compilation,
                 modules=modules,
                 assets=assets,
-                evidence_plan=evidence_plan,
+                evidence_plan=effective_plan,
             )
         compile_contract._mmm_authority_acceptance_projection = True
         _production.compile_production_contract = compile_contract
