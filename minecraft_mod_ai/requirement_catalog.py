@@ -257,7 +257,7 @@ def build_requirement_catalog(
                 id=req_id,
                 statement=stmt,
                 original_span=original_span,
-                normalized_statement=stmt,
+                normalized_statement=(str(r.get("semantic_statement") or stmt).strip() or stmt),
                 mandatory=bool(r.get("mandatory", True)),
                 provides=tuple(provides),
                 confidence=float(r.get("confidence", 1.0)),

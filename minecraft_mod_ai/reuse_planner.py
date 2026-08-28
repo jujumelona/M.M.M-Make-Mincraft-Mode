@@ -140,13 +140,19 @@ def decompose_capability_graph(
                     edges.append(edge)
         return anchor
 
-    def register_search_terms(capability: str, values: Iterable[Any]) -> None:
+    def register_search_terms(
+        capability: str,
+        values: Iterable[Any],
+        *,
+        include_predefined: bool = True,
+    ) -> None:
         if not capability:
             return
         bucket = search_terms.setdefault(capability, [])
-        for predefined in search_queries_for_capability(capability):
-            if predefined.casefold() not in {item.casefold() for item in bucket}:
-                bucket.append(predefined)
+        if include_predefined:
+            for predefined in search_queries_for_capability(capability):
+                if predefined.casefold() not in {item.casefold() for item in bucket}:
+                    bucket.append(predefined)
         for raw in values:
             value = " ".join(str(raw or "").split())
             if value and value.casefold() not in {item.casefold() for item in bucket}:
@@ -176,21 +182,87 @@ def decompose_capability_graph(
     ev_catalog = design.get("_evidence_request_catalog") if isinstance(design, Mapping) else None
     if ev_catalog and isinstance(ev_catalog.get("requirements"), Sequence):
         req_catalog = build_requirement_catalog(prompt, evidence_request_catalog=ev_catalog)
+        capabilities_by_requirement: dict[str, tuple[str, ...]] = {}
         for req in req_catalog.requirements:
             source = f"evidence_request_catalog.{req.id}"
+            bound: list[str] = []
+            semantic = " ".join(str(req.normalized_statement or req.statement).split())
+            original = " ".join(str(req.original_span or req.statement).split())
             for cap in req.provides:
-                # The evidence catalog is the requirement authority. Ontology
-                # expansion may enrich searches later, but may not rename it here.
+                # An approved evidence catalog is the semantic authority. Never
+                # re-expand or rename its capability identity through the ontology.
                 anchor = add(cap, source, expand=False)
-                if anchor:
-                    register_search_terms(anchor, (cap, req.statement))
-                    catalog_used = True
+                if not anchor:
+                    continue
+                cap_words = anchor.replace(".", " ").replace("_", " ")
+                register_search_terms(
+                    anchor,
+                    (
+                        f"{cap_words} implementation {semantic}",
+                        f"{cap_words} source {original}",
+                        f"{cap_words} reusable implementation",
+                    ),
+                    include_predefined=False,
+                )
+                bound.append(anchor)
+                catalog_used = True
+            capabilities_by_requirement[req.id] = tuple(dict.fromkeys(bound))
+
         if not catalog_used and req_catalog.capabilities:
             for c_spec in req_catalog.capabilities:
-                anchor = add(c_spec.id, "evidence_request_catalog.capability")
+                anchor = add(c_spec.id, "evidence_request_catalog.capability", expand=False)
                 if anchor:
-                    register_search_terms(anchor, (c_spec.id,))
+                    cap_words = anchor.replace(".", " ").replace("_", " ")
+                    register_search_terms(
+                        anchor,
+                        (
+                            f"{cap_words} reusable implementation",
+                            f"{cap_words} source code",
+                            f"{cap_words} minecraft implementation",
+                        ),
+                        include_predefined=False,
+                    )
                     catalog_used = True
+
+        if catalog_used:
+            # Preserve only authored gameplay dependencies. Semantic derivation is
+            # provenance, not an implementation dependency, and ontology defaults
+            # are forbidden after requirement approval.
+            raw_requirements = ev_catalog.get("requirements")
+            if isinstance(raw_requirements, Sequence) and not isinstance(
+                raw_requirements, (str, bytes, bytearray)
+            ):
+                for index, raw_requirement in enumerate(raw_requirements, 1):
+                    if not isinstance(raw_requirement, Mapping):
+                        continue
+                    child_id = str(
+                        raw_requirement.get("requirement_id")
+                        or raw_requirement.get("id")
+                        or f"REQ-{index:03d}"
+                    )
+                    raw_dependencies = raw_requirement.get("depends_on", ())
+                    if not isinstance(raw_dependencies, Sequence) or isinstance(
+                        raw_dependencies, (str, bytes, bytearray)
+                    ):
+                        continue
+                    for parent_id in raw_dependencies:
+                        for child_cap in capabilities_by_requirement.get(child_id, ()):
+                            for parent_cap in capabilities_by_requirement.get(str(parent_id), ()):
+                                if child_cap != parent_cap and (child_cap, parent_cap) not in edges:
+                                    edges.append((child_cap, parent_cap))
+
+            # Hard authority barrier: no raw-prompt resolver, semantic inference,
+            # opaque fallback node, predefined ontology search query, or default
+            # dependency may execute below this point.
+            return CapabilityGraph(
+                nodes=tuple(ordered),
+                edges=tuple(edges),
+                sources=tuple((node, sources[node]) for node in ordered),
+                search_terms=tuple(
+                    (node, tuple(search_terms.get(node, (node.replace(".", " "),))))
+                    for node in ordered
+                ),
+            )
 
     if not catalog_used and isinstance(design, Mapping):
         for key, value in design.items():
