@@ -1104,16 +1104,19 @@ def generate_with_tools(
             if state.mutation_context is not None
             else LocalizationStage.NEED_FILE
         )
+        mutation_localization_active = bool(
+            implementation_requires_mutation and state.phase == LoopPhase.OBSERVE
+        )
         phase_attempted_sources = (
             state.attempted_sources_for_localization_stage(current_localization_stage)
-            if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE
-            else frozenset(state.attempted_sources)
+            if mutation_localization_active
+            else frozenset()
         )
         phase_tools = _filter_tools_for_phase(
             all_exposed_tools,
             state.phase,
             role,
-            mutation_context=state.mutation_context,
+            mutation_context=(state.mutation_context if mutation_localization_active else None),
             attempted_sources=phase_attempted_sources,
         )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
