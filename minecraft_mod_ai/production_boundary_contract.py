@@ -8,7 +8,6 @@ anchor integrity and implementation invariants remain internal. Conditional qual
 is bound to the requirement that activated it instead of every requested requirement.
 """
 
-import sys
 from collections.abc import Mapping
 from functools import wraps
 from typing import Any
@@ -53,13 +52,6 @@ def _install_planner_public_acceptance_guard() -> None:
 
     is_public_acceptance._mmm_production_public_acceptance_guard = True
     _evidence._is_public_acceptance = is_public_acceptance
-
-    # Repair direct private imports too; package finalization precedes all user planning.
-    for name, module in tuple(sys.modules.items()):
-        if not name.startswith("minecraft_mod_ai.") or module is None:
-            continue
-        if getattr(module, "_is_public_acceptance", None) is original:
-            setattr(module, "_is_public_acceptance", is_public_acceptance)
 
 
 def _filter_evidence_input_acceptance(
@@ -343,14 +335,6 @@ def install_production_boundary_contract() -> None:
             )
         compile_contract._mmm_authority_acceptance_projection = True
         _production.compile_production_contract = compile_contract
-
-        # Repair already-imported direct references so runtime finalization order cannot
-        # resurrect the old serializer behind this authority boundary.
-        for name, module in tuple(sys.modules.items()):
-            if not name.startswith("minecraft_mod_ai.") or module is None:
-                continue
-            if getattr(module, "compile_production_contract", None) is original:
-                setattr(module, "compile_production_contract", compile_contract)
     _INSTALLED = True
 
 
