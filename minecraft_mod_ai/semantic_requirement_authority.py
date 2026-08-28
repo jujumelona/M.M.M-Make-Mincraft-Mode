@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-"""Host-owned semantic requirement authority and pre-retrieval approval barrier.
+"""Host-owned semantic requirement authority.
 
-The authored prompt is immutable source material. A semantic model may map host-owned
-clauses to gameplay requirements, but it cannot invent source text, turn a design
-alternative into a mandatory user requirement, or authorize retrieval while coverage
-is unresolved. Stable requirement identities are created exactly once in this module
-and are then carried downstream unchanged.
+The language model performs semantic interpretation only. The host owns authored source
+text, exact offsets, provenance, stable IDs, and downstream authority. Semantic analysis
+is batched so normal planning needs one model turn rather than one turn per clause. A
+single targeted repair batch is allowed only for clauses whose semantic payload is
+structurally invalid or cannot be grounded to the authored source.
 """
 
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
+from difflib import SequenceMatcher
 from typing import Any
 
 from . import evidence_first_planning as _evidence
@@ -30,7 +32,6 @@ _ALL_PROVENANCE_ROLES = frozenset(
     }
 )
 _CAPABILITY_ID = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
-_LOCAL_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OPAQUE_CAPABILITY = re.compile(r"^(?:semantic_[0-9a-f]{6,}|unresolved:)", re.IGNORECASE)
 
 
@@ -66,81 +67,16 @@ def _diagnostic(
     }
 
 
-def _semantic_schema(clause_count: int) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "requirements": {
-                "type": "array",
-                "minItems": clause_count,
-                "maxItems": max(clause_count * 8, clause_count),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "local_id": {"type": "string", "minLength": 1, "maxLength": 64},
-                        "capability_id": {"type": "string", "minLength": 3, "maxLength": 128},
-                        "provenance_role": {
-                            "type": "string",
-                            "enum": sorted(_ALL_PROVENANCE_ROLES),
-                        },
-                        "source_clause_index": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": max(0, clause_count - 1),
-                        },
-                        "source_quote": {"type": "string", "minLength": 1},
-                        "semantic_statement": {"type": "string", "minLength": 1},
-                        "derived_from": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1, "maxLength": 64},
-                        },
-                        "depends_on": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1, "maxLength": 64},
-                        },
-                        "derivation_reason": {"type": "string"},
-                        "observable_behavior": {
-                            "type": "object",
-                            "properties": {
-                                "given": {"type": "string", "minLength": 1},
-                                "when": {"type": "string", "minLength": 1},
-                                "then": {"type": "string", "minLength": 1},
-                            },
-                            "required": ["given", "when", "then"],
-                            "additionalProperties": False,
-                        },
-                    },
-                    "required": [
-                        "local_id",
-                        "capability_id",
-                        "provenance_role",
-                        "source_clause_index",
-                        "source_quote",
-                        "semantic_statement",
-                        "derived_from",
-                        "depends_on",
-                        "derivation_reason",
-                        "observable_behavior",
-                    ],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["requirements"],
-        "additionalProperties": False,
-    }
-
-
 def _clause_records(prompt: str) -> list[dict[str, Any]]:
     spans = list(_evidence._semantic_clause_spans(prompt))
     if not spans and prompt.strip():
         start = len(prompt) - len(prompt.lstrip())
         end = len(prompt.rstrip())
         spans = [(start, end)]
-    result: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     for index, (start, end) in enumerate(spans):
         text = prompt[start:end]
-        result.append(
+        records.append(
             {
                 "clause_index": index,
                 "char_start": start,
@@ -149,336 +85,52 @@ def _clause_records(prompt: str) -> list[dict[str, Any]]:
                 "text_sha256": _sha256(text),
             }
         )
-    if not result:
+    if not records:
         raise _evidence.EvidencePlanError(
             "REQ_SOURCE_EMPTY: authored request has no semantic clause."
         )
-    return result
+    return records
 
 
-def _messages(
-    prompt: str,
-    clauses: Sequence[Mapping[str, Any]],
-    diagnostic: Mapping[str, Any] | None,
-    previous_candidate: Mapping[str, Any] | None,
-) -> list[dict[str, str]]:
-    system = (
-        "You are the semantic requirement authority for a Minecraft mod planner. "
-        "Map only authored meaning and logically necessary gameplay requirements. "
-        "Do NOT choose implementation techniques, UI patterns, blueprint systems, boss "
-        "variants, persistence mechanisms, networking schemes, or other design alternatives "
-        "unless the authored text explicitly requires that behavior. The host owns source "
-        "clauses and IDs. Every authored clause must have at least one provenance_role="
-        "explicit requirement. Additional logically_derived requirements are allowed only "
-        "when they are necessary for an explicit goal and must cite derived_from local IDs "
-        "plus a non-empty derivation_reason. selected_design_alternative and "
-        "implementation_obligation are forbidden in this phase; those belong to later "
-        "design/artifact resolution. capability_id must be a meaningful lower-case dotted "
-        "semantic ID, never a hash or opaque placeholder. source_quote must be the smallest "
-        "verbatim substring of the assigned clause that grounds this requirement. If one "
-        "clause contains several independent meanings, give each its own local_id and precise "
-        "source_quote. depends_on expresses gameplay/progression causality between requirement "
-        "local IDs, not Java/datagen implementation ordering. observable_behavior must state "
-        "a concrete Given/When/Then player-visible contract. Return JSON only."
-    )
-    payload = {
-        "authoritative_prompt_receipt": {
-            "sha256": _sha256(prompt),
-            "char_count": len(prompt),
-        },
-        "host_owned_clauses": [dict(item) for item in clauses],
-        "repair_diagnostic": dict(diagnostic) if diagnostic else None,
-        "previous_candidate": dict(previous_candidate) if previous_candidate else None,
-    }
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": _canonical(payload)},
-    ]
-
-
-def _find_quote(clause: Mapping[str, Any], quote: str) -> tuple[int, int] | None:
-    text = str(clause["text"])
-    first = text.find(quote)
-    if first < 0:
-        return None
-    if text.find(quote, first + 1) >= 0:
-        return None
-    start = int(clause["char_start"]) + first
-    return start, start + len(quote)
-
-
-def _validate_candidate(
-    payload: Any,
-    *,
-    prompt: str,
-    clauses: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
-    del prompt
-    if not isinstance(payload, Mapping):
-        return None, _diagnostic(
-            "REQ_SCHEMA_ROOT",
-            "$",
-            type(payload).__name__,
-            "JSON object with a requirements array",
-            "whole_response",
-        )
-    raw_requirements = payload.get("requirements")
-    if not isinstance(raw_requirements, list) or not raw_requirements:
-        return None, _diagnostic(
-            "REQ_SCHEMA_REQUIREMENTS",
-            "$.requirements",
-            raw_requirements,
-            "non-empty requirements array",
-            "$.requirements",
-        )
-
-    local_ids: set[str] = set()
-    normalized: list[dict[str, Any]] = []
-    for index, raw in enumerate(raw_requirements):
-        path = f"$.requirements[{index}]"
-        if not isinstance(raw, Mapping):
-            return None, _diagnostic(
-                "REQ_SCHEMA_ITEM", path, raw, "requirement object", path
-            )
-        local_id = str(raw.get("local_id") or "").strip().casefold()
-        if not _LOCAL_ID.fullmatch(local_id):
-            return None, _diagnostic(
-                "REQ_LOCAL_ID",
-                path + ".local_id",
-                raw.get("local_id"),
-                "unique lower_snake local ID",
-                path,
-            )
-        if local_id in local_ids:
-            return None, _diagnostic(
-                "REQ_DUPLICATE_LOCAL_ID",
-                path + ".local_id",
-                local_id,
-                "unique local ID",
-                path,
-            )
-        local_ids.add(local_id)
-
-        capability = str(raw.get("capability_id") or "").strip().casefold()
-        if (
-            not _CAPABILITY_ID.fullmatch(capability)
-            or _OPAQUE_CAPABILITY.match(capability)
-        ):
-            return None, _diagnostic(
-                "REQ_CAPABILITY_ID",
-                path + ".capability_id",
-                raw.get("capability_id"),
-                "meaningful lower-case dotted semantic ID; no semantic hash/unresolved placeholder",
-                path,
-            )
-
-        role = str(raw.get("provenance_role") or "").strip().casefold()
-        if role not in _ALLOWED_AUTHORING_ROLES:
-            return None, _diagnostic(
-                "REQ_PROVENANCE_OVERREACH",
-                path + ".provenance_role",
-                raw.get("provenance_role"),
-                "explicit or logically_derived only before design-alternative resolution",
-                path,
-            )
-
-        clause_index = raw.get("source_clause_index")
-        if (
-            type(clause_index) is not int
-            or clause_index < 0
-            or clause_index >= len(clauses)
-        ):
-            return None, _diagnostic(
-                "REQ_SOURCE_CLAUSE",
-                path + ".source_clause_index",
-                clause_index,
-                f"integer in [0,{len(clauses) - 1}]",
-                path,
-            )
-        clause = clauses[clause_index]
-        quote = str(raw.get("source_quote") or "").strip()
-        receipt = _find_quote(clause, quote)
-        if receipt is None:
-            return None, _diagnostic(
-                "REQ_SOURCE_GROUNDING",
-                path + ".source_quote",
-                quote,
-                "one unique verbatim substring inside the assigned host clause",
-                path,
-            )
-
-        semantic_statement = str(raw.get("semantic_statement") or "").strip()
-        if not semantic_statement:
-            return None, _diagnostic(
-                "REQ_SEMANTIC_STATEMENT",
-                path + ".semantic_statement",
-                raw.get("semantic_statement"),
-                "non-empty language-neutral semantic statement",
-                path,
-            )
-        derived_from = [
-            str(value).strip().casefold()
-            for value in raw.get("derived_from", [])
-            if str(value).strip()
-        ] if isinstance(raw.get("derived_from"), list) else []
-        depends_on = [
-            str(value).strip().casefold()
-            for value in raw.get("depends_on", [])
-            if str(value).strip()
-        ] if isinstance(raw.get("depends_on"), list) else []
-        reason = str(raw.get("derivation_reason") or "").strip()
-        if role == "explicit" and derived_from:
-            return None, _diagnostic(
-                "REQ_EXPLICIT_DERIVATION",
-                path + ".derived_from",
-                derived_from,
-                "explicit requirements do not derive from other requirements",
-                path,
-            )
-        if role == "logically_derived" and (not derived_from or not reason):
-            return None, _diagnostic(
-                "REQ_DERIVATION_PROOF",
-                path,
-                {"derived_from": derived_from, "derivation_reason": reason},
-                "logically_derived requires derived_from plus non-empty derivation_reason",
-                path,
-            )
-
-        behavior = raw.get("observable_behavior")
-        if not isinstance(behavior, Mapping):
-            return None, _diagnostic(
-                "REQ_ACCEPTANCE_OBJECT",
-                path + ".observable_behavior",
-                behavior,
-                "object with non-empty given/when/then",
-                path,
-            )
-        given = str(behavior.get("given") or "").strip()
-        when = str(behavior.get("when") or "").strip()
-        then = str(behavior.get("then") or "").strip()
-        if not (given and when and then):
-            return None, _diagnostic(
-                "REQ_ACCEPTANCE_CONCRETE",
-                path + ".observable_behavior",
-                behavior,
-                "non-empty given, when and then strings",
-                path,
-            )
-
-        source_start, source_end = receipt
-        normalized.append(
-            {
-                "local_id": local_id,
-                "capability_id": capability,
-                "provenance_role": role,
-                "source_clause_index": clause_index,
-                "source_quote": quote,
-                "source_start": source_start,
-                "source_end": source_end,
-                "semantic_statement": semantic_statement,
-                "derived_from": derived_from,
-                "depends_on": depends_on,
-                "derivation_reason": reason,
-                "observable_behavior": {
-                    "given": given,
-                    "when": when,
-                    "then": then,
+def _semantic_schema(max_clause_index: int, max_items: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "requirements": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": max(1, max_items),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source_clause_index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": max(0, max_clause_index),
+                        },
+                        "capability_id": {"type": "string", "minLength": 3, "maxLength": 128},
+                        "source_anchor": {"type": "string", "minLength": 1},
+                        "semantic_statement": {"type": "string", "minLength": 1},
+                        "given": {"type": "string", "minLength": 1},
+                        "when": {"type": "string", "minLength": 1},
+                        "then": {"type": "string", "minLength": 1},
+                    },
+                    "required": [
+                        "source_clause_index",
+                        "capability_id",
+                        "source_anchor",
+                        "semantic_statement",
+                        "given",
+                        "when",
+                        "then",
+                    ],
+                    "additionalProperties": False,
                 },
             }
-        )
-
-    known = {item["local_id"] for item in normalized}
-    for index, item in enumerate(normalized):
-        for field in ("derived_from", "depends_on"):
-            unknown = [value for value in item[field] if value not in known]
-            if unknown:
-                return None, _diagnostic(
-                    "REQ_GRAPH_UNKNOWN_REFERENCE",
-                    f"$.requirements[{index}].{field}",
-                    unknown,
-                    "local IDs declared in the same requirements graph",
-                    f"$.requirements[{index}]",
-                )
-            if item["local_id"] in item[field]:
-                return None, _diagnostic(
-                    "REQ_GRAPH_SELF_REFERENCE",
-                    f"$.requirements[{index}].{field}",
-                    item[field],
-                    "acyclic reference set without self-reference",
-                    f"$.requirements[{index}]",
-                )
-
-    explicit_by_clause = {
-        int(item["source_clause_index"])
-        for item in normalized
-        if item["provenance_role"] == "explicit"
+        },
+        "required": ["requirements"],
+        "additionalProperties": False,
     }
-    uncovered = [
-        int(clause["clause_index"])
-        for clause in clauses
-        if int(clause["clause_index"]) not in explicit_by_clause
-    ]
-    if uncovered:
-        return None, _diagnostic(
-            "REQ_SOURCE_COVERAGE",
-            "$.requirements",
-            uncovered,
-            "at least one explicit semantic requirement for every authored clause",
-            "$.requirements",
-        )
-
-    for clause in clauses:
-        members = [
-            item
-            for item in normalized
-            if item["provenance_role"] == "explicit"
-            and item["source_clause_index"] == clause["clause_index"]
-        ]
-        if len(members) > 1 and all(
-            item["source_quote"] == clause["text"] for item in members
-        ):
-            return None, _diagnostic(
-                "REQ_SOURCE_AMBIGUITY",
-                "$.requirements",
-                {
-                    "source_clause_index": clause["clause_index"],
-                    "local_ids": [item["local_id"] for item in members],
-                },
-                "multiple independent meanings need distinct smallest verbatim source_quote grounding",
-                "$.requirements",
-            )
-
-    graph = {
-        item["local_id"]: tuple(dict.fromkeys((*item["derived_from"], *item["depends_on"])))
-        for item in normalized
-    }
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(node: str) -> bool:
-        if node in visited:
-            return True
-        if node in visiting:
-            return False
-        visiting.add(node)
-        for parent in graph[node]:
-            if not visit(parent):
-                return False
-        visiting.remove(node)
-        visited.add(node)
-        return True
-
-    for node in graph:
-        if not visit(node):
-            return None, _diagnostic(
-                "REQ_GRAPH_CYCLE",
-                "$.requirements",
-                graph,
-                "acyclic semantic/progression dependency graph",
-                "$.requirements",
-            )
-
-    return normalized, None
 
 
 def _parse_json(raw: Any) -> Any:
@@ -489,214 +141,479 @@ def _parse_json(raw: Any) -> Any:
     raise TypeError(f"semantic response type {type(raw).__name__} is not JSON text/object")
 
 
+def _model_messages(
+    clauses: Sequence[Mapping[str, Any]],
+    *,
+    repair_diagnostics: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, str]]:
+    system = (
+        "Interpret only the authored Minecraft-mod requirements in the supplied host clauses. "
+        "Return every independent player-visible requirement, and cover every supplied clause "
+        "at least once. Do not choose implementation classes, APIs, persistence/networking "
+        "schemes, UI patterns, boss variants, blueprint systems, or any other design alternative "
+        "unless that behavior is explicitly authored. capability_id must be a meaningful "
+        "lower-case dotted semantic identifier and never an opaque hash. source_clause_index "
+        "must identify the supplied host clause. source_anchor is only a short semantic locator; "
+        "it does NOT need to be a byte-for-byte copy because the host, not the model, owns exact "
+        "source text and offsets. Keep the anchor close to the smallest authored phrase that "
+        "supports the requirement. Return concrete Given/When/Then observable behavior. "
+        "Do not emit provenance roles, local IDs, dependencies, source offsets, or hashes."
+    )
+    payload = {
+        "host_owned_clauses": [
+            {
+                "source_clause_index": int(clause["clause_index"]),
+                "text": str(clause["text"]),
+            }
+            for clause in clauses
+        ],
+        "repair_diagnostics": [dict(item) for item in repair_diagnostics],
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": _canonical(payload)},
+    ]
+
+
+def _call_semantic_model(
+    router: Any,
+    clauses: Sequence[Mapping[str, Any]],
+    *,
+    repair_diagnostics: Sequence[Mapping[str, Any]] = (),
+) -> Any:
+    max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
+    parameters = _semantic_schema(max_clause_index, len(clauses) * 8)
+    messages = _model_messages(clauses, repair_diagnostics=repair_diagnostics)
+    native = getattr(router, "generate_tool_decision", None)
+    if callable(native):
+        return native(
+            "planner",
+            messages,
+            tool_name="compile_semantic_requirements",
+            parameters=parameters,
+            description=(
+                "Compile authored clauses into semantic requirements. "
+                "The host will ground all source spans."
+            ),
+        )
+    raw = router.generate_text(
+        "planner",
+        messages,
+        response_format="text",
+        response_schema=None,
+        enable_tools=False,
+    )
+    return _parse_json(raw)
+
+
+def _similarity_projection(value: str) -> tuple[str, list[int]]:
+    """Normalize for matching while retaining a map back to raw character offsets."""
+
+    characters: list[str] = []
+    raw_positions: list[int] = []
+    for raw_index, character in enumerate(value):
+        for normalized in unicodedata.normalize("NFKC", character).casefold():
+            if normalized.isspace() or unicodedata.category(normalized).startswith("P"):
+                continue
+            characters.append(normalized)
+            raw_positions.append(raw_index)
+    return "".join(characters), raw_positions
+
+
+def _ground_source_anchor(
+    clause: Mapping[str, Any],
+    source_anchor: str,
+) -> dict[str, Any] | None:
+    """Resolve a model semantic locator to an exact host-owned source span.
+
+    Exact unique matches are preferred. Minor spelling/spacing drift is tolerated by a
+    bounded alignment around SequenceMatcher blocks. This keeps source provenance
+    deterministic without an O(clause_length * anchor_length * window_count) scan.
+    """
+
+    text = str(clause["text"])
+    anchor = str(source_anchor or "").strip()
+    if not anchor:
+        return None
+
+    first = text.find(anchor)
+    if first >= 0 and text.find(anchor, first + 1) < 0:
+        start = int(clause["char_start"]) + first
+        return {
+            "source_quote": text[first : first + len(anchor)],
+            "source_start": start,
+            "source_end": start + len(anchor),
+            "grounding_method": "exact",
+            "grounding_similarity": 1.0,
+            "model_anchor": anchor,
+        }
+
+    anchor_form, _ = _similarity_projection(anchor)
+    text_form, text_positions = _similarity_projection(text)
+    if len(anchor_form) < 5 or not text_form:
+        return None
+
+    matcher = SequenceMatcher(None, anchor_form, text_form, autojunk=False)
+    matching_blocks = [block for block in matcher.get_matching_blocks() if block.size]
+    if not matching_blocks:
+        return None
+
+    radius = max(1, min(6, int(round(len(anchor_form) * 0.15))))
+    predicted_starts = {
+        max(0, min(len(text_form) - 1, block.b - block.a))
+        for block in matching_blocks
+    }
+    minimum_length = max(1, len(anchor_form) - radius)
+    maximum_length = min(len(text_form), len(anchor_form) + radius)
+    span_scores: dict[tuple[int, int], float] = {}
+
+    for predicted in predicted_starts:
+        start_low = max(0, predicted - radius)
+        start_high = min(len(text_form) - 1, predicted + radius)
+        for normalized_start in range(start_low, start_high + 1):
+            longest = min(maximum_length, len(text_form) - normalized_start)
+            for length in range(minimum_length, longest + 1):
+                normalized_end = normalized_start + length
+                candidate_form = text_form[normalized_start:normalized_end]
+                score = SequenceMatcher(
+                    None,
+                    anchor_form,
+                    candidate_form,
+                    autojunk=False,
+                ).ratio()
+                raw_start = text_positions[normalized_start]
+                raw_end = text_positions[normalized_end - 1] + 1
+                key = (raw_start, raw_end)
+                span_scores[key] = max(score, span_scores.get(key, 0.0))
+
+    if not span_scores:
+        return None
+
+    ranked = sorted(
+        (
+            (score, start, end)
+            for (start, end), score in span_scores.items()
+        ),
+        key=lambda item: (-item[0], item[2] - item[1], item[1]),
+    )
+    best_score, best_start, best_end = ranked[0]
+    threshold = 0.90 if len(anchor_form) < 10 else 0.82
+    if best_score < threshold:
+        return None
+
+    for score, start, end in ranked[1:]:
+        disjoint = end <= best_start or start >= best_end
+        if disjoint and score >= best_score - 0.015:
+            return None
+
+    absolute_start = int(clause["char_start"]) + best_start
+    return {
+        "source_quote": text[best_start:best_end],
+        "source_start": absolute_start,
+        "source_end": absolute_start + (best_end - best_start),
+        "grounding_method": "fuzzy_host_alignment",
+        "grounding_similarity": round(best_score, 6),
+        "model_anchor": anchor,
+    }
+
+
+def _normalize_requirement(
+    raw: Any,
+    *,
+    item_index: int,
+    clauses_by_index: Mapping[int, Mapping[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int | None]:
+    path = f"$.requirements[{item_index}]"
+    if not isinstance(raw, Mapping):
+        return (
+            None,
+            _diagnostic(
+                "REQ_SCHEMA_ITEM",
+                path,
+                raw,
+                "semantic requirement object",
+                path,
+            ),
+            None,
+        )
+
+    clause_index = raw.get("source_clause_index")
+    if type(clause_index) is not int or clause_index not in clauses_by_index:
+        return (
+            None,
+            _diagnostic(
+                "REQ_SOURCE_CLAUSE",
+                path + ".source_clause_index",
+                clause_index,
+                f"one supplied host clause index: {sorted(clauses_by_index)}",
+                path,
+            ),
+            None,
+        )
+
+    capability = str(raw.get("capability_id") or "").strip().casefold()
+    if not _CAPABILITY_ID.fullmatch(capability) or _OPAQUE_CAPABILITY.match(capability):
+        return (
+            None,
+            _diagnostic(
+                "REQ_CAPABILITY_ID",
+                path + ".capability_id",
+                raw.get("capability_id"),
+                "meaningful lower-case dotted semantic ID; no opaque semantic hash",
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
+
+    semantic_statement = str(raw.get("semantic_statement") or "").strip()
+    given = str(raw.get("given") or "").strip()
+    when = str(raw.get("when") or "").strip()
+    then = str(raw.get("then") or "").strip()
+    if not semantic_statement or not (given and when and then):
+        return (
+            None,
+            _diagnostic(
+                "REQ_SEMANTIC_CONTRACT",
+                path,
+                {
+                    "semantic_statement": raw.get("semantic_statement"),
+                    "given": raw.get("given"),
+                    "when": raw.get("when"),
+                    "then": raw.get("then"),
+                },
+                "non-empty semantic_statement and concrete given/when/then strings",
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
+
+    source_anchor = str(raw.get("source_anchor") or "").strip()
+    grounding = _ground_source_anchor(clauses_by_index[clause_index], source_anchor)
+    if grounding is None:
+        return (
+            None,
+            _diagnostic(
+                "REQ_SOURCE_GROUNDING",
+                path + ".source_anchor",
+                source_anchor,
+                (
+                    "a semantic locator that can be deterministically aligned to one "
+                    "unambiguous authored span; exact copying is not required"
+                ),
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
+
+    node = {
+        "capability_id": capability,
+        "provenance_role": "explicit",
+        "source_clause_index": clause_index,
+        **grounding,
+        "semantic_statement": semantic_statement,
+        "derived_from": [],
+        "depends_on": [],
+        "derivation_reason": "",
+        "observable_behavior": {
+            "given": given,
+            "when": when,
+            "then": then,
+        },
+    }
+    return node, None, clause_index
+
+
+def _evaluate_batch(
+    payload: Any,
+    clauses: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], set[int], list[dict[str, Any]]]:
+    clauses_by_index = {int(clause["clause_index"]): clause for clause in clauses}
+    all_indices = set(clauses_by_index)
+    if not isinstance(payload, Mapping):
+        diagnostic = _diagnostic(
+            "REQ_SCHEMA_ROOT",
+            "$",
+            type(payload).__name__,
+            "JSON object with a requirements array",
+            "semantic_batch",
+        )
+        return [], set(all_indices), [diagnostic]
+
+    raw_requirements = payload.get("requirements")
+    if not isinstance(raw_requirements, list) or not raw_requirements:
+        diagnostic = _diagnostic(
+            "REQ_SCHEMA_REQUIREMENTS",
+            "$.requirements",
+            raw_requirements,
+            "non-empty requirements array",
+            "semantic_batch",
+        )
+        return [], set(all_indices), [diagnostic]
+
+    nodes: list[dict[str, Any]] = []
+    invalid_clauses: set[int] = set()
+    diagnostics: list[dict[str, Any]] = []
+    global_failure = False
+    for item_index, raw in enumerate(raw_requirements):
+        node, diagnostic, clause_index = _normalize_requirement(
+            raw,
+            item_index=item_index,
+            clauses_by_index=clauses_by_index,
+        )
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
+            if clause_index is None:
+                global_failure = True
+            else:
+                invalid_clauses.add(clause_index)
+            continue
+        assert node is not None
+        nodes.append(node)
+
+    if global_failure:
+        invalid_clauses = set(all_indices)
+
+    covered = {
+        int(node["source_clause_index"])
+        for node in nodes
+        if int(node["source_clause_index"]) not in invalid_clauses
+    }
+    for clause_index in sorted(all_indices - covered):
+        invalid_clauses.add(clause_index)
+        diagnostics.append(
+            _diagnostic(
+                "REQ_SOURCE_COVERAGE",
+                "$.requirements",
+                clause_index,
+                "at least one explicit semantic requirement for every supplied clause",
+                f"clause:{clause_index}",
+            )
+        )
+
+    if invalid_clauses:
+        nodes = [
+            node
+            for node in nodes
+            if int(node["source_clause_index"]) not in invalid_clauses
+        ]
+
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, str]] = set()
+    for node in nodes:
+        key = (
+            int(node["source_clause_index"]),
+            str(node["capability_id"]),
+            str(node["semantic_statement"]).casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(node)
+    return deduplicated, invalid_clauses, diagnostics
+
+
+def _assign_local_ids(nodes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    counters: dict[int, int] = {}
+    result: list[dict[str, Any]] = []
+    for raw in sorted(
+        nodes,
+        key=lambda item: (
+            int(item["source_clause_index"]),
+            int(item["source_start"]),
+            str(item["capability_id"]),
+        ),
+    ):
+        clause_index = int(raw["source_clause_index"])
+        ordinal = counters.get(clause_index, 0)
+        counters[clause_index] = ordinal + 1
+        item = dict(raw)
+        item["local_id"] = f"c{clause_index}_{ordinal}"
+        result.append(item)
+    return result
+
+
 def _generate_approved_nodes(
     prompt: str,
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Approve authored meaning one host clause at a time.
+    """Compile all authored clauses in one model turn, with one repair turn at most."""
 
-    The model owns only the semantic description of the current authored clause.
-    The host owns provenance, graph identity, clause identity, and all cross-clause
-    references. A malformed response therefore invalidates only its own clause.
-    """
-
-    parameters = {
-        "type": "object",
-        "properties": {
-            "requirements": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 8,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "capability_id": {"type": "string", "minLength": 3},
-                        "source_quote": {"type": "string", "minLength": 1},
-                        "semantic_statement": {"type": "string", "minLength": 1},
-                        "given": {"type": "string", "minLength": 1},
-                        "when": {"type": "string", "minLength": 1},
-                        "then": {"type": "string", "minLength": 1},
-                    },
-                    "required": [
-                        "capability_id", "source_quote", "semantic_statement",
-                        "given", "when", "then",
-                    ],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["requirements"],
-        "additionalProperties": False,
-    }
-
-    approved: list[dict[str, Any]] = []
-    for ordinal, clause in enumerate(clauses):
-        clause_index = int(clause["clause_index"])
-        diagnostic: dict[str, Any] | None = None
-        seen_failures: set[str] = set()
-        accepted = False
-        for attempt in range(3):
-            request_payload = {
-                "current_clause_index": clause_index,
-                "current_clause": str(clause["text"]),
-                "previous_clause_context": (
-                    str(clauses[ordinal - 1]["text"]) if ordinal > 0 else ""
-                ),
-                "next_clause_context": (
-                    str(clauses[ordinal + 1]["text"])
-                    if ordinal + 1 < len(clauses)
-                    else ""
-                ),
-                "repair_diagnostic": diagnostic,
-            }
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "Interpret exactly the current authored clause. Do not add design choices, "
-                        "implementation classes, APIs, dependencies, or requirements not stated by "
-                        "that clause. Split only when the current clause independently states more "
-                        "than one observable requirement. capability_id must be a meaningful lower-"
-                        "case dotted semantic identifier, never an opaque hash. source_quote must be "
-                        "the smallest unique verbatim substring of current_clause that grounds that "
-                        "requirement. Adjacent clauses are context only and may not become new output "
-                        "requirements. Return concrete Given/When/Then observable behavior."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(request_payload, ensure_ascii=False, sort_keys=True),
-                },
-            ]
-            try:
-                native = getattr(router, "generate_tool_decision", None)
-                if callable(native):
-                    payload = native(
-                        "planner",
-                        messages,
-                        tool_name="approve_semantic_clause",
-                        parameters=parameters,
-                        description=(
-                            "Return only semantic requirements grounded in the current authored clause."
-                        ),
-                    )
-                else:
-                    raw = router.generate_text(
-                        "planner",
-                        messages,
-                        response_format="text",
-                        response_schema=None,
-                        enable_tools=False,
-                    )
-                    payload = _parse_json(raw)
-            except Exception as exc:
-                payload = {}
-                diagnostic = _diagnostic(
-                    "REQ_CLAUSE_MODEL_RESPONSE",
-                    f"$.clauses[{clause_index}]",
-                    f"{type(exc).__name__}: {exc}",
-                    "one compact clause-local semantic payload",
-                    f"clause:{clause_index}",
-                )
-            else:
-                raw_requirements = (
-                    payload.get("requirements") if isinstance(payload, Mapping) else None
-                )
-                if not isinstance(raw_requirements, list) or not raw_requirements:
-                    diagnostic = _diagnostic(
-                        "REQ_CLAUSE_SCHEMA",
-                        f"$.clauses[{clause_index}].requirements",
-                        raw_requirements,
-                        "non-empty clause-local requirements array",
-                        f"clause:{clause_index}",
-                    )
-                else:
-                    raw_nodes: list[dict[str, Any]] = []
-                    for item_index, item in enumerate(raw_requirements):
-                        if not isinstance(item, Mapping):
-                            raw_nodes.append({})
-                            continue
-                        raw_nodes.append(
-                            {
-                                "local_id": f"c{clause_index}_{item_index}",
-                                "capability_id": item.get("capability_id"),
-                                "provenance_role": "explicit",
-                                "source_clause_index": 0,
-                                "source_quote": item.get("source_quote"),
-                                "semantic_statement": item.get("semantic_statement"),
-                                "derived_from": [],
-                                "depends_on": [],
-                                "derivation_reason": "",
-                                "observable_behavior": {
-                                    "given": item.get("given"),
-                                    "when": item.get("when"),
-                                    "then": item.get("then"),
-                                },
-                            }
-                        )
-                    local_clause = dict(clause)
-                    local_clause["clause_index"] = 0
-                    local_nodes, validation_error = _validate_candidate(
-                        {"requirements": raw_nodes},
-                        prompt=prompt,
-                        clauses=(local_clause,),
-                    )
-                    if local_nodes is not None:
-                        for node in local_nodes:
-                            node["source_clause_index"] = clause_index
-                        approved.extend(local_nodes)
-                        accepted = True
-                        break
-                    diagnostic = dict(validation_error or {})
-                    diagnostic["repair_scope"] = f"clause:{clause_index}"
-
-            failure_state = _sha256({"diagnostic": diagnostic, "candidate": payload})
-            if failure_state in seen_failures:
-                raise _evidence.EvidencePlanError(
-                    "semantic clause approval reached a no-progress fixed point: "
-                    + _canonical(diagnostic)
-                )
-            seen_failures.add(failure_state)
-            if attempt == 2:
-                raise _evidence.EvidencePlanError(
-                    "semantic clause approval exhausted bounded repair attempts: "
-                    + _canonical(diagnostic)
-                )
-
-        if not accepted:
-            raise _evidence.EvidencePlanError(
-                f"semantic clause {clause_index} was not approved"
+    try:
+        first_payload = _call_semantic_model(router, clauses)
+    except Exception as exc:
+        first_payload = {}
+        first_diagnostics = [
+            _diagnostic(
+                "REQ_MODEL_RESPONSE",
+                "$",
+                f"{type(exc).__name__}: {exc}",
+                "one batched semantic requirements payload",
+                "semantic_batch",
             )
-
-    merged_payload = {
-        "requirements": [
-            {
-                "local_id": node["local_id"],
-                "capability_id": node["capability_id"],
-                "provenance_role": "explicit",
-                "source_clause_index": node["source_clause_index"],
-                "source_quote": node["source_quote"],
-                "semantic_statement": node["semantic_statement"],
-                "derived_from": [],
-                "depends_on": [],
-                "derivation_reason": "",
-                "observable_behavior": dict(node["observable_behavior"]),
-            }
-            for node in approved
         ]
-    }
-    merged, final_error = _validate_candidate(
-        merged_payload,
-        prompt=prompt,
-        clauses=clauses,
-    )
-    if merged is None:
-        raise _evidence.EvidencePlanError(
-            "host-merged semantic clauses violated the requirement contract: "
-            + _canonical(final_error)
+        first_nodes: list[dict[str, Any]] = []
+        invalid_clauses = {int(clause["clause_index"]) for clause in clauses}
+    else:
+        first_nodes, invalid_clauses, first_diagnostics = _evaluate_batch(
+            first_payload,
+            clauses,
         )
-    return merged
+
+    if not invalid_clauses:
+        return _assign_local_ids(first_nodes)
+
+    repair_clauses = [
+        clause
+        for clause in clauses
+        if int(clause["clause_index"]) in invalid_clauses
+    ]
+    try:
+        repair_payload = _call_semantic_model(
+            router,
+            repair_clauses,
+            repair_diagnostics=first_diagnostics,
+        )
+    except Exception as exc:
+        raise _evidence.EvidencePlanError(
+            "semantic repair batch failed: "
+            + _canonical(
+                _diagnostic(
+                    "REQ_REPAIR_MODEL_RESPONSE",
+                    "$",
+                    f"{type(exc).__name__}: {exc}",
+                    "one targeted semantic repair payload",
+                    "semantic_repair_batch",
+                )
+            )
+        ) from exc
+
+    repair_nodes, remaining_invalid, repair_diagnostics = _evaluate_batch(
+        repair_payload,
+        repair_clauses,
+    )
+    if remaining_invalid:
+        raise _evidence.EvidencePlanError(
+            "semantic repair batch could not satisfy the host contract: "
+            + _canonical(
+                {
+                    "invalid_clause_indices": sorted(remaining_invalid),
+                    "diagnostics": repair_diagnostics,
+                }
+            )
+        )
+
+    merged = [
+        *first_nodes,
+        *repair_nodes,
+    ]
+    covered = {int(node["source_clause_index"]) for node in merged}
+    expected = {int(clause["clause_index"]) for clause in clauses}
+    if covered != expected:
+        raise _evidence.EvidencePlanError(
+            "REQ_SOURCE_COVERAGE: semantic compilation did not cover every authored clause."
+        )
+    return _assign_local_ids(merged)
 
 
 def _build_catalog(
@@ -726,8 +643,6 @@ def _build_catalog(
         source_start = int(item["source_start"])
         source_end = int(item["source_end"])
         behavior = dict(item["observable_behavior"])
-        derived_from = [requirement_ids[value] for value in item["derived_from"]]
-        dependencies = [requirement_ids[value] for value in item["depends_on"]]
         requirements.append(
             {
                 "requirement_id": requirement_id,
@@ -735,7 +650,7 @@ def _build_catalog(
                 "statement": str(clause["text"]),
                 "semantic_statement": item["semantic_statement"],
                 "mandatory": True,
-                "provenance_role": item["provenance_role"],
+                "provenance_role": "explicit",
                 "source_span": {
                     "source_id": "requested_prompt",
                     "char_start": source_start,
@@ -744,9 +659,12 @@ def _build_catalog(
                     "text_sha256": _sha256(quote),
                     "source_clause_index": item["source_clause_index"],
                     "source_clause_sha256": clause["text_sha256"],
+                    "grounding_method": item["grounding_method"],
+                    "grounding_similarity": item["grounding_similarity"],
+                    "model_anchor": item["model_anchor"],
                 },
-                "derived_from": derived_from,
-                "depends_on": dependencies,
+                "derived_from": [],
+                "depends_on": [],
                 "provides": [_evidence._canonical_capability(item["capability_id"])],
                 "gameplay_capabilities": [item["capability_id"]],
                 "implementation_capabilities": [],
@@ -763,18 +681,6 @@ def _build_catalog(
             }
         )
 
-    edges = sorted(
-        {
-            (parent, requirement["requirement_id"], "derived_from")
-            for requirement in requirements
-            for parent in requirement["derived_from"]
-        }
-        | {
-            (parent, requirement["requirement_id"], "depends_on")
-            for requirement in requirements
-            for parent in requirement["depends_on"]
-        }
-    )
     payload: dict[str, Any] = {
         "schema_version": _SCHEMA,
         "prompt_sha256": prompt_hash,
@@ -786,10 +692,7 @@ def _build_catalog(
         "deployment_expectations": [],
         "requirement_graph": {
             "node_ids": [item["requirement_id"] for item in requirements],
-            "edges": [
-                {"from": source, "to": target, "relation": relation}
-                for source, target, relation in edges
-            ],
+            "edges": [],
         },
         "semantic_audit": {
             "status": "APPROVED",
@@ -798,6 +701,9 @@ def _build_catalog(
             "unresolved_clause_count": 0,
             "unsupported_design_choice_count": 0,
             "provenance_roles": sorted(_ALL_PROVENANCE_ROLES),
+            "normal_model_turns": 1,
+            "max_repair_turns": 1,
+            "source_grounding_owner": "host",
         },
         "catalog_sha256": "",
     }
@@ -824,12 +730,15 @@ def validate_approved_requirement_catalog(
         raise _evidence.EvidencePlanError(
             "REQ_AUTHORITY_PROMPT: requirement authority is stale for this prompt."
         )
+
     requirements = catalog.get("requirements")
     if not isinstance(requirements, list) or not requirements:
         raise _evidence.EvidencePlanError(
             "REQ_AUTHORITY_EMPTY: approved requirement graph has no nodes."
         )
+
     ids: set[str] = set()
+    covered_clauses: set[int] = set()
     for index, raw in enumerate(requirements):
         if not isinstance(raw, Mapping):
             raise _evidence.EvidencePlanError(
@@ -841,16 +750,19 @@ def validate_approved_requirement_catalog(
                 f"REQ_AUTHORITY_ID: invalid/duplicate requirement id at index {index}."
             )
         ids.add(requirement_id)
+
         capability = str(raw.get("capability") or "")
         if _OPAQUE_CAPABILITY.match(capability) or not _CAPABILITY_ID.fullmatch(capability):
             raise _evidence.EvidencePlanError(
                 f"REQ_AUTHORITY_CAPABILITY: invalid capability {capability!r}."
             )
+
         role = str(raw.get("provenance_role") or "")
         if role not in _ALLOWED_AUTHORING_ROLES:
             raise _evidence.EvidencePlanError(
                 f"REQ_AUTHORITY_OVERREACH: {role!r} cannot be a mandatory authored node."
             )
+
         span = raw.get("source_span")
         if not isinstance(span, Mapping):
             raise _evidence.EvidencePlanError(
@@ -868,6 +780,13 @@ def validate_approved_requirement_catalog(
             raise _evidence.EvidencePlanError(
                 f"REQ_AUTHORITY_SOURCE: stale source receipt for {requirement_id}."
             )
+        clause_index = span.get("source_clause_index")
+        if type(clause_index) is not int:
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_SOURCE: invalid clause index for {requirement_id}."
+            )
+        covered_clauses.add(clause_index)
+
         acceptance = raw.get("observable_behavior")
         if not isinstance(acceptance, Mapping) or not all(
             str(acceptance.get(field) or "").strip()
@@ -877,10 +796,16 @@ def validate_approved_requirement_catalog(
                 f"REQ_AUTHORITY_ACCEPTANCE: concrete observable contract missing for {requirement_id}."
             )
 
-    for raw in requirements:
         for field in ("derived_from", "depends_on"):
             refs = raw.get(field, [])
-            if not isinstance(refs, list) or any(str(ref) not in ids for ref in refs):
+            if not isinstance(refs, list):
+                raise _evidence.EvidencePlanError(
+                    f"REQ_AUTHORITY_GRAPH: {field} must be a list."
+                )
+
+    for raw in requirements:
+        for field in ("derived_from", "depends_on"):
+            if any(str(ref) not in ids for ref in raw.get(field, [])):
                 raise _evidence.EvidencePlanError(
                     f"REQ_AUTHORITY_GRAPH: {field} contains unknown requirement IDs."
                 )
@@ -891,9 +816,18 @@ def validate_approved_requirement_catalog(
         or audit.get("status") != "APPROVED"
         or audit.get("unresolved_clause_count") != 0
         or audit.get("unsupported_design_choice_count") != 0
+        or audit.get("source_grounding_owner") != "host"
     ):
         raise _evidence.EvidencePlanError(
             "REQ_AUTHORITY_BARRIER: semantic coverage/overreach audit is not approved."
+        )
+    expected_clause_count = audit.get("authored_clause_count")
+    if (
+        type(expected_clause_count) is not int
+        or len(covered_clauses) != expected_clause_count
+    ):
+        raise _evidence.EvidencePlanError(
+            "REQ_AUTHORITY_COVERAGE: authored clause coverage is incomplete."
         )
 
 
@@ -924,6 +858,7 @@ def install_semantic_requirement_authority() -> None:
 
     original_validate = _evidence._validate_request_catalog
     if not getattr(original_validate, "__mmm_approved_requirement_authority__", False):
+
         def validate(catalog: Mapping[str, Any], *, prompt: str) -> None:
             original_validate(catalog, prompt=prompt)
             if catalog.get("schema_version") == _SCHEMA:

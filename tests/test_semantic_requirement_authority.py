@@ -11,10 +11,16 @@ from minecraft_mod_ai.semantic_requirement_authority import (
 )
 
 
-def _item(capability: str, quote: str) -> dict:
+def _item(
+    capability: str,
+    anchor: str,
+    *,
+    clause_index: int = 0,
+) -> dict:
     return {
+        "source_clause_index": clause_index,
         "capability_id": capability,
-        "source_quote": quote,
+        "source_anchor": anchor,
         "semantic_statement": capability.replace(".", " "),
         "given": "the feature precondition exists",
         "when": "the player performs the requested behavior",
@@ -42,87 +48,202 @@ class NativeRouter:
 
     def generate_tool_decision(self, role, messages, **kwargs):
         self.calls.append({"role": role, "messages": messages, "kwargs": kwargs})
+        if not self.responses:
+            raise AssertionError("unexpected extra semantic call")
         return self.responses.pop(0)
 
     def generate_text(self, *args, **kwargs):
         raise AssertionError("native semantic authority must not use free-form JSON")
 
 
-def test_semantic_authority_requests_each_authored_clause_separately():
+def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
     prompt = "Players gather crystals. Players travel to a new region."
-    router = TextRouter([
-        {"requirements": [_item("resource.gathering", "gather crystals")]},
-        {"requirements": [_item("world.travel", "travel to a new region")]},
-    ])
+    router = TextRouter(
+        [
+            {
+                "requirements": [
+                    _item("resource.gathering", "gather crystals", clause_index=0),
+                    _item("world.travel", "travel to a new region", clause_index=1),
+                ]
+            }
+        ]
+    )
+
     catalog = build_approved_requirement_catalog(prompt, router)
+
     validate_approved_requirement_catalog(catalog, prompt=prompt)
-    assert len(router.calls) == 2
-    first = json.loads(router.calls[0]["messages"][1]["content"])
-    second = json.loads(router.calls[1]["messages"][1]["content"])
-    assert first["current_clause"] != second["current_clause"]
+    assert len(router.calls) == 1
+    request = json.loads(router.calls[0]["messages"][1]["content"])
+    assert len(request["host_owned_clauses"]) == 2
     assert router.calls[0]["kwargs"]["response_format"] == "text"
     assert router.calls[0]["kwargs"]["response_schema"] is None
-    assert {r["capability"] for r in catalog["requirements"]} == {"resource.gathering", "world.travel"}
-    assert all(r["provenance_role"] == "explicit" for r in catalog["requirements"])
-    assert all(r["depends_on"] == [] for r in catalog["requirements"])
+    assert {item["capability"] for item in catalog["requirements"]} == {
+        "resource.gathering",
+        "world.travel",
+    }
+    assert catalog["semantic_audit"]["normal_model_turns"] == 1
+    assert catalog["semantic_audit"]["max_repair_turns"] == 1
+    assert catalog["semantic_audit"]["source_grounding_owner"] == "host"
 
 
-def test_one_bad_json_retries_only_the_failed_clause():
-    prompt = "Players gather crystals. Players open a portal."
-    router = TextRouter([
-        {"requirements": [_item("resource.gathering", "gather crystals")]},
-        "not json",
-        {"requirements": [_item("progression.portal", "open a portal")]},
-    ])
+def test_minor_model_copy_error_is_host_aligned_without_retry():
+    prompt = "우주선을 부위마다 만들어서 만들 수 있고."
+    router = TextRouter(
+        [
+            {
+                "requirements": [
+                    _item(
+                        "vehicle.spacecraft.assembly",
+                        "우무선을 부위마다 만들어서 만들수있고",
+                    )
+                ]
+            }
+        ]
+    )
+
     catalog = build_approved_requirement_catalog(prompt, router)
-    assert len(catalog["requirements"]) == 2
-    assert len(router.calls) == 3
-    retry = json.loads(router.calls[2]["messages"][1]["content"])
-    assert retry["current_clause_index"] == 1
-    assert retry["repair_diagnostic"]["error_code"] == "REQ_CLAUSE_MODEL_RESPONSE"
-    assert retry["repair_diagnostic"]["repair_scope"] == "clause:1"
+
+    assert len(router.calls) == 1
+    span = catalog["requirements"][0]["source_span"]
+    assert span["text"] == "우주선을 부위마다 만들어서 만들 수 있고"
+    assert prompt[span["char_start"] : span["char_end"]] == span["text"]
+    assert span["grounding_method"] == "fuzzy_host_alignment"
+    assert span["grounding_similarity"] > 0.9
+    assert span["model_anchor"] == "우무선을 부위마다 만들어서 만들수있고"
 
 
-def test_native_tool_decision_is_preferred_for_clause_semantics():
+def test_native_tool_schema_exposes_semantics_not_provenance():
     prompt = "Players collect fragments."
-    router = NativeRouter([{"requirements": [_item("resource.collection", "collect fragments")]}])
+    router = NativeRouter(
+        [
+            {
+                "requirements": [
+                    _item("resource.collection", "collect fragments")
+                ]
+            }
+        ]
+    )
+
     catalog = build_approved_requirement_catalog(prompt, router)
+
     assert len(catalog["requirements"]) == 1
-    assert router.calls[0]["kwargs"]["tool_name"] == "approve_semantic_clause"
+    assert len(router.calls) == 1
+    assert router.calls[0]["kwargs"]["tool_name"] == "compile_semantic_requirements"
     props = router.calls[0]["kwargs"]["parameters"]["properties"]["requirements"]["items"]["properties"]
-    assert "provenance_role" not in props
-    assert "depends_on" not in props
+    assert "source_anchor" in props
+    for forbidden in (
+        "source_quote",
+        "provenance_role",
+        "depends_on",
+        "derived_from",
+        "local_id",
+        "char_start",
+        "char_end",
+    ):
+        assert forbidden not in props
 
 
-def test_multiple_meanings_in_one_clause_need_distinct_grounding_quotes():
-    prompt = "Players gather crystals, then trade crystals."
-    router = TextRouter([
-        {"requirements": [_item("resource.gathering", "gather crystals")]},
-        {"requirements": [_item("economy.trade", "trade crystals")]},
-    ])
+def test_two_requirements_in_one_clause_receive_distinct_exact_host_spans():
+    prompt = "Players can gather and trade crystals."
+    router = TextRouter(
+        [
+            {
+                "requirements": [
+                    _item("resource.gathering", "gather"),
+                    _item("economy.trade", "trade crystals"),
+                ]
+            }
+        ]
+    )
+
     catalog = build_approved_requirement_catalog(prompt, router)
-    assert len(catalog["requirements"]) == 2
-    assert {r["source_span"]["text"] for r in catalog["requirements"]} == {"gather crystals", "trade crystals"}
+
+    spans = [item["source_span"] for item in catalog["requirements"]]
+    assert len(spans) == 2
+    assert {span["text"] for span in spans} == {"gather", "trade crystals"}
+    assert spans[0]["char_start"] != spans[1]["char_start"]
+    assert all(
+        prompt[span["char_start"] : span["char_end"]] == span["text"]
+        for span in spans
+    )
 
 
-def test_opaque_capability_retries_clause_and_fails_closed_on_repeat():
+def test_only_invalid_clause_is_repaired_after_batched_first_pass():
+    prompt = "Players gather crystals. Players open a portal."
+    router = TextRouter(
+        [
+            {
+                "requirements": [
+                    _item("resource.gathering", "gather crystals", clause_index=0),
+                    _item("semantic_13ee7693e9ed", "open a portal", clause_index=1),
+                ]
+            },
+            {
+                "requirements": [
+                    _item("progression.portal", "open a portal", clause_index=1),
+                ]
+            },
+        ]
+    )
+
+    catalog = build_approved_requirement_catalog(prompt, router)
+
+    assert len(router.calls) == 2
+    repair_request = json.loads(router.calls[1]["messages"][1]["content"])
+    assert [item["source_clause_index"] for item in repair_request["host_owned_clauses"]] == [1]
+    assert any(
+        item["error_code"] == "REQ_CAPABILITY_ID"
+        for item in repair_request["repair_diagnostics"]
+    )
+    assert {item["capability"] for item in catalog["requirements"]} == {
+        "resource.gathering",
+        "progression.portal",
+    }
+
+
+def test_unrelated_anchor_is_repaired_instead_of_becoming_fake_provenance():
+    prompt = "Players gather crystals."
+    router = TextRouter(
+        [
+            {"requirements": [_item("resource.gathering", "build a submarine")]},
+            {"requirements": [_item("resource.gathering", "gather crystals")]},
+        ]
+    )
+
+    catalog = build_approved_requirement_catalog(prompt, router)
+
+    assert len(router.calls) == 2
+    assert catalog["requirements"][0]["source_span"]["text"] == "gather crystals"
+
+
+def test_repeated_invalid_semantics_fail_after_one_targeted_repair():
     prompt = "Players discover a hidden mechanic."
-    invalid = {"requirements": [_item("semantic_13ee7693e9ed", "discover a hidden mechanic")]}
+    invalid = {
+        "requirements": [
+            _item("semantic_13ee7693e9ed", "discover a hidden mechanic")
+        ]
+    }
     router = TextRouter([invalid, invalid])
-    with pytest.raises(EvidencePlanError, match="semantic clause approval reached a no-progress fixed point"):
+
+    with pytest.raises(
+        EvidencePlanError,
+        match="semantic repair batch could not satisfy the host contract",
+    ):
         build_approved_requirement_catalog(prompt, router)
-    second = json.loads(router.calls[1]["messages"][1]["content"])
-    assert second["repair_diagnostic"]["error_code"] == "REQ_CAPABILITY_ID"
-    assert second["repair_diagnostic"]["repair_scope"] == "clause:0"
+
+    assert len(router.calls) == 2
 
 
-def test_model_cannot_promote_design_provenance_or_cross_clause_dependencies():
+def test_model_cannot_promote_design_provenance_or_dependencies():
     prompt = "Players exchange collected items."
     supplied = _item("economy.exchange", "exchange collected items")
     supplied["provenance_role"] = "selected_design_alternative"
     supplied["depends_on"] = ["anything"]
     router = TextRouter([{"requirements": [supplied]}])
+
     catalog = build_approved_requirement_catalog(prompt, router)
+
     requirement = catalog["requirements"][0]
     assert requirement["provenance_role"] == "explicit"
     assert requirement["depends_on"] == []
+    assert requirement["derived_from"] == []
