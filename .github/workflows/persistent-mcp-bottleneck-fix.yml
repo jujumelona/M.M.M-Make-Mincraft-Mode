@@ -1,0 +1,88 @@
+name: One-shot persistent MCP bottleneck fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/persistent-mcp-bottleneck-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Reuse MCP process and event loop
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/agent_tool_runtime.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'agent_tool_runtime.py: expected one replacement, found {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''        self._external_bridge = ExternalAgentBridge(timeout_seconds=timeout_seconds)\n        self._lock = threading.RLock()\n''',
+              '''        self._external_bridge = ExternalAgentBridge(timeout_seconds=timeout_seconds)\n        self._lock = threading.RLock()\n        self._async_loop: asyncio.AbstractEventLoop | None = None\n        self._async_thread: threading.Thread | None = None\n        self._async_ready = threading.Event()\n        self._mcp_sessions: dict[str, tuple[Any, Any]] = {}\n        self._mcp_session_locks: dict[str, asyncio.Lock] = {}\n        self._closed = False\n''',
+          )
+
+          replace_once(
+              '''    def _run_async(self, function: Any, *args: Any) -> Any:\n        async def runner() -> Any:\n            return await function(*args)\n\n        try:\n            asyncio.get_running_loop()\n        except RuntimeError:\n            return anyio.run(runner)\n\n        value: dict[str, Any] = {}\n        errors: list[BaseException] = []\n\n        def worker() -> None:\n            try:\n                value["result"] = anyio.run(runner)\n            except BaseException as exc:  # pragma: no cover - event-loop bridge\n                errors.append(exc)\n\n        thread = threading.Thread(target=worker, daemon=True)\n        thread.start()\n        thread.join(self.timeout_seconds + 5.0)\n        if thread.is_alive():\n            raise AgentToolRuntimeError("MCP synchronous bridge timed out")\n        if errors:\n            raise AgentToolRuntimeError(str(errors[0])) from errors[0]\n        return value["result"]\n\n    async def _list_tools_async(self, stage: str) -> list[dict[str, Any]]:\n        async with self._session(stage) as session:\n            listed = await session.list_tools()\n            result: list[dict[str, Any]] = []\n            for item in getattr(listed, "tools", ()) or ():\n                schema = getattr(item, "inputSchema", None)\n                if schema is None:\n                    schema = getattr(item, "input_schema", None)\n                result.append(\n                    {\n                        "name": str(getattr(item, "name", "")),\n                        "description": str(getattr(item, "description", "") or ""),\n                        "input_schema": _jsonable(schema),\n                    }\n                )\n            return result\n''',
+              '''    def _ensure_async_loop(self) -> asyncio.AbstractEventLoop:\n        with self._lock:\n            if self._closed:\n                raise AgentToolRuntimeError("Agent tool runtime is closed")\n            loop = self._async_loop\n            if loop is not None and loop.is_running():\n                return loop\n            thread = self._async_thread\n            if thread is None or not thread.is_alive():\n                self._async_ready.clear()\n\n                def worker() -> None:\n                    event_loop = asyncio.new_event_loop()\n                    asyncio.set_event_loop(event_loop)\n                    self._async_loop = event_loop\n                    self._async_ready.set()\n                    try:\n                        event_loop.run_forever()\n                    finally:\n                        pending = asyncio.all_tasks(event_loop)\n                        for task in pending:\n                            task.cancel()\n                        if pending:\n                            event_loop.run_until_complete(\n                                asyncio.gather(*pending, return_exceptions=True)\n                            )\n                        event_loop.run_until_complete(event_loop.shutdown_asyncgens())\n                        event_loop.close()\n\n                thread = threading.Thread(\n                    target=worker,\n                    name="mmm-agent-tool-runtime",\n                    daemon=True,\n                )\n                self._async_thread = thread\n                thread.start()\n            ready = self._async_ready\n        if not ready.wait(self.timeout_seconds + 5.0):\n            raise AgentToolRuntimeError("MCP event-loop startup timed out")\n        loop = self._async_loop\n        if loop is None or not loop.is_running():\n            raise AgentToolRuntimeError("MCP event loop failed to start")\n        return loop\n\n    def _run_async(self, function: Any, *args: Any) -> Any:\n        loop = self._ensure_async_loop()\n        future = asyncio.run_coroutine_threadsafe(function(*args), loop)\n        try:\n            return future.result(timeout=self.timeout_seconds + 5.0)\n        except TimeoutError as exc:\n            future.cancel()\n            raise AgentToolRuntimeError("MCP synchronous bridge timed out") from exc\n        except AgentToolRuntimeError:\n            raise\n        except Exception as exc:\n            raise AgentToolRuntimeError(str(exc)) from exc\n\n    async def _persistent_session(self, stage: str) -> Any:\n        cached = self._mcp_sessions.get(stage)\n        if cached is not None:\n            return cached[1]\n        lock = self._mcp_session_locks.get(stage)\n        if lock is None:\n            lock = asyncio.Lock()\n            self._mcp_session_locks[stage] = lock\n        async with lock:\n            cached = self._mcp_sessions.get(stage)\n            if cached is not None:\n                return cached[1]\n            context = self._session(stage)\n            session = await context.__aenter__()\n            self._mcp_sessions[stage] = (context, session)\n            return session\n\n    async def _close_mcp_sessions_async(self) -> None:\n        sessions = tuple(reversed(tuple(self._mcp_sessions.values())))\n        self._mcp_sessions.clear()\n        self._mcp_session_locks.clear()\n        first_error: BaseException | None = None\n        for context, _session in sessions:\n            try:\n                await context.__aexit__(None, None, None)\n            except BaseException as exc:  # pragma: no cover - defensive cleanup\n                if first_error is None:\n                    first_error = exc\n        if first_error is not None:\n            raise first_error\n\n    def close(self) -> None:\n        with self._lock:\n            if self._closed:\n                return\n            self._closed = True\n            loop = self._async_loop\n            thread = self._async_thread\n        cleanup_error: BaseException | None = None\n        if loop is not None and loop.is_running():\n            future = asyncio.run_coroutine_threadsafe(\n                self._close_mcp_sessions_async(),\n                loop,\n            )\n            try:\n                future.result(timeout=self.timeout_seconds + 5.0)\n            except BaseException as exc:  # pragma: no cover - defensive cleanup\n                cleanup_error = exc\n            finally:\n                loop.call_soon_threadsafe(loop.stop)\n        if thread is not None and thread is not threading.current_thread():\n            thread.join(self.timeout_seconds + 5.0)\n        with self._lock:\n            self._async_loop = None\n            self._async_thread = None\n        if cleanup_error is not None:\n            raise AgentToolRuntimeError(\n                f"MCP session cleanup failed: {cleanup_error}"\n            ) from cleanup_error\n\n    async def _list_tools_async(self, stage: str) -> list[dict[str, Any]]:\n        session = await self._persistent_session(stage)\n        listed = await session.list_tools()\n        result: list[dict[str, Any]] = []\n        for item in getattr(listed, "tools", ()) or ():\n            schema = getattr(item, "inputSchema", None)\n            if schema is None:\n                schema = getattr(item, "input_schema", None)\n            result.append(\n                {\n                    "name": str(getattr(item, "name", "")),\n                    "description": str(getattr(item, "description", "") or ""),\n                    "input_schema": _jsonable(schema),\n                }\n            )\n        return result\n''',
+          )
+
+          replace_once(
+              '''    async def _call_tool_async(\n        self,\n        stage: str,\n        name: str,\n        arguments: Mapping[str, Any],\n    ) -> dict[str, Any]:\n        async with self._session(stage) as session:\n            raw = await session.call_tool(name, arguments=dict(arguments))\n            normalized = _normalize_tool_result(raw)\n            if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):\n                detail = _mcp_error_detail(normalized)\n                message = f"MCP tool {name!r} returned an error"\n                if detail:\n                    message = f"{message}: {detail}"\n                raise AgentToolRuntimeError(message)\n            return normalized\n''',
+              '''    async def _call_tool_async(\n        self,\n        stage: str,\n        name: str,\n        arguments: Mapping[str, Any],\n    ) -> dict[str, Any]:\n        session = await self._persistent_session(stage)\n        raw = await session.call_tool(name, arguments=dict(arguments))\n        normalized = _normalize_tool_result(raw)\n        if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):\n            detail = _mcp_error_detail(normalized)\n            message = f"MCP tool {name!r} returned an error"\n            if detail:\n                message = f"{message}: {detail}"\n            raise AgentToolRuntimeError(message)\n        return normalized\n''',
+          )
+
+          replace_once(
+              '''        stack = AsyncExitStack()\n        self._stack = stack\n        try:\n            stack.enter_context(anyio.fail_after(self.timeout_seconds))\n            errlog = stack.enter_context(\n                tempfile.TemporaryFile(mode="w+", encoding="utf-8")\n            )\n            params = StdioServerParameters(\n                command=sys.executable,\n                args=["-m", "minecraft_mod_ai.mcp_server"],\n                env=self.env,\n            )\n            read_stream, write_stream = await stack.enter_async_context(\n                stdio_client(params, errlog=errlog)\n            )\n            self.session = await stack.enter_async_context(\n                ClientSession(read_stream, write_stream)\n            )\n            await self.session.initialize()\n            return self.session\n''',
+              '''        stack = AsyncExitStack()\n        self._stack = stack\n        try:\n            errlog = stack.enter_context(\n                tempfile.TemporaryFile(mode="w+", encoding="utf-8")\n            )\n            params = StdioServerParameters(\n                command=sys.executable,\n                args=["-m", "minecraft_mod_ai.mcp_server"],\n                env=self.env,\n            )\n            with anyio.fail_after(self.timeout_seconds):\n                read_stream, write_stream = await stack.enter_async_context(\n                    stdio_client(params, errlog=errlog)\n                )\n                self.session = await stack.enter_async_context(\n                    ClientSession(read_stream, write_stream)\n                )\n                await self.session.initialize()\n            return self.session\n''',
+          )
+
+          path.write_text(text, encoding='utf-8')
+
+          router_path = Path('minecraft_mod_ai/model_router.py')
+          router = router_path.read_text(encoding='utf-8')
+          old = '''        with self._generation_lock:\n            if root != self._agent_workspace_root:\n                self._agent_workspace_root = root\n                self._agent_tool_runtime = None\n            self._agent_require_fresh_evidence = bool(require_fresh_evidence)\n        return self\n'''
+          new = '''        with self._generation_lock:\n            if root != self._agent_workspace_root:\n                old_runtime = self._agent_tool_runtime\n                if old_runtime is not None:\n                    close_runtime = getattr(old_runtime, "close", None)\n                    if callable(close_runtime):\n                        close_runtime()\n                self._agent_workspace_root = root\n                self._agent_tool_runtime = None\n            self._agent_require_fresh_evidence = bool(require_fresh_evidence)\n        return self\n'''
+          if router.count(old) != 1:
+              raise SystemExit('model_router.py: workspace runtime replacement target drifted')
+          router_path.write_text(router.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_agent_runtime_hot_paths.py')
+          test = test_path.read_text(encoding='utf-8')
+          test = test.replace('import anyio\n\n', '', 1)
+          old_test = '''    monkeypatch.setattr(runtime, "_session", lambda _stage: Context())\n    result = anyio.run(\n        runtime._call_tool_async,\n        "generation",\n        "search_code_rag",\n        {"query": "block registry"},\n    )\n    assert result["structured_content"] == {"ok": True}\n    assert events == ["enter", "execute:search_code_rag:block registry", "exit"]\n'''
+          new_test = '''    monkeypatch.setattr(runtime, "_session", lambda _stage: Context())\n    first = runtime._run_async(\n        runtime._call_tool_async,\n        "generation",\n        "search_code_rag",\n        {"query": "block registry"},\n    )\n    second = runtime._run_async(\n        runtime._call_tool_async,\n        "generation",\n        "search_code_rag",\n        {"query": "item registry"},\n    )\n    assert first["structured_content"] == {"ok": True}\n    assert second["structured_content"] == {"ok": True}\n    assert events == [\n        "enter",\n        "execute:search_code_rag:block registry",\n        "execute:search_code_rag:item registry",\n    ]\n    runtime.close()\n    assert events[-1] == "exit"\n    assert events.count("enter") == 1\n    assert events.count("exit") == 1\n'''
+          if test.count(old_test) != 1:
+              raise SystemExit('test_agent_runtime_hot_paths.py: expected hot-path test block not found')
+          test_path.write_text(test.replace(old_test, new_test, 1), encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_agent_runtime_hot_paths.py tests/test_agent_tool_calling.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit persistent MCP fix directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/agent_tool_runtime.py minecraft_mod_ai/model_router.py tests/test_agent_runtime_hot_paths.py
+          git rm .github/workflows/persistent-mcp-bottleneck-fix.yml
+          git commit -m "perf: reuse agent MCP sessions across tool calls"
+          git push origin HEAD:main
