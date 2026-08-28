@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,18 +15,9 @@ from .complete_spec import (
 from .evidence_first_planning import compile_evidence_first_plan, task_batches
 from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
-from .planner_template_schema import (
-    build_batch_skeleton,
-    merge_model_output_into_skeleton,
-)
+from .planner_template_schema import build_batch_skeleton
 from .production_contract import compile_production_contract
 from .spec import SpecValidationError
-
-_SYSTEM_PROMPT = (
-    "Fill values inside the supplied host template only. "
-    "The host owns identifiers, dependencies, completion semantics, and the final schema. "
-    "Do not invent top-level fields or identifiers."
-)
 
 
 @dataclass(frozen=True)
@@ -46,10 +36,9 @@ class CompleteGameDesignPlanner:
     """Plan production through deterministic host-owned batch templates.
 
     The model never creates the batch graph or schema. Host code derives the complete
-    production template from the validated game design, creates every module identity,
-    and merges only allowed values from one model response. Invalid, partial, or missing
-    model output falls back to the unchanged host skeleton instead of triggering a
-    repair/replan loop.
+    production template from the validated game design and creates every module identity.
+    Evidence-first production batches are materialized directly from those host-owned
+    templates; they do not ask the model to emit or repair JSON planning pages.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -159,6 +148,7 @@ class CompleteGameDesignPlanner:
         evidence_mode: bool = False,
         evidence_acceptance_tests: Sequence[str] = (),
     ) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[str, ...]]:
+        del prompt, game_design
         modules: list[ProductionModule] = []
         assets: list[AssetRequest] = []
         tests: list[str] = list(dict.fromkeys(evidence_acceptance_tests))
@@ -192,28 +182,11 @@ class CompleteGameDesignPlanner:
                 ),
                 acceptance_tests=batch.acceptance_tests,
             )
-            task_request = _bounded_task_request(batch)
-            request = {
-                "request": task_request if task_request is not None else prompt,
-                "batch": _batch_dict(batch),
-                "design": (
-                    _bounded_task_design(game_design, batch)
-                    if batch.task_contract is not None
-                    else _implementation_research_outline(game_design)
-                ),
-                "template_skeleton": skeleton,
-            }
-            raw_page = _generate_json_page(
-                self.router,
-                system_prompt=_SYSTEM_PROMPT,
-                request=request,
-                media_paths=(),
-            )
-            page = merge_model_output_into_skeleton(
-                skeleton=skeleton,
-                model_output=raw_page,
-                valid_module_catalog=known_module_ids | set(batch.exports),
-            )
+            # The host already owns the complete task graph, identities, dependencies,
+            # completion predicates, and acceptance projection. Do not round-trip this
+            # deterministic plan through an LLM JSON page: that only adds structured
+            # recovery latency and lets internal execution language leak outward.
+            page = skeleton
 
             expected_ids = {
                 str(item["module_id"])
@@ -341,79 +314,12 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
                 exports=tuple(str(item) for item in raw["exports"]),
                 task_contract=task,
                 evidence_plan_sha256=str(plan["plan_sha256"]),
-                acceptance_tests=tuple(str(item) for item in task.get("acceptance", ())),
+                # Task-local integrity checks stay inside task_contract. Public/release
+                # acceptance comes only from acceptance_release_bindings above.
+                acceptance_tests=(),
             )
         )
     return tuple(batches)
-
-
-def _bounded_task_request(batch: _ProductionBatch) -> dict[str, Any] | None:
-    if not isinstance(batch.task_contract, Mapping):
-        return None
-    context = batch.task_contract.get("request_context")
-    return dict(context) if isinstance(context, Mapping) else {
-        "requirement_refs": list(batch.task_contract.get("requirement_refs") or ()),
-    }
-
-
-def _bounded_task_design(
-    game_design: Mapping[str, Any],
-    batch: _ProductionBatch,
-) -> dict[str, Any]:
-    """Send only the active semantic task and frozen target evidence to the model."""
-    selection = _mapping_copy(game_design.get("_platform_selection"))
-    target = _mapping_copy(selection.get("target"))
-    task = dict(batch.task_contract or {})
-    return {
-        "target": target,
-        "task_id": batch.batch_id,
-        "semantic_outcome": task.get("semantic_outcome"),
-        "consumes": list(task.get("consumes") or ()),
-        "provides": list(task.get("provides") or ()),
-        "owned_anchors": list(task.get("owned_anchors") or ()),
-        "reuse_refs": list(task.get("reuse_refs") or ()),
-        "required_gates": list(task.get("required_gates") or ()),
-        "acceptance": list(task.get("acceptance") or ()),
-    }
-
-
-def _mapping_copy(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _implementation_prompt(prompt: str, game_design: dict[str, Any]) -> str:
-    design = json.dumps(_implementation_research_outline(game_design), ensure_ascii=False)
-    return (
-        "Implement the requested Minecraft mod features through the host-owned production "
-        f"template. Request: {prompt}\nDesign context: {design}"
-    )
-
-
-def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str, Any]:
-    keys = (
-        "mod_id",
-        "mod_name",
-        "description",
-        "features",
-        "systems",
-        "constraints",
-        "acceptance_tests",
-        "modules",
-        "assets",
-        "_platform_selection",
-        "_platform_evidence",
-        "_research_brief",
-        "_technical_evidence",
-        "_pre_design_research",
-    )
-    outline = {key: game_design[key] for key in keys if key in game_design}
-    if (
-        "_technical_evidence" in outline
-        and "_platform_evidence" in outline
-        and outline["_technical_evidence"] == outline["_platform_evidence"]
-    ):
-        outline.pop("_technical_evidence")
-    return outline
 
 
 def _retrieve_implementation_evidence(
@@ -440,66 +346,6 @@ def _retrieve_implementation_evidence(
         "domains": [],
         "status": "unavailable",
     }
-
-
-def _generate_json_page(
-    router: Any,
-    *,
-    system_prompt: str,
-    request: Mapping[str, Any] | str,
-    media_paths: Sequence[str | Path],
-) -> dict[str, Any]:
-    """Generate once and return a mapping; malformed output becomes an empty fill."""
-    request_text = (
-        request if isinstance(request, str) else json.dumps(request, ensure_ascii=False)
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": request_text},
-    ]
-    kwargs = {"media_paths": media_paths, "response_format": "json"}
-    try:
-        text = router.generate_text(
-            "planner",
-            messages,
-            enable_tools=False,
-            **kwargs,
-        )
-    except TypeError:
-        try:
-            text = router.generate_text("planner", messages, **kwargs)
-        except (ValueError, RuntimeError):
-            return {}
-    except (ValueError, RuntimeError):
-        return {}
-    return _extract_json(str(text))
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    """Extract the last JSON object without treating model shape as authority."""
-    if not isinstance(text, str) or not text.strip():
-        return {}
-    objects = _json_objects(text)
-    return dict(objects[-1]) if objects else {}
-
-
-def _json_objects(text: str) -> list[dict[str, Any]]:
-    decoder = json.JSONDecoder()
-    objects: list[dict[str, Any]] = []
-    index = 0
-    while index < len(text):
-        start = text.find("{", index)
-        if start < 0:
-            break
-        try:
-            value, end = decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:
-            index = start + 1
-            continue
-        if isinstance(value, dict):
-            objects.append(value)
-        index = start + max(end, 1)
-    return objects
 
 
 def _module(value: Mapping[str, Any]) -> ProductionModule:
