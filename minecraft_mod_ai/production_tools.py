@@ -45,6 +45,11 @@ class ProductionToolService:
         """Keep one initialized JDT LS owner per persistent production service."""
         return JavaLanguageService()
 
+    @cached_property
+    def model_router(self) -> ModelRouter:
+        """Reuse one lazy model owner across semantic/reranked RAG calls."""
+        return ModelRouter(profile=self.profile)
+
     def index_project_rag(self, roots: Sequence[str], *, index_path: str='rag/project-index.json', metadata: dict[str, Any], semantic: bool=False) -> dict[str, Any]:
         resolved = [str(self._existing_path(root)) for root in roots]
         target = self._replaceable_file(index_path)
@@ -59,7 +64,7 @@ class ProductionToolService:
             and global_cpu_dense
             and (not repair_like or eager_repair_semantic)
         )
-        router = ModelRouter(profile=self.profile) if effective_semantic else None
+        router = self.model_router if effective_semantic else None
         return ProjectRAGIndex(target).build(
             resolved,
             metadata=metadata,
@@ -76,7 +81,7 @@ class ProductionToolService:
             canonical = self._resolve('rag/project-index.json', allow_root=True)
             if canonical.is_file():
                 target = canonical
-        router = ModelRouter(profile=self.profile) if semantic or rerank else None
+        router = self.model_router if semantic or rerank else None
         result = ProjectRAGIndex(target).search_with_receipt(query, limit=limit, router=router, semantic=semantic, rerank=rerank, required_metadata=required_metadata)
         return {'schema_version': 'mmm/code-rag-result-v1', 'query': query, 'hits': [asdict(hit) for hit in result.hits], 'receipt': asdict(result.receipt)}
 
