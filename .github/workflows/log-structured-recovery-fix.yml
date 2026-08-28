@@ -1,0 +1,71 @@
+name: One-shot host-local structured recovery fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/log-structured-recovery-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Move structured validation behind host-local repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          paths = [
+              Path('minecraft_mod_ai/structured_repair_contract.py'),
+              Path('minecraft_mod_ai/structured_subtree_repair_contract.py'),
+          ]
+          total = 0
+          for path in paths:
+              text = path.read_text(encoding='utf-8')
+              # Planner repair must see the raw candidate before any schema-wide router
+              # validator can throw it away and trigger a whole-response regeneration.
+              text, count_format = re.subn(
+                  r'response_format="json",\n(?P<indent>\s*)response_schema=[^,\n]+,',
+                  'response_format="text",\n\\g<indent>response_schema=None,',
+                  text,
+              )
+              if count_format < 1:
+                  raise SystemExit(f'{path}: no structured router calls were rewritten')
+              total += count_format
+              path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_structured_subtree_repair_contract.py')
+          test = test_path.read_text(encoding='utf-8')
+          old = '''    repair_schema = router.calls[1]["response_schema"]\n    assert repair_schema["properties"]["repair"] == {"type": "number"}\n'''
+          new = '''    assert router.calls[0]["response_format"] == "text"\n    assert router.calls[0]["response_schema"] is None\n    assert router.calls[1]["response_format"] == "text"\n    assert router.calls[1]["response_schema"] is None\n'''
+          if test.count(old) != 1:
+              raise SystemExit('structured subtree test expectation drifted')
+          test = test.replace(old, new, 1)
+          test_path.write_text(test, encoding='utf-8')
+
+          contract_test = Path('tests/test_host_local_structured_recovery.py')
+          contract_test.write_text('''from __future__ import annotations\n\nimport json\n\nfrom minecraft_mod_ai import structured_repair_contract as field_local\nfrom minecraft_mod_ai import structured_subtree_repair_contract as exact\n\n\nclass Router:\n    def __init__(self, outputs):\n        self.outputs = list(outputs)\n        self.calls = []\n\n    def generate_text(self, role, messages, **kwargs):\n        self.calls.append(kwargs)\n        if kwargs.get("response_format") != "text" or kwargs.get("response_schema") is not None:\n            raise AssertionError("router-level structured validation must not own planner repair")\n        return self.outputs.pop(0)\n\n\ndef test_exact_repair_keeps_invalid_candidate_available_for_leaf_repair():\n    router = Router([\n        json.dumps({"section": {"x": {"a": "keep", "b": "bad"}}}),\n        json.dumps({"repair": 4}),\n    ])\n    result = exact._generate_section_exact(\n        router,\n        prompt="x",\n        section_id="x",\n        fields=("x",),\n        properties={\n            "x": {\n                "type": "object",\n                "properties": {"a": {"type": "string"}, "b": {"type": "number"}},\n                "required": ["a", "b"],\n                "additionalProperties": False,\n            }\n        },\n        research={},\n        media_paths=(),\n        trace_metadata=None,\n    )\n    assert result == {"x": {"a": "keep", "b": 4}}\n    assert len(router.calls) == 2\n\n\ndef test_field_local_repair_also_uses_raw_text_boundary():\n    router = Router([\n        json.dumps({"section": {"name": 3}}),\n        json.dumps({"repair": {"name": "ok"}}),\n    ])\n    result = field_local._generate_section_local(\n        router,\n        prompt="x",\n        section_id="x",\n        fields=("name",),\n        properties={"name": {"type": "string", "minLength": 1}},\n        research={},\n        media_paths=(),\n        trace_metadata=None,\n    )\n    assert result == {"name": "ok"}\n    assert len(router.calls) == 2\n''', encoding='utf-8')
+          print(f'rewritten_router_calls={total}')
+          PY
+          python -m pytest -q tests/test_structured_subtree_repair_contract.py tests/test_host_local_structured_recovery.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit fix directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/structured_repair_contract.py minecraft_mod_ai/structured_subtree_repair_contract.py tests/test_structured_subtree_repair_contract.py tests/test_host_local_structured_recovery.py
+          git rm .github/workflows/log-structured-recovery-fix.yml
+          git commit -m "fix: keep structured repair host-local"
+          git push origin HEAD:main
