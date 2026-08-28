@@ -1,0 +1,46 @@
+name: One-shot research localization scope fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/research-localization-scope-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Scope localization filtering to mutation work
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        phase_attempted_sources = (\n            state.attempted_sources_for_localization_stage(current_localization_stage)\n            if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE\n            else frozenset(state.attempted_sources)\n        )\n        phase_tools = _filter_tools_for_phase(\n            all_exposed_tools,\n            state.phase,\n            role,\n            mutation_context=state.mutation_context,\n            attempted_sources=phase_attempted_sources,\n        )\n'''
+          new = '''        mutation_localization_active = bool(\n            implementation_requires_mutation and state.phase == LoopPhase.OBSERVE\n        )\n        phase_attempted_sources = (\n            state.attempted_sources_for_localization_stage(current_localization_stage)\n            if mutation_localization_active\n            else frozenset()\n        )\n        phase_tools = _filter_tools_for_phase(\n            all_exposed_tools,\n            state.phase,\n            role,\n            mutation_context=(state.mutation_context if mutation_localization_active else None),\n            attempted_sources=phase_attempted_sources,\n        )\n'''
+          if text.count(old) != 1:
+              raise SystemExit('progress-aware localization scope target drifted')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python -m pytest -q tests/test_agent_tool_calling.py tests/test_localization_bottleneck_contract.py tests/test_agent_runtime_hot_paths.py
+          python -m compileall -q minecraft_mod_ai
+      - name: Commit fix directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/progress_aware_tool_loop.py
+          git rm .github/workflows/research-localization-scope-fix.yml
+          git commit -m "fix: scope mutation localization to implementation turns"
+          git push origin HEAD:main
