@@ -58,5 +58,6 @@ def test_task_acceptance_keeps_internal_checks_for_dag_validation() -> None:
     assert tasks
     assert all(task["acceptance"] for task in tasks)
     assert all(any("declared provides" in item.casefold() for item in task["acceptance"]) for task in tasks)
-    assert public_acceptance in tasks[-1]["acceptance"]
+    assert all(public_acceptance not in task["acceptance"] for task in tasks)
+    assert public_acceptance in tasks[-1].get("public_acceptance", [])
 
