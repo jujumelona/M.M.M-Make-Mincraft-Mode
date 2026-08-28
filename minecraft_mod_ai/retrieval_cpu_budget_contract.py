@@ -22,7 +22,6 @@ _MARKER = "_mmm_retrieval_cpu_budget_v2"
 _HYBRID_MARKER = "_mmm_small_model_hybrid_code_rag"
 _HYBRID_BUDGET_MARKER = "_mmm_cpu_dense_hybrid_guard_v2"
 _PRODUCTION_BUDGET_MARKER = "_mmm_cpu_dense_production_guard_v1"
-_ROUTER_RERANK_BUDGET_MARKER = "_mmm_cpu_dense_router_rerank_guard_v1"
 _DENSE_OPT_IN = "MMM_RAG_ENABLE_CPU_DENSE"
 
 
@@ -214,57 +213,6 @@ def _install_production_tool_budget(production_tools_module: Any) -> None:
         cls.index_project_rag = index_budgeted
 
 
-def _install_router_rerank_budget() -> None:
-    """Avoid intentionally-disabled CPU reranker calls before adapter construction.
-
-    The adapter loader still owns the fail-closed policy. This wrapper is only the
-    matching scheduling optimization: callers that treat an empty score vector as
-    "reranker unavailable" can fall back to lexical ordering without manufacturing a
-    ModelConfigurationError on every tool-selection turn.
-    """
-
-    from . import model_router
-
-    cls = model_router.ModelRouter
-    current = cls.rerank
-    if bool(getattr(current, _ROUTER_RERANK_BUDGET_MARKER, False)):
-        return
-
-    @wraps(current)
-    def rerank_budgeted(
-        self: Any,
-        query: str,
-        documents: Sequence[str],
-        *,
-        role: str = "reranker",
-        instruction: str = (
-            "Retrieve the Minecraft modding evidence that directly answers the query "
-            "for the caller-selected platform target. Do not prefer or infer a different "
-            "Minecraft version or mapping namespace."
-        ),
-    ) -> list[float]:
-        if not _dense_opted_in():
-            try:
-                config = self.registry.role(self.profile, role)
-                extra = config.extra if isinstance(config.extra, dict) else {}
-                device = str(extra.get("device", "cpu") or "cpu").strip().casefold()
-            except (AttributeError, KeyError, TypeError, ValueError):
-                device = ""
-            if device.startswith("cpu"):
-                return []
-        return current(
-            self,
-            query,
-            documents,
-            role=role,
-            instruction=instruction,
-        )
-
-    setattr(rerank_budgeted, _ROUTER_RERANK_BUDGET_MARKER, True)
-    rerank_budgeted.__wrapped__ = current
-    cls.rerank = rerank_budgeted
-
-
 def install(repository_grounding_module: Any, pre_design_module: Any) -> None:
     from . import production_tools, small_model_hybrid_search_contract
 
@@ -273,7 +221,6 @@ def install(repository_grounding_module: Any, pre_design_module: Any) -> None:
     # interpreted as proof that the live path is still guarded.
     _install_live_hybrid_budget(small_model_hybrid_search_contract)
     _install_production_tool_budget(production_tools)
-    _install_router_rerank_budget()
 
     if not _dense_opted_in():
         repository_grounding_module._explore_with_degraded_fallback = (
@@ -291,7 +238,6 @@ __all__ = [
     "_dense_opted_in",
     "_install_live_hybrid_budget",
     "_install_production_tool_budget",
-    "_install_router_rerank_budget",
     "install",
     "require_dense_retrieval_device",
 ]
