@@ -26,25 +26,30 @@ def _encoded_size(messages: Any) -> int:
 
 def run_context_budget_preflight() -> None:
     from . import llama_server_hardware_policy, model_context_budget
-    from .llama_generation_budget import plain_action_token_budget
+    from .generation_output_budget import tools_require_expansive_output
     from .model_context_budget import (
         fit_messages_to_context,
         request_message_budget,
         tool_action_token_budget,
     )
 
-    # Validate behavior, not a versioned monkey-patch marker. The payload owner is
-    # intentionally allowed to evolve as long as the live transport can never receive
-    # an unbounded max_tokens value and preserves the requested tool semantics.
+    # Validate behavior, not a versioned monkey-patch marker. A local Qwen profile may
+    # reserve 8192 tokens while packing the request, but that reservation must not become
+    # the decode ceiling for plain text or source-mutation actions. Compact read/status
+    # tools remain finitely bounded by the reviewed tool-action budget.
     synthetic_adapter = SimpleNamespace(
         config=SimpleNamespace(
             adapter="llama_cpp",
             max_context=262144,
-            max_new_tokens=-1,
+            max_new_tokens=8192,
             model_id="synthetic",
-            extra={"runtime_context_default": 32768},
+            extra={
+                "runtime_context_default": 32768,
+                "dynamic_output_budget": True,
+            },
         )
     )
+    compact_budget = tool_action_token_budget(synthetic_adapter.config)
     synthetic_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
         SimpleNamespace(
@@ -56,12 +61,12 @@ def run_context_budget_preflight() -> None:
             response_schema=None,
         ),
     )
-    expected_text_budget = plain_action_token_budget(synthetic_adapter.config)
-    if synthetic_payload.get("max_tokens") != expected_text_budget:
+    text_budget = int(synthetic_payload.get("max_tokens", 0) or 0)
+    if text_budget <= compact_budget:
         raise ContextBudgetPreflightError(
-            "llama-server non-tool production payload is not using the finite text budget"
+            "llama-server non-tool dynamic output is still capped by the compact tool budget"
         )
-    if int(synthetic_payload.get("max_tokens", 0) or 0) <= 0:
+    if text_budget <= 0:
         raise ContextBudgetPreflightError(
             "llama-server production payload still permits an unbounded max_tokens value"
         )
@@ -79,6 +84,10 @@ def run_context_budget_preflight() -> None:
             },
         },
     }
+    if not tools_require_expansive_output((tool_schema,)):
+        raise ContextBudgetPreflightError(
+            "source mutation tool was not classified as an expansive output action"
+        )
     synthetic_tool_payload = llama_server_hardware_policy._server_payload(
         synthetic_adapter,
         SimpleNamespace(
@@ -97,15 +106,14 @@ def run_context_budget_preflight() -> None:
             },
         ),
     )
-    if synthetic_tool_payload.get("max_tokens") != tool_action_token_budget(
-        synthetic_adapter.config
-    ):
+    source_budget = int(synthetic_tool_payload.get("max_tokens", 0) or 0)
+    if source_budget <= compact_budget:
         raise ContextBudgetPreflightError(
-            "tool turns must preserve the bounded tool-action budget"
+            "source mutation turns are still capped by the compact tool-action budget"
         )
-    if int(synthetic_tool_payload.get("max_tokens", 0) or 0) <= 0:
+    if source_budget <= 0:
         raise ContextBudgetPreflightError(
-            "tool turns still permit an unbounded max_tokens value"
+            "source mutation turns still permit an unbounded max_tokens value"
         )
     if synthetic_tool_payload.get("tool_choice") != "required":
         raise ContextBudgetPreflightError(
@@ -133,6 +141,33 @@ def run_context_budget_preflight() -> None:
         raise ContextBudgetPreflightError(
             "host-selected JSON action page leaked llama-server structured constraints: "
             + ",".join(leaked_constraints)
+        )
+
+    compact_tool_schema = {
+        "type": "function",
+        "function": {
+            "name": "work_status",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    if tools_require_expansive_output((compact_tool_schema,)):
+        raise ContextBudgetPreflightError(
+            "reviewed status tool was incorrectly classified as an expansive output action"
+        )
+    compact_tool_payload = llama_server_hardware_policy._server_payload(
+        synthetic_adapter,
+        SimpleNamespace(
+            messages=({"role": "user", "content": "status"},),
+            tools=(compact_tool_schema,),
+            tool_choice="required",
+            parallel_tool_calls=False,
+            response_format="text",
+            response_schema=None,
+        ),
+    )
+    if int(compact_tool_payload.get("max_tokens", 0) or 0) != compact_budget:
+        raise ContextBudgetPreflightError(
+            "compact status tool no longer preserves the bounded tool-action budget"
         )
 
     large_result = json.dumps(
