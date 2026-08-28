@@ -16,7 +16,7 @@ inputs:
   - version, loader, mappings, library and license metadata
 
 required_rag:
-  - Vanilla gameplay or mechanic facts require reviewed vanilla_knowledge evidence, preferring minecraft-wiki route when available.
+  - Vanilla gameplay or mechanic facts require reviewed vanilla_knowledge evidence, preferring the minecraft-wiki route when available.
   - Exact mappings, symbols, registries, source behavior and version differences require mapping_resolution, registry_lookup, source_search or version_diff evidence, preferring minecraft-dev when available.
   - Fabric or NeoForge API facts and implementation examples require official_mod_docs or mod_examples evidence from a reviewed modding-docs route such as mcmodding-docs when available.
   - Exact library version and license evidence is required for optional dependencies.
