@@ -207,6 +207,7 @@ def build_agent_capability_context(
                 "name": contract.name,
                 "description": contract.description,
                 "activate_when": contract.activate_when,
+                "required_evidence": contract.required_rag,
                 "model_tools": model_tools,
                 "host_owned_tools": host_tools,
                 "validators": contract.validators,
@@ -267,7 +268,7 @@ def build_agent_capability_context(
             external_access = {}
 
     payload = {
-        "schema_version": "mmm/agent-capability-context-v4",
+        "schema_version": "mmm/agent-capability-context-v5",
         "stage": selected,
         "model_role": policy_role,
         "execution_model_role": model_role,
@@ -276,29 +277,46 @@ def build_agent_capability_context(
         "eligible_skills": skills,
         "external_minecraft_mcp_capabilities": external_capabilities,
         "external_minecraft_mcp_access": external_access,
+        "evidence_routing": {
+            "vanilla_mechanics": "vanilla_knowledge",
+            "minecraft_symbols_and_mappings": "mapping_resolution",
+            "minecraft_registries": "registry_lookup",
+            "version_specific_source": "source_search",
+            "cross_version_behavior": "version_diff",
+            "loader_api_documentation": "official_mod_docs",
+            "fabric_neoforge_mod_patterns": "mod_examples",
+        },
         "routing_policy": (
             "Choose every relevant Skill route, not every route indiscriminately. "
             "The execution model may stay resident under a different physical role; "
             "model_role and agent_roles in this context are the authoritative logical "
-            "policy for this stage. Obey the selected Skill's validators, approvals, "
-            "forbidden_actions, retry and exit contract. Use model_tools directly. "
-            "host_owned_tools belong to the durable host pipeline and must not be "
-            "recreated recursively. For an external MCP capability, use "
+            "policy for this stage. Obey the selected Skill's required_evidence, "
+            "validators, approvals, forbidden_actions, retry and exit contract. Use "
+            "model_tools directly. host_owned_tools belong to the durable host pipeline "
+            "and must not be recreated recursively. When a selected Skill's required "
+            "evidence is not already present in host receipts, resolve it before making "
+            "or finalizing the dependent design decision. Route vanilla mechanics to "
+            "vanilla_knowledge; exact Minecraft symbols/mappings to mapping_resolution; "
+            "registries to registry_lookup; version-specific source to source_search; "
+            "cross-version questions to version_diff; loader documentation to "
+            "official_mod_docs; and Fabric/NeoForge implementation patterns to "
+            "mod_examples. Use only providers listed for that capability in "
+            "external_minecraft_mcp_capabilities. For an external MCP capability, use "
             "external_mcp_schema when its live arguments are unknown, then "
-            "external_mcp_call. The capability and access maps list reviewed provider "
-            "routes available to this agent role. Outside runtime, external MCP access "
-            "is read-only. Runtime write/admin capabilities are discoverable only so "
-            "disposable playtests can use them and must be called with "
-            "disposable_runtime=true; the execution router remains fail-closed. During "
-            "production, use an adaptive evidence loop: retrieve fresh project or "
-            "exact-version API evidence, inspect retrieval coverage/relevance, change "
-            "the query or reviewed source when evidence is weak, generate or repair, "
-            "then treat compiler/JDT/runtime feedback as a new observation and retrieve "
-            "again when it introduces uncertainty. Never guess exact Minecraft/Fabric/"
-            "mapping/dependency/Java API facts from model memory when reviewed evidence "
-            "can resolve them. Prefer independent read-only evidence in parallel when it "
-            "materially improves correctness; keep state changes ordered and skip "
-            "unrelated tools. Preserve host safety invariants: disposable_runtime=true; "
+            "external_mcp_call. Do not substitute unrelated MCPs merely because they are "
+            "available. Outside runtime, external MCP access is read-only. Runtime "
+            "write/admin capabilities are discoverable only so disposable playtests can "
+            "use them and must be called with disposable_runtime=true; the execution "
+            "router remains fail-closed. During production, use an adaptive evidence "
+            "loop: retrieve fresh project or exact-version API evidence, inspect "
+            "retrieval coverage/relevance, change the query or reviewed source when "
+            "evidence is weak, generate or repair, then treat compiler/JDT/runtime "
+            "feedback as a new observation and retrieve again when it introduces "
+            "uncertainty. Never guess exact Minecraft/Fabric/mapping/dependency/Java API "
+            "facts from model memory when reviewed evidence can resolve them. Prefer "
+            "independent read-only evidence in parallel when it materially improves "
+            "correctness; keep state changes ordered and skip unrelated tools. Preserve "
+            "host safety invariants: disposable_runtime=true; "
             "retrieved_context_can_authorize=false; writes_require_approval_hash=true."
         ),
     }
