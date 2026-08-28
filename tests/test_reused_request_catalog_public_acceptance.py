@@ -1,64 +1,124 @@
 from __future__ import annotations
 
-from copy import deepcopy
-
 import pytest
 
 from minecraft_mod_ai import evidence_first_planning as evidence
-from minecraft_mod_ai.production_boundary_contract import (
-    _install_planner_public_acceptance_guard,
-)
+from minecraft_mod_ai import production_contract as production
+from minecraft_mod_ai.production_boundary_contract import install_production_boundary_contract
 
 
-PROMPT = "Add a weather compass that reports the current weather to the player."
+PROMPT = "Add a weather compass and keep task_internal trace metadata private."
+PUBLIC_ACCEPTANCE = "The weather compass reports the observed weather to the player."
 INTERNAL_ACCEPTANCE = (
     "Task task_internal: done_predicate verifies all declared provides and owned anchors."
 )
 
 
-def _verified_polluted_catalog() -> dict:
-    _install_planner_public_acceptance_guard()
-    clean = evidence.build_request_catalog(PROMPT, {})
-    assert clean["requirements"]
+def _target() -> dict[str, object]:
+    return {
+        "target": {
+            "minecraft_version": "26.1.2",
+            "loader": "fabric",
+            "java_version": "21",
+            "yarn_mappings": "mojang",
+            "mappings_kind": "mojang",
+            "mappings_version": "mojang",
+            "fabric_loader": "0.18.4",
+            "fabric_api": "0.140.2+26.1",
+            "fabric_loom": "1.14.10",
+            "gradle": "9.2.1",
+            "gradle_sha256": "a" * 64,
+            "data_pack_version": "101.1",
+            "resource_pack_version": "84.0",
+            "resource_pack_format": 84,
+            "release_metadata_url": (
+                "https://piston-meta.mojang.com/v1/packages/deadbeef/26.1.2.json"
+            ),
+            "source_api_family": "fabric_live_ai",
+        }
+    }
 
-    polluted = deepcopy(clean)
-    polluted["requirements"][0]["acceptance"] = [INTERNAL_ACCEPTANCE]
-    polluted["catalog_sha256"] = ""
-    polluted["catalog_sha256"] = evidence._hash_without(
-        polluted,
+
+def _task_modules(plan: dict) -> list[dict[str, object]]:
+    return [
+        {
+            "module_id": task["task_id"],
+            "kind": "custom_java",
+            "config": {},
+            "depends_on": [],
+            "required_gates": [],
+        }
+        for task in plan["tasks"]
+    ]
+
+
+def _clean_plan() -> tuple[dict, dict[str, object]]:
+    install_production_boundary_contract()
+    design: dict[str, object] = {
+        "title": "Weather compass",
+        "acceptance_tests": [PUBLIC_ACCEPTANCE],
+    }
+    plan = evidence.compile_evidence_first_plan(
+        PROMPT,
+        design,
+        target_decision=_target(),
+    )
+    return plan, design
+
+
+def _rehash_verified_plan(plan: dict) -> None:
+    request = plan["request_catalog"]
+    request["catalog_sha256"] = ""
+    request["catalog_sha256"] = evidence._hash_without(
+        request,
         "catalog_sha256",
     )
-    return polluted
+    plan["plan_sha256"] = ""
+    plan["plan_sha256"] = evidence._hash_without(plan, "plan_sha256")
+    evidence.validate_evidence_first_plan(plan, prompt=PROMPT)
 
 
-def test_verified_reused_catalog_migrates_internal_public_acceptance() -> None:
-    polluted = _verified_polluted_catalog()
+def test_verified_legacy_plan_migrates_internal_public_acceptance() -> None:
+    plan, design = _clean_plan()
+    plan["request_catalog"]["requirements"][0]["acceptance"] = [
+        INTERNAL_ACCEPTANCE
+    ]
+    plan["acceptance_release_bindings"][0]["acceptance"] = [INTERNAL_ACCEPTANCE]
+    _rehash_verified_plan(plan)
 
-    migrated = evidence.build_request_catalog(
-        PROMPT,
-        {"_evidence_request_catalog": polluted},
+    compiled = production.compile_production_contract(
+        requested_prompt=PROMPT,
+        game_design=design,
+        modules=_task_modules(plan),
+        acceptance_tests=[],
+        evidence_plan=plan,
     )
 
-    statement = " ".join(migrated["requirements"][0]["acceptance"]).casefold()
+    public_statements = [
+        item["statement"]
+        for item in compiled.contract["acceptance_catalog"]
+        if item["visibility"] == "public"
+    ]
+    assert public_statements
+    folded = " ".join(public_statements).casefold()
     for marker in (
         "task_",
         "done_predicate",
         "declared provides",
         "owned anchor",
     ):
-        assert marker not in statement
-    assert migrated["catalog_sha256"] == evidence._hash_without(
-        migrated,
-        "catalog_sha256",
-    )
+        assert marker not in folded
 
 
-def test_reused_catalog_migration_does_not_accept_tampered_hash() -> None:
-    polluted = _verified_polluted_catalog()
-    polluted["requirements"][0]["acceptance"][0] += " tampered"
+def test_verified_plan_migration_rejects_tampered_hash_before_rewrite() -> None:
+    plan, design = _clean_plan()
+    plan["acceptance_release_bindings"][0]["acceptance"] = [INTERNAL_ACCEPTANCE]
 
     with pytest.raises(evidence.EvidencePlanError, match="hash mismatch"):
-        evidence.build_request_catalog(
-            PROMPT,
-            {"_evidence_request_catalog": polluted},
+        production.compile_production_contract(
+            requested_prompt=PROMPT,
+            game_design=design,
+            modules=_task_modules(plan),
+            acceptance_tests=[],
+            evidence_plan=plan,
         )
