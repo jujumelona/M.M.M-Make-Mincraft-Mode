@@ -124,11 +124,24 @@ class GameDesignPlanner:
             }
 
         from .evidence_first_planning import build_request_catalog
+        from .evidence_request_guard import active_authoritative_request_catalog
+        from .reuse_planner import compile_pre_retrieval_plan
 
+        request_catalog = active_authoritative_request_catalog(prompt)
+        if request_catalog is None:
+            request_catalog = build_request_catalog(prompt, design)
         design = {
             **design,
-            "_evidence_request_catalog": build_request_catalog(prompt, design),
+            "_evidence_request_catalog": request_catalog,
         }
+        pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
+        design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
+        print(
+            "planning: semantic plan ready before retrieval "
+            f"plan_sha256={pre_retrieval_plan['plan_sha256']} "
+            f"requirements={len(pre_retrieval_plan['planned_work'])}",
+            flush=True,
+        )
 
         research_brief = normalize_research_brief(prompt, design)
         design = {**design, "_research_brief": research_brief}

@@ -94,7 +94,9 @@ class PlatformAdapter:
             raise ValueError(
                 "Resource pack format major disagrees with the exact provider resource-pack version."
             )
-        if not self.release_metadata_url.startswith("https://www.minecraft.net/"):
+        if not self.release_metadata_url.startswith(
+            ("https://www.minecraft.net/", "https://feedback.minecraft.net/")
+        ):
             raise ValueError("Pack metadata must be grounded in an official Minecraft release URL.")
 
     def public_dict(self) -> dict[str, Any]:

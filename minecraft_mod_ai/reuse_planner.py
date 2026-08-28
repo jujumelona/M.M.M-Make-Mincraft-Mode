@@ -10,6 +10,7 @@ expected implementation + verification work and preserves donor provenance.
 """
 
 import hashlib
+import json
 import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -62,6 +63,9 @@ from .canonical_capability_ontology import (
 
 _CAPABILITY_HINTS = _canonical_domain_map()
 _PROMPT_CAPABILITY_WORDS = frozenset(_CAPABILITY_HINTS)
+_PRE_RETRIEVAL_PLAN_SCHEMA = "mmm/pre-retrieval-semantic-plan-v1"
+_DEFAULT_TARGET_CANDIDATE_LIMIT = 8
+_MAX_TARGET_CANDIDATE_LIMIT = 32
 
 
 def _capability_graph_limit() -> int:
@@ -77,15 +81,30 @@ def _capability_graph_limit() -> int:
     return value
 
 
+def _target_candidate_limit() -> int:
+    """Bound live provider work without changing the semantic project scope."""
+
+    raw = os.environ.get(
+        "MMM_PLATFORM_CANDIDATE_LIMIT",
+        str(_DEFAULT_TARGET_CANDIDATE_LIMIT),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_TARGET_CANDIDATE_LIMIT
+    return max(1, min(value, _MAX_TARGET_CANDIDATE_LIMIT))
+
+
 @dataclass(frozen=True)
 class CapabilityGraph:
     nodes: tuple[str, ...]
     edges: tuple[tuple[str, str], ...]
     sources: tuple[tuple[str, str], ...]
     search_terms: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    source_plan_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": "mmm/capability-graph-v1",
             "nodes": list(self.nodes),
             "edges": [{"from": left, "to": right} for left, right in self.edges],
@@ -95,6 +114,280 @@ class CapabilityGraph:
                 for cap, terms in self.search_terms
             ],
         }
+        if self.source_plan_sha256:
+            payload["source_plan_sha256"] = self.source_plan_sha256
+        return payload
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _sha256(value: Any) -> str:
+    raw = value if isinstance(value, str) else _canonical_json(value)
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _plan_hash(value: Mapping[str, Any]) -> str:
+    payload = dict(value)
+    payload["plan_sha256"] = ""
+    return _sha256(payload)
+
+
+def _requirement_capabilities(requirement: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = requirement.get("provides")
+    values: Iterable[Any]
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        values = raw
+    else:
+        values = (requirement.get("capability"),)
+    return tuple(
+        dict.fromkeys(
+            capability
+            for item in values
+            if (capability := _capability_id(item))
+        )
+    )
+
+
+def _planned_work_id(requirement_id: str) -> str:
+    digest = hashlib.sha256(requirement_id.encode("utf-8")).hexdigest()[:12]
+    return f"intent_{digest}"
+
+
+def compile_pre_retrieval_plan(
+    prompt: str,
+    design: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze semantic work before any platform or donor lookup can run.
+
+    This is deliberately target- and reuse-neutral.  It records what must be built,
+    why it is required, its authored dependencies, and how it will be accepted.  A
+    later discovery pass may choose retain/adapt/fresh for a work item, but it cannot
+    add, rename, merge, or remove semantic work.
+    """
+
+    catalog = design.get("_evidence_request_catalog")
+    if not isinstance(catalog, Mapping):
+        raise TypeError(
+            "Authoritative request catalog must be frozen before retrieval planning."
+        )
+    from .evidence_first_planning import _validate_request_catalog
+
+    _validate_request_catalog(catalog, prompt=prompt)
+    requirements = catalog.get("requirements")
+    if not isinstance(requirements, list) or not requirements:
+        raise ValueError("Pre-retrieval semantic planning requires request requirements.")
+
+    # This call is still planning: it turns the already-approved requirement graph
+    # into immutable search boundaries.  No provider/client is constructed here.
+    graph = decompose_capability_graph(prompt, design=design)
+    requirement_ids = [
+        str(item.get("requirement_id") or item.get("id") or "").strip()
+        for item in requirements
+        if isinstance(item, Mapping)
+    ]
+    if len(requirement_ids) != len(requirements) or any(not item for item in requirement_ids):
+        raise ValueError("Pre-retrieval requirements must have stable identifiers.")
+    if len(requirement_ids) != len(set(requirement_ids)):
+        raise ValueError("Pre-retrieval requirement identifiers must be unique.")
+    work_by_requirement = {
+        requirement_id: _planned_work_id(requirement_id)
+        for requirement_id in requirement_ids
+    }
+
+    planned_work: list[dict[str, Any]] = []
+    for raw in requirements:
+        assert isinstance(raw, Mapping)
+        requirement_id = str(raw.get("requirement_id") or raw.get("id") or "").strip()
+        dependencies_raw = raw.get("depends_on", ())
+        dependencies = (
+            tuple(str(item).strip() for item in dependencies_raw if str(item).strip())
+            if isinstance(dependencies_raw, Sequence)
+            and not isinstance(dependencies_raw, (str, bytes, bytearray))
+            else ()
+        )
+        unknown = sorted(set(dependencies) - set(work_by_requirement))
+        if unknown:
+            raise ValueError(
+                f"Pre-retrieval requirement {requirement_id} has unknown dependencies: {unknown}."
+            )
+        capabilities = _requirement_capabilities(raw)
+        if not capabilities:
+            raise ValueError(
+                f"Pre-retrieval requirement {requirement_id} has no semantic capability."
+            )
+        acceptance_raw = raw.get("acceptance", ())
+        acceptance = (
+            [str(item).strip() for item in acceptance_raw if str(item).strip()]
+            if isinstance(acceptance_raw, Sequence)
+            and not isinstance(acceptance_raw, (str, bytes, bytearray))
+            else []
+        )
+        planned_work.append(
+            {
+                "work_id": work_by_requirement[requirement_id],
+                "requirement_ref": requirement_id,
+                "objective": str(
+                    raw.get("semantic_statement")
+                    or raw.get("statement")
+                    or raw.get("capability")
+                    or ""
+                ).strip(),
+                "capabilities": list(capabilities),
+                "depends_on": [work_by_requirement[item] for item in dependencies],
+                "acceptance": acceptance,
+                "discovery_disposition": "unresolved_until_verified_reuse_analysis",
+            }
+        )
+
+    plan: dict[str, Any] = {
+        "schema_version": _PRE_RETRIEVAL_PLAN_SCHEMA,
+        "prompt_sha256": _sha256(prompt),
+        "prompt_char_length": len(prompt),
+        "request_catalog_sha256": str(catalog.get("catalog_sha256") or ""),
+        "purpose": str(catalog.get("purpose") or design.get("pitch") or prompt).strip(),
+        "planned_work": planned_work,
+        "capability_graph": graph.to_dict(),
+        "authority": {
+            "semantic_scope": "approved_request_catalog",
+            "work_identity": "host_frozen_before_retrieval",
+            "retrieval_authority": False,
+            "allowed_post_retrieval_changes": [
+                "retain_verified",
+                "adapt_verified",
+                "fresh_required",
+            ],
+        },
+        "plan_sha256": "",
+    }
+    plan["plan_sha256"] = _plan_hash(plan)
+    validate_pre_retrieval_plan(plan, prompt=prompt, design=design)
+    return plan
+
+
+def validate_pre_retrieval_plan(
+    plan: Mapping[str, Any],
+    *,
+    prompt: str,
+    design: Mapping[str, Any],
+) -> None:
+    if plan.get("schema_version") != _PRE_RETRIEVAL_PLAN_SCHEMA:
+        raise ValueError("Unsupported pre-retrieval semantic plan schema.")
+    if plan.get("plan_sha256") != _plan_hash(plan):
+        raise ValueError("Pre-retrieval semantic plan hash mismatch.")
+    if plan.get("prompt_sha256") != _sha256(prompt) or plan.get(
+        "prompt_char_length"
+    ) != len(prompt):
+        raise ValueError("Pre-retrieval semantic plan is stale for the request.")
+    catalog = design.get("_evidence_request_catalog")
+    if not isinstance(catalog, Mapping) or plan.get("request_catalog_sha256") != catalog.get(
+        "catalog_sha256"
+    ):
+        raise ValueError("Pre-retrieval semantic plan is not bound to the request catalog.")
+
+    requirements = catalog.get("requirements")
+    work = plan.get("planned_work")
+    if not isinstance(requirements, list) or not isinstance(work, list):
+        raise TypeError("Pre-retrieval semantic plan has no planned work catalog.")
+    requirement_ids = {
+        str(item.get("requirement_id") or item.get("id") or "")
+        for item in requirements
+        if isinstance(item, Mapping)
+    }
+    work_ids: set[str] = set()
+    work_requirements: set[str] = set()
+    planned_capabilities: list[str] = []
+    for item in work:
+        if not isinstance(item, Mapping):
+            raise TypeError("Pre-retrieval planned work must be an object.")
+        work_id = str(item.get("work_id") or "")
+        requirement_ref = str(item.get("requirement_ref") or "")
+        if not work_id or work_id in work_ids:
+            raise ValueError("Pre-retrieval planned work identifiers are invalid or duplicated.")
+        work_ids.add(work_id)
+        work_requirements.add(requirement_ref)
+        planned_capabilities.extend(
+            capability
+            for raw in item.get("capabilities", ())
+            if (capability := _capability_id(raw))
+        )
+    if work_requirements != requirement_ids or len(work) != len(requirement_ids):
+        raise ValueError("Pre-retrieval plan does not cover every request requirement exactly once.")
+    for item in work:
+        dependencies = tuple(str(value) for value in item.get("depends_on", ()))
+        if str(item.get("work_id")) in dependencies or any(
+            dependency not in work_ids for dependency in dependencies
+        ):
+            raise ValueError("Pre-retrieval planned work dependency graph is invalid.")
+
+    graph = plan.get("capability_graph")
+    if not isinstance(graph, Mapping):
+        raise TypeError("Pre-retrieval semantic plan has no capability graph.")
+    nodes = tuple(str(item) for item in graph.get("nodes", ()))
+    if not nodes or len(nodes) != len(set(nodes)):
+        raise ValueError("Pre-retrieval capability nodes are empty or duplicated.")
+    if set(nodes) != set(planned_capabilities):
+        raise ValueError("Pre-retrieval capability graph drifted from planned work.")
+    for edge in graph.get("edges", ()):
+        if not isinstance(edge, Mapping) or edge.get("from") not in nodes or edge.get("to") not in nodes:
+            raise ValueError("Pre-retrieval capability graph contains an invalid edge.")
+    sources = {
+        str(item.get("capability"))
+        for item in graph.get("sources", ())
+        if isinstance(item, Mapping)
+    }
+    terms = {
+        str(item.get("capability"))
+        for item in graph.get("search_terms", ())
+        if isinstance(item, Mapping) and item.get("terms")
+    }
+    if sources != set(nodes) or terms != set(nodes):
+        raise ValueError(
+            "Pre-retrieval plan must bind every capability to provenance and search intent."
+        )
+
+
+def _graph_from_pre_retrieval_plan(
+    plan: Mapping[str, Any],
+    *,
+    prompt: str,
+    design: Mapping[str, Any],
+) -> CapabilityGraph:
+    validate_pre_retrieval_plan(plan, prompt=prompt, design=design)
+    raw = plan["capability_graph"]
+    assert isinstance(raw, Mapping)
+    edges = tuple(
+        (str(item["from"]), str(item["to"]))
+        for item in raw.get("edges", ())
+        if isinstance(item, Mapping)
+    )
+    sources = tuple(
+        (str(item["capability"]), str(item["source"]))
+        for item in raw.get("sources", ())
+        if isinstance(item, Mapping)
+    )
+    search_terms = tuple(
+        (
+            str(item["capability"]),
+            tuple(str(term) for term in item.get("terms", ()) if str(term).strip()),
+        )
+        for item in raw.get("search_terms", ())
+        if isinstance(item, Mapping)
+    )
+    return CapabilityGraph(
+        nodes=tuple(str(item) for item in raw.get("nodes", ())),
+        edges=edges,
+        sources=sources,
+        search_terms=search_terms,
+        source_plan_sha256=str(plan.get("plan_sha256") or ""),
+    )
 
 
 def decompose_capability_graph(
@@ -111,6 +404,15 @@ def decompose_capability_graph(
     intentionally recognizes only capability-bearing words; arbitrary theme/title
     tokens never become donor-search queries.
     """
+
+    if isinstance(design, Mapping):
+        frozen_plan = design.get("_pre_retrieval_plan")
+        if isinstance(frozen_plan, Mapping):
+            return _graph_from_pre_retrieval_plan(
+                frozen_plan,
+                prompt=prompt,
+                design=design,
+            )
 
     ordered: list[str] = []
     edges: list[tuple[str, str]] = []
@@ -702,6 +1004,60 @@ def _load_verified_components_or_empty() -> tuple[VerifiedComponent, ...]:
         return ()
 
 
+def _resolve_target_adapters(
+    target_keys: Sequence[tuple[str, str]],
+) -> tuple[tuple[PlatformAdapter, ...], tuple[str, ...]]:
+    """Resolve independent provider receipts concurrently, preserving key order."""
+
+    resolved: dict[int, PlatformAdapter] = {}
+    errors: dict[int, str] = {}
+
+    def resolve(index: int, loader: str, version: str) -> tuple[int, PlatformAdapter]:
+        return index, adapter_for_target(version, loader)
+
+    workers = min(_workers(), len(target_keys))
+    if workers <= 1:
+        for index, (loader, version) in enumerate(target_keys):
+            try:
+                _, adapter = resolve(index, loader, version)
+                resolved[index] = adapter
+            except Exception as exc:  # noqa: BLE001 - candidate failures are independent
+                message = (
+                    f"target resolution skipped loader={loader} version={version}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                errors[index] = message
+                # adapter_for_target already emitted the full root traceback.  Keep
+                # this layer as one candidate summary instead of printing it twice.
+                _emit_discovery_log(message)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mmm-platform-resolve",
+        ) as pool:
+            futures = {
+                pool.submit(resolve, index, loader, version): (index, loader, version)
+                for index, (loader, version) in enumerate(target_keys)
+            }
+            for future in as_completed(futures):
+                index, loader, version = futures[future]
+                try:
+                    resolved_index, adapter = future.result()
+                    resolved[resolved_index] = adapter
+                except Exception as exc:  # noqa: BLE001 - candidate failures are independent
+                    message = (
+                        f"target resolution skipped loader={loader} version={version}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    errors[index] = message
+                    _emit_discovery_log(message)
+
+    return (
+        tuple(resolved[index] for index in sorted(resolved)),
+        tuple(errors[index] for index in sorted(errors)),
+    )
+
+
 def optimize_platform_and_reuse(
     prompt: str,
     *,
@@ -713,35 +1069,38 @@ def optimize_platform_and_reuse(
     discovery_client: EcosystemDiscoveryClient | None = None,
     semantic_router: Any = None,
 ) -> ReuseAwareOptimization:
-    """Evaluate every executable target and select the lowest expected-cost plan."""
+    """Evaluate the bounded live-target window and select the lowest-cost plan."""
 
+    if (
+        isinstance(design, Mapping)
+        and isinstance(design.get("_evidence_request_catalog"), Mapping)
+        and not isinstance(design.get("_pre_retrieval_plan"), Mapping)
+    ):
+        raise TypeError(
+            "Platform/reuse discovery cannot start before the pre-retrieval semantic "
+            "plan is frozen."
+        )
     graph = decompose_capability_graph(
         prompt,
         design=design,
         module_kinds=module_kinds,
         semantic_router=semantic_router,
     )
+    if graph.source_plan_sha256:
+        print(
+            "planning: verified semantic plan -> platform/reuse discovery "
+            f"plan_sha256={graph.source_plan_sha256} capabilities={len(graph.nodes)}",
+            flush=True,
+        )
     queries = graph.nodes
     platform_diagnostics: list[str] = []
     target_keys = discover_target_keys(
         loader=loader_constraint,
         minecraft_version=version_constraint,
-        limit_per_loader=32,
+        limit_per_loader=_target_candidate_limit(),
         diagnostics=platform_diagnostics,
     )
-    adapters: list[PlatformAdapter] = []
-    resolution_errors: list[str] = []
-    for loader, version in target_keys:
-        try:
-            adapters.append(adapter_for_target(version, loader))
-        except Exception as exc:  # noqa: BLE001 - one target must not abort reuse planning
-            message = (
-                f"target resolution skipped loader={loader} version={version}: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            resolution_errors.append(message)
-            _emit_discovery_log(message, exc_info=True)
-            continue
+    adapters, resolution_errors = _resolve_target_adapters(target_keys)
     if not adapters:
         detail = "; ".join((*platform_diagnostics, *resolution_errors))
         raise ValueError(
@@ -1982,7 +2341,9 @@ __all__ = [
     "ReuseAwareOptimization",
     "ReuseDecision",
     "TargetImplementationPlan",
+    "compile_pre_retrieval_plan",
     "decompose_capability_graph",
     "optimize_platform_and_reuse",
     "plan_fixed_target",
+    "validate_pre_retrieval_plan",
 ]

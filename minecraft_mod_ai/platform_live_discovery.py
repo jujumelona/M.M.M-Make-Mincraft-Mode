@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -111,6 +112,9 @@ _FABRIC_WRAPPER = (
 )
 _MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 _MINECRAFT_ARTICLE = "https://www.minecraft.net/en-us/article/minecraft-java-edition-{}"
+_MINECRAFT_FEEDBACK_SEARCH = (
+    "https://feedback.minecraft.net/api/v2/help_center/articles/search.json"
+)
 _API_METADATA_PATH = "/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
 _PACK_VERSION = re.compile(
     r"\b(The\s+)?(?P<kind>Data|Resource)\s+Pack\s+version\s+is\s+now\s+"
@@ -119,8 +123,13 @@ _PACK_VERSION = re.compile(
 )
 
 
-def _fetch(url: str, *, timeout: int = 20) -> bytes:
-    retries = _discovery_retries()
+def _fetch(
+    url: str,
+    *,
+    timeout: int = 20,
+    retries: int | None = None,
+) -> bytes:
+    retries = _discovery_retries() if retries is None else max(1, int(retries))
     last_error: BaseException | None = None
     for attempt in range(1, retries + 1):
         request_url = url
@@ -449,19 +458,29 @@ def _release_article_url(version: str) -> str:
     return _MINECRAFT_ARTICLE.format(slug)
 
 
-@lru_cache(maxsize=64)
-def _official_pack_versions(version: str) -> tuple[str, str, str]:
-    """Read exact Data/Resource Pack versions from the official Minecraft release article.
+def _article_timeout() -> int:
+    raw = os.environ.get("MMM_PLATFORM_ARTICLE_TIMEOUT", "6").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 6
+    return max(2, min(value, 20))
 
-    There is intentionally no numeric fallback. Missing or unparsable official metadata makes
-    the target incomplete and therefore ineligible for planning/generation.
-    """
-    url = _release_article_url(version)
-    raw = _fetch(url).decode("utf-8", errors="replace")
-    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
-    text = " ".join(text.split())
+
+def _article_retries() -> int:
+    raw = os.environ.get("MMM_PLATFORM_ARTICLE_RETRIES", "2").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 2
+    return max(1, min(value, 3))
+
+
+def _parse_pack_versions(text: str, *, version: str, source_url: str) -> tuple[str, str, str]:
+    plain = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    plain = " ".join(plain.split())
     found: dict[str, str] = {}
-    for match in _PACK_VERSION.finditer(text):
+    for match in _PACK_VERSION.finditer(plain):
         found[match.group("kind").casefold()] = match.group("version")
     data_pack = found.get("data", "")
     resource_pack = found.get("resource", "")
@@ -469,7 +488,90 @@ def _official_pack_versions(version: str) -> tuple[str, str, str]:
         raise PlatformDiscoveryError(
             f"official Minecraft release metadata did not expose complete pack versions for {version}"
         )
-    return data_pack, resource_pack, url
+    return data_pack, resource_pack, source_url
+
+
+def _feedback_pack_versions(version: str) -> tuple[str, str, str]:
+    """Resolve the exact stable release from Minecraft's structured feedback API."""
+
+    query = urllib.parse.urlencode(
+        {
+            "query": f"Minecraft Java Edition {version}",
+            "per_page": "25",
+        }
+    )
+    url = f"{_MINECRAFT_FEEDBACK_SEARCH}?{query}"
+    raw = _fetch(
+        url,
+        timeout=_article_timeout(),
+        retries=_article_retries(),
+    )
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PlatformDiscoveryError(
+            "official Minecraft feedback search returned invalid JSON"
+        ) from exc
+    results = payload.get("results", ()) if isinstance(payload, dict) else ()
+    expected = re.compile(
+        rf"^Minecraft\s+Java\s+Edition\s*(?:-\s*)?{re.escape(version)}$",
+        re.IGNORECASE,
+    )
+    article = next(
+        (
+            item
+            for item in results
+            if isinstance(item, dict)
+            and expected.fullmatch(str(item.get("title") or "").strip())
+            and not bool(item.get("draft"))
+        ),
+        None,
+    )
+    if article is None:
+        raise PlatformDiscoveryError(
+            f"official Minecraft feedback search found no exact stable release article for {version}"
+        )
+    source_url = str(article.get("html_url") or "").strip()
+    body = str(article.get("body") or "")
+    if not source_url.startswith("https://feedback.minecraft.net/"):
+        raise PlatformDiscoveryError(
+            "official Minecraft feedback result exposed an invalid article URL"
+        )
+    return _parse_pack_versions(body, version=version, source_url=source_url)
+
+
+@lru_cache(maxsize=64)
+def _official_pack_versions(version: str) -> tuple[str, str, str]:
+    """Read exact pack versions from two official, independently served sources.
+
+    The structured Minecraft Feedback API is tried first because the public
+    ``minecraft.net`` presentation page can stall behind an edge proxy.  The canonical
+    presentation article remains a bounded fallback.  Neither path guesses numbers.
+    """
+
+    errors: list[str] = []
+    try:
+        return _feedback_pack_versions(version)
+    except PlatformDiscoveryError as exc:
+        errors.append(f"feedback.minecraft.net: {exc}")
+        _emit_discovery_log(
+            f"structured official pack metadata unavailable for {version}: {exc}; "
+            "trying the canonical release article"
+        )
+
+    url = _release_article_url(version)
+    try:
+        raw = _fetch(
+            url,
+            timeout=_article_timeout(),
+            retries=1,
+        ).decode("utf-8", errors="replace")
+        return _parse_pack_versions(raw, version=version, source_url=url)
+    except PlatformDiscoveryError as exc:
+        errors.append(f"minecraft.net: {exc}")
+        raise PlatformDiscoveryError(
+            f"official pack metadata unavailable for {version}; " + "; ".join(errors)
+        ) from exc
 
 
 @lru_cache(maxsize=32)

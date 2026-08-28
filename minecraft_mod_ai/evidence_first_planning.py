@@ -3,9 +3,10 @@ from __future__ import annotations
 """Host-owned evidence-first implementation planning.
 
 The model may describe implementation details later, but it never owns the identities,
-coverage claims, dependency edges, or completion rules produced here.  The compiler is
-deliberately target-input-only: platform selection and reuse discovery happen before it,
-and only verified project-bound provides are removed from the implementation gap.
+coverage claims, dependency edges, or completion rules produced here.  A target-neutral
+semantic work plan is frozen before platform/reuse discovery; this compiler then refines
+that same work with a resolved target and verified reuse evidence.  Only verified
+project-bound provides are removed from the implementation gap.
 """
 
 import hashlib
@@ -375,7 +376,7 @@ def _model_semantic_ir(
         )
         intent = str(data.get("intent", clause)).strip() or clause
         unresolved = bool(data.get("unresolved", False)) and not candidates
-    except Exception:
+    except Exception:  # noqa: BLE001 - this is the documented deterministic fallback boundary
         # On any model/parse failure fall back to stub — never crash catalog build.
         return _stub_semantic_model(clause, source_start, source_end, prompt)
 
@@ -1512,7 +1513,7 @@ def _semantic_steps(
         steps.extend(
             (
                 _Step("resource_binding", f"Bind models, language, loot, and resource references for {capability}", (item,), (resources,), ("resource", "test")),
-                _Step("integration_proof", f"Verify the complete semantic outcome for {capability}", tuple([*final_inputs, resources]), (capability,), ("test",)),
+                _Step("integration_proof", f"Verify the complete semantic outcome for {capability}", (*final_inputs, resources), (capability,), ("test",)),
             )
         )
         return tuple(steps)
@@ -1910,8 +1911,25 @@ def compile_evidence_first_plan(
     # reach reuse discovery or coder generation.  Direct catalog inspection may
     # expose unresolved work for review; production compilation may not proceed.
     _validate_request_catalog(request_catalog, prompt=prompt)
+    pre_retrieval = game_design.get("_pre_retrieval_plan")
+    pre_retrieval_sha256 = ""
+    if isinstance(pre_retrieval, Mapping):
+        from .reuse_planner import validate_pre_retrieval_plan
+
+        validate_pre_retrieval_plan(
+            pre_retrieval,
+            prompt=prompt,
+            design=game_design,
+        )
+        pre_retrieval_sha256 = str(pre_retrieval.get("plan_sha256") or "")
     components = normalize_component_catalog(game_design, component_catalog)
     reuse_payload = dict(reuse_plan) if isinstance(reuse_plan, Mapping) else _reuse_payload(game_design)
+    reuse_graph = _mapping(reuse_payload.get("capability_graph"))
+    graph_plan_sha256 = str(reuse_graph.get("source_plan_sha256") or "")
+    if pre_retrieval_sha256 and reuse_payload and graph_plan_sha256 != pre_retrieval_sha256:
+        raise EvidencePlanError(
+            "Reuse evidence is not bound to the frozen pre-retrieval semantic plan."
+        )
     target = _target_decision(game_design, target_decision)
     if target.get("hard_gate_status") != "passed":
         raise EvidencePlanError(
@@ -2011,6 +2029,7 @@ def compile_evidence_first_plan(
     root_provides = ["target:frozen", *sorted(verified)]
     plan: dict[str, Any] = {
         "schema_version": SCHEMA,
+        "pre_retrieval_plan_sha256": pre_retrieval_sha256,
         "request_catalog": request_catalog,
         "existing_snapshot": _mapping(
             game_design.get("_existing_project_inventory")
@@ -2047,12 +2066,17 @@ def validate_evidence_first_plan(plan: Mapping[str, Any], *, prompt: str | None 
         raise EvidencePlanError("Unsupported evidence-first planning schema.")
     if plan.get("plan_sha256") != _hash_without(plan, "plan_sha256"):
         raise EvidencePlanError("Evidence-first plan hash mismatch.")
+    pre_retrieval_sha256 = str(plan.get("pre_retrieval_plan_sha256") or "")
+    if pre_retrieval_sha256 and not _SHA_RE.fullmatch(pre_retrieval_sha256):
+        raise EvidencePlanError("Pre-retrieval semantic plan reference is invalid.")
     request = _mapping(plan.get("request_catalog"))
     if request.get("catalog_sha256") != _hash_without(request, "catalog_sha256"):
         raise EvidencePlanError("Request catalog hash mismatch.")
-    if prompt is not None:
-        if request.get("prompt_sha256") != _sha(prompt) or request.get("prompt_char_length") != len(prompt):
-            raise EvidencePlanError("Request catalog is stale for the supplied prompt.")
+    if prompt is not None and (
+        request.get("prompt_sha256") != _sha(prompt)
+        or request.get("prompt_char_length") != len(prompt)
+    ):
+        raise EvidencePlanError("Request catalog is stale for the supplied prompt.")
     requirements = request.get("requirements")
     if not isinstance(requirements, list) or not requirements:
         raise EvidencePlanError("Request catalog has no requirements.")

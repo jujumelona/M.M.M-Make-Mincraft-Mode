@@ -11,6 +11,7 @@ root receives its own proof and implementation path.
 
 import json
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
@@ -19,6 +20,19 @@ from .game_design import GameDesignPlanner
 
 _INSTALLED = False
 _ORIGINAL_BUILD_REQUEST_CATALOG = _evidence.build_request_catalog
+_ACTIVE_REQUEST_CATALOG: ContextVar[tuple[str, dict[str, Any]] | None] = ContextVar(
+    "mmm_active_authoritative_request_catalog",
+    default=None,
+)
+
+
+def active_authoritative_request_catalog(prompt: str) -> dict[str, Any] | None:
+    """Return this planning call's frozen catalog, never process-global stale state."""
+
+    active = _ACTIVE_REQUEST_CATALOG.get()
+    if active is None or active[0] != prompt:
+        return None
+    return dict(active[1])
 
 
 class _StrictSemanticRouterProxy:
@@ -49,7 +63,7 @@ class _StrictSemanticRouterProxy:
 
         try:
             payload = json.loads(raw) if isinstance(raw, str) else raw
-        except Exception as exc:
+        except json.JSONDecodeError as exc:
             self.failure_reason = f"semantic router returned invalid JSON: {type(exc).__name__}: {exc}"
             return raw
 
@@ -211,19 +225,39 @@ def install_evidence_request_guard() -> None:
             prompt,
             router=self.router,
         )
-        result = original_plan(self, prompt, *args, **kwargs)
+        token = _ACTIVE_REQUEST_CATALOG.set((prompt, dict(request_catalog)))
+        try:
+            result = original_plan(self, prompt, *args, **kwargs)
+        finally:
+            _ACTIVE_REQUEST_CATALOG.reset(token)
         if not isinstance(result, tuple) or len(result) != 2:
             return result
         design, proposal = result
         if not isinstance(design, dict):
             return result
-        frozen_design = dict(design)
-        frozen_design["_evidence_request_catalog"] = request_catalog
-        return frozen_design, proposal
+        observed = design.get("_evidence_request_catalog")
+        if not isinstance(observed, Mapping) or dict(observed) != dict(request_catalog):
+            raise _evidence.EvidencePlanError(
+                "PLAN_ORDER_VIOLATION: platform/reuse planning did not consume the exact "
+                "authoritative request catalog."
+            )
+        from .reuse_planner import validate_pre_retrieval_plan
+
+        frozen_plan = design.get("_pre_retrieval_plan")
+        if not isinstance(frozen_plan, Mapping):
+            raise _evidence.EvidencePlanError(
+                "PLAN_ORDER_VIOLATION: semantic work was not frozen before retrieval."
+            )
+        validate_pre_retrieval_plan(frozen_plan, prompt=prompt, design=design)
+        return design, proposal
 
     guarded_plan.__mmm_request_contract_guard__ = True  # type: ignore[attr-defined]
     GameDesignPlanner.plan = guarded_plan  # type: ignore[method-assign]
     _INSTALLED = True
 
 
-__all__ = ["build_authoritative_request_catalog", "install_evidence_request_guard"]
+__all__ = [
+    "active_authoritative_request_catalog",
+    "build_authoritative_request_catalog",
+    "install_evidence_request_guard",
+]
