@@ -110,6 +110,9 @@ def finalize_runtime() -> None:
         from .model_tool_alias_permission_policy import (
             install as install_model_tool_alias_permissions,
         )
+        from .planner_graph_integrity_contract import (
+            install as install_planner_graph_integrity,
+        )
         from .procedural_skill_identity_contract import (
             install as install_procedural_skill_identity,
         )
@@ -191,6 +194,7 @@ def finalize_runtime() -> None:
         # post-finalize package-init sequence while moving composition under one owner.
         install_evidence_request_guard()
         install_semantic_requirement_authority()
+        install_planner_graph_integrity()
         install_evidence_obligation_contract()
         # Evidence-obligation routing replaces normalize_research_brief. Re-wrap that
         # current function so the Minecraft knowledge contract remains the documented
