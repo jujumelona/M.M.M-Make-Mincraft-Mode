@@ -8,7 +8,7 @@ test_path = Path("tests/test_acceptance_hotfix_regression.py")
 boundary = boundary_path.read_text(encoding="utf-8")
 production = production_path.read_text(encoding="utf-8")
 
-helper = """
+helper = r'''
 def _sanitize_evidence_plan_public_acceptance(
     evidence_plan: Mapping[str, Any] | None,
 ) -> Mapping[str, Any] | None:
@@ -34,7 +34,8 @@ def _sanitize_evidence_plan_public_acceptance(
             if _strict_public_acceptance(candidate):
                 clean.append(candidate)
                 continue
-            for chunk in re.split(r"[;\r\n]+", candidate):
+            chunks = candidate.replace("\r", "\n").replace("\n", ";").split(";")
+            for chunk in chunks:
                 chunk = chunk.strip(" \t-*•")
                 if chunk and _strict_public_acceptance(chunk):
                     clean.append(chunk)
@@ -111,7 +112,7 @@ def _sanitize_evidence_plan_public_acceptance(
     return plan
 
 
-"""
+'''
 
 if "def _sanitize_evidence_plan_public_acceptance(" not in boundary:
     anchor = "def _filter_evidence_input_acceptance("
@@ -163,14 +164,10 @@ for path in Path("minecraft_mod_ai").rglob("*.py"):
     if not match:
         continue
     var = match.group("v")
-    text = (
-        text[:match.start()]
-        + f"errors={{len({var})}} details={{{var}!r}}"
-        + text[match.end():]
-    )
+    text = text[:match.start()] + f"errors={{len({var})}} details={{{var}!r}}" + text[match.end():]
     path.write_text(text, encoding="utf-8")
 
-tests = """
+tests = '''
 from minecraft_mod_ai.production_boundary_contract import (
     _sanitize_evidence_plan_public_acceptance,
 )
@@ -216,7 +213,7 @@ def test_public_acceptance_error_exposes_marker_and_statement():
         raise AssertionError("dirty public acceptance unexpectedly passed")
     assert "task_" in message
     assert statement in message
-"""
+'''
 
 boundary_path.write_text(boundary, encoding="utf-8")
 production_path.write_text(production, encoding="utf-8")
