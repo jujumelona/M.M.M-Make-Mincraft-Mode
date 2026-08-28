@@ -72,7 +72,7 @@ def test_medieval_banking_unresolved_concept_preservation() -> None:
             },
         ),
     )
-    assert any(node.capability_id.startswith("provisional:") for node in enriched.nodes)
+    assert any(node.capability_id == "bank.loan" for node in enriched.nodes)
     assert any("persistence.state_store" in edge[1] for edge in enriched.edges)
 
 

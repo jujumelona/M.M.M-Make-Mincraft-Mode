@@ -304,14 +304,21 @@ def _refresh_evidence_production_contract(
     raw_acceptance = current.get('acceptance_catalog')
     if not isinstance(raw_acceptance, list):
         raise SpecValidationError('Evidence-first production contract has no acceptance catalog.')
-    input_acceptance = tuple(
+    # The authority boundary may deduplicate an input acceptance when it is
+    # byte-identical to the requirement-owned canonical public acceptance. Rebinding must
+    # therefore preserve the complete current public acceptance surface, not require a
+    # surviving origin=input row. Feeding these statements back through compilation is
+    # lossless: the authority boundary deterministically removes duplicate input rows again.
+    recompilation_acceptance = tuple(
         str(item.get('statement') or '')
         for item in raw_acceptance
-        if isinstance(item, Mapping) and item.get('origin') == 'input'
+        if isinstance(item, Mapping)
+        and item.get('visibility') == 'public'
+        and item.get('origin') in {'input', 'requirement'}
     )
-    if not input_acceptance or any(not item for item in input_acceptance):
+    if not recompilation_acceptance or any(not item for item in recompilation_acceptance):
         raise SpecValidationError(
-            'Evidence-first production contract has no exact input acceptance receipts.'
+            'Evidence-first production contract has no exact public acceptance receipts.'
         )
     contract_design = {
         key: value
@@ -328,7 +335,7 @@ def _refresh_evidence_production_contract(
             research_brief=(research_brief if isinstance(research_brief, Mapping) else None),
             modules=modules,
             assets=proposal.assets,
-            acceptance_tests=input_acceptance,
+            acceptance_tests=recompilation_acceptance,
             evidence_plan=evidence_plan,
         )
     except (ImportError, ValueError, TypeError, RecursionError) as exc:
