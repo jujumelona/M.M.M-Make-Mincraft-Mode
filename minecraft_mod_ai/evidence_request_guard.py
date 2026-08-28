@@ -27,12 +27,12 @@ _ACTIVE_REQUEST_CATALOG: ContextVar[tuple[str, dict[str, Any]] | None] = Context
 
 
 def active_authoritative_request_catalog(prompt: str) -> dict[str, Any] | None:
-    """Return this planning call's frozen catalog, never process-global stale state."""
+    """Return the frozen catalog, with a host-only safe fallback if no guard is active."""
 
     active = _ACTIVE_REQUEST_CATALOG.get()
-    if active is None or active[0] != prompt:
-        return None
-    return dict(active[1])
+    if active is not None and active[0] == prompt:
+        return dict(active[1])
+    return build_authoritative_request_catalog(prompt, router=None)
 
 
 class _StrictSemanticRouterProxy:
