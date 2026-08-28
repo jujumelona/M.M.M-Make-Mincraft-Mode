@@ -152,7 +152,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
             )
             for public_check in public_checks:
                 _validate_public_acceptance(public_check)
-            statement = f"[{requirement_ref}] " + '; '.join(public_checks)
+            statement = '; '.join(public_checks)
         else:
             statement = f"[{requirement_ref}] Demonstrate observable behavior or output satisfying: {requirement['statement']}"
         statement = _unique_acceptance_statement(statement, used_acceptance_statements)
