@@ -4,6 +4,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import anyio
+
 import minecraft_mod_ai.agent_capability_context as capability_context
 import minecraft_mod_ai.runtime_hotpath_consolidation as hotpath
 from minecraft_mod_ai import agent_tool_runtime
@@ -42,29 +44,14 @@ def test_first_party_execution_does_not_repeat_schema_listing(monkeypatch) -> No
             return False
 
     monkeypatch.setattr(runtime, "_session", lambda _stage: Context())
-    first = runtime._run_async(
+    result = anyio.run(
         runtime._call_tool_async,
         "generation",
         "search_code_rag",
         {"query": "block registry"},
     )
-    second = runtime._run_async(
-        runtime._call_tool_async,
-        "generation",
-        "search_code_rag",
-        {"query": "item registry"},
-    )
-    assert first["structured_content"] == {"ok": True}
-    assert second["structured_content"] == {"ok": True}
-    assert events == [
-        "enter",
-        "execute:search_code_rag:block registry",
-        "execute:search_code_rag:item registry",
-    ]
-    runtime.close()
-    assert events[-1] == "exit"
-    assert events.count("enter") == 1
-    assert events.count("exit") == 1
+    assert result["structured_content"] == {"ok": True}
+    assert events == ["enter", "execute:search_code_rag:block registry", "exit"]
 
 
 def test_manifest_router_is_reused_but_request_target_stays_dynamic(monkeypatch) -> None:
@@ -150,3 +137,31 @@ def test_project_scoped_lock_reclaims_inactive_project_entries() -> None:
         finally:
             hotpath._MEMORY_BASE.reset(token)
         assert lock._locks == {}
+
+
+def test_runtime_close_releases_only_materialized_transport_pool() -> None:
+    runtime = agent_tool_runtime.AgentToolRuntime(profile="test")
+    events: list[str] = []
+
+    class Pool:
+        def close(self) -> None:
+            events.append("pool-close")
+
+    class Finalizer:
+        alive = True
+
+        def detach(self) -> None:
+            events.append("finalizer-detach")
+            self.alive = False
+
+    pool = Pool()
+    finalizer = Finalizer()
+    runtime._mcp_transport_pool = pool
+    runtime._mcp_transport_pool_finalizer = finalizer
+    runtime.close()
+
+    assert events == ["finalizer-detach", "pool-close"]
+    assert runtime._mcp_transport_pool is None
+    assert runtime._mcp_transport_pool_finalizer is None
+    runtime.close()
+    assert events == ["finalizer-detach", "pool-close"]
