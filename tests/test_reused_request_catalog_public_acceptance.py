@@ -68,6 +68,16 @@ def _clean_plan() -> tuple[dict, dict[str, object]]:
 
 def _rehash_verified_plan(plan: dict) -> None:
     request = plan["request_catalog"]
+    requirements = {
+        requirement["requirement_id"]: requirement
+        for requirement in request["requirements"]
+    }
+    for gap in plan["gap_catalog"]:
+        requirement = requirements[gap["requirement_ref"]]
+        gap["acceptance"] = list(requirement["acceptance"])
+        gap["gap_sha256"] = ""
+        gap["gap_sha256"] = evidence._hash_without(gap, "gap_sha256")
+
     request["catalog_sha256"] = ""
     request["catalog_sha256"] = evidence._hash_without(
         request,
