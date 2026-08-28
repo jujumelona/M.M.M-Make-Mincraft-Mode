@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import model_router
-from minecraft_mod_ai import retrieval_cpu_budget_contract as cpu_budget
 
 
 class _RoleConfig:
+    adapter = "reranker"
+
     def __init__(self, device: str) -> None:
         self.extra = {"device": device}
 
@@ -25,29 +26,26 @@ class _RouterLike:
 
 
 def _install_sentinel(monkeypatch):
-    calls: list[tuple[str, tuple[str, ...], str]] = []
+    constructions: list[str] = []
+    calls: list[tuple[str, tuple[str, ...]]] = []
 
-    def sentinel(
-        self,
-        query: str,
-        documents,
-        *,
-        role: str = "reranker",
-        instruction: str = "test instruction",
-    ):
-        del self, instruction
-        values = tuple(str(item) for item in documents)
-        calls.append((query, values, role))
-        return [float(index + 1) for index in range(len(values))]
+    class SentinelReranker:
+        def __init__(self, config) -> None:
+            constructions.append(str(config.extra.get("device")))
 
-    monkeypatch.setattr(model_router.ModelRouter, "rerank", sentinel)
-    cpu_budget._install_router_rerank_budget()
-    return calls
+        def score(self, query: str, documents, *, instruction: str):
+            del instruction
+            values = tuple(str(item) for item in documents)
+            calls.append((query, values))
+            return [float(index + 1) for index in range(len(values))]
+
+    monkeypatch.setattr(model_router, "RerankerAdapter", SentinelReranker)
+    return constructions, calls
 
 
 def test_disabled_cpu_reranker_is_skipped_without_backend_attempt(monkeypatch) -> None:
     monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
-    calls = _install_sentinel(monkeypatch)
+    constructions, calls = _install_sentinel(monkeypatch)
 
     scores = model_router.ModelRouter.rerank(
         _RouterLike("cpu"),
@@ -56,12 +54,13 @@ def test_disabled_cpu_reranker_is_skipped_without_backend_attempt(monkeypatch) -
     )
 
     assert scores == []
+    assert constructions == []
     assert calls == []
 
 
 def test_explicit_cpu_dense_opt_in_delegates_to_reranker(monkeypatch) -> None:
     monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
-    calls = _install_sentinel(monkeypatch)
+    constructions, calls = _install_sentinel(monkeypatch)
 
     scores = model_router.ModelRouter.rerank(
         _RouterLike("cpu"),
@@ -70,12 +69,13 @@ def test_explicit_cpu_dense_opt_in_delegates_to_reranker(monkeypatch) -> None:
     )
 
     assert scores == [1.0, 2.0]
-    assert calls == [("alien planet", ("one", "two"), "reranker")]
+    assert constructions == ["cpu"]
+    assert calls == [("alien planet", ("one", "two"))]
 
 
 def test_non_cpu_reranker_is_not_suppressed(monkeypatch) -> None:
     monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
-    calls = _install_sentinel(monkeypatch)
+    constructions, calls = _install_sentinel(monkeypatch)
 
     scores = model_router.ModelRouter.rerank(
         _RouterLike("cuda"),
@@ -84,4 +84,5 @@ def test_non_cpu_reranker_is_not_suppressed(monkeypatch) -> None:
     )
 
     assert scores == [1.0]
-    assert calls == [("alien planet", ("one",), "reranker")]
+    assert constructions == ["cuda"]
+    assert calls == [("alien planet", ("one",))]
