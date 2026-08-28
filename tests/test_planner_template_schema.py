@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _host_batches,
@@ -115,15 +113,14 @@ def test_invalid_module_kind_falls_back_without_new_contract_layer() -> None:
     assert page["modules"][0]["kind"] == "custom_java"
 
 
-def test_multiple_design_modules_use_one_host_template_fill() -> None:
+def test_multiple_design_modules_use_host_template_without_model_fill() -> None:
     class Router:
         def __init__(self) -> None:
             self.calls = 0
 
-        def generate_text(self, _role, messages, **_kwargs):
+        def generate_text(self, *_args, **_kwargs):
             self.calls += 1
-            request = json.loads(messages[-1]["content"])
-            return json.dumps(request["template_skeleton"])
+            raise AssertionError("host-owned batch expansion must not call the model")
 
     design = {
         "modules": [
@@ -142,7 +139,7 @@ def test_multiple_design_modules_use_one_host_template_fill() -> None:
 
     assert len(batches) == 1
     assert batches[0].exports == ("combat", "economy", "quests")
-    assert router.calls == 1
+    assert router.calls == 0
     assert tuple(module.module_id for module in modules) == (
         "combat",
         "economy",
