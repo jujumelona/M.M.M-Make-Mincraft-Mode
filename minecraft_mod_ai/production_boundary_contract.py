@@ -16,13 +16,77 @@ from typing import Any
 from . import production_contract as _production
 
 _INSTALLED = False
-_INTERNAL_MARKERS = (
-    "all declared provides",
-    "owned anchor",
-    "owned_anchor",
-    "task integrity",
-    "declared_provides",
-)
+
+
+def _strict_public_acceptance(value: Any) -> bool:
+    """Return whether ``value`` satisfies the production public-acceptance boundary."""
+    if not isinstance(value, str):
+        return False
+    try:
+        _production._validate_public_acceptance(value.strip())
+    except _production.ProductionContractError:
+        return False
+    return True
+
+
+def _install_planner_public_acceptance_guard() -> None:
+    """Make evidence planning use the same strict public boundary as production.
+
+    The evidence planner has additional testability checks that remain authoritative.
+    This guard only tightens its result with the production leak detector so a plan
+    accepted upstream cannot fail later solely because task/integrity language crossed
+    the public boundary.
+    """
+    from . import evidence_first_planning as _evidence
+
+    original = _evidence._is_public_acceptance
+    if getattr(original, "_mmm_production_public_acceptance_guard", False):
+        return
+
+    @wraps(original)
+    def is_public_acceptance(value: Any) -> bool:
+        if not original(value):
+            return False
+        normalize = getattr(_evidence, "_normalize_public_acceptance", None)
+        candidate = normalize(value) if callable(normalize) else str(value or "").strip()
+        return _strict_public_acceptance(candidate)
+
+    is_public_acceptance._mmm_production_public_acceptance_guard = True
+    _evidence._is_public_acceptance = is_public_acceptance
+
+    # Repair direct private imports too; package finalization precedes all user planning.
+    for name, module in tuple(sys.modules.items()):
+        if not name.startswith("minecraft_mod_ai.") or module is None:
+            continue
+        if getattr(module, "_is_public_acceptance", None) is original:
+            setattr(module, "_is_public_acceptance", is_public_acceptance)
+
+
+def _filter_evidence_input_acceptance(
+    acceptance_tests: Any,
+    evidence_plan: Mapping[str, Any] | None,
+) -> Any:
+    """Drop non-authoritative internal acceptance text before evidence-mode compilation.
+
+    In evidence mode the canonical public contract belongs to
+    ``request_catalog.requirements[*].acceptance``. Free-form input tests are only
+    supplementary, so internal task/integrity prose must never be allowed to abort the
+    compiler before the canonical requirement authority is projected. Outside evidence
+    mode the original strict fail-closed behavior is preserved unchanged.
+    """
+    if not isinstance(evidence_plan, Mapping):
+        return acceptance_tests
+    if isinstance(acceptance_tests, (str, bytes, bytearray)):
+        return acceptance_tests
+    try:
+        values = tuple(acceptance_tests)
+    except TypeError:
+        return acceptance_tests
+    return tuple(
+        value
+        for value in values
+        if not isinstance(value, str) or _strict_public_acceptance(value)
+    )
 
 
 def _approved_requirements(evidence_plan: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
@@ -47,12 +111,12 @@ def _approved_acceptance(requirement: Mapping[str, Any]) -> str:
             f"approved requirement {requirement.get('requirement_id')} must expose exactly one canonical public acceptance contract"
         )
     statement = acceptance[0]
-    lowered = statement.casefold()
-    if any(marker in lowered for marker in _INTERNAL_MARKERS) or "task_" in lowered:
+    try:
+        _production._validate_public_acceptance(statement)
+    except _production.ProductionContractError as exc:
         raise _production.ProductionContractError(
             f"approved public acceptance contains internal task/integrity language: {requirement.get('requirement_id')}"
-        )
-    _production._validate_public_acceptance(statement)
+        ) from exc
     return statement
 
 
@@ -159,11 +223,12 @@ def _rewrite_compilation(
             continue
         if item.get("visibility") == "public":
             statement = str(item.get("statement") or "")
-            lowered = statement.casefold()
-            if any(marker in lowered for marker in _INTERNAL_MARKERS) or "task_" in lowered:
+            try:
+                _production._validate_public_acceptance(statement)
+            except _production.ProductionContractError as exc:
                 raise _production.ProductionContractError(
                     f"public acceptance leaked an internal task invariant: {ref}"
-                )
+                ) from exc
             if statement in seen_public:
                 raise _production.ProductionContractError(
                     f"duplicate public acceptance statement would destroy requirement traceability: {ref}"
@@ -240,6 +305,11 @@ def install_production_boundary_contract() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
+
+    # Install this before production wrapping so every subsequently created or
+    # revalidated evidence plan is already constrained by the production boundary.
+    _install_planner_public_acceptance_guard()
+
     original = _production.compile_production_contract
     if not getattr(original, "_mmm_authority_acceptance_projection", False):
         @wraps(original)
@@ -252,13 +322,17 @@ def install_production_boundary_contract() -> None:
             acceptance_tests=(),
             evidence_plan: Mapping[str, Any] | None = None,
         ):
+            effective_acceptance = _filter_evidence_input_acceptance(
+                acceptance_tests,
+                evidence_plan,
+            )
             compilation = original(
                 requested_prompt,
                 game_design,
                 research_brief,
                 modules,
                 assets,
-                acceptance_tests,
+                effective_acceptance,
                 evidence_plan,
             )
             return _rewrite_compilation(
