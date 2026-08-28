@@ -78,6 +78,17 @@ def _rehash_verified_plan(plan: dict) -> None:
         gap["gap_sha256"] = ""
         gap["gap_sha256"] = evidence._hash_without(gap, "gap_sha256")
 
+    rebuilt_tasks = evidence._compile_tasks(
+        plan["gap_catalog"],
+        plan["reuse_decisions"],
+        plan["target_decision"],
+        plan["branch_predicates"],
+        plan["ownership_context"],
+    )
+    order = evidence._topological(rebuilt_tasks)
+    tasks_by_id = {task["task_id"]: task for task in rebuilt_tasks}
+    plan["tasks"] = [tasks_by_id[task_id] for task_id in order]
+
     request["catalog_sha256"] = ""
     request["catalog_sha256"] = evidence._hash_without(
         request,
