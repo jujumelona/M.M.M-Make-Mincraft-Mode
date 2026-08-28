@@ -32,6 +32,7 @@ _HTTP_CONTEXT_MARKERS = (
     '"type": "exceed_context_size"',
 )
 _CONTEXT_RECOVERY_EXHAUSTED_ATTR = "_mmm_context_recovery_exhausted"
+_ATOMIC_ACTION_OUTPUT_STALLED = "ATOMIC_ACTION_OUTPUT_STALLED:"
 
 
 class LlamaCompletionBoundaryError(RuntimeError):
@@ -103,15 +104,41 @@ def context_recovery_exhausted(exc: BaseException) -> bool:
     )
 
 
+def _atomic_output_recovery_terminal(exc: BaseException) -> bool:
+    """Return true when the canonical agent loop already exhausted atomic recovery.
+
+    ``progress_aware_tool_loop`` raises one stable host-owned error code after its
+    bounded atomic mutation retry also exhausts output.  The original llama boundary
+    remains in the cause chain for diagnostics, but outer generators must not treat it
+    as a fresh recovery opportunity and start a second continuation protocol.
+    """
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if _ATOMIC_ACTION_OUTPUT_STALLED in str(current):
+            return True
+        wrapped = getattr(current, "cause", None)
+        if isinstance(wrapped, BaseException) and id(wrapped) not in seen:
+            current = wrapped
+            continue
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def completion_boundary_kind(exc: BaseException) -> str:
     """Return a recoverable completion-boundary kind through wrapper chains.
 
     A context boundary whose one canonical overflow-recovery attempt is exhausted is
-    deliberately no longer advertised as recoverable. The original typed exception
-    remains discoverable through :func:`completion_boundary_error` and is re-raised
-    unchanged by outer layers.
+    deliberately no longer advertised as recoverable. Likewise an output boundary
+    beneath ``ATOMIC_ACTION_OUTPUT_STALLED`` has already consumed the canonical
+    agent-state recovery and must not trigger a legacy outer continuation. The original
+    typed exception remains discoverable through :func:`completion_boundary_error`.
     """
 
+    if _atomic_output_recovery_terminal(exc):
+        return ""
     boundary = completion_boundary_error(exc)
     if boundary is None:
         return ""
