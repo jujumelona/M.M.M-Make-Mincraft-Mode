@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Single-owner pre-design evidence collection.
+"""Single-owner pre-design evidence collection with fail-closed diagnostics.
 
 Pre-design research answers Minecraft/Fabric feasibility and compatibility questions.
 Third-party donor discovery belongs to the frozen-design reuse phase, where the query is
@@ -12,8 +12,14 @@ The research ledger and the model working view are deliberately separate. The ho
 all collected notes losslessly. A design worker receives only the view that fits the live
 planner request budget. The runtime context budget, not a fixed item count or similarity
 threshold, is the authority for how much detail can be projected into a model turn.
+
+A failed research domain is not a design input. Every provider/domain failure is printed at
+the point where the host still owns the exact exception or note, and terminal/insufficient
+research raises before game-design generation can consume it.
 """
 
+import json
+import traceback
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
@@ -35,6 +41,46 @@ _DETERMINISTIC_STAGES = (
     "technology_radar",
     "forced_project_rag",
 )
+
+
+class PreDesignResearchFailure(RuntimeError):
+    """Raised when pre-design evidence did not reach a usable completed state."""
+
+
+def _emit_research_diagnostic(event: str, **fields: Any) -> None:
+    payload = {"event": event, **fields}
+    print(
+        "PRE-DESIGN RESEARCH DIAGNOSTIC: "
+        + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
+def _exception_payload(exc: BaseException) -> dict[str, Any]:
+    chain: list[dict[str, str]] = []
+    pending: BaseException | None = exc
+    seen: set[int] = set()
+    while pending is not None and id(pending) not in seen:
+        seen.add(id(pending))
+        chain.append(
+            {
+                "type": f"{type(pending).__module__}.{type(pending).__qualname__}",
+                "message": str(pending),
+            }
+        )
+        cause = getattr(pending, "__cause__", None)
+        context = getattr(pending, "__context__", None)
+        pending = cause if isinstance(cause, BaseException) else (
+            context if isinstance(context, BaseException) else None
+        )
+    return {
+        "type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "message": str(exc),
+        "chain": chain,
+        "traceback": "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        ),
+    }
 
 
 def _pre_design_brief(prompt: str) -> dict[str, Any]:
@@ -307,13 +353,65 @@ def _bounded_model_view(
     return view
 
 
+def _domain_failure_reasons(note: Mapping[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    checkpoint = note.get("checkpoint")
+    if isinstance(checkpoint, Mapping):
+        status = str(checkpoint.get("status", "")).strip()
+        if status == "terminal_gap":
+            reasons.append("checkpoint.status=terminal_gap")
+    failures = note.get("research_failures")
+    if isinstance(failures, list) and failures:
+        reasons.append("research_failures is non-empty")
+    if note.get("sufficient") is False:
+        reasons.append("sufficient=false")
+    if note.get("fixed_point") is True and note.get("sufficient") is not True:
+        reasons.append("fixed_point reached without sufficient evidence")
+    return list(dict.fromkeys(reasons))
+
+
+def _validate_domain_result(note: Any, *, domain_id: str) -> dict[str, Any]:
+    if not isinstance(note, Mapping):
+        _emit_research_diagnostic(
+            "domain_result_invalid",
+            domain_id=domain_id,
+            result_type=type(note).__name__,
+            result=note,
+        )
+        raise PreDesignResearchFailure(
+            f"Pre-design research domain {domain_id!r} returned a non-object result."
+        )
+
+    value = dict(note)
+    reasons = _domain_failure_reasons(value)
+    _emit_research_diagnostic(
+        "domain_result",
+        domain_id=domain_id,
+        status=(
+            value.get("checkpoint", {}).get("status")
+            if isinstance(value.get("checkpoint"), Mapping)
+            else None
+        ),
+        sufficient=value.get("sufficient"),
+        fixed_point=value.get("fixed_point"),
+        failure_reasons=reasons,
+        result=value,
+    )
+    if reasons:
+        raise PreDesignResearchFailure(
+            "Pre-design research failed closed for domain "
+            f"{domain_id!r}: {'; '.join(reasons)}. Full domain result is printed above."
+        )
+    return value
+
+
 def collect_design_research(
     router: Any,
     prompt: str,
     *,
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collect evidence once, compile explicit skills, then project the live-budget view."""
+    """Collect evidence once, require success, compile skills, then project model context."""
 
     from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
@@ -322,6 +420,13 @@ def collect_design_research(
     knowledge_plan = compile_minecraft_knowledge_plan(prompt)
     deterministic: dict[str, Any] = {}
     errors: list[dict[str, str]] = []
+
+    _emit_research_diagnostic(
+        "research_start",
+        prompt=prompt,
+        research_brief=research_brief,
+        minecraft_knowledge_plan=knowledge_plan,
+    )
 
     futures: dict[str, Future[Any]] = {}
     with ThreadPoolExecutor(
@@ -347,24 +452,59 @@ def collect_design_research(
 
         for stage in _DETERMINISTIC_STAGES:
             try:
-                deterministic[stage] = futures[stage].result()
+                result = futures[stage].result()
+                deterministic[stage] = result
+                _emit_research_diagnostic(
+                    "deterministic_stage_complete",
+                    stage=stage,
+                    result=result,
+                )
             except Exception as exc:
-                errors.append(agentic._error(stage, exc))
-                deterministic[stage] = {"status": "unavailable"}
+                diagnostic = _exception_payload(exc)
+                _emit_research_diagnostic(
+                    "deterministic_stage_failure",
+                    stage=stage,
+                    exception=diagnostic,
+                )
+                errors.append(
+                    {
+                        "stage": stage,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                deterministic[stage] = {
+                    "status": "unavailable",
+                    "failure": diagnostic,
+                }
 
     domain_notes: list[dict[str, Any]] = []
     for domain in research_brief.get("domains", []):
         if not isinstance(domain, dict):
             continue
-        domain_notes.append(
-            agentic._research_domain_with_agent(
+        domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
+        _emit_research_diagnostic(
+            "domain_execution_start",
+            domain_id=domain_id,
+            domain=domain,
+            deterministic_sources=list(deterministic),
+        )
+        try:
+            raw_note = agentic._research_domain_with_agent(
                 router,
                 prompt=prompt,
                 domain=domain,
                 deterministic=deterministic,
                 trace_metadata=trace_metadata,
             )
-        )
+        except Exception as exc:
+            diagnostic = _exception_payload(exc)
+            _emit_research_diagnostic(
+                "domain_execution_exception",
+                domain_id=domain_id,
+                exception=diagnostic,
+            )
+            raise
+        domain_notes.append(_validate_domain_result(raw_note, domain_id=domain_id))
 
     payload: dict[str, Any] = {
         "schema_version": "mmm/agentic-pre-design-research-v1",
@@ -386,8 +526,12 @@ def collect_design_research(
     }
     payload["minecraft_knowledge_plan"] = knowledge_plan
     coverage = evaluate_route_coverage(knowledge_plan, payload)
+    _emit_research_diagnostic(
+        "minecraft_knowledge_route_coverage",
+        coverage=coverage,
+    )
     if coverage["status"] != "PASS":
-        raise RuntimeError(
+        raise PreDesignResearchFailure(
             "Minecraft knowledge route coverage blocked pre-design research: "
             + ", ".join(coverage.get("blocking_requirement_refs", ()))
         )
@@ -395,7 +539,15 @@ def collect_design_research(
     payload = attach_procedural_skillbank(router, prompt, payload)
     payload = compose_research_skillbank(router, prompt, payload)
     payload["research_sha256"] = agentic._json_sha256(payload)
-    return _bounded_model_view(agentic, router, prompt, payload)
+    model_view = _bounded_model_view(agentic, router, prompt, payload)
+    _emit_research_diagnostic(
+        "research_complete",
+        research_sha256=payload["research_sha256"],
+        domain_count=len(domain_notes),
+        errors=errors,
+        model_view_sha256=model_view.get("model_view_sha256"),
+    )
+    return model_view
 
 
-__all__ = ["collect_design_research"]
+__all__ = ["PreDesignResearchFailure", "collect_design_research"]
