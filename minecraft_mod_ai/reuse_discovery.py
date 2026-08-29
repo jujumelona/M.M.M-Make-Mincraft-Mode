@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .canonical_capability_ontology import (
+    atomic_capability_definitions,
     resolve_capabilities_from_phrase_structured,
     search_queries_for_capability,
 )
@@ -172,6 +173,11 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
 
     values: list[str] = []
     seen: set[str] = set()
+    exact_canonical = capability in atomic_capability_definitions()
+    if exact_canonical:
+        for query in search_queries_for_capability(capability):
+            _append_query(values, seen, query)
+
     semantic = " ".join(
         _TOKEN.findall(
             capability.replace(".", " ")
@@ -193,11 +199,11 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
             for query in search_queries_for_capability(node.capability_id):
                 _append_query(values, seen, query)
 
-    # If ontology resolution found no known authored concept, preserve the exact
-    # approved capability as a compact dynamic search phrase. For canonical IDs
-    # this is also a harmless deduplicated fallback.
-    for query in search_queries_for_capability(capability):
-        _append_query(values, seen, query)
+    if not exact_canonical:
+        # Unknown/custom IDs keep their exact approved semantics as compact
+        # fallback queries after any recognized authored aliases.
+        for query in search_queries_for_capability(capability):
+            _append_query(values, seen, query)
     return tuple(values)
 
 
