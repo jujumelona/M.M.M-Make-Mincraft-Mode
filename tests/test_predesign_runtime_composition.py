@@ -37,9 +37,11 @@ def official(brief):
         "domains": [
             {
                 "domain_id": domain["domain_id"],
-                "queries": [
-                    {"query": query, "query_sha256": "sha256:test"}
-                    for query in domain.get("queries", [])
+                "documents": [
+                    {
+                        "document_id": "fixture-official",
+                        "content": "target-neutral official evidence",
+                    }
                 ],
             }
             for domain in brief.get("domains", [])
@@ -71,29 +73,36 @@ def forced(_router, brief):
     }
 
 
-def domain_worker(_router, *, prompt, domain, deterministic, trace_metadata):
+def domain_worker(_agentic, _router, *, prompt, domain, document, trace_metadata):
     del prompt, trace_metadata
     calls["domain"] += 1
-    assert set(deterministic) == {
+    assert set(document["source_keys"]) == {
         "official_rag",
         "technology_radar",
         "forced_project_rag",
     }
-    assert deterministic["technology_radar"]["status"] == "deferred_until_target_freeze"
+    pages = project_rag._read_evidence_pages(document)
+    assert pages
     return {
         "domain_id": domain["domain_id"],
-        "claims": [{"claim": "validated request", "evidence_refs": ["probe"]}],
+        "claims": [
+            {
+                "claim": "validated request",
+                "evidence_refs": [pages[0]["page_ref"]],
+            }
+        ],
         "gaps": [],
         "next_queries": [],
         "sufficient": True,
         "procedures": [],
+        "checkpoint": {"status": "complete"},
     }
 
 
-pipeline.retrieve_domain_evidence = official
+pipeline._target_neutral_official_evidence = official
 pipeline.collect_technology_radar = radar
 project_rag._forced_rag_bundle = forced
-agentic._research_domain_with_agent = domain_worker
+project_rag._research_document_domain = domain_worker
 
 
 class ProbeRouter:
@@ -130,6 +139,8 @@ assert coverage["target_frozen"] is False
 assert coverage_statuses == {"DEFERRED_UNTIL_TARGET_FREEZE"}
 assert result["minecraft_knowledge_plan"]["policy"]["target_frozen"] is False
 assert result["domain_notes"][0]["sufficient"] is True
+assert result["domain_notes"][0]["claims"][0]["evidence_refs"][0].startswith("sha256:")
+assert "#page=" in result["domain_notes"][0]["claims"][0]["evidence_refs"][0]
 
 print(
     "__MMM_RESULT__="
