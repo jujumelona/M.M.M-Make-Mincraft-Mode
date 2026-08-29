@@ -4,54 +4,51 @@ import threading
 from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as forced_rag
+import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.llama_structured_decode_policy as decode_policy
 import minecraft_mod_ai.llama_tuning_pipeline as tuning_pipeline
 
 
 def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> None:
+    """Concurrent plans carry evidence through arguments, never process-global context."""
+
     barrier = threading.Barrier(2)
     observed: dict[str, str] = {}
-    agentic = SimpleNamespace()
-    agentic.normalize_research_brief = lambda prompt, _design: {
-        "domains": [{"domain_id": "request", "queries": [prompt]}]
-    }
-    agentic._domain_evidence_slice = lambda domain_id, deterministic: {
-        "base": domain_id,
-        **dict(deterministic),
-    }
-    agentic._research_receipt = lambda value: value
-    agentic._research_domain_with_agent = lambda *args, **kwargs: {}
+    failures: list[BaseException] = []
+    lock = threading.Lock()
 
-    def original_collect(router, prompt, *, trace_metadata=None):
+    def materialize(domain_id, raw_value):
         barrier.wait(timeout=2)
-        forced = forced_rag._FORCED_RAG_CONTEXT.get()
-        assert forced is not None
-        observed[prompt] = str(forced["owner"])
+        owner = str(raw_value["forced_project_rag"]["owner"])
+        with lock:
+            observed[owner] = owner
         return {
-            "research_brief": {"domains": []},
-            "deterministic": {},
-            "domain_notes": [],
-            "errors": [],
+            "schema_version": "mmm/research-evidence-document-v1",
+            "domain_id": domain_id,
+            "document_sha256": f"sha256:{owner}",
         }
 
-    agentic.collect_pre_design_research = original_collect
     monkeypatch.setattr(
         forced_rag,
-        "_forced_rag_bundle",
-        lambda _router, brief: {
-            "owner": brief["domains"][0]["queries"][0],
-            "domains": [
-                {"domain_id": "request", "queries": []},
-            ],
-        },
+        "_materialize_domain_evidence_document",
+        materialize,
     )
-    forced_rag.harden_pre_design_research(agentic)
 
-    failures: list[BaseException] = []
-
-    def run(prompt: str) -> None:
+    def run(owner: str) -> None:
+        deterministic = {
+            "forced_project_rag": {
+                "owner": owner,
+                "domains": [
+                    {
+                        "domain_id": "request",
+                        "queries": [{"query": owner}],
+                    }
+                ],
+            }
+        }
         try:
-            agentic.collect_pre_design_research(object(), prompt)
+            result = agentic._domain_evidence_slice("request", deterministic)
+            assert result["evidence_document"]["document_sha256"] == f"sha256:{owner}"
         except BaseException as exc:
             failures.append(exc)
 
@@ -66,6 +63,8 @@ def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> 
 
     assert not failures
     assert observed == {"alpha": "alpha", "beta": "beta"}
+    assert not hasattr(forced_rag, "_FORCED_RAG_CONTEXT")
+    assert not hasattr(forced_rag, "harden_pre_design_research")
 
 
 def test_bounded_section_disables_thinking_without_touching_research_tools() -> None:
