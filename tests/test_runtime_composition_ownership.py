@@ -27,27 +27,22 @@ def _direct_call_names(function: ast.FunctionDef) -> list[str]:
     return [name for _, _, name in calls]
 
 
-def test_bootstrap_owns_execution_extensions_before_adaptive_hardening() -> None:
-    tree = _module("runtime_bootstrap.py")
-    function = _function(tree, "_install_post_bootstrap_contracts")
-    calls = _direct_call_names(function)
+def test_pre_design_pipeline_owns_procedural_composition_explicitly() -> None:
+    pipeline = _module("pre_design_research_pipeline.py")
+    collector = _function(pipeline, "collect_design_research")
+    calls = _direct_call_names(collector)
 
-    assert calls.count("install_small_model_execution_extensions") == 1
-    assert calls.index("install_small_model_execution_extensions") < calls.index(
-        "harden_adaptive_compute"
+    assert calls.count("attach_procedural_skillbank") == 1
+    assert calls.count("compose_research_skillbank") == 1
+    assert calls.index("attach_procedural_skillbank") < calls.index(
+        "compose_research_skillbank"
     )
 
-    imports = {
-        (node.module, alias.name, alias.asname)
-        for node in ast.walk(function)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-    assert (
-        "small_model_execution_extensions_contract",
-        "install",
-        "install_small_model_execution_extensions",
-    ) in imports
+    bootstrap = _module("runtime_bootstrap.py")
+    post = _function(bootstrap, "_install_post_bootstrap_contracts")
+    post_calls = _direct_call_names(post)
+    assert "install_small_model_execution_extensions" not in post_calls
+    assert "install_external_procedural_skill" not in post_calls
 
 
 def test_adaptive_hardener_does_not_compose_execution_extensions() -> None:
