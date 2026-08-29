@@ -69,6 +69,7 @@ def finalize_runtime() -> None:
         )
         from .agent_routing_intent_contract import install as install_routing_intent
         from .context_budget_preflight import run_context_budget_preflight
+        from .deep_design_execution_contract import install as install_deep_design_execution
         from .design_resolution_provenance_contract import (
             install_design_resolution_provenance_contract,
         )
@@ -112,6 +113,9 @@ def finalize_runtime() -> None:
         )
         from .planner_graph_integrity_contract import (
             install as install_planner_graph_integrity,
+        )
+        from .prefill_calibration_strictness_contract import (
+            install as install_prefill_calibration_strictness,
         )
         from .procedural_skill_identity_contract import (
             install as install_procedural_skill_identity,
@@ -169,7 +173,7 @@ def finalize_runtime() -> None:
             agent_tool_runtime,
             expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
         )
-        install_routing_intent(small_model_module=small_model_max_agent_contract)
+        install_routing_intent(small_model_max_agent_contract)
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
@@ -177,6 +181,7 @@ def finalize_runtime() -> None:
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_tool_validation_surface()
         install_llama_finish_reason(llama_cpp_adapter)
+        install_prefill_calibration_strictness(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
@@ -195,6 +200,7 @@ def finalize_runtime() -> None:
         install_evidence_request_guard()
         install_semantic_requirement_authority()
         install_planner_graph_integrity()
+        install_deep_design_execution()
         install_evidence_obligation_contract()
         # Evidence-obligation routing replaces normalize_research_brief. Re-wrap that
         # current function so the Minecraft knowledge contract remains the documented
