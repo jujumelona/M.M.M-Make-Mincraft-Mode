@@ -27,6 +27,21 @@ def test_custom_capability_gets_compact_ecosystem_queries() -> None:
     assert "very long authored semantic statement" not in variants[0].casefold()
 
 
+def test_github_query_removes_duplicate_provider_boilerplate() -> None:
+    assert (
+        reuse_discovery._provider_query(
+            "github", "minecraft space travel spaceship mod"
+        )
+        == "space travel"
+    )
+    assert (
+        reuse_discovery._provider_query(
+            "modrinth", "minecraft space travel spaceship mod"
+        )
+        == "minecraft space travel spaceship mod"
+    )
+
+
 def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
     monkeypatch,
 ) -> None:
@@ -41,7 +56,7 @@ def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
             assert limit >= 4
             assert target_profile == "minecraft_mod"
             self.calls.append((provider, query))
-            if provider == "github" and query == "minecraft space travel spaceship mod":
+            if provider == "github" and query == "space travel":
                 return {
                     "candidates": [
                         {"source_url": "https://github.com/example/space-donor"}
@@ -67,4 +82,4 @@ def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
 
     assert result["space.travel"] == ("example/space-donor",)
     github_queries = [query for provider, query in client.calls if provider == "github"]
-    assert github_queries[0] == "minecraft space travel spaceship mod"
+    assert github_queries[0] == "space travel"
