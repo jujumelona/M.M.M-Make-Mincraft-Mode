@@ -105,10 +105,6 @@ def _fake_contract_modules():
             return kwargs
 
     class FakeCompletePlanner:
-        @staticmethod
-        def _implementation_prompt(prompt, game_design):
-            return f"{prompt}:{sorted(game_design)}"
-
         complete_proposal_from_parts = (
             FakeCompleteSpec.complete_proposal_from_parts
         )
@@ -117,18 +113,22 @@ def _fake_contract_modules():
     return FakeCompleteSpec, FakeCompletePlanner
 
 
-def test_complete_scope_prompt_does_not_mutate_caller_design() -> None:
-    _, fake_planner = _fake_contract_modules()
+def test_complete_scope_does_not_mutate_caller_design() -> None:
+    fake_spec, _ = _fake_contract_modules()
     design = {"title": "ZIP", "payload": "z" * 50_000}
     original = dict(design)
 
-    rendered = fake_planner._implementation_prompt(
-        "음식 아이템 모드를 만들어줘",
-        design,
+    result = fake_spec.complete_proposal_from_parts(
+        requested_prompt="음식 아이템 모드를 만들어줘",
+        base_proposal=SimpleNamespace(arena=None),
+        game_design=design,
+        modules=(),
+        acceptance_tests=(),
     )
 
     assert design == original
-    assert "_mod_development_methods" in rendered
+    assert "_mod_development_methods" not in design
+    assert "_mod_development_methods" in result["game_design"]
 
 
 def test_complete_scope_attaches_methods_to_proposal() -> None:
