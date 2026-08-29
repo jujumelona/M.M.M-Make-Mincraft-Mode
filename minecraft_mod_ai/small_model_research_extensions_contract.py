@@ -2,16 +2,10 @@ from __future__ import annotations
 
 """Late inference-time extensions for maximizing one frozen small agent.
 
-This contract intentionally reuses the production owners that already exist in MMM:
-
-* verifier-qualified v3 trajectories remain the only durable experience source;
-* ProjectRAGIndex remains the only code-RAG implementation;
-* causal_tool_frontier remains the tool-set/action-surface owner;
-* deterministic validators remain authoritative over model self-judgement.
-
-The extensions here only fill research-backed gaps around adaptive compute, procedural
-skill evolution, intent-routed experience retrieval, and instruction projection.
-No model weights are trained or modified.
+This contract reuses production owners without rewrapping pre-design collection:
+trajectory memory owns durable experience, ProjectRAGIndex owns code retrieval,
+causal_tool_frontier owns the action surface, and deterministic validators remain
+authoritative over model self-judgement.
 """
 
 import json
@@ -69,13 +63,6 @@ def _memory_route(query: str, task_class: str, requested_limit: int) -> tuple[st
 
 
 def _explicit_legacy_workflow_path() -> Path | None:
-    """Keep the old planner workflow file as explicit opt-in compatibility only.
-
-    Durable success/failure experience is already owned by trajectory_memory and the
-    remote mmm-data v3 store. Falling back to MMM_WORKSPACE here would create a second
-    competing persistent memory.
-    """
-
     explicit = os.environ.get("MMM_AGENT_WORKFLOW_MEMORY_PATH", "").strip()
     return Path(explicit).expanduser() if explicit else None
 
@@ -97,8 +84,6 @@ def _project_capability_payload(
     *,
     exposed_tools: frozenset[str],
 ) -> dict[str, Any]:
-    """Project canonical Skill instructions onto the already-authorized tool frontier."""
-
     projected = dict(payload)
     raw_skills = payload.get("eligible_skills")
     skills = list(raw_skills) if isinstance(raw_skills, list) else []
@@ -117,9 +102,6 @@ def _project_capability_payload(
         if model_tools & exposed_tools:
             relevant.append(dict(raw))
 
-    # The execution router/Skill catalog remains the authorization owner. This
-    # projection only reduces prompt instructions, so an empty relevant set is valid
-    # for meta-tools such as external MCP discovery.
     projected["eligible_skills"] = relevant
     projected["instruction_projection"] = {
         "schema_version": "mmm/instruction-projection-v1",
@@ -210,8 +192,6 @@ def _verified_failure(record: Mapping[str, Any]) -> bool:
 
 
 def _skill_relations(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Derive a compact procedural relation graph from verified action sequences."""
-
     from .procedure_trace import sequence_actions
     from .trajectory_record_integrity import record_strong_skill_eligible
 
@@ -249,8 +229,6 @@ def _evolve_skill(
     *,
     task_class: str,
 ) -> dict[str, Any]:
-    """Add a fingerprint-cached evolving playbook without creating another store."""
-
     skill = dict(base_skill)
     relations = _skill_relations(records)
     tier, _limit = _memory_route(query, task_class, 6)
@@ -301,8 +279,6 @@ def _install_skill_evolution(trajectory_memory: Any, temporary_skill_contract: A
     evolved._mmm_evolving_skill_v1 = True  # type: ignore[attr-defined]
     evolved.__wrapped__ = current  # type: ignore[attr-defined]
     trajectory_memory.synthesize_temporary_skill = evolved
-    # temporary_skill_contract imported the function directly, so update that bound
-    # reference as well rather than creating a second synthesis path.
     temporary_skill_contract.synthesize_temporary_skill = evolved
 
 
@@ -313,28 +289,16 @@ def install() -> None:
 
     from . import (
         agent_capability_context,
-        agentic_research_game_design,
-        central_intelligence_amplifier,
-        small_model_adaptive_compute,
         small_model_agent_policy,
         temporary_skill_contract,
         trajectory_memory,
     )
 
-    # The v3 trajectory store is the durable memory owner. Keep the old planner
-    # workflow JSONL only when a caller explicitly opts into that legacy path.
     small_model_agent_policy._memory_path = _explicit_legacy_workflow_path
-
-    small_model_adaptive_compute.harden(
-        agentic_research_game_design,
-        central_intelligence_amplifier,
-    )
     _install_instruction_projection(agent_capability_context)
     _install_intent_routed_memory(trajectory_memory)
     _install_skill_evolution(trajectory_memory, temporary_skill_contract)
     _INSTALLED = True
 
 
-__all__ = [
-    "install",
-]
+__all__ = ["install"]
