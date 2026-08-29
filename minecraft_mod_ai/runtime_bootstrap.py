@@ -238,7 +238,6 @@ def _install_platform_contracts() -> None:
     agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
     central_intelligence_amplifier.install(agentic_research_game_design)
     minecraft_knowledge_contract.install(agentic_research_game_design, complete_planner)
-    agentic_research_game_design.bind_game_design_planner(game_design)
     install_platform_central_ai(
         game_design_module=game_design,
         complete_planner_module=complete_planner,
