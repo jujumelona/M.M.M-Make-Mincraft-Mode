@@ -146,58 +146,6 @@ def _domain_ids(research_brief: Any, domain_notes: list[Any]) -> list[str]:
     return values
 
 
-def _fit_note_detail(
-    agentic: Any,
-    router: Any,
-    prompt: str,
-    view: dict[str, Any],
-    note_index: int,
-    note: Mapping[str, Any],
-) -> None:
-    """Add note evidence item-by-item while the real section envelopes still fit."""
-
-    summary = dict(view["domain_notes"][note_index])
-    detail = {
-        **summary,
-        "claims": [],
-        "gaps": [],
-        "next_queries": [],
-    }
-    candidate = deepcopy(view)
-    candidate["domain_notes"][note_index] = detail
-    if _design_request_fits(agentic, router, prompt, candidate):
-        view["domain_notes"][note_index] = detail
-    else:
-        return
-
-    for field in ("claims", "gaps", "next_queries"):
-        raw_items = note.get(field, [])
-        if not isinstance(raw_items, list):
-            continue
-        for item in raw_items:
-            candidate = deepcopy(view)
-            candidate["domain_notes"][note_index][field].append(deepcopy(item))
-            if _design_request_fits(agentic, router, prompt, candidate):
-                view = candidate
-                # Keep the caller's dictionary identity stable while accepting the
-                # candidate that the live-budget check proved safe.
-                for key in tuple(view):
-                    pass
-                # The assignment below is intentionally field-local; it avoids replacing
-                # the host ledger or unrelated deterministic receipts.
-                detail = candidate["domain_notes"][note_index]
-                view_ref = detail
-                # Apply the accepted detail to the original view object.
-                # `candidate` is a deep copy solely for transactional sizing.
-                # noqa: PERF401 - clarity is more important on this exceptional path.
-                original_notes = candidate["domain_notes"]
-                del original_notes
-                view_ref = deepcopy(detail)
-                # Reach the original object through the closure-local summary container.
-                # The actual write is performed after the loop body below.
-                view["domain_notes"][note_index] = view_ref
-
-
 def _enrich_note_detail(
     agentic: Any,
     router: Any,
@@ -206,7 +154,7 @@ def _enrich_note_detail(
     note_index: int,
     note: Mapping[str, Any],
 ) -> None:
-    """Transactional version of detail packing without semantic cutoffs."""
+    """Add evidence transactionally; only the live context budget decides acceptance."""
 
     summary = dict(view["domain_notes"][note_index])
     base_detail = {
@@ -266,8 +214,8 @@ def _bounded_model_view(
     view["domain_notes"] = []
     view["model_view_sha256"] = ""
 
-    # First preserve broad coverage. Each source note gets a tiny receipt before any
-    # note receives detailed claims. If even the complete index cannot fit, the full
+    # Preserve broad coverage before spending space on detail. Every accepted summary is
+    # chosen by the real request budget; if the complete index does not fit, the full
     # domain-id list/hash in research_brief still records the omitted coverage.
     indexed_notes: list[dict[str, Any]] = []
     for note in domain_notes:
@@ -280,9 +228,9 @@ def _bounded_model_view(
             break
     view["domain_notes"] = indexed_notes
 
-    # Then spend the remaining live budget on exact evidence in source order. There is
-    # no fixed top-N or relevance threshold: acceptance is decided only by whether the
-    # resulting real design requests fit the active planner context.
+    # Spend remaining capacity on exact evidence in source order. There is no fixed top-N
+    # or relevance threshold: each claim/gap/query is admitted only when all actual design
+    # section envelopes remain within the active planner input budget.
     for index, note in enumerate(domain_notes[: len(indexed_notes)]):
         if isinstance(note, Mapping):
             _enrich_note_detail(agentic, router, prompt, view, index, note)
@@ -301,13 +249,14 @@ def _bounded_model_view(
         # all evidence remain in host_research_ledger.
         brief = dict(view["research_brief"])
         brief.pop("domain_ids", None)
+        brief["summary"] = ""
         view["research_brief"] = brief
         view["domain_notes"] = []
+        view["errors"] = []
         view["model_view_sha256"] = agentic._json_sha256(
             {
                 "research_brief": brief,
                 "deterministic": view.get("deterministic"),
-                "errors": view.get("errors"),
             }
         )
     return view
