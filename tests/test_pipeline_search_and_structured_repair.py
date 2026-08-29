@@ -232,11 +232,10 @@ def test_machine_pack_metadata_preserves_three_value_contract(monkeypatch) -> No
     assert source_url.endswith("/1.21.1.json")
 
 
-def test_lossless_page_research_is_installed() -> None:
-    from minecraft_mod_ai import agentic_pre_design_rag as rag
+def test_lossless_page_research_has_single_canonical_owner() -> None:
+    from minecraft_mod_ai import pre_design_domain_research as domain_research
 
-    assert getattr(
-        rag._research_document_domain,
-        "_mmm_lossless_page_research",
-        False,
+    assert callable(domain_research.research_document_domain)
+    assert domain_research.research_document_domain.__module__ == (
+        "minecraft_mod_ai.pre_design_domain_research"
     )
