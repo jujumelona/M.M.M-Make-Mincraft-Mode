@@ -4,7 +4,6 @@ import hashlib
 
 import pytest
 
-import minecraft_mod_ai.agentic_research_game_design as agentic
 from minecraft_mod_ai.minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
@@ -91,7 +90,12 @@ def test_boss_expands_host_owned_minecraft_dependency_graph() -> None:
             assert order[dependency.removeprefix("mk:")] < order[item["knowledge_id"]]
 
     mcp = {item["capability"] for item in plan["mcp_requirements"]}
-    assert {"source_search", "mapping_resolution", "registry_lookup", "runtime_inspection"} <= mcp
+    assert {
+        "source_search",
+        "mapping_resolution",
+        "registry_lookup",
+        "runtime_inspection",
+    } <= mcp
 
 
 def test_machine_gui_activates_only_required_container_and_client_branches() -> None:
@@ -157,7 +161,8 @@ def test_unknown_mechanic_has_source_mapping_project_and_runtime_fallback() -> N
     assert "custom_java" in plan["features"]
     assert {"custom.source_extension", "quality.gametest", "quality.runtime"} <= ids
     custom = next(
-        item for item in plan["requirements"]
+        item
+        for item in plan["requirements"]
         if item["knowledge_id"] == "custom.source_extension"
     )
     assert custom["evidence"]["rag_queries"]
@@ -179,15 +184,12 @@ def test_common_mod_features_have_dedicated_contracts() -> None:
     } <= _ids(plan)
 
 
-def test_pre_design_knowledge_does_not_pin_version_before_platform_resolution() -> None:
+def test_pre_design_knowledge_is_target_neutral_and_routes_are_deferred() -> None:
     plan = compile_minecraft_knowledge_plan(
         "Minecraft 1.21.1 Fabric에서 새 보스 몬스터를 추가해줘."
     )
     routed_text = "\n".join(
-        [
-            str(item["objective"])
-            for item in plan["requirements"]
-        ]
+        [str(item["objective"]) for item in plan["requirements"]]
         + [
             str(query)
             for domain in plan["research_domains"]
@@ -198,20 +200,23 @@ def test_pre_design_knowledge_does_not_pin_version_before_platform_resolution() 
     assert "1.21.1" not in routed_text
     assert "Java 17" not in routed_text
     assert "host-resolved" in routed_text
+    assert plan["policy"]["target_frozen"] is False
 
-
-def test_runtime_normalizer_keeps_minecraft_domains_out_of_predesign_forced_rag() -> None:
-    assert getattr(agentic.normalize_research_brief, "_mmm_minecraft_knowledge_contract_v2", False)
-    brief = agentic.normalize_research_brief(
-        "보스 몬스터를 추가해줘.",
-        {"title": "pre-design research"},
+    coverage = evaluate_route_coverage(
+        plan,
+        {
+            "research_brief": {"domains": [{"domain_id": "request"}]},
+            "deterministic": {},
+            "domain_notes": [],
+        },
     )
-    domain_ids = {str(item["domain_id"]) for item in brief["domains"]}
-    assert "request" in domain_ids
-    assert not any(domain_id.startswith("mk_") for domain_id in domain_ids)
+    assert coverage["status"] == "PASS"
+    assert {item["status"] for item in coverage["domains"]} == {
+        "DEFERRED_UNTIL_TARGET_FREEZE"
+    }
 
 
-def test_route_coverage_requires_actual_forced_rag_and_sufficient_research() -> None:
+def test_route_coverage_requires_actual_route_receipts_after_target_freeze() -> None:
     plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")
     research = _fake_research(plan)
     coverage = evaluate_route_coverage(plan, research)
@@ -233,8 +238,9 @@ def test_route_coverage_requires_actual_forced_rag_and_sufficient_research() -> 
     research["domain_notes"][0]["sufficient"] = False
     unresolved = evaluate_route_coverage(plan, research)
     assert unresolved["status"] == "BLOCK"
-    assert any(item["status"] == "RESEARCH_UNRESOLVED" for item in unresolved["domains"])
-
+    assert any(
+        item["status"] == "RESEARCH_UNRESOLVED" for item in unresolved["domains"]
+    )
 
 
 def test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> None:
@@ -242,7 +248,8 @@ def test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> Non
     research = _fake_research(plan)
     domain = plan["research_domains"][0]
     note = next(
-        item for item in research["domain_notes"]
+        item
+        for item in research["domain_notes"]
         if item["domain_id"] == domain["domain_id"]
     )
     note["sufficient"] = False
@@ -254,7 +261,8 @@ def test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> Non
     assert not coverage["blocking_requirement_refs"]
     assert set(domain["requirements"]) <= set(coverage["deferred_requirement_refs"])
     receipt = next(
-        item for item in coverage["domains"]
+        item
+        for item in coverage["domains"]
         if item["domain_id"] == domain["domain_id"]
     )
     assert receipt["status"] == "ROUTES_EXECUTED_WITH_GAPS"
@@ -262,44 +270,40 @@ def test_route_coverage_accepts_terminal_fixed_point_with_deferred_gaps() -> Non
     assert receipt["research_agent_fixed_point"] is True
 
 
-def test_runtime_normalizer_adds_active_minecraft_domains_after_target_freeze() -> None:
-    brief = agentic.normalize_research_brief(
-        "Add a custom boss entity.",
-        {
-            "title": "implementation research",
-            "_platform_selection": {
-                "target": {
-                    "minecraft_version": "1.21.1",
-                    "loader": "fabric",
-                }
-            },
-        },
-    )
-
-    domain_ids = {str(item["domain_id"]) for item in brief["domains"]}
-    assert {"mk_entity", "mk_platform", "mk_project", "mk_quality"} <= domain_ids
-
-
-def test_pre_target_routes_are_deferred_without_forced_rag_receipts() -> None:
-    plan = compile_minecraft_knowledge_plan("Add a server command.")
+def test_target_frozen_plan_marks_policy_and_active_routes_fail_closed() -> None:
+    design = {
+        "_platform_selection": {
+            "target": {
+                "minecraft_version": "1.21.1",
+                "loader": "fabric",
+            }
+        }
+    }
+    plan = compile_minecraft_knowledge_plan("Add multiplayer packet networking.", design)
+    assert plan["policy"]["target_frozen"] is True
+    assert plan["policy"]["target_receipt_sha256"].startswith("sha256:")
+    assert {domain["domain_id"] for domain in plan["research_domains"]} >= {
+        "mk_networking",
+        "mk_platform",
+        "mk_project",
+        "mk_quality",
+    }
 
     coverage = evaluate_route_coverage(
         plan,
         {
-            "research_brief": {"domains": []},
+            "research_brief": {
+                "_mmm_platform_target": design["_platform_selection"]["target"],
+                "domains": [],
+            },
             "deterministic": {},
             "domain_notes": [],
         },
     )
-
-    assert plan["policy"]["versioned_rag_required_before_design"] is False
-    assert plan["policy"]["target_frozen"] is False
-    assert coverage["status"] == "PASS"
-    assert not coverage["blocking_requirement_refs"]
-    assert coverage["deferred_requirement_refs"]
-    assert {
-        item["status"] for item in coverage["domains"]
-    } == {"DEFERRED_UNTIL_TARGET_FREEZE"}
+    routes = {item["predicate_id"]: item for item in coverage["branch_routes"]}
+    assert coverage["status"] == "BLOCK"
+    assert coverage["blocking_requirement_refs"]
+    assert routes["needs_network"]["status"] == "ACTIVE_ROUTE_BLOCKED"
 
 
 def test_false_optional_branches_have_hashed_not_applicable_receipts() -> None:
@@ -335,40 +339,7 @@ def test_false_optional_branches_have_hashed_not_applicable_receipts() -> None:
         assert evidence["evidence_sha256"].startswith("sha256:")
 
 
-def test_target_frozen_active_route_still_fails_closed() -> None:
-    plan = compile_minecraft_knowledge_plan(
-        "Add multiplayer packet networking.",
-        {
-            "_platform_selection": {
-                "target": {
-                    "minecraft_version": "1.21.1",
-                    "loader": "fabric",
-                }
-            }
-        },
-    )
-    coverage = evaluate_route_coverage(
-        plan,
-        {
-            "research_brief": {
-                "_mmm_platform_target": {
-                    "minecraft_version": "1.21.1",
-                    "loader": "fabric",
-                },
-                "domains": [],
-            },
-            "deterministic": {},
-            "domain_notes": [],
-        },
-    )
-
-    routes = {item["predicate_id"]: item for item in coverage["branch_routes"]}
-    assert coverage["status"] == "BLOCK"
-    assert coverage["blocking_requirement_refs"]
-    assert routes["needs_network"]["status"] == "ACTIVE_ROUTE_BLOCKED"
-
-
-def test_target_scoped_official_receipts_satisfy_active_routes_without_predesign_rag() -> None:
+def test_target_scoped_official_receipts_satisfy_active_routes() -> None:
     plan = compile_minecraft_knowledge_plan("Add a server command.")
     research = _fake_research(plan)
     forced = research["deterministic"].pop("forced_project_rag")
@@ -438,11 +409,9 @@ def test_loader_leaf_rejects_unreceipted_host_activation() -> None:
 
 
 def test_authoritative_evidence_retriever_handles_large_limit() -> None:
-    """AuthoritativeEvidenceRetriever clamps limit when larger than catalog records without failing."""
     from minecraft_mod_ai.knowledge import AuthoritativeEvidenceRetriever
 
     retriever = AuthoritativeEvidenceRetriever()
     results = retriever.search("item registry", minecraft_version="1.21.1", limit=100)
     assert isinstance(results, tuple)
     assert len(results) > 0
-
