@@ -71,9 +71,7 @@ def test_adaptive_progression_repair_is_schema_constrained_and_freezes_siblings(
             ),
             json.dumps(
                 {
-                    "repair": {
-                        "progression": ["레벨 성장", "장비 강화", "보스 단계 해금"]
-                    }
+                    "repair": ["레벨 성장", "장비 강화", "보스 단계 해금"]
                 },
                 ensure_ascii=False,
             ),
@@ -99,8 +97,8 @@ def test_adaptive_progression_repair_is_schema_constrained_and_freezes_siblings(
     assert router.calls[0]["response_schema"] is None
     assert router.calls[1]["response_format"] == "json"
     repair = router.calls[1]["response_schema"]["properties"]["repair"]
-    assert repair["required"] == ["progression"]
-    assert repair["properties"]["progression"]["type"] == "array"
+    assert repair["type"] == "array"
+    assert repair["items"] == {"type": "string", "minLength": 1}
 
 
 def test_target_neutral_research_hides_donor_and_target_compatibility_tools() -> None:
