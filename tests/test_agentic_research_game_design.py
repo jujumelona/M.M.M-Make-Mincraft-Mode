@@ -298,14 +298,13 @@ def test_domain_slice_persists_raw_forced_receipt_instead_of_inlining_it(
             }
         ],
     }
-    token = paged_rag._FORCED_RAG_CONTEXT.set(forced)
-    try:
-        prompt_slice = agentic._domain_evidence_slice(
-            "request",
-            {"official_rag": {"domains": []}},
-        )
-    finally:
-        paged_rag._FORCED_RAG_CONTEXT.reset(token)
+    prompt_slice = agentic._domain_evidence_slice(
+        "request",
+        {
+            "official_rag": {"domains": []},
+            "forced_project_rag": forced,
+        },
+    )
 
     rendered = json.dumps(prompt_slice, ensure_ascii=False, sort_keys=True)
     assert huge_forced not in rendered
