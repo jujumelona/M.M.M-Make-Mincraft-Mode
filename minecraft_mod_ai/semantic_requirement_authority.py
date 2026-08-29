@@ -302,8 +302,9 @@ def _ground_source_anchor(
             "model_anchor": anchor,
         }
 
-    anchor_terms = _semantic_terms((anchor,))
-    if not any(term and term in text_form for term in anchor_terms):
+    anchor_terms = set(_semantic_terms((anchor,)))
+    authored_terms = set(_semantic_terms((text,)))
+    if anchor_terms.isdisjoint(authored_terms):
         return None
 
     matcher = SequenceMatcher(None, anchor_form, text_form, autojunk=False)
