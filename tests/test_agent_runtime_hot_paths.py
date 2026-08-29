@@ -165,3 +165,41 @@ def test_runtime_close_releases_only_materialized_transport_pool() -> None:
     assert runtime._mcp_transport_pool_finalizer is None
     runtime.close()
     assert events == ["finalizer-detach", "pool-close"]
+
+
+def test_schema_discovery_releases_runtime_lock_before_notebook_bridge(monkeypatch) -> None:
+    runtime = agent_tool_runtime.AgentToolRuntime(profile="test", timeout_seconds=1.0)
+    discovery_threads: list[int] = []
+
+    async def list_tools(stage: str):
+        assert stage == "research"
+        acquired = runtime._lock.acquire(timeout=0.25)
+        assert acquired, "schema discovery worker was blocked by the caller's runtime lock"
+        try:
+            discovery_threads.append(threading.get_ident())
+        finally:
+            runtime._lock.release()
+        return [
+            {
+                "name": "search_project_rag",
+                "description": "search project evidence",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(runtime, "_list_tools_async", list_tools)
+
+    async def exercise_from_running_loop():
+        return runtime.tool_schemas("research")
+
+    schemas = anyio.run(exercise_from_running_loop)
+    names = {
+        str(schema["function"]["name"])
+        for schema in schemas
+    }
+    assert "search_project_rag" in names
+    assert discovery_threads
