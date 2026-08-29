@@ -2,11 +2,11 @@ from __future__ import annotations
 
 """Exact JSON-path repair layered over the structured planner contract.
 
-The first structured generation remains unchanged.  Once validation identifies a bad
-leaf, however, the model receives the schema for exactly that leaf and cannot rewrite
-its valid siblings.  Unknown fields are removed deterministically by the host.  A local
-stagnation guard terminates repeated failures of the same validator predicate without
-placing any cap on project size or on unrelated repair scopes.
+The first section generation stays permissive so a mostly-good section is never thrown
+away just because one leaf has the wrong shape. Once validation locates a bad leaf, the
+repair turn is constrained by the schema for exactly that leaf. Valid siblings remain
+host-owned frozen state. Repair continues only while the validator frontier changes;
+there is no arbitrary retry count.
 """
 
 import json
@@ -19,7 +19,6 @@ from . import planner_stage_trace as _trace
 from . import structured_repair_contract as _base
 from .spec import SpecValidationError
 
-_STAGNATION_LIMIT = 3
 _MISSING = object()
 
 
@@ -79,20 +78,28 @@ def _set_at(root: dict[str, Any], tokens: Sequence[str | int], value: Any) -> No
     for token in tokens[:-1]:
         if isinstance(token, int):
             if not isinstance(parent, list) or not 0 <= token < len(parent):
-                raise SpecValidationError(f"structured repair path disappeared: {_path(tokens)}")
+                raise SpecValidationError(
+                    f"structured repair path disappeared: {_path(tokens)}"
+                )
             parent = parent[token]
         else:
             if not isinstance(parent, Mapping) or token not in parent:
-                raise SpecValidationError(f"structured repair path disappeared: {_path(tokens)}")
+                raise SpecValidationError(
+                    f"structured repair path disappeared: {_path(tokens)}"
+                )
             parent = parent[token]
     leaf = tokens[-1]
     if isinstance(leaf, int):
         if not isinstance(parent, list) or not 0 <= leaf < len(parent):
-            raise SpecValidationError(f"structured repair list path disappeared: {_path(tokens)}")
+            raise SpecValidationError(
+                f"structured repair list path disappeared: {_path(tokens)}"
+            )
         parent[leaf] = value
     else:
         if not isinstance(parent, dict):
-            raise SpecValidationError(f"structured repair object path disappeared: {_path(tokens)}")
+            raise SpecValidationError(
+                f"structured repair object path disappeared: {_path(tokens)}"
+            )
         parent[leaf] = value
 
 
@@ -140,41 +147,136 @@ def _validate(
     expected = schema.get("type")
     if expected == "string":
         if not isinstance(value, str):
-            return [_diag("invalid_type", tokens, message="expected string", expected="string", observed=value)]
+            return [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected string",
+                    expected="string",
+                    observed=value,
+                )
+            ]
         minimum = int(schema.get("minLength", 0) or 0)
         if minimum and len(value) < minimum:
-            return [_diag("min_length", tokens, message="string is shorter than schema minimum", expected={"minLength": minimum}, observed=value)]
+            return [
+                _diag(
+                    "min_length",
+                    tokens,
+                    message="string is shorter than schema minimum",
+                    expected={"minLength": minimum},
+                    observed=value,
+                )
+            ]
         maximum = schema.get("maxLength")
         if maximum is not None and len(value) > int(maximum):
-            return [_diag("max_length", tokens, message="string exceeds schema maximum", expected={"maxLength": maximum}, observed=value)]
+            return [
+                _diag(
+                    "max_length",
+                    tokens,
+                    message="string exceeds schema maximum",
+                    expected={"maxLength": maximum},
+                    observed=value,
+                )
+            ]
         return []
+
     if expected == "boolean":
-        return [] if isinstance(value, bool) else [_diag("invalid_type", tokens, message="expected boolean", expected="boolean", observed=value)]
+        return (
+            []
+            if isinstance(value, bool)
+            else [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected boolean",
+                    expected="boolean",
+                    observed=value,
+                )
+            ]
+        )
     if expected == "number":
         valid = isinstance(value, (int, float)) and not isinstance(value, bool)
-        return [] if valid else [_diag("invalid_type", tokens, message="expected number", expected="number", observed=value)]
+        return (
+            []
+            if valid
+            else [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected number",
+                    expected="number",
+                    observed=value,
+                )
+            ]
+        )
     if expected == "integer":
         valid = isinstance(value, int) and not isinstance(value, bool)
-        return [] if valid else [_diag("invalid_type", tokens, message="expected integer", expected="integer", observed=value)]
+        return (
+            []
+            if valid
+            else [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected integer",
+                    expected="integer",
+                    observed=value,
+                )
+            ]
+        )
+
     if expected == "array":
         if not isinstance(value, list):
-            return [_diag("invalid_type", tokens, message="expected array", expected="array", observed=value)]
+            return [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected array",
+                    expected="array",
+                    observed=value,
+                )
+            ]
         diagnostics: list[dict[str, Any]] = []
         minimum = schema.get("minItems")
         if minimum is not None and len(value) < int(minimum):
-            diagnostics.append(_diag("min_items", tokens, message="array is shorter than schema minimum", expected={"minItems": minimum}, observed=value))
+            diagnostics.append(
+                _diag(
+                    "min_items",
+                    tokens,
+                    message="array is shorter than schema minimum",
+                    expected={"minItems": minimum},
+                    observed=value,
+                )
+            )
         maximum = schema.get("maxItems")
         if maximum is not None and len(value) > int(maximum):
-            diagnostics.append(_diag("max_items", tokens, message="array exceeds schema maximum", expected={"maxItems": maximum}, observed=value))
+            diagnostics.append(
+                _diag(
+                    "max_items",
+                    tokens,
+                    message="array exceeds schema maximum",
+                    expected={"maxItems": maximum},
+                    observed=value,
+                )
+            )
         item_schema = schema.get("items")
         if isinstance(item_schema, Mapping):
             for index, item in enumerate(value):
                 diagnostics.extend(_validate(item, item_schema, (*tokens, index)))
         return diagnostics
+
     if expected == "object":
         if not isinstance(value, Mapping):
-            return [_diag("invalid_type", tokens, message="expected object", expected="object", observed=value)]
-        diagnostics: list[dict[str, Any]] = []
+            return [
+                _diag(
+                    "invalid_type",
+                    tokens,
+                    message="expected object",
+                    expected="object",
+                    observed=value,
+                )
+            ]
+        diagnostics = []
         properties = schema.get("properties")
         properties = properties if isinstance(properties, Mapping) else {}
         required = schema.get("required")
@@ -193,7 +295,9 @@ def _validate(
                     )
         for key, child_schema in properties.items():
             if key in value and isinstance(child_schema, Mapping):
-                diagnostics.extend(_validate(value[key], child_schema, (*tokens, str(key))))
+                diagnostics.extend(
+                    _validate(value[key], child_schema, (*tokens, str(key)))
+                )
         additional = schema.get("additionalProperties", True)
         known = set(properties)
         if additional is False:
@@ -211,8 +315,11 @@ def _validate(
         elif isinstance(additional, Mapping):
             for key, child in value.items():
                 if key not in known:
-                    diagnostics.extend(_validate(child, additional, (*tokens, str(key))))
+                    diagnostics.extend(
+                        _validate(child, additional, (*tokens, str(key)))
+                    )
         return diagnostics
+
     return []
 
 
@@ -269,6 +376,8 @@ def _target_for(diagnostic: Mapping[str, Any]) -> tuple[str | int, ...]:
 
 
 def _repair_schema(target_schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Constrain only the replacement leaf, never the already-valid section."""
+
     return {
         "type": "object",
         "properties": {"repair": dict(target_schema)},
@@ -306,7 +415,15 @@ def _repair_messages(
     }
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)},
+        {
+            "role": "user",
+            "content": json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+        },
     ]
 
 
@@ -340,8 +457,14 @@ def _generate_section_exact(
         stage=f"game_design_{section_id}",
         prompt=prompt,
         media_paths=media_paths,
-        metadata={"repair_strategy": "json_path_exact", **dict(trace_metadata or {})},
+        metadata={
+            "repair_strategy": "json_path_exact",
+            **dict(trace_metadata or {}),
+        },
     )
+
+    # Keep the first turn permissive. Its valid siblings are valuable host state even
+    # when one field has the wrong JSON type.
     raw = router.generate_text(
         "planner",
         _design._section_messages(
@@ -361,12 +484,22 @@ def _generate_section_exact(
     diagnostics = _diagnostics(candidate, fields=fields, properties=properties)
     trace.record_attempt(
         raw_output=raw,
-        validation_error=None if not diagnostics else "; ".join(str(item["message"]) for item in diagnostics),
+        validation_error=(
+            None
+            if not diagnostics
+            else "; ".join(str(item["message"]) for item in diagnostics)
+        ),
         candidate=candidate,
         accepted=candidate if not diagnostics else None,
-        context={"section_id": section_id, "repair_strategy": "json_path_exact"},
+        context={
+            "section_id": section_id,
+            "repair_strategy": "json_path_exact",
+        },
         diagnostics=diagnostics,
-        repair_scope=[str(item.get("repair_scope") or item.get("path")) for item in diagnostics],
+        repair_scope=[
+            str(item.get("repair_scope") or item.get("path"))
+            for item in diagnostics
+        ],
     )
     if not diagnostics and candidate is not None:
         result = {field: candidate[field] for field in fields}
@@ -374,8 +507,6 @@ def _generate_section_exact(
         return result
 
     if candidate is None:
-        # There is no trustworthy subtree to freeze. Delegate one full field-local
-        # recovery to the established contract rather than fabricating a section root.
         return _base._generate_section_local(
             router,
             prompt=prompt,
@@ -384,21 +515,34 @@ def _generate_section_exact(
             properties=properties,
             research=research,
             media_paths=media_paths,
-            trace_metadata={"fallback_from": "json_path_exact", **dict(trace_metadata or {})},
+            trace_metadata={
+                "fallback_from": "json_path_exact",
+                **dict(trace_metadata or {}),
+            },
         )
 
     working = dict(candidate)
-    stagnant: dict[tuple[str, str], int] = {}
     while diagnostics:
         diagnostic = diagnostics[0]
         target = _target_for(diagnostic)
+
         if diagnostic.get("code") == "unexpected_field" and target:
             if not _delete_at(working, target):
-                raise SpecValidationError(f"failed to remove unexpected field at {_path(target)}")
-            diagnostics = _diagnostics(working, fields=fields, properties=properties)
+                raise SpecValidationError(
+                    f"failed to remove unexpected field at {_path(target)}"
+                )
+            diagnostics = _diagnostics(
+                working,
+                fields=fields,
+                properties=properties,
+            )
             trace.record_attempt(
                 raw_output="<host-delete-unexpected-field>",
-                validation_error=None if not diagnostics else "; ".join(str(item["message"]) for item in diagnostics),
+                validation_error=(
+                    None
+                    if not diagnostics
+                    else "; ".join(str(item["message"]) for item in diagnostics)
+                ),
                 candidate=working,
                 accepted=working if not diagnostics else None,
                 context={
@@ -413,8 +557,6 @@ def _generate_section_exact(
 
         target_schema = _schema_at(properties, target)
         if not target or not isinstance(target_schema, Mapping):
-            # A root-level shape failure cannot be localized safely. The established
-            # field-local path is the narrowest trustworthy fallback.
             return _base._generate_section_local(
                 router,
                 prompt=prompt,
@@ -423,16 +565,13 @@ def _generate_section_exact(
                 properties=properties,
                 research=research,
                 media_paths=media_paths,
-                trace_metadata={"fallback_from": "json_path_exact", **dict(trace_metadata or {})},
+                trace_metadata={
+                    "fallback_from": "json_path_exact",
+                    **dict(trace_metadata or {}),
+                },
             )
 
         key = _diagnostic_key(diagnostic)
-        stagnant[key] = stagnant.get(key, 0) + 1
-        if stagnant[key] > _STAGNATION_LIMIT:
-            raise SpecValidationError(
-                f"{section_id} exact-path repair made no validator progress at {key[0]} ({key[1]})"
-            )
-
         current = _value_at(working, target)
         repair_raw = router.generate_text(
             "planner",
@@ -446,30 +585,44 @@ def _generate_section_exact(
                 research=research,
             ),
             media_paths=media_paths,
-            response_format="text",
-            response_schema=None,
+            response_format="json",
+            response_schema=_repair_schema(target_schema),
             enable_tools=False,
         )
         value = _repair_value(repair_raw)
-        if value is not _MISSING:
-            _set_at(working, target, value)
+        if value is _MISSING:
+            raise SpecValidationError(
+                f"{section_id} exact-path repair returned no replacement at {_path(target)}"
+            )
+        _set_at(working, target, value)
 
-        next_diagnostics = _diagnostics(working, fields=fields, properties=properties)
+        next_diagnostics = _diagnostics(
+            working,
+            fields=fields,
+            properties=properties,
+        )
         next_keys = {_diagnostic_key(item) for item in next_diagnostics}
-        for old_key in tuple(stagnant):
-            if old_key not in next_keys:
-                stagnant.pop(old_key, None)
+        if key in next_keys:
+            raise SpecValidationError(
+                f"{section_id} exact-path repair made no validator progress at "
+                f"{key[0]} ({key[1]})"
+            )
+
         diagnostics = next_diagnostics
         trace.record_attempt(
             raw_output=repair_raw,
-            validation_error=None if not diagnostics else "; ".join(str(item["message"]) for item in diagnostics),
+            validation_error=(
+                None
+                if not diagnostics
+                else "; ".join(str(item["message"]) for item in diagnostics)
+            ),
             candidate=working,
             accepted=working if not diagnostics else None,
             context={
                 "section_id": section_id,
                 "repair_strategy": "json_path_exact",
                 "repair_path": _path(target),
-                "stagnation_count": stagnant.get(key, 0),
+                "validator_frontier_changed": True,
             },
             diagnostics=diagnostics,
             repair_scope=[_path(target)],
@@ -483,5 +636,6 @@ def _generate_section_exact(
 __all__ = [
     "_diagnostics",
     "_generate_section_exact",
+    "_repair_schema",
     "_schema_at",
 ]
