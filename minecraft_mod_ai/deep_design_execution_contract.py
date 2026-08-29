@@ -15,7 +15,6 @@ and proposal construction; only its bounded design-generation primitive is repla
 import hashlib
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from functools import wraps
 from typing import Any
 
 from . import evidence_first_planning as _evidence
@@ -118,7 +117,7 @@ def _research_first_generate_once(
         )
 
     # In a sharded request the host JSON envelope is provenance, while fallback_prompt
-    # is the exact lossless user page.  Research and design must consume the latter.
+    # is the exact lossless user page. Research and design must consume the latter.
     design_prompt = str(fallback_prompt or authoritative_prompt)
     research = agentic.collect_pre_design_research(router, design_prompt)
     design = agentic.generate_sectioned_game_design(
