@@ -8,6 +8,10 @@ from minecraft_mod_ai import platform_optimizer
 from minecraft_mod_ai.llama_structured_decode_policy import _structured_repair_request
 from minecraft_mod_ai.model_adapters import GenerationRequest
 from minecraft_mod_ai.pipeline_hardening_v2 import _search_variants
+from minecraft_mod_ai.pipeline_hardening_v4 import (
+    _strict_provenance_repair,
+    bounded_seed_query,
+)
 
 
 def test_generated_task_name_gets_bounded_semantic_search_variant() -> None:
@@ -151,3 +155,88 @@ def test_structured_retry_uses_compact_repair_context_not_original_task() -> Non
     assert repaired.media_paths == ()
     assert repaired.tools == ()
     assert repaired.tool_choice is None
+
+
+def test_seed_query_stays_bounded_and_keeps_domain_terms() -> None:
+    prompt = (
+        "Please create Minecraft Fabric generated implementation planning semantic task "
+        "for an AlienPlanetInteraction system with oxygen gravity radiation survival "
+        + ("generic planning implementation module " * 200)
+    )
+    design = {
+        "title": "Alien Planet Survival",
+        "pitch": "Explore toxic planets with oxygen and gravity hazards.",
+        "modules": [
+            {
+                "name": "OxygenGravityController",
+                "kind": "survival_system",
+                "reason": "oxygen gravity radiation atmosphere",
+            }
+        ],
+    }
+    query = bounded_seed_query(prompt, design)
+
+    assert 0 < len(query) <= 320
+    lowered = query.casefold()
+    assert "alien" in lowered
+    assert "planet" in lowered
+    assert "oxygen" in lowered
+    assert "gravity" in lowered
+    assert "implementation" not in lowered
+    assert "generated" not in lowered
+
+
+def test_provenance_filter_never_invents_missing_evidence_refs() -> None:
+    note = {
+        "claims": [
+            {"claim": "grounded", "evidence_refs": ["page:1"]},
+            {"claim": "uncited", "evidence_refs": []},
+            {"claim": "foreign", "evidence_refs": ["page:999"]},
+        ],
+        "gaps": [],
+        "procedures": [],
+        "sufficient": True,
+    }
+    repaired = _strict_provenance_repair(
+        note,
+        allowed_refs=("page:1", "page:2"),
+    )
+
+    assert repaired["claims"] == [
+        {"claim": "grounded", "evidence_refs": ["page:1"]}
+    ]
+    assert all(
+        claim["evidence_refs"]
+        for claim in repaired["claims"]
+    )
+    assert any("omitted" in gap for gap in repaired["gaps"])
+
+
+def test_machine_pack_metadata_preserves_three_value_contract(monkeypatch) -> None:
+    from minecraft_mod_ai import platform_live_discovery as live
+
+    monkeypatch.setattr(
+        live,
+        "_mojang_pack_versions",
+        lambda version: ("61", "46"),
+    )
+    monkeypatch.setattr(
+        live,
+        "_mojang_target_url",
+        lambda version: f"https://piston-meta.mojang.com/{version}.json",
+    )
+
+    data_pack, resource_pack, source_url = live._official_pack_versions("1.21.1")
+    assert data_pack == "61"
+    assert resource_pack == "46"
+    assert source_url.endswith("/1.21.1.json")
+
+
+def test_lossless_page_research_is_installed() -> None:
+    from minecraft_mod_ai import agentic_pre_design_rag as rag
+
+    assert getattr(
+        rag._research_document_domain,
+        "_mmm_lossless_page_research",
+        False,
+    )
