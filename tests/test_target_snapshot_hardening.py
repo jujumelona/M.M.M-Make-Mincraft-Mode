@@ -180,17 +180,9 @@ def test_live_lowering_preserves_validated_retain_only_plan_with_base_content(
         ),
     )
 
-    class Planner:
-        def _plan_in_session(self, prompt, *, media_paths=(), existing_input_sha256=""):
-            return result
+    lowered = central_contract.lower_live_modules(result)
 
-    module = SimpleNamespace(
-        CompleteGameDesignPlanner=Planner,
-        SpecValidationError=SpecValidationError,
-    )
-    central_contract._install_live_module_lowering(module)
-
-    assert Planner()._plan_in_session(prompt) is result
+    assert lowered is result
     assert result.modules == ()
 
 
