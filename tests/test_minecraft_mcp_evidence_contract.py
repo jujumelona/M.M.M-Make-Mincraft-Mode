@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from minecraft_mod_ai import agentic_research_game_design
 from minecraft_mod_ai import minecraft_mcp_evidence_contract as mcp_contract
-from minecraft_mod_ai.central_research import normalize_research_brief
+from minecraft_mod_ai.central_research import (
+    normalize_research_brief,
+    retrieve_domain_evidence,
+)
 from minecraft_mod_ai.minecraft_mcp_evidence_contract import (
     collect_external_minecraft_evidence,
 )
@@ -64,7 +66,7 @@ def test_minecraft_technical_domains_gain_external_mcp_route() -> None:
 
 
 def test_official_research_does_not_eagerly_invoke_external_mcp(monkeypatch) -> None:
-    """Optional MCP evidence must not own the pre-design provider critical path."""
+    """Optional MCP evidence must not own the official/project RAG critical path."""
 
     def fail_if_called(*args, **kwargs):
         del args, kwargs
@@ -76,7 +78,7 @@ def test_official_research_does_not_eagerly_invoke_external_mcp(monkeypatch) -> 
         fail_if_called,
     )
     brief = normalize_research_brief("Add a custom Fabric entity", {"title": "x"})
-    result = agentic_research_game_design.retrieve_domain_evidence(brief)
+    result = retrieve_domain_evidence(brief)
     assert isinstance(result, dict)
     assert result.get("domains")
 
