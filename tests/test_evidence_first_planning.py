@@ -408,32 +408,18 @@ def test_validated_multiloader_inventory_binds_leaf_anchors(tmp_path) -> None:
     assert plan["ownership_context"]["module_id"] == "common"
 
 
-def test_host_task_pages_do_not_replay_full_prompt_or_accept_graph_rewrites() -> None:
+def test_host_task_pages_are_fully_host_owned_and_do_not_call_the_model() -> None:
     prompt = "Add a block with a very specific observable behavior."
     plan = compile_evidence_first_plan(prompt, _design("block"))
     batches = _evidence_host_batches(plan)
 
     class Router:
         def __init__(self) -> None:
-            self.requests: list[dict[str, object]] = []
+            self.calls = 0
 
-        def generate_text(self, _role, messages, **_kwargs):
-            request = json.loads(messages[-1]["content"])
-            self.requests.append(request)
-            skeleton = copy.deepcopy(request["template_skeleton"])
-            module = skeleton["modules"][0]
-            module["depends_on"] = ["model_invented_dependency"]
-            module["config"] = {
-                "implementation_notes": "bounded detail",
-                "evidence_task": {"task_id": "model_owned"},
-            }
-            skeleton["modules"].append(
-                {
-                    **copy.deepcopy(module),
-                    "module_id": "model_invented_id",
-                }
-            )
-            return json.dumps(skeleton)
+        def generate_text(self, *_args, **_kwargs):  # pragma: no cover - must not run
+            self.calls += 1
+            raise AssertionError("host-owned task pages must not call the model")
 
     router = Router()
     modules, _assets, _tests = CompleteGameDesignPlanner(router)._expand_batches(
@@ -450,8 +436,8 @@ def test_host_task_pages_do_not_replay_full_prompt_or_accept_graph_rewrites() ->
         module = by_id[task["task_id"]]
         assert module.depends_on == tuple(task["depends_on"])
         assert module.config["evidence_task"]["task_id"] == task["task_id"]
-        assert module.config["model_fill"] == {"implementation_notes": "bounded detail"}
-    assert all(request["request"] != prompt for request in router.requests)
+        assert module.config["model_fill"] == {}
+    assert router.calls == 0
 
 
 def test_retain_only_task_batch_surface_is_empty(tmp_path) -> None:
