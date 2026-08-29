@@ -9,46 +9,38 @@ import minecraft_mod_ai.llama_structured_decode_policy as decode_policy
 import minecraft_mod_ai.llama_tuning_pipeline as tuning_pipeline
 
 
-def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> None:
-    """Concurrent plans carry evidence through arguments, never process-global context."""
+def test_forced_rag_context_is_isolated_across_concurrent_plans() -> None:
+    """Concurrent plans carry bounded evidence through arguments, never global context."""
 
     barrier = threading.Barrier(2)
     observed: dict[str, str] = {}
     failures: list[BaseException] = []
     lock = threading.Lock()
 
-    def materialize(domain_id, raw_value):
-        barrier.wait(timeout=2)
-        owner = str(raw_value["forced_project_rag"]["owner"])
-        with lock:
-            observed[owner] = owner
-        return {
-            "schema_version": "mmm/research-evidence-document-v1",
-            "domain_id": domain_id,
-            "document_sha256": f"sha256:{owner}",
-        }
-
-    monkeypatch.setattr(
-        forced_rag,
-        "_materialize_domain_evidence_document",
-        materialize,
-    )
-
     def run(owner: str) -> None:
         deterministic = {
             "forced_project_rag": {
-                "owner": owner,
+                "schema_version": "mmm/forced-pre-design-rag-v2",
+                "research_sha256": f"sha256:{owner}",
+                "domain_count": 1,
+                "query_count": 1,
+                "project_source_count": 1,
                 "domains": [
                     {
                         "domain_id": "request",
-                        "queries": [{"query": owner}],
+                        "queries": [{"query": owner, "raw": owner * 20_000}],
                     }
                 ],
             }
         }
         try:
+            barrier.wait(timeout=2)
             result = agentic._domain_evidence_slice("request", deterministic)
-            assert result["evidence_document"]["document_sha256"] == f"sha256:{owner}"
+            receipt = result["forced_project_rag"]
+            assert receipt["research_sha256"] == f"sha256:{owner}"
+            assert owner * 20_000 not in str(result)
+            with lock:
+                observed[owner] = str(receipt["research_sha256"])
         except BaseException as exc:
             failures.append(exc)
 
@@ -62,7 +54,10 @@ def test_forced_rag_context_is_isolated_across_concurrent_plans(monkeypatch) -> 
         thread.join(timeout=3)
 
     assert not failures
-    assert observed == {"alpha": "alpha", "beta": "beta"}
+    assert observed == {
+        "alpha": "sha256:alpha",
+        "beta": "sha256:beta",
+    }
     assert not hasattr(forced_rag, "_FORCED_RAG_CONTEXT")
     assert not hasattr(forced_rag, "harden_pre_design_research")
 
