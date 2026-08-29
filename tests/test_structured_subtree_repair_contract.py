@@ -54,7 +54,7 @@ def _run(router: _Router):
     )
 
 
-def test_nested_leaf_repair_preserves_valid_siblings():
+def test_nested_leaf_repair_preserves_valid_siblings_and_constrains_leaf_schema():
     router = _Router(
         [
             json.dumps(
@@ -79,11 +79,66 @@ def test_nested_leaf_repair_preserves_valid_siblings():
     assert len(router.calls) == 2
     assert router.calls[0]["response_format"] == "text"
     assert router.calls[0]["response_schema"] is None
-    assert router.calls[1]["response_format"] == "text"
-    assert router.calls[1]["response_schema"] is None
+    assert router.calls[1]["response_format"] == "json"
+    repair_schema = router.calls[1]["response_schema"]
+    assert repair_schema["properties"]["repair"] == {"type": "number"}
     payload = json.loads(router.calls[1]["messages"][1]["content"])
     assert payload["repair_path"] == "$.section.machine.power.max"
     assert payload["frozen_parent_context"]["min"] == 2
+
+
+def test_progression_type_failure_is_repaired_as_array_without_regenerating_siblings():
+    properties = {
+        "progression": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+        },
+        "combat": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+        "mod_context": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+    }
+    router = _Router(
+        [
+            json.dumps(
+                {
+                    "section": {
+                        "progression": "level up",
+                        "combat": {"boss": ["server authoritative"]},
+                        "mod_context": {"scope": ["maple progression"]},
+                    }
+                }
+            ),
+            json.dumps({"repair": ["level up", "enhance equipment"]}),
+        ]
+    )
+
+    result = _generate_section_exact(
+        router,
+        prompt="메이플 스타일 성장 시스템을 설계해줘",
+        section_id="systems_and_progression",
+        fields=("progression", "combat", "mod_context"),
+        properties=properties,
+        research={},
+        media_paths=(),
+        trace_metadata=None,
+    )
+
+    assert result["progression"] == ["level up", "enhance equipment"]
+    assert result["combat"] == {"boss": ["server authoritative"]}
+    assert result["mod_context"] == {"scope": ["maple progression"]}
+    assert len(router.calls) == 2
+    assert router.calls[1]["response_schema"]["properties"]["repair"]["type"] == "array"
 
 
 def test_unexpected_nested_field_is_deleted_without_model_repair_call():
@@ -108,7 +163,7 @@ def test_unexpected_nested_field_is_deleted_without_model_repair_call():
     assert len(router.calls) == 1
 
 
-def test_same_validator_predicate_cannot_oscillate_forever():
+def test_same_validator_predicate_fails_after_one_nonprogressing_leaf_repair():
     router = _Router(
         [
             json.dumps(
@@ -121,13 +176,11 @@ def test_same_validator_predicate_cannot_oscillate_forever():
                     }
                 }
             ),
-            json.dumps({"repair": "bad-1"}),
-            json.dumps({"repair": "bad-2"}),
-            json.dumps({"repair": "bad-3"}),
+            json.dumps({"repair": "still-not-a-number"}),
         ]
     )
 
     with pytest.raises(SpecValidationError, match="made no validator progress"):
         _run(router)
 
-    assert len(router.calls) == 4
+    assert len(router.calls) == 2
