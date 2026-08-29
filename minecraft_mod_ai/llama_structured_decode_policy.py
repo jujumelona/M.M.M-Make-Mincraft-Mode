@@ -3,14 +3,13 @@ from __future__ import annotations
 import copy
 import json
 import os
-import sys
 from collections.abc import Mapping
 from dataclasses import is_dataclass, replace
 from functools import wraps
 from typing import Any
 
-_MARKER = "_mmm_server_constrained_structured_decode_v1"
-_RETRY_MARKER = "_mmm_structured_generation_retry_v2"
+_MARKER = "_mmm_server_constrained_structured_decode_v2"
+_VALIDATION_MARKER = "_mmm_structured_generation_validation_v3"
 
 
 def _bounded_section_output_tokens(adapter: Any) -> int:
@@ -49,11 +48,10 @@ def _copy_request_with(request: Any, **changes: Any) -> Any:
 
 
 def _structured_repair_request(request: Any, exc: Any) -> Any:
-    """Build one compact serialization-repair turn without replaying the task.
+    """Legacy compatibility helper.
 
-    The invalid output is embedded verbatim rather than JSON-escaping it. This keeps
-    already-valid values visible to the repair model while validator diagnostics and
-    the response schema remain host-owned constraints.
+    Structured planner generation no longer invokes a hidden model repair turn. Callers
+    that explicitly use this helper still receive the old compact request shape.
     """
 
     schema = getattr(request, "response_schema", None)
@@ -64,9 +62,21 @@ def _structured_repair_request(request: Any, exc: Any) -> Any:
         "invalid_output (verbatim):\n"
         f"{invalid_output}\n"
         "validation_errors:\n"
-        + json.dumps(errors, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        + json.dumps(
+            errors,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
         + "\nresponse_schema:\n"
-        + json.dumps(schema_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        + json.dumps(
+            schema_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
     )
     messages = (
         {
@@ -92,70 +102,55 @@ def _structured_repair_request(request: Any, exc: Any) -> Any:
 
 
 def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
-    """Validate JSON and perform one compact local serialization repair if needed."""
+    """Validate one constrained generation without launching a hidden repair turn."""
 
-    from .structured_output import (
-        StructuredOutputValidationError,
-        validate_structured_output,
-    )
+    from .structured_output import validate_structured_output
 
     adapter_type = llama_cpp_module.LlamaCppAdapter
     current = adapter_type.generate
-    if getattr(current, _RETRY_MARKER, False):
+    if getattr(current, _VALIDATION_MARKER, False):
         return
 
     @wraps(current)
     def generate(self: Any, request: Any) -> str:
+        output = current(self, request)
         if (
             getattr(request, "response_format", None) != "json"
             or bool(getattr(request, "tools", ()))
         ):
-            return current(self, request)
-
-        output = current(self, request)
-        try:
-            return validate_structured_output(
-                output,
-                response_format=request.response_format,
-                response_schema=request.response_schema,
-            )
-        except StructuredOutputValidationError as exc:
-            repair_request = _structured_repair_request(request, exc)
-            original_chars = sum(
-                len(str(message.get("content", "") or ""))
-                for message in getattr(request, "messages", ())
-                if isinstance(message, Mapping)
-            )
-            repair_chars = sum(
-                len(str(message.get("content", "") or ""))
-                for message in repair_request.messages
-                if isinstance(message, Mapping)
-            )
-            print(
-                "llama structured recovery: compact local repair once",
-                f" errors={len(exc.errors)}",
-                f" original_input_chars={original_chars}",
-                f" repair_input_chars={repair_chars}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-        repaired = current(self, repair_request)
+            return output
         return validate_structured_output(
-            repaired,
-            response_format=repair_request.response_format,
-            response_schema=repair_request.response_schema,
+            output,
+            response_format=request.response_format,
+            response_schema=request.response_schema,
         )
 
-    setattr(generate, _RETRY_MARKER, True)
-    generate._mmm_local_structured_repair = True  # type: ignore[attr-defined]
+    setattr(generate, _VALIDATION_MARKER, True)
+    generate._mmm_structured_validation_only = True  # type: ignore[attr-defined]
     adapter_type.generate = generate
 
 
-def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Keep structured validation host-owned and bind bounded JSON page budgets."""
+def _apply_llama_json_schema(
+    payload: dict[str, Any],
+    request: Any,
+) -> None:
+    """Put the host-owned JSON schema onto llama.cpp's chat-completions payload."""
 
-    if getattr(hardware_module, "__name__", "") == "minecraft_mod_ai.llama_server_hardware_policy":
+    if getattr(request, "response_format", None) != "json":
+        return
+    payload["response_format"] = {"type": "json_object"}
+    schema = getattr(request, "response_schema", None)
+    if isinstance(schema, Mapping):
+        payload["json_schema"] = copy.deepcopy(dict(schema))
+
+
+def bind_structured_decode_policy(hardware_module: Any) -> None:
+    """Bind real server-side schema constraints and bounded JSON page budgets."""
+
+    if (
+        getattr(hardware_module, "__name__", "")
+        == "minecraft_mod_ai.llama_server_hardware_policy"
+    ):
         from .model_adapters import llama_cpp_adapter
 
         _bind_structured_generation_retry(llama_cpp_adapter)
@@ -166,15 +161,13 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
 
     @wraps(current)
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
-        result = current(adapter, request)
-        if getattr(request, "response_format", None) == "json":
-            result = dict(result)
-            for key in ("response_format", "json_schema", "grammar"):
-                result.pop(key, None)
+        result = dict(current(adapter, request))
         if result.get("tools"):
             return result
         if getattr(request, "response_format", None) != "json":
             return result
+
+        _apply_llama_json_schema(result, request)
 
         schema = getattr(request, "response_schema", None)
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
@@ -206,6 +199,7 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
 
 
 __all__ = [
+    "_apply_llama_json_schema",
     "_bind_structured_generation_retry",
     "_structured_repair_request",
     "bind_structured_decode_policy",
