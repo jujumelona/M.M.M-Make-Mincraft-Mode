@@ -407,18 +407,12 @@ def _install_post_bootstrap_contracts() -> None:
     )
     from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
-    from .external_procedural_skill_contract import (
-        install as install_external_procedural_skill,
-    )
     from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import (
         install as install_minecraft_mcp_evidence,
     )
     from .research_bottleneck_runtime import (
         install as install_research_bottleneck_runtime,
-    )
-    from .small_model_execution_extensions_contract import (
-        install as install_small_model_execution_extensions,
     )
     from .small_model_hybrid_search_contract import (
         install as install_small_model_hybrid_search,
@@ -461,10 +455,8 @@ def _install_post_bootstrap_contracts() -> None:
     install_active_repair_verifier(agentic_optimization_contract)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
-    install_small_model_execution_extensions()
     install_long_run_resilience()
     qwen_agent_family_contract.install()
     install_small_model_research_extensions()
     install_unified_trajectory_memory()
     install_adaptive_retrieval(model_router)
-    install_external_procedural_skill()
