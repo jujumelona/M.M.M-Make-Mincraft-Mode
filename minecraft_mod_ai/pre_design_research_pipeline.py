@@ -15,6 +15,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
+from .agent_capability_context import target_neutral_research_scope
 from .central_research import normalize_research_brief, retrieve_domain_evidence
 from .external_procedural_skill_contract import attach_procedural_skillbank
 from .minecraft_knowledge_contract import (
@@ -488,13 +489,14 @@ def collect_design_research(
             deterministic_sources=list(deterministic),
         )
         try:
-            raw_note = agentic._research_domain_with_agent(
-                router,
-                prompt=prompt,
-                domain=domain,
-                deterministic=deterministic,
-                trace_metadata=trace_metadata,
-            )
+            with target_neutral_research_scope():
+                raw_note = agentic._research_domain_with_agent(
+                    router,
+                    prompt=prompt,
+                    domain=domain,
+                    deterministic=deterministic,
+                    trace_metadata=trace_metadata,
+                )
         except Exception as exc:
             diagnostic = _exception_payload(exc)
             _emit_research_diagnostic(
