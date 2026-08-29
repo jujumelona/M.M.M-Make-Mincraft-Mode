@@ -6,10 +6,6 @@ from .runtime_finalization import finalize_runtime
 initialize_runtime()
 finalize_runtime()
 
-from .runtime_contracts import install_runtime_contracts
-
-install_runtime_contracts()
-
 from .api import (
     ChatReply,
     CompleteChatReply,
