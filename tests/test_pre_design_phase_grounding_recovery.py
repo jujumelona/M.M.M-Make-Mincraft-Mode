@@ -88,7 +88,7 @@ def test_strict_research_validator_rejects_missing_or_unissued_refs() -> None:
             allowed_refs=allowed,
         )
 
-    with pytest.raises(agentic.SpecValidationError, match="outside bounded input"):
+    with pytest.raises(agentic.SpecValidationError, match="unverified evidence_refs"):
         agentic._validate_sufficient_research(
             {
                 "sufficient": True,
