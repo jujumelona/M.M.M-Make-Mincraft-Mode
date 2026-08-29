@@ -3,7 +3,9 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
+from minecraft_mod_ai import agentic_pre_design_rag as project_rag
 from minecraft_mod_ai import agentic_research_game_design as agentic
+from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 from minecraft_mod_ai.pre_design_research_pipeline import (
     _bounded_model_view,
     _design_request_fits,
@@ -11,7 +13,7 @@ from minecraft_mod_ai.pre_design_research_pipeline import (
 )
 
 
-def test_pre_design_research_parallelizes_evidence_and_defers_donor_search(
+def test_pre_design_research_parallelizes_all_evidence_and_defers_donor_search(
     monkeypatch,
 ) -> None:
     brief = {
@@ -22,9 +24,9 @@ def test_pre_design_research_parallelizes_evidence_and_defers_donor_search(
             }
         ]
     }
-    monkeypatch.setattr(agentic, "normalize_research_brief", lambda *_args: brief)
+    monkeypatch.setattr(pipeline, "normalize_research_brief", lambda *_args: brief)
 
-    barrier = threading.Barrier(2)
+    barrier = threading.Barrier(3)
 
     def official(_brief):
         barrier.wait(timeout=2)
@@ -34,15 +36,23 @@ def test_pre_design_research_parallelizes_evidence_and_defers_donor_search(
         barrier.wait(timeout=2)
         return {"status": "available", "kind": "radar"}
 
-    monkeypatch.setattr(agentic, "retrieve_domain_evidence", official)
-    monkeypatch.setattr(agentic, "collect_technology_radar", radar)
-    monkeypatch.setattr(
-        agentic,
-        "collect_ecosystem_seed_bundle",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("donor discovery must not run before design freeze")
-        ),
-    )
+    def forced(_router, _brief):
+        barrier.wait(timeout=2)
+        return {
+            "schema_version": "mmm/forced-pre-design-rag-v2",
+            "domain_count": 1,
+            "query_count": 1,
+            "domains": [
+                {
+                    "domain_id": "fabric_api",
+                    "queries": [{"query": "Fabric API target behavior"}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(pipeline, "retrieve_domain_evidence", official)
+    monkeypatch.setattr(pipeline, "collect_technology_radar", radar)
+    monkeypatch.setattr(project_rag, "_forced_rag_bundle", forced)
 
     seen_deterministic = []
 
@@ -61,9 +71,10 @@ def test_pre_design_research_parallelizes_evidence_and_defers_donor_search(
 
     payload = collect_design_research(object(), "build a Fabric mechanic")
 
-    assert set(payload["deterministic"]) == {"official_rag", "technology_radar"}
+    expected = {"official_rag", "technology_radar", "forced_project_rag"}
+    assert set(payload["deterministic"]) == expected
     assert "ecosystem_discovery" not in payload["deterministic"]
-    assert seen_deterministic == [{"official_rag", "technology_radar"}]
+    assert seen_deterministic == [expected]
     assert payload["domain_notes"][0]["domain_id"] == "fabric_api"
     assert "deferred" in payload["method"]["planning_search"]
 
@@ -122,6 +133,10 @@ def _oversized_research_payload() -> dict:
         "deterministic": {
             "official_rag": {"status": "available", "evidence_sha256": "official"},
             "technology_radar": {"status": "available", "radar_sha256": "radar"},
+            "forced_project_rag": {
+                "status": "available",
+                "research_sha256": "project",
+            },
         },
         "domain_notes": notes,
         "errors": [],
@@ -165,7 +180,12 @@ def test_small_research_payload_is_not_compacted() -> None:
         "domain_notes": [
             {
                 "domain_id": "request",
-                "claims": [{"claim": "Fabric registration is available", "evidence_refs": []}],
+                "claims": [
+                    {
+                        "claim": "Fabric registration is available",
+                        "evidence_refs": [],
+                    }
+                ],
                 "gaps": [],
                 "next_queries": [],
                 "sufficient": True,
