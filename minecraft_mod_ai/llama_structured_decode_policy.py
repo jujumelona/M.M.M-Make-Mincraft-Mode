@@ -8,7 +8,9 @@ from dataclasses import is_dataclass, replace
 from functools import wraps
 from typing import Any
 
-_MARKER = "_mmm_server_constrained_structured_decode_v2"
+from .llama_schema_transport import project_llama_transport_schema
+
+_MARKER = "_mmm_server_constrained_structured_decode_v3"
 _VALIDATION_MARKER = "_mmm_structured_generation_validation_v3"
 
 
@@ -33,7 +35,7 @@ def _is_qwen35(adapter: Any) -> bool:
         if isinstance(extra, Mapping)
         else ""
     )
-    return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
+    return "qwen3.5" in model_id or "qwen3.5" in filename
 
 
 def _copy_request_with(request: Any, **changes: Any) -> Any:
@@ -48,11 +50,7 @@ def _copy_request_with(request: Any, **changes: Any) -> Any:
 
 
 def _structured_repair_request(request: Any, exc: Any) -> Any:
-    """Legacy compatibility helper.
-
-    Structured planner generation no longer invokes a hidden model repair turn. Callers
-    that explicitly use this helper still receive the old compact request shape.
-    """
+    """Legacy compatibility helper; normal planner execution does not call it."""
 
     schema = getattr(request, "response_schema", None)
     invalid_output = str(getattr(exc, "output", "") or "")
@@ -102,7 +100,7 @@ def _structured_repair_request(request: Any, exc: Any) -> Any:
 
 
 def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
-    """Validate one constrained generation without launching a hidden repair turn."""
+    """Validate one generation without launching a hidden model repair turn."""
 
     from .structured_output import validate_structured_output
 
@@ -130,22 +128,46 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
     adapter_type.generate = generate
 
 
+def _remove_native_json_constraints(payload: dict[str, Any]) -> None:
+    """Remove llama.cpp sampler grammar controls while leaving host validation intact."""
+
+    for key in ("response_format", "json_schema", "grammar"):
+        payload.pop(key, None)
+
+
 def _apply_llama_json_schema(
     payload: dict[str, Any],
     request: Any,
+    *,
+    adapter: Any | None = None,
 ) -> None:
-    """Put the host-owned JSON schema onto llama.cpp's chat-completions payload."""
+    """Apply only sampler-safe transport constraints.
+
+    Qwen3.5 is intentionally excluded from llama.cpp native JSON grammar. Its chat
+    template/reasoning prefill can conflict with grammar initialization before decoding.
+    The original, complete schema remains on the host request and is validated after the
+    model returns.
+    """
 
     if getattr(request, "response_format", None) != "json":
         return
-    payload["response_format"] = {"type": "json_object"}
+
+    if adapter is not None and _is_qwen35(adapter):
+        _remove_native_json_constraints(payload)
+        return
+
     schema = getattr(request, "response_schema", None)
-    if isinstance(schema, Mapping):
-        payload["json_schema"] = copy.deepcopy(dict(schema))
+    projected = project_llama_transport_schema(schema)
+    payload.pop("grammar", None)
+    payload["response_format"] = {"type": "json_object"}
+    if projected:
+        payload["json_schema"] = projected
+    else:
+        payload.pop("json_schema", None)
 
 
 def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Bind real server-side schema constraints and bounded JSON page budgets."""
+    """Separate llama.cpp transport constraints from host-owned schema validation."""
 
     if (
         getattr(hardware_module, "__name__", "")
@@ -167,17 +189,16 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
         if getattr(request, "response_format", None) != "json":
             return result
 
-        _apply_llama_json_schema(result, request)
+        qwen35 = _is_qwen35(adapter)
+        _apply_llama_json_schema(result, request, adapter=adapter)
 
         schema = getattr(request, "response_schema", None)
         properties = schema.get("properties") if isinstance(schema, Mapping) else None
         bounded_section = isinstance(properties, Mapping) and "section" in properties
-        qwen35_game_design = (
-            isinstance(properties, Mapping)
-            and "game_design" in properties
-            and _is_qwen35(adapter)
-        )
-        if schema is None or bounded_section or qwen35_game_design:
+
+        # Qwen3.5 structured calls must not emit a reasoning prefix before host parsing.
+        # This applies to research pages as well as final design sections.
+        if qwen35 or schema is None or bounded_section:
             result["reasoning_effort"] = "none"
             result["chat_template_kwargs"] = {"enable_thinking": False}
             result.pop("thinking_budget_tokens", None)
@@ -193,6 +214,7 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
 
     setattr(payload, _MARKER, True)
     payload._mmm_server_constrained_structured_decode = True  # type: ignore[attr-defined]
+    payload._mmm_qwen35_host_validated_json = True  # type: ignore[attr-defined]
     payload._mmm_bounded_section_thinking_budget_v2 = True  # type: ignore[attr-defined]
     payload._mmm_bounded_section_thinking_budget_v1 = True  # type: ignore[attr-defined]
     hardware_module._server_payload = payload
@@ -201,6 +223,8 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
 __all__ = [
     "_apply_llama_json_schema",
     "_bind_structured_generation_retry",
+    "_is_qwen35",
+    "_remove_native_json_constraints",
     "_structured_repair_request",
     "bind_structured_decode_policy",
 ]
