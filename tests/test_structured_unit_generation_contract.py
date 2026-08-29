@@ -6,6 +6,7 @@ import pytest
 
 from minecraft_mod_ai import llama_structured_decode_policy as decode_policy
 from minecraft_mod_ai import structured_unit_generation_contract as units
+from minecraft_mod_ai.spec import SpecValidationError
 from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 
 
@@ -38,10 +39,9 @@ class _FakeRouter:
         return self.outputs.pop(0)
 
 
-def test_control_jsonpath_is_not_accepted_as_string_content(monkeypatch):
+def test_control_jsonpath_is_rejected_without_regeneration(monkeypatch):
     monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
     monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
-    monkeypatch.setenv("MMM_STRUCTURED_UNIT_ATTEMPTS", "3")
 
     router = _FakeRouter(
         [
@@ -49,24 +49,20 @@ def test_control_jsonpath_is_not_accepted_as_string_content(monkeypatch):
             '{"section":{"status":"ready"}}',
         ]
     )
-    result = units._generate_section_units(
-        router,
-        prompt="make the requested mod",
-        section_id="module_status",
-        fields=["status"],
-        properties={"status": {"type": "string", "minLength": 1}},
-        research={},
-        media_paths=(),
-        trace_metadata=None,
-    )
 
-    assert result == {"status": "ready"}
-    assert len(router.calls) == 2
-    assert all(call["response_format"] == "json" for call in router.calls)
-    assert all(call["enable_tools"] is False for call in router.calls)
-    for call in router.calls:
-        schema = call["response_schema"]
-        assert schema["properties"]["section"]["required"] == ["status"]
+    with pytest.raises(SpecValidationError, match="control metadata/JSONPath"):
+        units._generate_section_units(
+            router,
+            prompt="make the requested mod",
+            section_id="module_status",
+            fields=["status"],
+            properties={"status": {"type": "string", "minLength": 1}},
+            research={},
+            media_paths=(),
+            trace_metadata=None,
+        )
+
+    assert len(router.calls) == 1
 
 
 def test_section_is_generated_one_top_level_field_per_request(monkeypatch):
@@ -101,11 +97,44 @@ def test_section_is_generated_one_top_level_field_per_request(monkeypatch):
         "title": "Alien Planet",
         "progression": ["scan", "adapt", "escape"],
     }
+    assert len(router.calls) == 2
     required = [
         call["response_schema"]["properties"]["section"]["required"]
         for call in router.calls
     ]
     assert required == [["title"], ["progression"]]
+    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(call["enable_tools"] is False for call in router.calls)
+    assert all(
+        "JSON_SCHEMA=" in call["messages"][0]["content"]
+        for call in router.calls
+    )
+
+
+def test_invalid_field_schema_does_not_launch_second_generation(monkeypatch):
+    monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
+    monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
+
+    router = _FakeRouter(
+        [
+            '{"section":{"status":[]}}',
+            '{"section":{"status":"ready"}}',
+        ]
+    )
+
+    with pytest.raises((SpecValidationError, StructuredOutputValidationError)):
+        units._generate_section_units(
+            router,
+            prompt="make the requested mod",
+            section_id="module_status",
+            fields=["status"],
+            properties={"status": {"type": "string"}},
+            research={},
+            media_paths=(),
+            trace_metadata=None,
+        )
+
+    assert len(router.calls) == 1
 
 
 def test_structured_adapter_validation_does_not_launch_hidden_repair():

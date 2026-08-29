@@ -1,52 +1,70 @@
 from __future__ import annotations
 
-"""Route structured planner sections through bounded constrained field generation."""
+"""Install single-pass constrained field generation on the planner's live section path.
 
-from contextvars import ContextVar
+The historical public installer name is retained for bootstrap compatibility only. The
+implementation no longer imports, installs, or falls back to subtree/field repair code.
+"""
+
+import sys
+from collections.abc import Mapping, Sequence
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 from . import agentic_research_game_design as _design
-from . import structured_repair_contract as _base
 from . import structured_unit_generation_contract as _units
 
 _INSTALLED = False
-_IN_UNIT_GENERATION: ContextVar[bool] = ContextVar(
-    "mmm_structured_field_unit_generation",
-    default=False,
-)
+_MARKER = "_mmm_single_pass_constrained_section_v1"
 
 
 def install_structured_subtree_repair_dispatch_contract() -> None:
-    """Install field-unit generation while preserving the public bootstrap hook."""
+    """Bind the live planner directly to constrained field-unit generation."""
 
     global _INSTALLED
     if _INSTALLED:
         return
-    if not getattr(_design._generate_section, "_mmm_field_local_repair", False):
-        raise RuntimeError(
-            "field-unit structured generation requires installed field-local contract"
-        )
 
-    original = _base._generate_section_local
-    if getattr(original, "_mmm_field_unit_dispatch", False):
+    original = _design._generate_section
+    if getattr(original, _MARKER, False):
         _INSTALLED = True
         return
 
     @wraps(original)
-    def dispatch(*args: Any, **kwargs: Any):
-        if _IN_UNIT_GENERATION.get():
-            return original(*args, **kwargs)
-        token = _IN_UNIT_GENERATION.set(True)
-        try:
-            return _units._generate_section_units(*args, **kwargs)
-        finally:
-            _IN_UNIT_GENERATION.reset(token)
+    def generate_section(
+        router: Any,
+        *,
+        prompt: str,
+        section_id: str,
+        fields: Sequence[str],
+        properties: Mapping[str, Any],
+        research: Mapping[str, Any],
+        media_paths: Sequence[str | Path],
+        trace_metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        return _units._generate_section_units(
+            router,
+            prompt=prompt,
+            section_id=section_id,
+            fields=fields,
+            properties=properties,
+            research=research,
+            media_paths=media_paths,
+            trace_metadata=trace_metadata,
+        )
 
-    dispatch._mmm_field_unit_dispatch = True
-    dispatch._mmm_exact_subtree_dispatch = True
-    dispatch._mmm_field_local_fallback = original
-    _base._generate_section_local = dispatch
+    setattr(generate_section, _MARKER, True)
+    generate_section.__wrapped__ = original  # type: ignore[attr-defined]
+    _design._generate_section = generate_section
+
+    # Repair stale import-by-value edges without installing any repair implementation.
+    for name, module in tuple(sys.modules.items()):
+        if not name.startswith("minecraft_mod_ai.") or module is None:
+            continue
+        if getattr(module, "_generate_section", None) is original:
+            setattr(module, "_generate_section", generate_section)
+
     _INSTALLED = True
 
 

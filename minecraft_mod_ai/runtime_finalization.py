@@ -137,8 +137,8 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .semantic_requirement_authority import install_semantic_requirement_authority
+        from .semantic_single_pass_contract import install as install_semantic_single_pass
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
-        from .structured_repair_contract import install_structured_repair_contract
         from .structured_subtree_repair_dispatch_contract import (
             install_structured_subtree_repair_dispatch_contract,
         )
@@ -186,6 +186,8 @@ def finalize_runtime() -> None:
         install_evidence_task_receipts()
         install_evidence_request_guard()
         install_semantic_requirement_authority()
+        # Semantic interpretation is compiled once and then host-validated atomically.
+        install_semantic_single_pass()
         install_planner_graph_integrity()
         install_deep_design_execution()
         install_evidence_obligation_contract()
@@ -198,7 +200,8 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        install_structured_repair_contract()
+        # Bind schema-constrained field generation directly; repair contracts are not
+        # installed on the normal planner path.
         install_structured_subtree_repair_dispatch_contract()
         install_implementation_kind_boundary(
             complete_spec_module=complete_spec,

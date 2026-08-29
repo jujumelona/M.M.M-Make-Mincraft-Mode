@@ -75,14 +75,16 @@ def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
     assert len(router.calls) == 1
     request = json.loads(router.calls[0]["messages"][1]["content"])
     assert len(request["host_owned_clauses"]) == 2
-    assert router.calls[0]["kwargs"]["response_format"] == "text"
-    assert router.calls[0]["kwargs"]["response_schema"] is None
+    assert "repair_diagnostics" not in request
+    assert router.calls[0]["kwargs"]["response_format"] == "json"
+    assert router.calls[0]["kwargs"]["response_schema"]["required"] == ["requirements"]
     assert {item["capability"] for item in catalog["requirements"]} == {
         "resource.gathering",
         "world.travel",
     }
     assert catalog["semantic_audit"]["normal_model_turns"] == 1
-    assert catalog["semantic_audit"]["max_repair_turns"] == 1
+    assert catalog["semantic_audit"]["max_repair_turns"] == 0
+    assert catalog["semantic_audit"]["generation_policy"] == "single_pass_constrained"
     assert catalog["semantic_audit"]["source_grounding_owner"] == "host"
 
 
@@ -168,7 +170,7 @@ def test_two_requirements_in_one_clause_receive_distinct_exact_host_spans():
     )
 
 
-def test_only_invalid_clause_is_repaired_after_batched_first_pass():
+def test_invalid_clause_rejects_atomic_batch_without_second_model_call():
     prompt = "Players gather crystals. Players open a portal."
     router = TextRouter(
         [
@@ -186,22 +188,16 @@ def test_only_invalid_clause_is_repaired_after_batched_first_pass():
         ]
     )
 
-    catalog = build_approved_requirement_catalog(prompt, router)
+    with pytest.raises(
+        EvidencePlanError,
+        match="semantic compilation did not satisfy the host contract",
+    ):
+        build_approved_requirement_catalog(prompt, router)
 
-    assert len(router.calls) == 2
-    repair_request = json.loads(router.calls[1]["messages"][1]["content"])
-    assert [item["source_clause_index"] for item in repair_request["host_owned_clauses"]] == [1]
-    assert any(
-        item["error_code"] == "REQ_CAPABILITY_ID"
-        for item in repair_request["repair_diagnostics"]
-    )
-    assert {item["capability"] for item in catalog["requirements"]} == {
-        "resource.gathering",
-        "progression.portal",
-    }
+    assert len(router.calls) == 1
 
 
-def test_unrelated_anchor_is_repaired_instead_of_becoming_fake_provenance():
+def test_unrelated_anchor_is_rejected_without_repair_call():
     prompt = "Players gather crystals."
     router = TextRouter(
         [
@@ -210,13 +206,16 @@ def test_unrelated_anchor_is_repaired_instead_of_becoming_fake_provenance():
         ]
     )
 
-    catalog = build_approved_requirement_catalog(prompt, router)
+    with pytest.raises(
+        EvidencePlanError,
+        match="semantic compilation did not satisfy the host contract",
+    ):
+        build_approved_requirement_catalog(prompt, router)
 
-    assert len(router.calls) == 2
-    assert catalog["requirements"][0]["source_span"]["text"] == "gather crystals"
+    assert len(router.calls) == 1
 
 
-def test_repeated_invalid_semantics_fail_after_one_targeted_repair():
+def test_invalid_semantics_make_exactly_one_model_call():
     prompt = "Players discover a hidden mechanic."
     invalid = {
         "requirements": [
@@ -227,11 +226,11 @@ def test_repeated_invalid_semantics_fail_after_one_targeted_repair():
 
     with pytest.raises(
         EvidencePlanError,
-        match="semantic repair batch could not satisfy the host contract",
+        match="semantic compilation did not satisfy the host contract",
     ):
         build_approved_requirement_catalog(prompt, router)
 
-    assert len(router.calls) == 2
+    assert len(router.calls) == 1
 
 
 def test_model_cannot_promote_design_provenance_or_dependencies():
