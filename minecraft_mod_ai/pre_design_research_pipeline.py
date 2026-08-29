@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-"""Fast design-evidence collection without premature donor discovery.
+"""Single-owner pre-design evidence collection.
 
 Pre-design research answers Minecraft/Fabric feasibility and compatibility questions.
 Third-party donor discovery belongs to the frozen-design reuse phase, where the query is
-specific enough to be useful. Keeping those phases separate avoids searching the same
-Modrinth/GitHub space twice and prevents implementation candidates from biasing design.
+specific enough to be useful. Official evidence, technology evidence, and project/code RAG
+are independent retrieval lanes and are collected together here; no legacy planner wrapper
+or ContextVar is required to inject one of them later.
 
 The research ledger and the model working view are deliberately separate. The host keeps
 all collected notes losslessly. A design worker receives only the view that fits the live
-planner request budget, following the same full-state/bounded-view architecture used by
-production coding agents. The runtime context budget, not a fixed item count or similarity
+planner request budget. The runtime context budget, not a fixed item count or similarity
 threshold, is the authority for how much detail can be projected into a model turn.
 """
 
@@ -20,7 +20,11 @@ from copy import deepcopy
 from typing import Any
 
 
-_DETERMINISTIC_STAGES = ("official_rag", "technology_radar")
+_DETERMINISTIC_STAGES = (
+    "official_rag",
+    "technology_radar",
+    "forced_project_rag",
+)
 
 
 def _planner_config(router: Any) -> Any | None:
@@ -42,8 +46,6 @@ def _design_request_fits(
 
     config = _planner_config(router)
     if config is None:
-        # Lightweight test/dummy routers do not expose a runtime context. There is no
-        # model request to size in that case, so preserve the complete research payload.
         return True
 
     from .model_context_budget import _canonical_size, request_message_budget
@@ -213,9 +215,6 @@ def _bounded_model_view(
     view["domain_notes"] = []
     view["model_view_sha256"] = ""
 
-    # Preserve broad coverage before spending space on detail. The list itself is mutated
-    # transactionally so packing cost grows with the serialized request, not with repeated
-    # copies of the entire research ledger.
     indexed_notes: list[dict[str, Any]] = view["domain_notes"]
     for note in domain_notes:
         indexed_notes.append(_note_summary(note, agentic=agentic))
@@ -223,9 +222,6 @@ def _bounded_model_view(
             indexed_notes.pop()
             break
 
-    # Spend remaining capacity on exact evidence in source order. There is no fixed top-N
-    # or relevance threshold: each claim/gap/query is admitted only when all actual design
-    # section envelopes remain within the active planner input budget.
     for index, note in enumerate(domain_notes[: len(indexed_notes)]):
         if isinstance(note, Mapping):
             _enrich_note_detail(agentic, router, prompt, view, index, note)
@@ -239,9 +235,6 @@ def _bounded_model_view(
         }
     )
     if not _design_request_fits(agentic, router, prompt, view):
-        # A pathological domain-id index can itself exceed a tiny runtime context. Keep
-        # only its lossless hash/count receipt in the model view; the complete list and
-        # all evidence remain in host_research_ledger.
         brief = dict(view["research_brief"])
         brief.pop("domain_ids", None)
         brief["summary"] = ""
@@ -263,14 +256,9 @@ def collect_design_research(
     *,
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collect design evidence, then run domain agents serially over one local model slot.
+    """Collect all pre-design evidence once, then run domain agents over one model slot."""
 
-    The two deterministic evidence sources are independent and therefore run concurrently.
-    Domain-agent turns remain serial: local llama deployments commonly expose one inference
-    slot, so concurrent domain turns only create queueing/VRAM pressure instead of reducing
-    wall time.
-    """
-
+    from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
 
     research_brief = agentic.normalize_research_brief(
@@ -296,9 +284,12 @@ def collect_design_research(
             page_size=50,
             page_builder=agentic.build_technology_radar,
         )
+        futures["forced_project_rag"] = executor.submit(
+            project_rag._forced_rag_bundle,
+            router,
+            research_brief,
+        )
 
-        # Read in a stable order so receipts/error ordering stays deterministic even though
-        # the independent work itself runs concurrently.
         for stage in _DETERMINISTIC_STAGES:
             try:
                 deterministic[stage] = futures[stage].result()
@@ -327,10 +318,10 @@ def collect_design_research(
         "domain_notes": domain_notes,
         "errors": errors,
         "method": {
-            "reason_act": "ReAct-style stage-scoped research tool loop",
-            "adaptive_retrieval": "Self-RAG/FLARE-style retrieve when evidence is missing",
-            "corrective_retrieval": "CRAG-style official/project evidence correction",
-            "reflection": "Reflexion-style gap feedback across research passes",
+            "reason_act": "stage-scoped research tool loop",
+            "adaptive_retrieval": "retrieve when design evidence is missing",
+            "corrective_retrieval": "official/project/code evidence correction",
+            "reflection": "gap feedback across research passes",
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
         },
     }
