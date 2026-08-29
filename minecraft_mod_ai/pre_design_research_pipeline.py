@@ -22,6 +22,7 @@ from .minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
 )
+from .pre_design_local_project_evidence import collect_local_project_evidence
 from .research_coordinator import collect_technology_radar
 from .retrieval import BUILTIN_CORPUS, OfficialCorpusIndex
 from .small_model_execution_extensions_contract import compose_research_skillbank
@@ -531,8 +532,7 @@ def collect_design_research(
             research_brief,
         )
         futures["forced_project_rag"] = executor.submit(
-            project_rag._forced_rag_bundle,
-            router,
+            collect_local_project_evidence,
             research_brief,
         )
         if target_frozen:
@@ -622,7 +622,7 @@ def collect_design_research(
         "method": {
             "reason_act": "target-neutral host evidence collection before design",
             "adaptive_retrieval": "lossless evidence documents are paged to the model within bounded context",
-            "corrective_retrieval": "official/project/code evidence is retained in the host ledger",
+            "corrective_retrieval": "official and local-project evidence are independently retained in the host ledger",
             "reflection": "final sufficient claims must cite exact host-owned evidence page refs",
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
             "minecraft_knowledge": (
