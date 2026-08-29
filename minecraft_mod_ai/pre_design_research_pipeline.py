@@ -23,6 +23,7 @@ from .minecraft_knowledge_contract import (
     evaluate_route_coverage,
 )
 from .research_coordinator import collect_technology_radar
+from .retrieval import BUILTIN_CORPUS, OfficialCorpusIndex
 from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
 
@@ -113,6 +114,91 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
         {"title": "pre-design research"},
         candidate,
     )
+
+
+def _target_neutral_official_evidence(
+    research_brief: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Expose every reviewed target-neutral primary-source document with its content.
+
+    No ranking cutoff is applied here. The host owns the full corpus and the downstream
+    evidence-document protocol performs bounded, lossless paging. Exact target-specific
+    symbols and coordinates remain intentionally absent until target freeze.
+    """
+
+    index = OfficialCorpusIndex(BUILTIN_CORPUS)
+    documents = [
+        {
+            **document.public_metadata(),
+            "content": document.content,
+        }
+        for document in index.documents
+    ]
+    domains: list[dict[str, Any]] = []
+    raw_domains = research_brief.get("domains", [])
+    if isinstance(raw_domains, list):
+        for domain in raw_domains:
+            if not isinstance(domain, Mapping):
+                continue
+            domains.append(
+                {
+                    "domain_id": str(domain.get("domain_id", "")),
+                    "queries": list(domain.get("queries", []))
+                    if isinstance(domain.get("queries"), list)
+                    else [],
+                    "documents": documents,
+                }
+            )
+    return {
+        "schema_version": "mmm/pre-design-official-evidence-v1",
+        "status": "available",
+        "target_scope": "target_neutral",
+        "target_frozen": False,
+        "corpus_snapshot_hash": index.snapshot_hash,
+        "document_count": len(documents),
+        "domains": domains,
+    }
+
+
+def _domain_document_evidence(
+    agentic: Any,
+    domain_id: str,
+    deterministic: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        str(source): agentic._domain_source_value(domain_id, value)
+        for source, value in deterministic.items()
+    }
+
+
+def _validate_document_grounding(
+    agentic: Any,
+    project_rag: Any,
+    note: Mapping[str, Any],
+    document: Mapping[str, Any],
+    *,
+    domain_id: str,
+) -> None:
+    pages = project_rag._read_evidence_pages(document)
+    allowed_refs = frozenset(
+        str(page.get("page_ref", "")).strip()
+        for page in pages
+        if str(page.get("page_ref", "")).strip()
+    )
+    try:
+        agentic._validate_sufficient_research(note, allowed_refs=allowed_refs)
+    except agentic.SpecValidationError as exc:
+        _emit_research_diagnostic(
+            "domain_grounding_failure",
+            domain_id=domain_id,
+            allowed_page_refs=sorted(allowed_refs),
+            note=note,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise PreDesignResearchFailure(
+            "Pre-design research synthesis cited evidence outside the host-owned "
+            f"lossless evidence pages for domain {domain_id!r}: {exc}"
+        ) from exc
 
 
 def _planner_config(router: Any) -> Any | None:
@@ -440,7 +526,10 @@ def collect_design_research(
         max_workers=len(active_stages),
         thread_name_prefix="mmm-design-evidence",
     ) as executor:
-        futures["official_rag"] = executor.submit(retrieve_domain_evidence, research_brief)
+        futures["official_rag"] = executor.submit(
+            retrieve_domain_evidence if target_frozen else _target_neutral_official_evidence,
+            research_brief,
+        )
         futures["forced_project_rag"] = executor.submit(
             project_rag._forced_rag_bundle,
             router,
@@ -489,14 +578,31 @@ def collect_design_research(
             deterministic_sources=list(deterministic),
         )
         try:
+            domain_evidence = _domain_document_evidence(
+                agentic,
+                domain_id,
+                deterministic,
+            )
+            document = project_rag._materialize_domain_evidence_document(
+                domain_id,
+                domain_evidence,
+            )
             with target_neutral_research_scope():
-                raw_note = agentic._research_domain_with_agent(
+                raw_note = project_rag._research_document_domain(
+                    agentic,
                     router,
                     prompt=prompt,
                     domain=domain,
-                    deterministic=deterministic,
+                    document=document,
                     trace_metadata=trace_metadata,
                 )
+            _validate_document_grounding(
+                agentic,
+                project_rag,
+                raw_note,
+                document,
+                domain_id=domain_id,
+            )
         except Exception as exc:
             diagnostic = _exception_payload(exc)
             _emit_research_diagnostic(
@@ -514,10 +620,10 @@ def collect_design_research(
         "domain_notes": domain_notes,
         "errors": errors,
         "method": {
-            "reason_act": "target-neutral tool-enabled research before design",
-            "adaptive_retrieval": "research tools close target-neutral evidence gaps",
-            "corrective_retrieval": "official/project/code evidence correction",
-            "reflection": "gap feedback until sufficient evidence or exact fixed point",
+            "reason_act": "target-neutral host evidence collection before design",
+            "adaptive_retrieval": "lossless evidence documents are paged to the model within bounded context",
+            "corrective_retrieval": "official/project/code evidence is retained in the host ledger",
+            "reflection": "final sufficient claims must cite exact host-owned evidence page refs",
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
             "minecraft_knowledge": (
                 "version-sensitive routes are explicit deferred work until platform target freeze"
