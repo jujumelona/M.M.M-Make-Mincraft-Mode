@@ -180,18 +180,9 @@ def finalize_runtime() -> None:
         install_llama_finish_reason(llama_cpp_adapter)
         install_prefill_calibration_strictness(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
-        assert_runtime_hot_paths(
-            mcp_transport_pool_module=mcp_transport_pool,
-            external_mcp_router_module=external_mcp_router,
-            research_rag_performance_module=research_rag_performance,
-        )
-        verify_installed_wrappers()
-        run_context_budget_preflight()
-        run_runtime_live_path_preflight()
-        run_runtime_preflight()
+
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
-
         install_evidence_request_guard()
         install_semantic_requirement_authority()
         install_planner_graph_integrity()
@@ -217,6 +208,19 @@ def finalize_runtime() -> None:
             orchestrator_module=complete_orchestrator,
             work_graph_module=work_graph,
         )
+
+        # Validate the runtime only after every late installer has mutated its owner.
+        # Earlier checks observed an intermediate graph and could not detect breakage in
+        # deep-design, evidence, target-grounding, production, or feedback wrappers.
+        assert_runtime_hot_paths(
+            mcp_transport_pool_module=mcp_transport_pool,
+            external_mcp_router_module=external_mcp_router,
+            research_rag_performance_module=research_rag_performance,
+        )
+        verify_installed_wrappers()
+        run_context_budget_preflight()
+        run_runtime_live_path_preflight()
+        run_runtime_preflight()
 
         _FINALIZED = True
         _FINALIZING = False
