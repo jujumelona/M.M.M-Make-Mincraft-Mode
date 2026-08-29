@@ -15,13 +15,19 @@ from .spec import SpecValidationError
 _LIVE_NON_SOURCE_KINDS = frozenset({"integration"})
 
 
-def install(*, game_design_module: Any) -> None:
+def install(
+    *,
+    game_design_module: Any,
+    complete_planner_module: Any | None = None,
+) -> None:
     """Install only the central platform-selection owner.
 
-    Live-target lowering is an explicit post-planning call from ``complete_planner``;
-    it must not be implemented by rebinding ``CompleteGameDesignPlanner._plan_in_session``.
+    ``complete_planner_module`` is accepted only for bootstrap call compatibility and is
+    deliberately unused. Live-target lowering is an explicit post-planning call from
+    ``complete_planner``; it must not rebind ``CompleteGameDesignPlanner._plan_in_session``.
     """
 
+    del complete_planner_module
     _install_central_target_choice(game_design_module)
 
 
