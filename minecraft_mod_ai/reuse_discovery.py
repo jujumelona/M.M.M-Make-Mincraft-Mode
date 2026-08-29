@@ -164,7 +164,7 @@ def _append_query(values: list[str], seen: set[str], raw: Any) -> None:
 def _ontology_search_queries(capability: str) -> tuple[str, ...]:
     """Return retrieval phrasing without changing the approved capability graph.
 
-    The authoritative planner owns which capabilities exist.  This helper only
+    The authoritative planner owns which capabilities exist. This helper only
     translates one already-approved capability into catalogue-friendly queries.
     Canonical ontology matches are therefore safe retrieval aliases, not scope
     expansion or dependency invention.
@@ -172,9 +172,6 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
 
     values: list[str] = []
     seen: set[str] = set()
-    for query in search_queries_for_capability(capability):
-        _append_query(values, seen, query)
-
     semantic = " ".join(
         _TOKEN.findall(
             capability.replace(".", " ")
@@ -195,13 +192,19 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
                 continue
             for query in search_queries_for_capability(node.capability_id):
                 _append_query(values, seen, query)
+
+    # If ontology resolution found no known authored concept, preserve the exact
+    # approved capability as a compact dynamic search phrase. For canonical IDs
+    # this is also a harmless deduplicated fallback.
+    for query in search_queries_for_capability(capability):
+        _append_query(values, seen, query)
     return tuple(values)
 
 
 def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
     """Build bounded provider queries while preserving unbounded semantic scope.
 
-    The bound here is an external-I/O budget, not a planning cardinality cap.  The
+    The bound here is an external-I/O budget, not a planning cardinality cap. The
     most reusable, ontology-backed search phrases are deliberately placed first so
     long source clauses cannot crowd them out of the provider budget.
     """
