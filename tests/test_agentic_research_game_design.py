@@ -176,7 +176,11 @@ def test_research_domain_accepts_only_host_issued_grounding_ref(monkeypatch) -> 
     assert call["enable_tools"] is True
     rendered = json.dumps(call["messages"], ensure_ascii=False)
     assert "intentionally" in rendered
-    assert '"evidence_ref": "forced_project_rag"' in rendered
+    payload = json.loads(call["messages"][-1]["content"])
+    assert (
+        payload["deterministic_evidence_receipts"]["forced_project_rag"]["evidence_ref"]
+        == "forced_project_rag"
+    )
     assert "evidence_document" not in rendered
 
 
