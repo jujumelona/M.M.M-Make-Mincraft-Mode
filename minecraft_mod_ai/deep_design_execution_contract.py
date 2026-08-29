@@ -2,19 +2,21 @@ from __future__ import annotations
 
 """Bind research-first game design to leaf-granular production execution.
 
-The authored request catalog remains immutable.  Game-design subsystems are derived
+The authored request catalog remains immutable. Game-design subsystems are derived
 implementation obligations beneath those authored requirements: they may refine donor
 search and coder task granularity, but they cannot become new public requirements.
 
-This contract also restores the intended pre-design agentic research path without
-replacing ``GameDesignPlanner.plan``.  The host-owned plan method continues to own
-inventory binding, request freezing, pre-retrieval planning, target/reuse selection,
-and proposal construction; only its bounded design-generation primitive is replaced.
+This contract also restores the intended pre-design research path without replacing
+``GameDesignPlanner.plan``. The host-owned plan method continues to own inventory binding,
+request freezing, pre-retrieval planning, target/reuse selection, and proposal construction;
+only its bounded design-generation primitive is replaced.
 """
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 from . import evidence_first_planning as _evidence
@@ -27,9 +29,26 @@ _TASKS_MARKER = "__mmm_design_leaf_reuse_binding__"
 _COMPILE_MARKER = "__mmm_design_leaf_evidence_plan__"
 _VALIDATE_MARKER = "__mmm_design_leaf_plan_validation__"
 
-_ACTIVE_DESIGN_EXECUTION: ContextVar[tuple[dict[str, Any], ...]] = ContextVar(
+_INDEXED_SOURCE = re.compile(
+    r"^game_design\.(modules|core_loop|progression)\[(\d+)\]$"
+)
+_MAPPING_SOURCE = re.compile(
+    r"^game_design\.(combat|mod_context)\.([^\[]+)\[(\d+)\]$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutionState:
+    facets: tuple[dict[str, Any], ...]
+    by_parent: dict[str, tuple[dict[str, Any], ...]]
+    reuse_refs_by_outcome: dict[str, tuple[str, ...]]
+
+
+_ACTIVE_DESIGN_EXECUTION: ContextVar[
+    _ExecutionState | tuple[dict[str, Any], ...] | None
+] = ContextVar(
     "mmm_active_design_execution_facets",
-    default=(),
+    default=None,
 )
 
 
@@ -105,7 +124,8 @@ def _research_first_generate_once(
 ) -> dict[str, Any]:
     original = _research_first_generate_once.__wrapped__
     from . import agentic_research_game_design as agentic
-    from . import game_design as game_design
+    from . import game_design
+    from .pre_design_research_pipeline import collect_design_research
 
     if not agentic.supports_agentic_research_router(router):
         return original(
@@ -119,7 +139,7 @@ def _research_first_generate_once(
     # In a sharded request the host JSON envelope is provenance, while fallback_prompt
     # is the exact lossless user page. Research and design must consume the latter.
     design_prompt = str(fallback_prompt or authoritative_prompt)
-    research = agentic.collect_pre_design_research(router, design_prompt)
+    research = collect_design_research(router, design_prompt)
     design = agentic.generate_sectioned_game_design(
         game_design,
         router,
@@ -144,6 +164,54 @@ def _reuse_payload(
     return _evidence._reuse_payload(game_design)
 
 
+def _indexed_value(
+    game_design: Mapping[str, Any],
+    field: str,
+    index: int,
+) -> Any:
+    values = game_design.get(field)
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return None
+    return values[index] if 0 <= index < len(values) else None
+
+
+def _design_detail(
+    game_design: Mapping[str, Any],
+    binding: Mapping[str, Any],
+) -> str:
+    explicit = " ".join(str(binding.get("detail") or "").split())
+    if explicit:
+        return explicit
+
+    source = str(binding.get("source") or "")
+    indexed = _INDEXED_SOURCE.fullmatch(source)
+    if indexed:
+        field, raw_index = indexed.groups()
+        value = _indexed_value(game_design, field, int(raw_index))
+        if field == "modules" and isinstance(value, Mapping):
+            return " ".join(
+                str(value.get("reason") or value.get("plugin_id") or "").split()
+            )
+        return " ".join(str(value or "").split())
+
+    mapped = _MAPPING_SOURCE.fullmatch(source)
+    if mapped:
+        field, key, raw_index = mapped.groups()
+        container = game_design.get(field)
+        if isinstance(container, Mapping):
+            values = container.get(key)
+            if isinstance(values, Sequence) and not isinstance(
+                values, (str, bytes, bytearray)
+            ):
+                index = int(raw_index)
+                if 0 <= index < len(values):
+                    return " ".join(str(values[index] or "").split())
+            elif values is not None and int(raw_index) == 0:
+                return " ".join(str(values).split())
+
+    return " ".join(str(binding.get("capability") or "").split())
+
+
 def _execution_context(
     game_design: Mapping[str, Any],
     reuse_plan: Mapping[str, Any] | None,
@@ -163,90 +231,62 @@ def _execution_context(
         if isinstance(item, Mapping) and str(item.get("requirement_id") or "")
     }
 
-    from . import planner_graph_integrity_contract as graph_contract
-
-    facet_details = {
-        str(item.get("capability") or ""): dict(item)
-        for item in graph_contract._design_facets(game_design)
-        if isinstance(item, Mapping) and str(item.get("capability") or "")
-    }
-    reuse = _reuse_payload(game_design, reuse_plan)
     raw_reuse = {
         str(item.get("capability") or ""): dict(item)
-        for item in reuse.get("capabilities", ())
+        for item in _reuse_payload(game_design, reuse_plan).get("capabilities", ())
         if isinstance(item, Mapping) and str(item.get("capability") or "")
     }
+    module_parents = {
+        str(binding.get("requirement_ref") or "")
+        for binding in bindings
+        if isinstance(binding, Mapping)
+        and str(binding.get("source") or "").startswith("game_design.modules[")
+    }
 
-    candidates: list[dict[str, Any]] = []
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
     for binding in bindings:
         if not isinstance(binding, Mapping):
             continue
         requirement_ref = str(binding.get("requirement_ref") or "")
         requirement = requirement_by_id.get(requirement_ref)
         capability = str(binding.get("capability") or "")
-        detail = facet_details.get(capability, {})
-        if requirement is None or not capability or not detail:
+        source = str(binding.get("source") or "")
+        if requirement is None or not capability:
             continue
+        if requirement_ref in module_parents and not source.startswith(
+            "game_design.modules["
+        ):
+            continue
+        key = (requirement_ref, capability)
+        if key in seen:
+            continue
+        seen.add(key)
+
         parent_capability = str(requirement.get("capability") or "").strip()
         if not parent_capability:
             continue
         raw = raw_reuse.get(capability, {})
-        refs: list[str] = []
         mode = str(raw.get("mode") or "fresh").strip().casefold()
+        refs: list[str] = []
         if mode != "fresh":
             refs.extend(_strings(raw.get("component_refs")))
             source_id = str(raw.get("source_id") or "").strip()
             if source_id:
                 refs.append(source_id)
-        candidates.append(
+        output.append(
             {
                 "requirement_ref": requirement_ref,
                 "parent_capability": parent_capability,
                 "capability": capability,
-                "detail": str(detail.get("detail") or capability).strip(),
-                "source": str(detail.get("source") or binding.get("source") or "").strip(),
+                "detail": _design_detail(game_design, binding) or capability,
+                "source": source,
                 "reuse_refs": list(dict.fromkeys(refs)),
                 "reuse_mode": mode,
                 "proof_level": str(raw.get("proof_level") or "").strip(),
             }
         )
-
-    # modules[] is the implementation-leaf index. Core-loop/progression/combat facets
-    # remain donor-search evidence, but once concrete module leaves exist for a parent we
-    # do not generate duplicate coder classes for its narrative descriptions.
-    module_parents = {
-        item["requirement_ref"]
-        for item in candidates
-        if item["source"].startswith("game_design.modules[")
-    }
-    selected = [
-        item
-        for item in candidates
-        if item["requirement_ref"] not in module_parents
-        or item["source"].startswith("game_design.modules[")
-    ]
-
-    seen: set[tuple[str, str]] = set()
-    output: list[dict[str, Any]] = []
-    for item in selected:
-        key = (item["requirement_ref"], item["capability"])
-        if key in seen:
-            continue
-        seen.add(key)
-        output.append(item)
     return tuple(output)
-
-
-def _context_groups(
-    context: Sequence[Mapping[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for raw in context:
-        item = dict(raw)
-        parent = str(item.get("parent_capability") or "")
-        if parent:
-            grouped.setdefault(parent, []).append(item)
-    return grouped
 
 
 def _leaf_outcome(item: Mapping[str, Any]) -> str:
@@ -256,12 +296,43 @@ def _leaf_outcome(item: Mapping[str, Any]) -> str:
     )
 
 
+def _build_execution_state(
+    context: Sequence[Mapping[str, Any]],
+) -> _ExecutionState:
+    facets = tuple(dict(raw) for raw in context)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    refs_by_outcome: dict[str, tuple[str, ...]] = {}
+    for item in facets:
+        parent = str(item.get("parent_capability") or "")
+        if parent:
+            grouped.setdefault(parent, []).append(item)
+        refs = _strings(item.get("reuse_refs"))
+        if refs:
+            refs_by_outcome[_leaf_outcome(item)] = refs
+    return _ExecutionState(
+        facets=facets,
+        by_parent={key: tuple(values) for key, values in grouped.items()},
+        reuse_refs_by_outcome=refs_by_outcome,
+    )
+
+
+def _active_execution_state() -> _ExecutionState:
+    current = _ACTIVE_DESIGN_EXECUTION.get()
+    if isinstance(current, _ExecutionState):
+        return current
+    if isinstance(current, tuple):
+        # Backward-compatible test/extension path. Runtime compile/validation always sets
+        # the pre-indexed state and therefore never pays this conversion per capability.
+        return _build_execution_state(current)
+    return _build_execution_state(())
+
+
 def _semantic_steps_with_design_leaves(
     capability: str,
     branches: Mapping[str, Mapping[str, Any]],
 ) -> tuple[Any, ...]:
     original = _semantic_steps_with_design_leaves.__wrapped__
-    facets = _context_groups(_ACTIVE_DESIGN_EXECUTION.get()).get(str(capability), [])
+    facets = _active_execution_state().by_parent.get(str(capability), ())
     if not facets:
         return original(capability, branches)
 
@@ -328,18 +399,14 @@ def _compile_tasks_with_design_reuse(
     if not tasks:
         return tasks
 
-    refs_by_outcome = {
-        _leaf_outcome(item): list(_strings(item.get("reuse_refs")))
-        for item in _ACTIVE_DESIGN_EXECUTION.get()
-        if _strings(item.get("reuse_refs"))
-    }
+    refs_by_outcome = _active_execution_state().reuse_refs_by_outcome
     if not refs_by_outcome:
         return tasks
 
     output: list[dict[str, Any]] = []
     for raw in tasks:
         task = dict(raw)
-        refs = refs_by_outcome.get(str(task.get("semantic_outcome") or ""), [])
+        refs = refs_by_outcome.get(str(task.get("semantic_outcome") or ""), ())
         if refs:
             task["reuse_refs"] = list(
                 dict.fromkeys([*_strings(task.get("reuse_refs")), *refs])
@@ -366,7 +433,7 @@ def _validate_plan_with_design_context(
     context = _context_from_plan(plan)
     if not context:
         return original(plan, prompt=prompt)
-    token = _ACTIVE_DESIGN_EXECUTION.set(context)
+    token = _ACTIVE_DESIGN_EXECUTION.set(_build_execution_state(context))
     try:
         original(plan, prompt=prompt)
     finally:
@@ -394,7 +461,8 @@ def _compile_plan_with_design_context(
             semantic_router=semantic_router,
         )
 
-    token = _ACTIVE_DESIGN_EXECUTION.set(context)
+    state = _build_execution_state(context)
+    token = _ACTIVE_DESIGN_EXECUTION.set(state)
     try:
         plan = original(
             prompt,
@@ -408,7 +476,7 @@ def _compile_plan_with_design_context(
         _ACTIVE_DESIGN_EXECUTION.reset(token)
 
     enriched = dict(plan)
-    enriched["design_execution_facets"] = [dict(item) for item in context]
+    enriched["design_execution_facets"] = [dict(item) for item in state.facets]
     enriched["plan_sha256"] = ""
     enriched["plan_sha256"] = _evidence._hash_without(enriched, "plan_sha256")
     _evidence.validate_evidence_first_plan(enriched, prompt=prompt)
