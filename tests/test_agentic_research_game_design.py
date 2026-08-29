@@ -108,7 +108,7 @@ def _deterministic_research() -> dict[str, object]:
     }
 
 
-def test_sectioned_game_design_uses_four_host_validated_text_calls() -> None:
+def test_sectioned_game_design_generates_each_field_once_with_exact_schema() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -124,11 +124,29 @@ def test_sectioned_game_design_uses_four_host_validated_text_calls() -> None:
         research=research,
     )
 
-    assert len(router.calls) == 4
+    expected_fields = [
+        "title",
+        "pitch",
+        "core_loop",
+        "progression",
+        "combat",
+        "mod_context",
+        "modules",
+        "assets",
+        "acceptance_tests",
+        "art_direction",
+    ]
+    assert len(router.calls) == len(expected_fields)
     assert all(call["role"] == "planner" for call in router.calls)
-    assert all(call["response_format"] == "text" for call in router.calls)
+    assert all(call["response_format"] == "json" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
-    assert all(call["response_schema"] is None for call in router.calls)
+    for field, call in zip(expected_fields, router.calls, strict=True):
+        schema = call["response_schema"]
+        assert isinstance(schema, dict)
+        section_schema = schema["properties"]["section"]
+        assert list(section_schema["properties"]) == [field]
+        assert section_schema["required"] == [field]
+        assert section_schema["additionalProperties"] is False
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
