@@ -6,6 +6,10 @@ from .runtime_finalization import finalize_runtime
 initialize_runtime()
 finalize_runtime()
 
+from .pipeline_hardening import install_pipeline_hardening
+
+install_pipeline_hardening()
+
 from .api import (
     ChatReply,
     CompleteChatReply,
