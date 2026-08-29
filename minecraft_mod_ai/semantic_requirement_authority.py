@@ -93,14 +93,13 @@ def _clause_records(prompt: str) -> list[dict[str, Any]]:
     return records
 
 
-def _semantic_schema(max_clause_index: int, max_items: int) -> dict[str, Any]:
+def _semantic_schema(max_clause_index: int) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
             "requirements": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": max(1, max_items),
                 "items": {
                     "type": "object",
                     "properties": {
@@ -150,15 +149,22 @@ def _model_messages(
     system = (
         "Interpret only the authored Minecraft-mod requirements in the supplied host clauses. "
         "Return every independent player-visible requirement, and cover every supplied clause "
-        "at least once. Do not choose implementation classes, APIs, persistence/networking "
-        "schemes, UI patterns, boss variants, blueprint systems, or any other design alternative "
-        "unless that behavior is explicitly authored. capability_id must be a meaningful "
-        "lower-case dotted semantic identifier and never an opaque hash. source_clause_index "
-        "must identify the supplied host clause. source_anchor is only a short semantic locator; "
-        "it does NOT need to be a byte-for-byte copy because the host, not the model, owns exact "
-        "source text and offsets. Keep the anchor close to the smallest authored phrase that "
-        "supports the requirement. Return concrete Given/When/Then observable behavior. "
-        "Do not emit provenance roles, local IDs, dependencies, source offsets, or hashes."
+        "at least once. A clause may contain many independent behaviors even without punctuation: "
+        "split conjunctions, sequences, lists, resource flows, state transitions, purchases, "
+        "assembly steps, upgrades, travel phases, combat outcomes, world interactions, and "
+        "persistence-visible outcomes whenever each can be implemented and observed independently. "
+        "Never compress multiple verbs or player-visible outcomes into an umbrella requirement to "
+        "shorten the response. The authored request determines requirement cardinality; there is no "
+        "fixed leaf target or per-clause leaf ceiling. Do not choose implementation classes, APIs, "
+        "persistence/networking schemes, UI patterns, boss variants, blueprint systems, or any other "
+        "design alternative unless that behavior is explicitly authored. capability_id must be a "
+        "meaningful lower-case dotted semantic identifier and never an opaque hash. "
+        "source_clause_index must identify the supplied host clause. source_anchor is only a short "
+        "semantic locator; it does NOT need to be a byte-for-byte copy because the host, not the "
+        "model, owns exact source text and offsets. Keep the anchor close to the smallest authored "
+        "phrase that supports the requirement. Return one concrete Given/When/Then observable "
+        "behavior for each leaf. Do not emit provenance roles, local IDs, dependencies, source "
+        "offsets, or hashes."
     )
     payload = {
         "host_owned_clauses": [
@@ -183,7 +189,7 @@ def _call_semantic_model(
     repair_diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> Any:
     max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
-    parameters = _semantic_schema(max_clause_index, len(clauses) * 8)
+    parameters = _semantic_schema(max_clause_index)
     messages = _model_messages(clauses, repair_diagnostics=repair_diagnostics)
     native = getattr(router, "generate_tool_decision", None)
     if callable(native):
@@ -193,8 +199,8 @@ def _call_semantic_model(
             tool_name="compile_semantic_requirements",
             parameters=parameters,
             description=(
-                "Compile authored clauses into semantic requirements. "
-                "The host will ground all source spans."
+                "Compile every independently observable authored behavior into semantic "
+                "leaf requirements. The host owns exact source grounding."
             ),
         )
     raw = router.generate_text(
@@ -296,10 +302,6 @@ def _ground_source_anchor(
             "model_anchor": anchor,
         }
 
-    # For typo-tolerant alignment, require semantic lexical evidence already present in
-    # the authored clause. This rejects unrelated anchors without imposing an arbitrary
-    # length or ratio cutoff. The model's Given/When/Then boilerplate is intentionally not
-    # used as grounding evidence because generic words such as "player" are not provenance.
     terms = _semantic_terms((anchor, *semantic_context))
     supported_terms = tuple(term for term in terms if term and term in text_form)
     if not supported_terms:
@@ -490,8 +492,6 @@ def _evaluate_batch(
     if global_failure:
         invalid_clauses = set(all_indices)
 
-    # A bad leaf must not erase its valid siblings. The clause remains in the targeted
-    # repair set, but already-grounded leaves survive and are merged with the repaired leaf.
     covered = {int(node["source_clause_index"]) for node in nodes}
     for clause_index in sorted(all_indices - covered):
         invalid_clauses.add(clause_index)
@@ -620,10 +620,7 @@ def _generate_approved_nodes(
             )
         )
 
-    merged = [
-        *first_nodes,
-        *repair_nodes,
-    ]
+    merged = [*first_nodes, *repair_nodes]
     covered = {int(node["source_clause_index"]) for node in merged}
     expected = {int(clause["clause_index"]) for clause in clauses}
     if covered != expected:
