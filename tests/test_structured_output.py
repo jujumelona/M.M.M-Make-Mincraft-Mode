@@ -22,6 +22,25 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
+_RESEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "research_note": {
+            "type": "object",
+            "properties": {
+                "domain_id": {"type": "string"},
+                "claims": {"type": "array", "items": {}},
+                "gaps": {"type": "array", "items": {}},
+                "next_queries": {"type": "array", "items": {}},
+                "sufficient": {"type": "boolean"},
+                "procedures": {"type": "array", "items": {}},
+            },
+            "additionalProperties": True,
+        }
+    },
+    "additionalProperties": True,
+}
+
 
 def _request(*, schema=_SCHEMA) -> GenerationRequest:
     return GenerationRequest(
@@ -103,6 +122,29 @@ def test_schema_failure_console_log_contains_exact_path_schema_and_raw_output(ca
     assert "$[\\\"count\\\"]" in logged
     assert "is not of type 'integer'" in logged
     assert '"required": ["name", "count"]' in logged
+
+
+def test_parser_owned_research_schema_accepts_prose_wrapped_json_for_host_parser(capsys) -> None:
+    output = (
+        "연구 결과입니다.\n"
+        '{"research_note":{"domain_id":"request","claims":["grounded"],'
+        '"gaps":[],"next_queries":[],"sufficient":true}}\n끝'
+    )
+    request = _request(schema=_RESEARCH_SCHEMA)
+
+    assert _validate(output, request) == output
+    logged = capsys.readouterr().out
+    assert "MODEL STRUCTURED OUTPUT RECOVERED:" in logged
+    assert "parser_owned_embedded_json_recovery" in logged
+    assert "grounded" in logged
+    assert "MODEL STRUCTURED OUTPUT FAILURE:" not in logged
+
+
+def test_strict_schema_still_rejects_prose_wrapped_json() -> None:
+    output = 'prefix {"name":"ok","count":1} suffix'
+
+    with pytest.raises(StructuredOutputValidationError):
+        _validate(output)
 
 
 def test_json_without_schema_is_still_strictly_validated() -> None:
