@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import json
+
+from minecraft_mod_ai import agentic_pre_design_rag as paged_rag
+from minecraft_mod_ai import agentic_research_game_design as agentic
+
+
+_PAGE_REF = "sha256:0123456789abcdef#page=1/1"
+
+
+def _qwen_claim_note() -> dict:
+    return {
+        "domain_id": "request",
+        "claims": [
+            {
+                "claim_text": "잡몹에서 보스로 이어지는 성장 구조를 설계할 수 있다.",
+                "evidence_refs": [_PAGE_REF],
+            }
+        ],
+        "gaps": [],
+        "next_queries": [],
+        "procedures": [],
+        "sufficient": True,
+    }
+
+
+def test_qwen_claim_text_is_canonicalized_before_grounding_validation() -> None:
+    raw = json.dumps({"research_note": _qwen_claim_note()}, ensure_ascii=False)
+
+    note = agentic._parse_research_note(raw, "request")
+
+    assert note["claims"] == [
+        {
+            "claim": "잡몹에서 보스로 이어지는 성장 구조를 설계할 수 있다.",
+            "evidence_refs": [_PAGE_REF],
+        }
+    ]
+    agentic._validate_sufficient_research(
+        note,
+        allowed_refs=frozenset({_PAGE_REF}),
+    )
+
+
+def test_paged_synthesis_preserves_qwen_claim_text() -> None:
+    tail_sha256 = "sha256:page-tail"
+    raw = json.dumps(
+        {
+            "research_note": _qwen_claim_note(),
+            "continuation": {
+                "complete": True,
+                "next_offset": 32,
+                "tail_sha256": tail_sha256,
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    parsed = paged_rag._parse_page_response(
+        agentic,
+        raw,
+        domain_id="request",
+        current_offset=0,
+        content_chars=32,
+        tail_sha256=tail_sha256,
+    )
+
+    assert parsed["note"]["claims"][0]["claim"] == (
+        "잡몹에서 보스로 이어지는 성장 구조를 설계할 수 있다."
+    )
+    assert parsed["note"]["claims"][0]["evidence_refs"] == [_PAGE_REF]
+    agentic._validate_sufficient_research(
+        parsed["note"],
+        allowed_refs=frozenset({_PAGE_REF}),
+    )
