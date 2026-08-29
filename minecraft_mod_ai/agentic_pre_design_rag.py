@@ -6,9 +6,9 @@ import os
 import tempfile
 import threading
 import time
+import traceback
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import ContextVar
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -20,19 +20,14 @@ from .knowledge import (
 )
 from .rag_index import ProjectRAGIndex
 
-_MARKER = "_mmm_forced_pre_design_rag_v3"
-_SLICE_OWNER_MARKER = "_mmm_forced_rag_slice_owner_v1"
-_WORKER_OWNER_MARKER = "_mmm_document_worker_owner_v1"
-_FORCED_RAG_CONTEXT: ContextVar[Mapping[str, Any] | None] = ContextVar(
-    "mmm_forced_pre_design_rag_context",
-    default=None,
-)
 _EVIDENCE_PAGE_CHARS = 1_800
 _EVIDENCE_DOCUMENT_SCHEMA = "mmm/research-evidence-document-v1"
 _EVIDENCE_PAGE_SCHEMA = "mmm/research-evidence-page-v1"
-_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v2"
+# v3 invalidates old terminal-gap/synthesis caches created before failure-state and
+# procedure preservation became part of the canonical contract.
+_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v3"
 _PAGE_PROTOCOL_SCHEMA = "mmm/research-page-continuation-v2"
-_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v2"
+_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v3"
 _SYNTHESIS_INPUT_BYTES = 3_600
 _SYNTHESIS_GROUP_ITEMS = 4
 _MIN_ADAPTIVE_FRAGMENT_CHARS = 512
@@ -73,7 +68,7 @@ def _emit_research_progress(event: str, **fields: Any) -> None:
         hook = _PROGRESS_HOOK
     print(
         "planner research progress: "
-        + json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
         flush=True,
     )
     if callable(hook):
@@ -82,195 +77,6 @@ def _emit_research_progress(event: str, **fields: Any) -> None:
         except Exception:
             # Observability must never change research execution semantics.
             pass
-
-
-def _effective_forced_collect_owner(current: Any) -> bool:
-    """Return true only when forced RAG wraps (rather than sits behind) fan-out."""
-
-    saw_parallel_owner = False
-    seen: set[int] = set()
-    cursor = current
-    while callable(cursor) and id(cursor) not in seen:
-        seen.add(id(cursor))
-        if cursor.__dict__.get(_MARKER) is cursor:
-            return not saw_parallel_owner
-        if (
-            cursor.__dict__.get("_mmm_parallel_research_design_core_v1")
-            is cursor
-        ):
-            saw_parallel_owner = True
-        cursor = getattr(cursor, "__wrapped__", None)
-    return False
-
-
-def harden_pre_design_research(agentic_module: Any) -> None:
-    """Force deterministic RAG and feed model workers through bounded evidence documents.
-
-    Full retrieval receipts remain authoritative and are retained in the returned research
-    bundle. Prompt-facing workers never receive those raw receipts directly: the host writes
-    them to a durable per-run document, reads every bounded page, asks the planner to digest
-    each page separately, then synthesizes only the compact page notes. This keeps fixed
-    context limits independent of retrieval volume without reducing any research route.
-    """
-
-    current_collect = agentic_module.collect_pre_design_research
-    # functools.wraps copies function attributes. An outer parallel collector can
-    # therefore inherit our boolean marker without actually executing this wrapper.
-    # Identity ownership distinguishes the real forced-RAG owner from copied metadata.
-    if _effective_forced_collect_owner(current_collect):
-        return
-
-    # Preserve the central intelligence parallel collector when it already owns provider/
-    # domain fan-out. Only obsolete forced-RAG wrappers are unwrapped.
-    if getattr(current_collect, "_mmm_parallel_research_design_core_v1", False):
-        original_collect = current_collect
-    else:
-        original_collect = getattr(current_collect, "__wrapped__", current_collect)
-    current_slice = agentic_module._domain_evidence_slice
-    slice_is_owned = (
-        current_slice.__dict__.get(_SLICE_OWNER_MARKER) is current_slice
-    )
-    original_domain_slice = getattr(current_slice, "__wrapped__", current_slice)
-    current_domain_worker = agentic_module._research_domain_with_agent
-    worker_is_owned = (
-        current_domain_worker.__dict__.get(_WORKER_OWNER_MARKER)
-        is current_domain_worker
-    )
-    original_domain_worker = current_domain_worker
-
-    def collect(
-        router: Any,
-        prompt: str,
-        *,
-        trace_metadata: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        brief = agentic_module.normalize_research_brief(
-            prompt,
-            {"title": "pre-design research"},
-        )
-        forced = _forced_rag_bundle(router, brief)
-        token = _FORCED_RAG_CONTEXT.set(forced)
-        try:
-            result = original_collect(
-                router,
-                prompt,
-                trace_metadata=trace_metadata,
-            )
-        finally:
-            _FORCED_RAG_CONTEXT.reset(token)
-
-        deterministic = result.get("deterministic")
-        if not isinstance(deterministic, dict):
-            deterministic = {}
-        result = {
-            **result,
-            "deterministic": {
-                **deterministic,
-                "forced_project_rag": forced,
-            },
-        }
-        result["research_sha256"] = _sha256(result)
-        return result
-
-    def domain_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
-        # Build the complete raw evidence slice first. It is persisted verbatim below, but
-        # never returned inline to the model-facing prompt path.
-        raw_value = dict(original_domain_slice(domain_id, deterministic))
-        forced = _FORCED_RAG_CONTEXT.get()
-        if not isinstance(forced, Mapping):
-            forced = deterministic.get("forced_project_rag")
-        if isinstance(forced, Mapping):
-            domains = forced.get("domains")
-            selected = None
-            if isinstance(domains, list):
-                selected = next(
-                    (
-                        item
-                        for item in domains
-                        if isinstance(item, Mapping)
-                        and item.get("domain_id") == domain_id
-                    ),
-                    None,
-                )
-            receipt = {key: item for key, item in forced.items() if key != "domains"}
-            if isinstance(selected, Mapping):
-                receipt.update(dict(selected))
-            raw_value["forced_project_rag"] = receipt
-
-        document = _materialize_domain_evidence_document(domain_id, raw_value)
-        return {"evidence_document": document}
-
-    def research_domain_from_document(
-        router: Any,
-        *,
-        prompt: str,
-        domain: Mapping[str, Any],
-        deterministic: Mapping[str, Any],
-        trace_metadata: Mapping[str, Any] | None,
-    ) -> dict[str, Any]:
-        domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-        evidence = agentic_module._domain_evidence_slice(domain_id, deterministic)
-        document = evidence.get("evidence_document")
-        if not isinstance(document, Mapping):
-            return original_domain_worker(
-                router,
-                prompt=prompt,
-                domain=domain,
-                deterministic=deterministic,
-                trace_metadata=trace_metadata,
-            )
-
-        return _research_document_domain(
-            agentic_module,
-            router,
-            prompt=prompt,
-            domain=domain,
-            document=document,
-            trace_metadata=trace_metadata,
-        )
-
-    def compact_receipt(value: Any) -> Any:
-        if not isinstance(value, Mapping):
-            return value
-        keep = (
-            "schema_version",
-            "research_sha256",
-            "evidence_sha256",
-            "radar_sha256",
-            "route_sha256",
-            "query_sha256",
-            "status",
-            "unresolved_official_domains",
-            "candidate_count",
-            "domain_count",
-            "query_count",
-            "project_source_count",
-            "code_index_status",
-            "code_index_path",
-            "document_sha256",
-            "page_count",
-        )
-        return {key: value[key] for key in keep if key in value}
-
-    setattr(collect, _MARKER, collect)
-    collect._mmm_forced_pre_design_rag_v1 = True  # type: ignore[attr-defined]
-    collect._mmm_forced_pre_design_rag_v2 = True  # type: ignore[attr-defined]
-    collect.__wrapped__ = original_collect  # type: ignore[attr-defined]
-    domain_slice.__wrapped__ = original_domain_slice  # type: ignore[attr-defined]
-    research_domain_from_document.__wrapped__ = original_domain_worker  # type: ignore[attr-defined]
-    research_domain_from_document._mmm_document_paged_evidence_v1 = True  # type: ignore[attr-defined]
-    setattr(domain_slice, _SLICE_OWNER_MARKER, domain_slice)
-    setattr(
-        research_domain_from_document,
-        _WORKER_OWNER_MARKER,
-        research_domain_from_document,
-    )
-    agentic_module.collect_pre_design_research = collect
-    if not slice_is_owned:
-        agentic_module._domain_evidence_slice = domain_slice
-    if not worker_is_owned:
-        agentic_module._research_domain_with_agent = research_domain_from_document
-    agentic_module._research_receipt = compact_receipt
 
 
 def _research_page_messages(
@@ -282,6 +88,7 @@ def _research_page_messages(
     continuation_offset: int = 0,
 ) -> list[dict[str, str]]:
     """Create one bounded page-reading request; raw cross-page evidence is never inlined."""
+
     system = (
         "You are reading exactly one bounded page from a host-owned Minecraft research "
         "evidence document. Extract only design-relevant claims supported by this page. "
@@ -353,9 +160,18 @@ def _page_response_schema(research_note_schema: Mapping[str, Any]) -> dict[str, 
 
 
 def _core_note(note: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve every model-authored semantic field used by downstream research/skills."""
+
     return {
         key: note[key]
-        for key in ("domain_id", "claims", "gaps", "next_queries", "sufficient")
+        for key in (
+            "domain_id",
+            "claims",
+            "gaps",
+            "next_queries",
+            "sufficient",
+            "procedures",
+        )
         if key in note
     }
 
@@ -379,9 +195,6 @@ def _parse_page_response(
     note = agentic_module._parse_research_note(raw, domain_id)
     payload = agentic_module._extract_json_object(raw)
     continuation = payload.get("continuation")
-    # Focused adapters written before the continuation protocol do not enforce JSON
-    # Schema. Preserve that test/adapter compatibility; production schema decoding
-    # always requires the explicit receipt below.
     if continuation is None:
         return {
             "note": note,
@@ -467,12 +280,34 @@ def _repair_messages(
             "role": "system",
             "content": (
                 "The prior response failed the bounded JSON contract: "
-                f"{type(error).__name__}: {str(error)[:500]}. Regenerate from the same "
-                "supplied evidence span exactly once. Emit only schema-valid compact JSON; "
-                "do not repeat, quote, or continue the invalid output."
+                f"{type(error).__name__}: {error}. Regenerate from the same supplied "
+                "evidence span exactly once. Emit only schema-valid compact JSON. If you "
+                "claim sufficient=true, include at least one concrete evidence-grounded "
+                "claim. Do not repeat, quote, or continue the invalid output."
             ),
         },
     ]
+
+
+def _emit_bounded_failure(
+    event: str,
+    *,
+    progress_label: str,
+    raw_output: str,
+    error: BaseException,
+) -> None:
+    _emit_research_progress(
+        event,
+        label=progress_label,
+        raw_output=raw_output,
+        raw_output_sha256=_sha256_text(raw_output),
+        raw_output_chars=len(raw_output),
+        exception_type=f"{type(error).__module__}.{type(error).__qualname__}",
+        exception_message=str(error),
+        traceback="".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        ),
+    )
 
 
 def _generate_bounded(
@@ -485,6 +320,7 @@ def _generate_bounded(
     progress_label: str,
 ) -> Any:
     _emit_research_progress("model_attempt", label=progress_label, attempt=1)
+    raw = ""
     try:
         raw = router.generate_text(
             "planner",
@@ -496,6 +332,12 @@ def _generate_bounded(
         )
         return parser(raw)
     except Exception as first_error:
+        _emit_bounded_failure(
+            "bounded_model_or_parse_failure",
+            progress_label=progress_label,
+            raw_output=raw,
+            error=first_error,
+        )
         if not isinstance(first_error, agentic_module.SpecValidationError) and not (
             _structured_output_failure(first_error)
         ):
@@ -504,8 +346,9 @@ def _generate_bounded(
             "bounded_json_repair",
             label=progress_label,
             attempt=2,
-            error=f"{type(first_error).__name__}: {str(first_error)[:500]}",
+            error=f"{type(first_error).__name__}: {first_error}",
         )
+        repaired = ""
         try:
             repaired = router.generate_text(
                 "planner",
@@ -517,12 +360,19 @@ def _generate_bounded(
             )
             return parser(repaired)
         except Exception as second_error:
+            _emit_bounded_failure(
+                "bounded_repair_failure",
+                progress_label=progress_label,
+                raw_output=repaired,
+                error=second_error,
+            )
             if not isinstance(
                 second_error, agentic_module.SpecValidationError
             ) and not _structured_output_failure(second_error):
                 raise
             raise _BoundedResearchOutputError(
-                f"bounded JSON repair failed: {second_error}"
+                "bounded JSON repair failed after two fully logged attempts: "
+                f"{type(second_error).__name__}: {second_error}"
             ) from second_error
 
 
@@ -607,21 +457,21 @@ def _checkpoint_root() -> Path:
         output_root = os.environ.get("MMM_OUTPUT_ROOT", "").strip()
         workspace = os.environ.get("MMM_WORKSPACE", "").strip()
         if output_root:
-            root = Path(output_root).expanduser() / "research-checkpoints-v2"
+            root = Path(output_root).expanduser() / "research-checkpoints-v3"
         elif workspace:
             workspace_path = Path(workspace).expanduser().resolve()
             if (workspace_path / ".git").exists():
-                root = workspace_path.parent / "mmm-output" / "research-checkpoints-v2"
+                root = workspace_path.parent / "mmm-output" / "research-checkpoints-v3"
             else:
-                root = workspace_path / "research-checkpoints-v2"
+                root = workspace_path / "research-checkpoints-v3"
         else:
-            root = Path(tempfile.gettempdir()) / "mmm-research-checkpoints-v2"
+            root = Path(tempfile.gettempdir()) / "mmm-research-checkpoints-v3"
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
 
 def _checkpoint_dir(domain_key: str) -> Path:
-    path = _checkpoint_root() / "domains-v2" / domain_key[:2] / domain_key
+    path = _checkpoint_root() / "domains-v3" / domain_key[:2] / domain_key
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -686,15 +536,14 @@ def _read_complete_manifest(
     domain_key: str,
     domain_id: str,
 ) -> dict[str, Any] | None:
+    """Reuse successful work only. Failed/terminal research is always recomputed."""
+
     path = _manifest_path(domain_key)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, TypeError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, Mapping) or payload.get("status") not in {
-        "complete",
-        "terminal_gap",
-    }:
+    if not isinstance(payload, Mapping) or payload.get("status") != "complete":
         return None
     note = payload.get("note")
     if (
@@ -704,7 +553,9 @@ def _read_complete_manifest(
     ):
         return None
     try:
-        _validate_core_note(agentic_module, note, domain_id)
+        validated = _validate_core_note(agentic_module, note, domain_id)
+        if validated.get("sufficient") is not True or not validated.get("claims"):
+            return None
         _validate_note_artifacts(domain_key, note)
     except Exception:
         return None
@@ -778,12 +629,9 @@ def _page_claims_with_provenance(
         ]
         if page_ref and page_ref not in refs:
             refs.insert(0, page_ref)
-        claims.append(
-            {
-                "claim": str(claim.get("claim", "")).strip(),
-                "evidence_refs": refs,
-            }
-        )
+        text = str(claim.get("claim", "")).strip()
+        if text:
+            claims.append({"claim": text, "evidence_refs": refs})
     return claims
 
 
@@ -934,7 +782,7 @@ def _read_page_losslessly(
                 failures.append(
                     {
                         "unit": page_ref or progress_label,
-                        "error": f"{type(exc).__name__}: {str(exc)[:600]}",
+                        "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
                 return notes
@@ -971,9 +819,9 @@ def _group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, A
     current_bytes = 2
     for note in notes:
         size = len(
-            json.dumps(
-                note, ensure_ascii=False, sort_keys=True, default=str
-            ).encode("utf-8")
+            json.dumps(note, ensure_ascii=False, sort_keys=True, default=str).encode(
+                "utf-8"
+            )
         )
         if current and (
             len(current) >= _SYNTHESIS_GROUP_ITEMS
@@ -986,13 +834,12 @@ def _group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, A
         current_bytes += size + 1
     if current:
         groups.append(current)
-    # Never force two large children past the input bound. Once leaf evidence pages
-    # have each been summarized, atomize oversized summaries into bounded semantic
-    # records so the next level makes deterministic progress without dropping fields.
+
     if len(notes) > 1 and len(groups) == len(notes):
         atomic: list[dict[str, Any]] = []
         for note in notes:
             domain_id = str(note.get("domain_id", "unknown"))
+            sufficient = bool(note.get("sufficient"))
             for claim in note.get("claims", []):
                 atomic.append(
                     {
@@ -1000,7 +847,8 @@ def _group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, A
                         "claims": [claim],
                         "gaps": [],
                         "next_queries": [],
-                        "sufficient": bool(note.get("sufficient")),
+                        "procedures": [],
+                        "sufficient": sufficient,
                     }
                 )
             for gap in note.get("gaps", []):
@@ -1010,7 +858,8 @@ def _group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, A
                         "claims": [],
                         "gaps": [gap],
                         "next_queries": [],
-                        "sufficient": bool(note.get("sufficient")),
+                        "procedures": [],
+                        "sufficient": sufficient,
                     }
                 )
             for query in note.get("next_queries", []):
@@ -1020,7 +869,19 @@ def _group_synthesis_notes(notes: list[dict[str, Any]]) -> list[list[dict[str, A
                         "claims": [],
                         "gaps": [],
                         "next_queries": [query],
-                        "sufficient": bool(note.get("sufficient")),
+                        "procedures": [],
+                        "sufficient": sufficient,
+                    }
+                )
+            for procedure in note.get("procedures", []):
+                atomic.append(
+                    {
+                        "domain_id": domain_id,
+                        "claims": [],
+                        "gaps": [],
+                        "next_queries": [],
+                        "procedures": [procedure],
+                        "sufficient": sufficient,
                     }
                 )
         if atomic:
@@ -1052,8 +913,11 @@ def _synthesis_messages(
         "bounded_child_notes": notes,
         "instruction": (
             "Synthesize only these child notes into one compact research_note. Preserve "
-            "concrete contradictions and gaps. The full lossless claim catalog is retained "
-            "by the host, so this response is a bounded design summary, not a replacement."
+            "concrete evidence-grounded claims, contradictions, gaps, next queries, and any "
+            "cited reusable procedures with their requires/provides edges. The full lossless "
+            "evidence ledger is retained by the host; this response is a bounded design "
+            "summary, not a replacement. Set sufficient=true only when at least one concrete "
+            "grounded claim survives synthesis and the supplied evidence resolves this group."
         ),
     }
     return [
@@ -1062,7 +926,8 @@ def _synthesis_messages(
             "content": (
                 "You are a bounded hierarchical Minecraft research synthesizer. Return "
                 "only one JSON object matching research_note. Do not use tools and do not "
-                "repeat raw evidence."
+                "repeat raw evidence. Preserve cited procedures instead of silently dropping "
+                "them."
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
@@ -1095,9 +960,7 @@ def _bounded_domain_projection(value: Any) -> Any:
                 "externalized_to_request_ledger": True,
                 "value_sha256": _sha256(value),
                 "item_count": len(value),
-                "sample": [
-                    _bounded_domain_projection(item) for item in value[:2]
-                ],
+                "sample": [_bounded_domain_projection(item) for item in value[:2]],
             }
         return [_bounded_domain_projection(item) for item in value]
     if isinstance(value, tuple):
@@ -1156,6 +1019,8 @@ def _synthesize_group_with_recovery(
     if isinstance(cached, Mapping):
         try:
             note = _validate_core_note(agentic_module, cached, domain_id)
+            if note.get("sufficient") is True and not note.get("claims"):
+                note = None
         except Exception:
             note = None
     if note is not None:
@@ -1164,6 +1029,7 @@ def _synthesize_group_with_recovery(
             domain_id=domain_id,
             level=level,
             group=group_label,
+            checkpoint_unit=str(_unit_path(domain_key, "synthesis", unit_key)),
         )
         return [note]
     try:
@@ -1181,6 +1047,10 @@ def _synthesize_group_with_recovery(
             parser=lambda raw: agentic_module._parse_research_note(raw, domain_id),
             progress_label=f"domain {domain_id} synthesis {level}:{group_label}",
         )
+        if note.get("sufficient") is True and not note.get("claims"):
+            raise agentic_module.SpecValidationError(
+                "research synthesis declared sufficient=true without a grounded claim"
+            )
         _write_unit(domain_key, "synthesis", unit_key, note)
         return [note]
     except _BoundedResearchOutputError as exc:
@@ -1198,6 +1068,7 @@ def _synthesize_group_with_recovery(
                 level=level,
                 group=group_label,
                 child_count=len(children),
+                reason=f"{type(exc).__name__}: {exc}",
             )
             recovered: list[dict[str, Any]] = []
             for child_index, child in enumerate(children):
@@ -1215,11 +1086,18 @@ def _synthesize_group_with_recovery(
                     )
                 )
             return recovered
-        failures.append(
-            {
-                "unit": f"synthesis:{level}:{group_label}",
-                "error": f"{type(exc).__name__}: {str(exc)[:600]}",
-            }
+        failure = {
+            "unit": f"synthesis:{level}:{group_label}",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        failures.append(failure)
+        _emit_research_progress(
+            "synthesis_terminal_failure",
+            domain_id=domain_id,
+            level=level,
+            group=group_label,
+            failure=failure,
+            checkpoint_dir=str(_checkpoint_dir(domain_key)),
         )
         return [
             {
@@ -1227,6 +1105,7 @@ def _synthesize_group_with_recovery(
                 "claims": [],
                 "gaps": ["A bounded synthesis page failed validation."],
                 "next_queries": [],
+                "procedures": [],
                 "sufficient": False,
             }
         ]
@@ -1249,6 +1128,7 @@ def _hierarchical_synthesis(
             "claims": [],
             "gaps": ["No readable evidence page note was produced."],
             "next_queries": [],
+            "procedures": [],
             "sufficient": False,
         }
     ]
@@ -1273,9 +1153,6 @@ def _hierarchical_synthesis(
         if len(next_level) == 1:
             return next_level[0]
         if failures and len(next_level) >= len(current):
-            # Every bounded retry/split at this frontier failed to reduce the work.
-            # Stop in host code with an explicit terminal gap instead of reissuing the
-            # same malformed synthesis forever or discarding the durable evidence ledger.
             return {
                 "domain_id": domain_id,
                 "claims": [],
@@ -1284,6 +1161,7 @@ def _hierarchical_synthesis(
                     "full evidence remains in the durable ledger."
                 ],
                 "next_queries": [],
+                "procedures": [],
                 "sufficient": False,
             }
         current = next_level
@@ -1321,6 +1199,7 @@ def _host_page_note(domain_id: str, page: Mapping[str, Any]) -> dict[str, Any]:
         "claims": [],
         "gaps": [],
         "next_queries": [],
+        "procedures": [],
         "sufficient": True,
         "evidence_fragment": {
             "page_ref": page_ref,
@@ -1410,6 +1289,9 @@ def _research_document_domain(
             _emit_research_progress(
                 "domain_checkpoint_complete",
                 domain_id=domain_id,
+                manifest_path=str(_manifest_path(domain_key)),
+                checkpoint_dir=str(_checkpoint_dir(domain_key)),
+                note=cached,
             )
             return cached
 
@@ -1420,6 +1302,10 @@ def _research_document_domain(
             "domain_start",
             domain_id=domain_id,
             page_count=len(pages),
+            evidence_document=_prompt_document_receipt(document),
+            evidence_pages_path=document.get("pages_path"),
+            evidence_raw_path=document.get("raw_path"),
+            checkpoint_dir=str(_checkpoint_dir(domain_key)),
         )
         for page_index, page in enumerate(pages):
             _emit_research_progress(
@@ -1427,11 +1313,8 @@ def _research_document_domain(
                 domain_id=domain_id,
                 page_index=page_index + 1,
                 page_count=len(pages),
+                page_ref=str(page.get("page_ref", "")),
             )
-            # Raw evidence is already a host-owned, hash-addressed page. Preserve every
-            # byte in the ledger and let the model synthesize packed page fragments once;
-            # forcing a separate model paraphrase before synthesis doubled simple-request
-            # latency without adding evidence.
             page_notes.append(_host_page_note(domain_id, page))
             _emit_research_progress(
                 "page_ledgered",
@@ -1452,9 +1335,16 @@ def _research_document_domain(
         )
         claims = _stable_unique_claims([*page_notes, summary])
         catalog = _materialize_claim_catalog(domain_key, domain_id, claims)
-        evidence_ledger = _materialize_evidence_ledger(
-            domain_key, domain_id, pages
-        )
+        evidence_ledger = _materialize_evidence_ledger(domain_key, domain_id, pages)
+        failure_reasons = []
+        if failures:
+            failure_reasons.append("bounded synthesis failure")
+        if summary.get("sufficient") is not True:
+            failure_reasons.append("synthesis returned sufficient=false")
+        if not claims:
+            failure_reasons.append("synthesis produced zero grounded claims")
+
+        status = "failed" if failure_reasons else "complete"
         note: dict[str, Any] = {
             **_core_note(summary),
             "evidence_document": _prompt_document_receipt(document),
@@ -1463,35 +1353,62 @@ def _research_document_domain(
             "checkpoint": {
                 "schema_version": _DOMAIN_CHECKPOINT_SCHEMA,
                 "request_sha256": "sha256:" + domain_key,
-                "status": "terminal_gap" if failures else "complete",
+                "status": status,
+                "manifest_path": str(_manifest_path(domain_key)),
+                "checkpoint_dir": str(_checkpoint_dir(domain_key)),
             },
         }
         if failures:
             existing_gaps = [str(item) for item in note.get("gaps", [])]
-            note["gaps"] = (
-                existing_gaps
-                + [f"{item['unit']}: {item['error']}" for item in failures]
-            )[:4]
+            note["gaps"] = existing_gaps + [
+                f"{item['unit']}: {item['error']}" for item in failures
+            ]
+            note["research_failures"] = list(failures)
+        if failure_reasons:
             note["sufficient"] = False
-            note["research_failures"] = failures
             note["fixed_point"] = True
-        elif not bool(note.get("sufficient")):
-            note["fixed_point"] = True
+            note["failure_reasons"] = failure_reasons
 
-        status = "terminal_gap" if failures else "complete"
         _write_manifest(
             domain_key,
             status=status,
             note=note,
             failures=failures,
         )
+
+        if status != "complete":
+            _emit_research_progress(
+                "domain_failure",
+                domain_id=domain_id,
+                status=status,
+                failure_reasons=failure_reasons,
+                failures=failures,
+                summary=summary,
+                claim_catalog=catalog,
+                evidence_ledger=evidence_ledger,
+                evidence_document=_prompt_document_receipt(document),
+                manifest_path=str(_manifest_path(domain_key)),
+                checkpoint_dir=str(_checkpoint_dir(domain_key)),
+                note=note,
+            )
+            raise _BoundedResearchOutputError(
+                "pre-design research failed closed for domain "
+                f"{domain_id!r}: {'; '.join(failure_reasons)}; "
+                f"manifest={_manifest_path(domain_key)}"
+            )
+
         _emit_research_progress(
-            "domain_complete" if status == "complete" else "domain_gap_receipt",
+            "domain_complete",
             domain_id=domain_id,
             status=status,
             claim_count=catalog["claim_count"],
+            procedure_count=len(note.get("procedures", [])),
             page_count=len(pages),
-            failure_count=len(failures),
+            failure_count=0,
+            claim_catalog=catalog,
+            evidence_ledger=evidence_ledger,
+            manifest_path=str(_manifest_path(domain_key)),
+            checkpoint_dir=str(_checkpoint_dir(domain_key)),
         )
         return note
 
@@ -1514,9 +1431,6 @@ def _materialize_domain_evidence_document(
     raw_path = directory / f"{safe_domain}.json"
     pages_path = directory / f"{safe_domain}.pages.jsonl"
 
-    # Pack small records, but split oversized records into ordered UTF-8-safe fragments.
-    # Concatenating an oversized record's fragments reproduces its exact JSON text; no
-    # middle evidence is replaced by a head/tail digest.
     units = list(_evidence_units(evidence))
     rendered_units = [
         json.dumps(
@@ -1832,8 +1746,6 @@ def _search_authoritative_catalog(
     sources: dict[str, dict[str, Any]] = {}
     errors: list[dict[str, str]] = []
 
-    # Forced research runs before target selection too. At that point use only
-    # wildcard official sources and keep target coordinates unresolved.
     if not versions:
         try:
             catalog = target_neutral_evidence_catalog()
@@ -1940,4 +1852,7 @@ def _sha256_text(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-__all__ = ["harden_pre_design_research"]
+__all__ = [
+    "research_progress_snapshot",
+    "set_research_progress_hook",
+]
