@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from minecraft_mod_ai import agentic_pre_design_rag as project_rag
 from minecraft_mod_ai import agentic_research_game_design as agentic
+from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 from minecraft_mod_ai.agent_capability_context import (
     filter_tool_schemas_for_role,
     target_neutral_research_scope,
 )
+from minecraft_mod_ai.pre_design_research_pipeline import PreDesignResearchFailure
 from minecraft_mod_ai.structured_repair_contract import _generate_section_local
 
 
@@ -70,9 +75,7 @@ def test_adaptive_progression_repair_is_schema_constrained_and_freezes_siblings(
                 }
             ),
             json.dumps(
-                {
-                    "repair": ["레벨 성장", "장비 강화", "보스 단계 해금"]
-                },
+                {"repair": ["레벨 성장", "장비 강화", "보스 단계 해금"]},
                 ensure_ascii=False,
             ),
         ]
@@ -207,3 +210,61 @@ def test_ungrounded_sufficient_research_reaches_evidence_frontier_fixed_point(
     assert result["sufficient"] is False
     assert result["fixed_point"] is True
     assert len(router.calls) == 2
+
+
+def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    document = project_rag._materialize_domain_evidence_document(
+        "request",
+        {
+            "official_rag": {
+                "documents": [
+                    {
+                        "document_id": "fixture",
+                        "content": "real host-owned target-neutral evidence",
+                    }
+                ]
+            }
+        },
+    )
+    pages = project_rag._read_evidence_pages(document)
+    assert pages
+
+    invented = {
+        "domain_id": "request",
+        "claims": [
+            {
+                "claim": "unsupported claim",
+                "evidence_refs": ["sha256:invented#page=1/1"],
+            }
+        ],
+        "gaps": [],
+        "next_queries": [],
+        "procedures": [],
+        "sufficient": True,
+    }
+    with pytest.raises(PreDesignResearchFailure, match="lossless evidence pages"):
+        pipeline._validate_document_grounding(
+            agentic,
+            project_rag,
+            invented,
+            document,
+            domain_id="request",
+        )
+
+    grounded = {
+        **invented,
+        "claims": [
+            {
+                "claim": "grounded claim",
+                "evidence_refs": [pages[0]["page_ref"]],
+            }
+        ],
+    }
+    pipeline._validate_document_grounding(
+        agentic,
+        project_rag,
+        grounded,
+        document,
+        domain_id="request",
+    )
