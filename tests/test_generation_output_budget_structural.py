@@ -37,8 +37,10 @@ class _StaticConfig:
     extra: dict = field(default_factory=dict)
 
 
-def test_apply_source_edit_is_reviewed_as_compact_structural_action() -> None:
-    assert tools_require_expansive_output((_source_edit_schema(),)) is False
+def test_apply_source_edit_keeps_expansive_effect_classification() -> None:
+    # Source mutation remains an expansive project effect even though its scalar
+    # function arguments are intentionally compact for generation budgeting.
+    assert tools_require_expansive_output((_source_edit_schema(),)) is True
 
 
 def test_large_prompt_does_not_starve_forced_source_edit_output() -> None:

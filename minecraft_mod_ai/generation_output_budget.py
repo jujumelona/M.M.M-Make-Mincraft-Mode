@@ -97,11 +97,17 @@ def _tool_name(tool: Any) -> str:
     return str(tool.get("name", "") or "").strip()
 
 
-def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
+def _structural_tool_call_is_compact(tools: Sequence[Any]) -> bool:
+    """Classify serialized call shape, independently from the tool's side effects."""
+
     if not tools:
-        return 1
+        return False
     names = {_tool_name(tool) for tool in tools}
-    if names and names <= _STRUCTURAL_COMPACT_TOOLS:
+    return bool(names and names <= _STRUCTURAL_COMPACT_TOOLS)
+
+
+def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
+    if _structural_tool_call_is_compact(tools):
         return max(
             1,
             min(
@@ -113,11 +119,12 @@ def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
 
 
 def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
-    """Return true unless every visible tool is reviewed as a compact action.
+    """Classify tool effects, not how many tokens its function arguments need.
 
-    ``apply_source_edit`` is deliberately compact even though its reviewed transition
-    mutates source: its scalar protocol permits one structural Java operation per model
-    action (type shell, one import, or one member), never a whole Java file.
+    ``apply_source_edit`` remains expansive here because it mutates project source and
+    preflight/recovery policy depends on that effect classification. Its scalar protocol
+    is nevertheless a compact *call shape* (one type shell, import, or member); output
+    budgeting handles that separately through ``_structural_tool_call_is_compact``.
     """
 
     if not tools:
@@ -128,8 +135,6 @@ def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
         name = _tool_name(tool)
         if not name:
             return True
-        if name in _STRUCTURAL_COMPACT_TOOLS:
-            continue
         transition = reviewed_transition(name)
         if transition is None:
             return True
@@ -162,7 +167,10 @@ def generation_output_token_budget(
     else:
         budget = max(floor, _DEFAULT_DYNAMIC_OUTPUT_TOKENS)
 
-    if tools and not tools_require_expansive_output(tools):
+    if tools and (
+        not tools_require_expansive_output(tools)
+        or _structural_tool_call_is_compact(tools)
+    ):
         budget = min(budget, tool_action_token_budget(config))
     return max(1, int(budget))
 
