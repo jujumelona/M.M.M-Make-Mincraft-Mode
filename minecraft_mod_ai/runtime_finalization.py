@@ -185,9 +185,10 @@ def finalize_runtime() -> None:
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
         install_evidence_request_guard()
-        install_semantic_requirement_authority()
-        # Semantic interpretation is compiled once and then host-validated atomically.
+        # Install the single-pass public authority first so the downstream authority
+        # binding captures that exact callable rather than a stale pre-contract reference.
         install_semantic_single_pass()
+        install_semantic_requirement_authority()
         install_planner_graph_integrity()
         install_deep_design_execution()
         install_evidence_obligation_contract()

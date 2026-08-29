@@ -6,7 +6,6 @@ The historical public installer name is retained for bootstrap compatibility onl
 implementation no longer imports, installs, or falls back to subtree/field repair code.
 """
 
-import sys
 from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
@@ -57,14 +56,6 @@ def install_structured_subtree_repair_dispatch_contract() -> None:
     setattr(generate_section, _MARKER, True)
     generate_section.__wrapped__ = original  # type: ignore[attr-defined]
     _design._generate_section = generate_section
-
-    # Repair stale import-by-value edges without installing any repair implementation.
-    for name, module in tuple(sys.modules.items()):
-        if not name.startswith("minecraft_mod_ai.") or module is None:
-            continue
-        if getattr(module, "_generate_section", None) is original:
-            setattr(module, "_generate_section", generate_section)
-
     _INSTALLED = True
 
 
