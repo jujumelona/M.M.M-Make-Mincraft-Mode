@@ -123,6 +123,7 @@ def finalize_runtime() -> None:
             install as install_quality_public_acceptance_view,
         )
         from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
+        from .research_grounded_rag_contract import install as install_research_grounded_rag
         from .retrieval_cpu_budget_contract import (
             install as install_retrieval_cpu_budget,
         )
@@ -175,6 +176,7 @@ def finalize_runtime() -> None:
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
+        install_research_grounded_rag(agentic_pre_design_rag)
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_tool_validation_surface()
