@@ -25,7 +25,7 @@ assert not hasattr(agentic, "collect_pre_design_research")
 calls = {
     "official": 0,
     "radar": 0,
-    "forced": 0,
+    "local_project": 0,
     "domain": 0,
 }
 
@@ -55,22 +55,46 @@ def radar(*_args, **_kwargs):
     raise AssertionError("target-specific radar ran before target freeze")
 
 
-def forced(_router, brief):
-    calls["forced"] += 1
-    return {
-        "schema_version": "mmm/forced-pre-design-rag-v2",
-        "domains": [
+def local_project(brief):
+    calls["local_project"] += 1
+    rendered_domains = []
+    query_count = 0
+    for domain in brief.get("domains", []):
+        if not isinstance(domain, dict):
+            continue
+        queries = []
+        for query in domain.get("queries", []):
+            query_count += 1
+            queries.append(
+                {
+                    "query": query,
+                    "query_sha256": "sha256:test",
+                    "code_rag": {
+                        "schema_version": "mmm/pre-design-local-project-query-v1",
+                        "status": "not_indexed",
+                        "hits": [],
+                    },
+                }
+            )
+        rendered_domains.append(
             {
                 "domain_id": domain["domain_id"],
-                "queries": [
-                    {"query": query, "query_sha256": "sha256:test"}
-                    for query in domain.get("queries", [])
-                ],
+                "queries": queries,
             }
-            for domain in brief.get("domains", [])
-            if isinstance(domain, dict)
-        ],
+        )
+    return {
+        "schema_version": "mmm/pre-design-local-project-evidence-v1",
+        "status": "not_indexed",
+        "code_index_status": "not_indexed",
+        "code_index_path": "",
+        "domain_count": len(rendered_domains),
+        "query_count": query_count,
+        "domains": rendered_domains,
     }
+
+
+def retired_forced(*_args, **_kwargs):
+    raise AssertionError("retired duplicate forced RAG path was invoked")
 
 
 def domain_worker(_agentic, _router, *, prompt, domain, document, trace_metadata):
@@ -101,7 +125,8 @@ def domain_worker(_agentic, _router, *, prompt, domain, document, trace_metadata
 
 pipeline._target_neutral_official_evidence = official
 pipeline.collect_technology_radar = radar
-project_rag._forced_rag_bundle = forced
+pipeline.collect_local_project_evidence = local_project
+project_rag._forced_rag_bundle = retired_forced
 project_rag._research_document_domain = domain_worker
 
 
@@ -132,8 +157,9 @@ coverage = result["minecraft_knowledge_route_coverage"]
 coverage_statuses = {item["status"] for item in coverage["domains"]}
 
 assert brief_ids == ["request"]
-assert calls == {"official": 1, "radar": 0, "forced": 1, "domain": 1}
+assert calls == {"official": 1, "radar": 0, "local_project": 1, "domain": 1}
 assert result["deterministic"]["technology_radar"]["status"] == "deferred_until_target_freeze"
+assert result["deterministic"]["forced_project_rag"]["schema_version"] == "mmm/pre-design-local-project-evidence-v1"
 assert coverage["status"] == "PASS"
 assert coverage["target_frozen"] is False
 assert coverage_statuses == {"DEFERRED_UNTIL_TARGET_FREEZE"}
@@ -194,7 +220,7 @@ def test_fresh_runtime_uses_single_owner_and_defers_versioned_routes(
     assert result["brief_ids"] == ["request"]
     assert result["calls"] == {
         "domain": 1,
-        "forced": 1,
+        "local_project": 1,
         "official": 1,
         "radar": 0,
     }
