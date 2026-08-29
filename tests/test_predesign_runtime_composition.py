@@ -97,7 +97,7 @@ def retired_forced(*_args, **_kwargs):
     raise AssertionError("retired duplicate forced RAG path was invoked")
 
 
-def domain_worker(_agentic, _router, *, prompt, domain, document, trace_metadata):
+def domain_worker(_agentic, _project_rag, _router, *, prompt, domain, document, trace_metadata):
     del prompt, trace_metadata
     calls["domain"] += 1
     assert set(document["source_keys"]) == {
@@ -127,7 +127,7 @@ pipeline._target_neutral_official_evidence = official
 pipeline.collect_technology_radar = radar
 pipeline.collect_local_project_evidence = local_project
 project_rag._forced_rag_bundle = retired_forced
-project_rag._research_document_domain = domain_worker
+pipeline.research_document_domain = domain_worker
 
 
 class ProbeRouter:
