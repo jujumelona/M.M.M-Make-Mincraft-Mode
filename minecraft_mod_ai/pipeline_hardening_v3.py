@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-"""Compatibility repair for machine-only Minecraft pack metadata discovery."""
-
-from .pipeline_hardening import _replace_bound_references
+"""Compatibility marker for verified Minecraft pack metadata discovery."""
 
 _INSTALLED = False
 
 
 def install_pipeline_hardening_v3() -> None:
-    """Preserve the official pack resolver's three-value ABI without article fallbacks."""
+    """Preserve the current official resolver instead of replacing its ABI.
+
+    ``platform_live_discovery._official_pack_versions`` already uses Mojang's
+    machine-readable, checksummed ``version.json`` as the primary source and keeps
+    bounded official release metadata as a fail-closed fallback. Replacing that
+    function here used to strip its ``lru_cache`` control API and duplicated stale
+    behavior. Keep the canonical resolver intact and only mark the installed policy.
+    """
 
     global _INSTALLED
     if _INSTALLED:
@@ -17,16 +22,7 @@ def install_pipeline_hardening_v3() -> None:
     from . import platform_live_discovery as live
 
     current = live._official_pack_versions
-    if not getattr(current, "_mmm_machine_pack_contract_v3", False):
-        def machine_only(version: str) -> tuple[str, str, str]:
-            target = str(version or "").strip()
-            data_pack, resource_pack = live._mojang_pack_versions(target)
-            return data_pack, resource_pack, live._mojang_target_url(target)
-
-        machine_only._mmm_machine_pack_contract_v3 = True  # type: ignore[attr-defined]
-        live._official_pack_versions = machine_only
-        _replace_bound_references(current, machine_only)
-
+    setattr(current, "_mmm_machine_pack_contract_v3", True)
     _INSTALLED = True
 
 
