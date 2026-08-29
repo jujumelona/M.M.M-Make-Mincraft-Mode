@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-"""Explicit requires/provides SkillBank composition for small-model execution.
+"""Explicit requires/provides SkillBank composition.
 
-Source editing is owned directly by AgentToolRuntime. This module now has one job:
-compose procedural skills through explicit dependency edges without inferring them
-from lexical similarity.
+There is no runtime installer here. The canonical pre-design pipeline calls
+``compose_research_skillbank`` after procedural skills have been compiled. Dependency
+resolution uses only explicit requires/provides edges; unresolved or cyclic skills are
+blocked instead of being inferred from lexical similarity.
 """
 
-import hashlib
-import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from functools import wraps
 from typing import Any
 
-_INSTALLED = False
 _MAX_COMPOSED_SKILLS = 12
 
 
@@ -31,14 +28,6 @@ def _bounded_strings(value: Any, *, limit: int = 8, chars: int = 192) -> list[st
 
 def _capability(value: Any) -> str:
     return " ".join(str(value).split()).casefold()
-
-
-def _rehash_skill(skill: Mapping[str, Any]) -> dict[str, Any]:
-    result = dict(skill)
-    result.pop("skill_id", None)
-    encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    result["skill_id"] = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-    return result
 
 
 def _skill_confidence(skill: Mapping[str, Any]) -> float:
@@ -75,7 +64,12 @@ def _compose_skills(
             if normalized:
                 providers[normalized].append(skill)
     for rows in providers.values():
-        rows.sort(key=lambda skill: (-_skill_confidence(skill), str(skill.get("skill_id", ""))))
+        rows.sort(
+            key=lambda skill: (
+                -_skill_confidence(skill),
+                str(skill.get("skill_id", "")),
+            )
+        )
 
     unresolved: list[dict[str, str]] = []
     changed = True
@@ -86,14 +80,15 @@ def _compose_skills(
                 capability = _capability(requirement)
                 if not capability:
                     continue
-                if any(
+                already_provided = any(
                     capability
                     in {
                         _capability(item)
                         for item in _bounded_strings(candidate.get("provides"), limit=8)
                     }
                     for candidate in selected.values()
-                ):
+                )
+                if already_provided:
                     continue
                 candidates = providers.get(capability, ())
                 if not candidates:
@@ -231,204 +226,56 @@ def _compose_skills(
     }
 
 
-def _install_ordered_skill_composition(skills_module: Any) -> None:
-    current_sanitize = skills_module._sanitize_procedure
-    if not getattr(current_sanitize, "_mmm_ordered_skill_composition_v1", False):
+def compose_research_skillbank(
+    router: Any,
+    prompt: str,
+    research: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compose the attached SkillBank explicitly; no research function is monkeypatched."""
 
-        @wraps(current_sanitize)
-        def sanitize(value: Mapping[str, Any], domain_id: str):
-            skill = current_sanitize(value, domain_id)
-            if skill is None:
-                return None
-            result = dict(skill)
-            result["requires"] = _bounded_strings(value.get("requires"), limit=8)
-            result["provides"] = _bounded_strings(value.get("provides"), limit=8)
-            return _rehash_skill(result)
+    from . import external_procedural_skill_contract as skills
 
-        sanitize._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-        sanitize.__wrapped__ = current_sanitize  # type: ignore[attr-defined]
-        skills_module._sanitize_procedure = sanitize
+    value = dict(research)
+    bank = value.get("procedural_skillbank")
+    if not isinstance(bank, Mapping):
+        return value
 
-    current_consolidated = skills_module._consolidated_skill
-    if not getattr(current_consolidated, "_mmm_ordered_skill_composition_v1", False):
+    bank_value = dict(bank)
+    seeds = [
+        dict(skill)
+        for skill in bank_value.get("retrieved_skills", ())
+        if isinstance(skill, Mapping)
+    ]
+    available = [
+        dict(skill)
+        for skill in bank_value.get("skills", ())
+        if isinstance(skill, Mapping)
+    ]
+    path = skills._skillbank_path(router)
+    if path is not None:
+        available.extend(skills._load_persistent_skills(path))
+    dedup = {
+        str(skill.get("skill_id", "")): skill
+        for skill in available
+        if str(skill.get("skill_id", ""))
+    }
+    composition = _compose_skills(
+        prompt,
+        list(dedup.values()),
+        seeds,
+        limit=_MAX_COMPOSED_SKILLS,
+    )
+    bank_value["flat_retrieved_skills"] = seeds
+    bank_value["retrieved_skills"] = composition["ordered_skills"]
+    bank_value["skill_composition"] = composition
+    value["procedural_skillbank"] = bank_value
 
-        @wraps(current_consolidated)
-        def consolidated(skills: Sequence[Mapping[str, Any]]):
-            skill = current_consolidated(skills)
-            if skill is None:
-                return None
-            require_sets = [
-                set(_bounded_strings(value.get("requires"), limit=8)) for value in skills
-            ]
-            provide_sets = [
-                set(_bounded_strings(value.get("provides"), limit=8)) for value in skills
-            ]
-            common_requires = set.intersection(*require_sets) if require_sets else set()
-            common_provides = set.intersection(*provide_sets) if provide_sets else set()
-            result = dict(skill)
-            result["requires"] = sorted(common_requires)
-            result["provides"] = sorted(common_provides)
-            return _rehash_skill(result)
-
-        consolidated._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-        consolidated.__wrapped__ = current_consolidated  # type: ignore[attr-defined]
-        skills_module._consolidated_skill = consolidated
-
-    current_schema = skills_module._procedure_schema
-    if not getattr(current_schema, "_mmm_ordered_skill_composition_v1", False):
-
-        @wraps(current_schema)
-        def procedure_schema():
-            schema = current_schema()
-            properties = schema["items"]["properties"]
-            properties["requires"] = {
-                "type": "array",
-                "maxItems": 8,
-                "items": {"type": "string", "minLength": 1, "maxLength": 192},
-            }
-            properties["provides"] = {
-                "type": "array",
-                "maxItems": 8,
-                "items": {"type": "string", "minLength": 1, "maxLength": 192},
-            }
-            return schema
-
-        procedure_schema._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-        procedure_schema.__wrapped__ = current_schema  # type: ignore[attr-defined]
-        skills_module._procedure_schema = procedure_schema
-
-    current_install = skills_module._install_research_skill_compiler
-    if not getattr(current_install, "_mmm_ordered_skill_composition_v1", False):
-
-        @wraps(current_install)
-        def install_compiler() -> None:
-            current_install()
-            from . import agentic_research_game_design as research
-
-            current_messages = research._research_messages
-            if not getattr(current_messages, "_mmm_ordered_skill_composition_v1", False):
-
-                @wraps(current_messages)
-                def research_messages(**kwargs: Any):
-                    messages = [dict(message) for message in current_messages(**kwargs)]
-                    if len(messages) >= 2 and isinstance(messages[1].get("content"), str):
-                        try:
-                            payload = json.loads(str(messages[1]["content"]))
-                        except json.JSONDecodeError:
-                            payload = None
-                        if isinstance(payload, dict):
-                            payload["skill_dependency_instruction"] = (
-                                "For each procedure, emit requires and provides as exact capability "
-                                "labels only when the cited evidence explicitly establishes the "
-                                "dependency/output. Use [] when no explicit dependency is supported; "
-                                "never infer requires/provides from lexical similarity."
-                            )
-                            messages[1]["content"] = json.dumps(
-                                payload, ensure_ascii=False, sort_keys=True
-                            )
-                    return messages
-
-                research_messages._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-                research_messages.__wrapped__ = current_messages  # type: ignore[attr-defined]
-                research._research_messages = research_messages
-
-            current_collect = research.collect_pre_design_research
-            if not getattr(current_collect, "_mmm_ordered_skill_composition_v1", False):
-
-                @wraps(current_collect)
-                def collect(router: Any, prompt: str, *, trace_metadata=None):
-                    result = current_collect(router, prompt, trace_metadata=trace_metadata)
-                    if not isinstance(result, Mapping):
-                        return result
-                    value = dict(result)
-                    bank = value.get("procedural_skillbank")
-                    if not isinstance(bank, Mapping):
-                        return value
-                    bank_value = dict(bank)
-                    flat = [
-                        dict(skill)
-                        for skill in bank_value.get("retrieved_skills", ())
-                        if isinstance(skill, Mapping)
-                    ]
-                    available = [
-                        dict(skill)
-                        for skill in bank_value.get("skills", ())
-                        if isinstance(skill, Mapping)
-                    ]
-                    path = skills_module._skillbank_path(router)
-                    if path is not None:
-                        available.extend(skills_module._load_persistent_skills(path))
-                    dedup = {
-                        str(skill.get("skill_id", "")): skill
-                        for skill in available
-                        if str(skill.get("skill_id", ""))
-                    }
-                    composition = _compose_skills(
-                        prompt,
-                        list(dedup.values()),
-                        flat,
-                        limit=_MAX_COMPOSED_SKILLS,
-                    )
-                    bank_value["flat_retrieved_skills"] = flat
-                    bank_value["retrieved_skills"] = composition["ordered_skills"]
-                    bank_value["skill_composition"] = composition
-                    value["procedural_skillbank"] = bank_value
-                    method = (
-                        dict(value.get("method", {}))
-                        if isinstance(value.get("method"), Mapping)
-                        else {}
-                    )
-                    method["skill_composition"] = (
-                        "explicit requires/provides DAG; unresolved/cyclic procedures are blocked"
-                    )
-                    value["method"] = method
-                    value["research_sha256"] = research._json_sha256(value)
-                    return value
-
-                collect._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-                collect.__wrapped__ = current_collect  # type: ignore[attr-defined]
-                research.collect_pre_design_research = collect
-
-            current_compact = research._compact_research_for_design
-            if not getattr(current_compact, "_mmm_ordered_skill_composition_v1", False):
-
-                @wraps(current_compact)
-                def compact(research: Mapping[str, Any]) -> dict[str, Any]:
-                    result = dict(current_compact(research))
-                    bank = research.get("procedural_skillbank")
-                    if isinstance(bank, Mapping):
-                        compact_bank = dict(result.get("procedural_skillbank", {}))
-                        composition = bank.get("skill_composition")
-                        if isinstance(composition, Mapping):
-                            compact_bank["skill_composition"] = {
-                                "schema_version": composition.get("schema_version"),
-                                "composition_policy": composition.get("composition_policy"),
-                                "ordered_skills": list(composition.get("ordered_skills", ()))[:_MAX_COMPOSED_SKILLS],
-                                "dependency_edges": list(composition.get("dependency_edges", ()))[:24],
-                                "unresolved_requirements": list(composition.get("unresolved_requirements", ()))[:12],
-                                "cycles": list(composition.get("cycles", ()))[:8],
-                                "blocked_skill_ids": list(composition.get("blocked_skill_ids", ()))[:16],
-                            }
-                        result["procedural_skillbank"] = compact_bank
-                    return result
-
-                compact._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-                compact.__wrapped__ = current_compact  # type: ignore[attr-defined]
-                research._compact_research_for_design = compact
-
-        install_compiler._mmm_ordered_skill_composition_v1 = True  # type: ignore[attr-defined]
-        install_compiler.__wrapped__ = current_install  # type: ignore[attr-defined]
-        skills_module._install_research_skill_compiler = install_compiler
+    method = dict(value.get("method", {})) if isinstance(value.get("method"), Mapping) else {}
+    method["skill_composition"] = (
+        "explicit requires/provides DAG; unresolved/cyclic procedures are blocked"
+    )
+    value["method"] = method
+    return value
 
 
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    from . import external_procedural_skill_contract
-
-    _install_ordered_skill_composition(external_procedural_skill_contract)
-    _INSTALLED = True
-
-
-__all__ = ["_compose_skills", "install"]
+__all__ = ["_compose_skills", "compose_research_skillbank"]
