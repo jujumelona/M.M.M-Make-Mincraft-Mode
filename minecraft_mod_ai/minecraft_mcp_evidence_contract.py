@@ -115,14 +115,13 @@ def _target(research_brief: Mapping[str, Any]) -> dict[str, str]:
     raw = research_brief.get("_mmm_platform_target")
     if not isinstance(raw, Mapping):
         raw = {}
-    values = {
-        "minecraft_version": str(raw.get("minecraft_version", os.environ.get("MMM_MINECRAFT_VERSION", ""))).strip(),
-        "loader": str(raw.get("loader", os.environ.get("MMM_LOADER", ""))).strip(),
-        "mappings": str(raw.get("mappings", raw.get("yarn_mappings", os.environ.get("MMM_MAPPINGS", "")))).strip(),
+    # Target identity is request-owned. Process environment can configure providers,
+    # but it cannot silently freeze or backfill a planning request's platform target.
+    return {
+        "minecraft_version": str(raw.get("minecraft_version", "")).strip(),
+        "loader": str(raw.get("loader", "")).strip(),
+        "mappings": str(raw.get("mappings", raw.get("yarn_mappings", ""))).strip(),
     }
-    # Target-neutral evidence batching may run before platform selection. Missing
-    # coordinates remain blank and are never replaced by a historical default.
-    return values
 
 
 def _capabilities(domain: Mapping[str, Any]) -> tuple[str, ...]:
