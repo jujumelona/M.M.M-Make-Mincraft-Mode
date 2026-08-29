@@ -253,14 +253,14 @@ def _projected_span(
 def _ground_source_anchor(
     clause: Mapping[str, Any],
     source_anchor: str,
-    *,
-    semantic_context: Sequence[Any] = (),
 ) -> dict[str, Any] | None:
     """Resolve a model semantic locator to an exact host-owned source span.
 
     The locator may be short, repeated, whitespace-normalized, or contain a copy error.
     Grounding is based on evidence in the authored clause, not magic character counts or
     fixed similarity thresholds. Exact host text always remains the provenance authority.
+    A typo-tolerant locator must itself retain authored lexical evidence; a related semantic
+    statement cannot bootstrap provenance for an unrelated locator.
     """
 
     text = str(clause["text"])
@@ -302,9 +302,8 @@ def _ground_source_anchor(
             "model_anchor": anchor,
         }
 
-    terms = _semantic_terms((anchor, *semantic_context))
-    supported_terms = tuple(term for term in terms if term and term in text_form)
-    if not supported_terms:
+    anchor_terms = _semantic_terms((anchor,))
+    if not any(term and term in text_form for term in anchor_terms):
         return None
 
     matcher = SequenceMatcher(None, anchor_form, text_form, autojunk=False)
@@ -403,11 +402,7 @@ def _normalize_requirement(
         )
 
     source_anchor = str(raw.get("source_anchor") or "").strip()
-    grounding = _ground_source_anchor(
-        clauses_by_index[clause_index],
-        source_anchor,
-        semantic_context=(semantic_statement,),
-    )
+    grounding = _ground_source_anchor(clauses_by_index[clause_index], source_anchor)
     if grounding is None:
         return (
             None,
