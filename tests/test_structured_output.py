@@ -76,6 +76,35 @@ def test_invalid_json_reports_location_and_preserves_original_output() -> None:
     assert raised.value.errors[0].startswith("$: invalid JSON at line ")
 
 
+def test_invalid_json_console_log_contains_exact_raw_output_and_location(capsys) -> None:
+    output = '{"name":"VISIBLE_RAW_FAILURE"\n"count":1}'
+
+    with pytest.raises(StructuredOutputValidationError):
+        _validate(output)
+
+    logged = capsys.readouterr().out
+    assert "MODEL STRUCTURED OUTPUT FAILURE:" in logged
+    assert "VISIBLE_RAW_FAILURE" in logged
+    assert '"output_chars"' in logged
+    assert '"output_sha256"' in logged
+    assert "invalid JSON at line" in logged
+    assert '"response_schema"' in logged
+
+
+def test_schema_failure_console_log_contains_exact_path_schema_and_raw_output(capsys) -> None:
+    output = '{"name":"VISIBLE_SCHEMA_FAILURE","count":"wrong"}'
+
+    with pytest.raises(StructuredOutputValidationError):
+        _validate(output)
+
+    logged = capsys.readouterr().out
+    assert "MODEL STRUCTURED OUTPUT FAILURE:" in logged
+    assert "VISIBLE_SCHEMA_FAILURE" in logged
+    assert "$[\\\"count\\\"]" in logged
+    assert "is not of type 'integer'" in logged
+    assert '"required": ["name", "count"]' in logged
+
+
 def test_json_without_schema_is_still_strictly_validated() -> None:
     request = GenerationRequest(
         messages=({"role": "user", "content": "json only"},),
