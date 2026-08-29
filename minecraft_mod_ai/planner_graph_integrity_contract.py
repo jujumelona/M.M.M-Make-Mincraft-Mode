@@ -3,9 +3,8 @@ from __future__ import annotations
 """Restore production-depth planning without moving semantic authority.
 
 The authored request remains owned by ``semantic_requirement_authority``. This contract
-adds four late planning policies after that authority is installed:
+adds three late planning policies after that authority is installed:
 
-* semantic model calls must decompose compound clauses into independently testable leaves;
 * game design must be completed at reusable subsystem granularity before ecosystem search;
 * design subsystems become retrieval/reuse facets under the already-approved requirement
   identities, never new public requirements; and
@@ -26,10 +25,10 @@ from .canonical_capability_ontology import atomic_capability_definitions
 
 _INSTALLED = False
 _MARKER = "__mmm_cross_system_dependencies__"
-_SEMANTIC_MARKER = "__mmm_deep_semantic_leaf_planning__"
 _DESIGN_MARKER = "__mmm_production_depth_game_design__"
 _REUSE_MARKER = "__mmm_design_facet_retrieval__"
-_TOKEN = re.compile(r"[\w]{2,}", re.UNICODE)
+_TOKEN = re.compile(r"[\w]+", re.UNICODE)
+_CAPABILITY_ID_MAX_LENGTH = 128
 
 
 def _task_capability(gap: Mapping[str, Any]) -> str:
@@ -135,68 +134,6 @@ def _compile_tasks_with_cross_system_dependencies(
     )
 
 
-def _semantic_model_with_leaf_decomposition(
-    router: Any,
-    clauses: Sequence[Mapping[str, Any]],
-    *,
-    repair_diagnostics: Sequence[Mapping[str, Any]] = (),
-) -> Any:
-    """Run the canonical semantic call without an arbitrary per-clause item ceiling."""
-
-    from . import semantic_requirement_authority as semantic
-
-    max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
-    parameters = semantic._semantic_schema(max_clause_index, max(1, len(clauses) * 64))
-    requirements = parameters.get("properties", {}).get("requirements")
-    if isinstance(requirements, dict):
-        # The request itself determines cardinality. Small-model schemas used to cap one
-        # clause at eight leaves, which silently forced unrelated mechanics back together.
-        requirements.pop("maxItems", None)
-
-    messages = semantic._model_messages(
-        clauses,
-        repair_diagnostics=repair_diagnostics,
-    )
-    if messages and isinstance(messages[0], dict):
-        messages = [dict(item) for item in messages]
-        messages[0]["content"] = (
-            str(messages[0].get("content") or "")
-            + "\n\nDECOMPOSITION DEPTH CONTRACT: A clause may contain many independent "
-            "behaviors even when the author used no punctuation. Split conjunctions, "
-            "sequences, lists, resource flows, state transitions, purchases, assembly "
-            "steps, upgrades, travel phases, combat outcomes, world interactions, and "
-            "persistence-visible outcomes whenever each can be implemented and observed "
-            "independently. Never compress several verbs or several player-visible "
-            "outcomes into one broad umbrella requirement merely to keep the response "
-            "short. Emit as many leaf requirements as the authored clause actually "
-            "contains; there is no fixed item target. Each leaf must have one concrete "
-            "Given/When/Then behavior. Do not invent unrelated features, implementation "
-            "classes, APIs, networking, storage, UI, or third-party mods that the request "
-            "does not require."
-        )
-
-    native = getattr(router, "generate_tool_decision", None)
-    if callable(native):
-        return native(
-            "planner",
-            messages,
-            tool_name="compile_semantic_requirements",
-            parameters=parameters,
-            description=(
-                "Compile every independently observable authored behavior into semantic "
-                "leaf requirements. The host owns exact source grounding."
-            ),
-        )
-    raw = router.generate_text(
-        "planner",
-        messages,
-        response_format="text",
-        response_schema=None,
-        enable_tools=False,
-    )
-    return semantic._parse_json(raw)
-
-
 def _production_depth_game_design_prompt() -> str:
     """Require a design artifact that is useful before any donor/reuse search."""
 
@@ -229,14 +166,22 @@ def _production_depth_game_design_prompt() -> str:
     )
 
 
-def _facet_identifier(namespace: str, text: str) -> str:
-    clean = re.sub(r"[^a-z0-9_]+", "_", text.casefold()).strip("_")
+def _bounded_capability(prefix: str, raw_suffix: str, *, seed: str) -> str:
+    clean = re.sub(r"[^a-z0-9_]+", "_", raw_suffix.casefold()).strip("_")
     clean = re.sub(r"_+", "_", clean)
-    if clean and clean[0].isalpha():
-        suffix = clean[:52]
-    else:
-        suffix = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
-    return f"design.{namespace}.{suffix}"
+    if not clean or not clean[0].isalpha():
+        clean = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    available = _CAPABILITY_ID_MAX_LENGTH - len(prefix)
+    if len(clean) <= available:
+        return prefix + clean
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    readable = clean[: max(0, available - len(digest) - 1)].rstrip("_")
+    suffix = f"{readable}_{digest}" if readable else digest[:available]
+    return prefix + suffix
+
+
+def _facet_identifier(namespace: str, text: str) -> str:
+    return _bounded_capability(f"design.{namespace}.", text, seed=text)
 
 
 def _append_design_facet(
@@ -278,18 +223,16 @@ def _design_facets(design: Mapping[str, Any]) -> list[dict[str, str]]:
         for index, raw in enumerate(raw_modules):
             if not isinstance(raw, Mapping):
                 continue
-            plugin_id = re.sub(
-                r"[^a-z0-9_]+",
-                "_",
-                str(raw.get("plugin_id") or "").strip().casefold(),
-            ).strip("_")
+            plugin_id = str(raw.get("plugin_id") or "").strip()
             if not plugin_id:
                 continue
             reason = str(raw.get("reason") or plugin_id)
             _append_design_facet(
                 output,
                 seen,
-                capability=f"design.module.{plugin_id[:63]}",
+                capability=_bounded_capability(
+                    "design.module.", plugin_id, seed=f"module:{plugin_id}:{reason}"
+                ),
                 label=plugin_id.replace("_", " "),
                 detail=reason,
                 source=f"game_design.modules[{index}]",
@@ -363,31 +306,34 @@ def _facet_work_index(
     facet_index: int,
     facet_count: int,
 ) -> int:
-    """Bind a design facet to the closest authored requirement, preserving order as fallback."""
+    """Bind a design facet to the best authored requirement without magic score cutoffs."""
 
     facet_text = f"{facet.get('label', '')} {facet.get('detail', '')}"
     facet_tokens = _text_tokens(facet_text)
     best_index = 0
-    best_score = -1.0
+    best_key: tuple[int, float, float] | None = None
+    any_lexical_overlap = False
     for index, candidate in enumerate(work):
         candidate_text = _work_text(candidate)
         candidate_tokens = _text_tokens(candidate_text)
         overlap = len(facet_tokens & candidate_tokens)
-        lexical = overlap / max(1, len(facet_tokens))
+        if overlap:
+            any_lexical_overlap = True
+        lexical = overlap / len(facet_tokens) if facet_tokens else 0.0
         ratio = SequenceMatcher(
             None,
             facet_text.casefold(),
             candidate_text.casefold(),
             autojunk=False,
         ).ratio()
-        score = lexical * 4.0 + ratio
-        if score > best_score:
-            best_score = score
+        key = (overlap, lexical, ratio)
+        if best_key is None or key > best_key:
+            best_key = key
             best_index = index
 
-    if best_score <= 0.15 and work:
-        # When languages/wording differ, narrative order is a safer deterministic fallback
-        # than attaching every facet to the first broad requirement.
+    if not any_lexical_overlap and work:
+        # Cross-language wording has no reliable lexical evidence. Preserve narrative order
+        # rather than inventing an arbitrary similarity cutoff.
         best_index = min(
             len(work) - 1,
             (facet_index * len(work)) // max(1, facet_count),
@@ -489,6 +435,8 @@ def _compile_pre_retrieval_plan_with_design_facets(
                 "work_id": str(owner.get("work_id") or ""),
                 "requirement_ref": str(owner.get("requirement_ref") or ""),
                 "source": facet["source"],
+                "label": facet["label"],
+                "detail": facet["detail"],
             }
         )
 
@@ -515,21 +463,14 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    from . import game_design as game_design
+    from . import game_design
     from . import reuse_planner as reuse
-    from . import semantic_requirement_authority as semantic
 
     original_compile = _evidence._compile_tasks
     if not getattr(original_compile, _MARKER, False):
         _compile_tasks_with_cross_system_dependencies.__wrapped__ = original_compile  # type: ignore[attr-defined]
         setattr(_compile_tasks_with_cross_system_dependencies, _MARKER, True)
         _evidence._compile_tasks = _compile_tasks_with_cross_system_dependencies
-
-    original_semantic_call = semantic._call_semantic_model
-    if not getattr(original_semantic_call, _SEMANTIC_MARKER, False):
-        _semantic_model_with_leaf_decomposition.__wrapped__ = original_semantic_call  # type: ignore[attr-defined]
-        setattr(_semantic_model_with_leaf_decomposition, _SEMANTIC_MARKER, True)
-        semantic._call_semantic_model = _semantic_model_with_leaf_decomposition
 
     original_design_prompt = game_design._system_prompt
     if not getattr(original_design_prompt, _DESIGN_MARKER, False):
@@ -551,6 +492,5 @@ __all__ = [
     "_design_facets",
     "_facet_work_index",
     "_production_depth_game_design_prompt",
-    "_semantic_model_with_leaf_decomposition",
     "install",
 ]
