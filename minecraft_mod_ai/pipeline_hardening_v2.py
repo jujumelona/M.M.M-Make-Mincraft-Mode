@@ -64,7 +64,7 @@ def _stable_unique(values: Sequence[str], *, limit: int | None = None) -> tuple[
 def _search_variants(query: str) -> tuple[str, ...]:
     """Return a tiny bounded set of useful Modrinth queries.
 
-    Generated implementation identifiers are especially bad search queries.  Keep the
+    Generated implementation identifiers are especially bad search queries. Keep the
     original semantic phrase, but add one de-noised variant so a generated class/task
     name cannot collapse discovery to zero results.
     """
@@ -114,27 +114,37 @@ def _install_cheap_target_normalization() -> None:
         return
 
     def normalize(
-        *,
         minecraft_version: str | None,
         loader: str | None,
-        target_profile: str | None,
-    ) -> tuple[str | None, str | None]:
-        version = str(minecraft_version or "").strip() or None
-        loader_value = str(loader or "").strip().lower() or None
+        *,
+        target_profile: str,
+        exact_required: bool = False,
+    ) -> Any:
         profile = str(target_profile or "").strip().lower()
+        if profile != "minecraft_mod":
+            return ecosystem._DiscoveryTarget("not_applicable", "not_applicable", False)
 
-        if profile == "minecraft_mod" and version:
-            # Loader-provider existence is a cheap host-owned registry check.  Do NOT
-            # resolve PlatformAdapter here: that performs remote platform/pack metadata
-            # work and turned every search request into a full target-resolution pass.
-            resolved_loader = loader_value or "fabric"
-            try:
-                provider_for_loader(resolved_loader)
-            except ValueError as exc:
-                raise ValueError(str(exc)) from exc
-            return version, resolved_loader
+        version = str(minecraft_version or "").strip()
+        loader_value = str(loader or "").strip().casefold()
+        if bool(version) != bool(loader_value):
+            raise ecosystem.SpecValidationError(
+                "Minecraft ecosystem target requires both minecraft_version and loader."
+            )
+        if not version:
+            if exact_required:
+                raise ecosystem.SpecValidationError(
+                    "Exact ecosystem inspection requires the host-selected Minecraft target."
+                )
+            return ecosystem._DiscoveryTarget("unresolved", "unresolved", False)
 
-        return version, loader_value
+        # Provider existence is a cheap host-owned registry check. Do NOT resolve a
+        # PlatformAdapter here: that performs remote platform/pack metadata work and
+        # turned every search/inspection call into another target-resolution pass.
+        try:
+            provider_for_loader(loader_value)
+        except ValueError as exc:
+            raise ecosystem.SpecValidationError(str(exc)) from exc
+        return ecosystem._DiscoveryTarget(version, loader_value, True)
 
     normalize._mmm_cheap_target_normalization = True  # type: ignore[attr-defined]
     ecosystem._normalize_discovery_target = normalize
@@ -167,9 +177,9 @@ def _install_verified_mod_search() -> None:
             variants = _search_variants(query) or (query,)
             for variant in variants:
                 try:
-                    # Deliberately omit exact version/loader facets here.  This is
-                    # semantic candidate recall.  Exact compatibility is verified from
-                    # Modrinth version metadata in the next stage.
+                    # Deliberately omit exact version/loader facets here. This is
+                    # semantic candidate recall. Exact compatibility is ranked in the
+                    # matrix and fully inspected only after target selection.
                     page = client.search(
                         "modrinth",
                         variant,
@@ -216,6 +226,14 @@ def _install_verified_mod_search() -> None:
         queries: Sequence[str],
         client: Any,
     ) -> tuple[dict[str, dict[str, tuple[str, ...]]], tuple[str, ...]]:
+        """Build a cheap exact-target support matrix from Modrinth search metadata.
+
+        This stage intentionally does not inspect every broad candidate against every
+        Minecraft version. That Cartesian product can explode into thousands of API
+        requests. Exact version/loader facets rank hypotheses; the existing deep stage
+        then inspects project/version metadata only for the selected target.
+        """
+
         query_tuple = tuple(str(query) for query in queries)
         matrix_lists: dict[str, dict[str, list[str]]] = {
             adapter.adapter_id: {query: [] for query in query_tuple}
@@ -223,79 +241,75 @@ def _install_verified_mod_search() -> None:
         }
 
         cached = _cache_get((id(client), query_tuple))
-        if cached is None:
-            # Remain correct when this helper is called independently in a unit test or
-            # alternate host path.
-            neutral, neutral_errors = broad_neutral(query_tuple, client)
-            cached = _cache_get((id(client), query_tuple))
-            if cached is None:
-                cached = (neutral, neutral_errors, 0)
+        if cached is not None:
+            _neutral, neutral_errors, neutral_successes = cached
+            if neutral_successes == 0 and neutral_errors:
+                detail = "; ".join(neutral_errors[:8])
+                raise ValueError(
+                    "Modrinth search source unavailable; refusing to score Minecraft "
+                    f"targets from empty transport evidence. Diagnostics: {detail}"
+                )
 
-        neutral, neutral_errors, neutral_successes = cached
-        errors = list(neutral_errors)
+        errors: list[str] = []
+        successful_requests = 0
 
-        if neutral_successes == 0 and neutral_errors:
-            detail = "; ".join(neutral_errors[:8])
-            raise ValueError(
-                "Modrinth search source unavailable; refusing to score Minecraft "
-                f"targets from empty transport evidence. Diagnostics: {detail}"
+        def run(adapter: Any, query: str) -> tuple[str, str, tuple[str, ...], tuple[str, ...], int]:
+            ids: list[str] = []
+            local_errors: list[str] = []
+            successes = 0
+            for variant in (_search_variants(query) or (query,)):
+                try:
+                    page = client.search(
+                        "modrinth",
+                        variant,
+                        limit=16,
+                        minecraft_version=adapter.minecraft_version,
+                        loader=adapter.loader,
+                        target_profile="minecraft_mod",
+                    )
+                    successes += 1
+                    ids.extend(optimizer._candidate_ids(page))
+                except Exception as exc:  # noqa: BLE001 - source state is aggregated
+                    local_errors.append(
+                        "matrix:"
+                        f"{adapter.minecraft_version}/{adapter.loader}:{query!r} "
+                        f"variant={variant!r}: {type(exc).__name__}: {exc}"
+                    )
+            return (
+                adapter.adapter_id,
+                query,
+                _stable_unique(ids, limit=24),
+                tuple(local_errors),
+                successes,
             )
 
-        project_to_queries: dict[str, set[str]] = {}
-        for query, candidate_ids in neutral.items():
-            for candidate_id in candidate_ids:
-                if not str(candidate_id).startswith("modrinth:"):
-                    continue
-                project_id = str(candidate_id).split(":", 1)[1].strip()
-                if project_id:
-                    project_to_queries.setdefault(project_id, set()).add(query)
+        jobs = [(adapter, query) for adapter in adapters for query in query_tuple]
+        with ThreadPoolExecutor(
+            max_workers=min(optimizer._workers(), max(1, len(jobs))),
+            thread_name_prefix="mmm-platform-exact-mod-search",
+        ) as pool:
+            futures = {
+                pool.submit(run, adapter, query): (adapter, query)
+                for adapter, query in jobs
+            }
+            for future in as_completed(futures):
+                adapter, query = futures[future]
+                try:
+                    adapter_id, resolved_query, ids, local_errors, successes = future.result()
+                    matrix_lists[adapter_id][resolved_query].extend(ids)
+                    errors.extend(local_errors)
+                    successful_requests += successes
+                except Exception as exc:  # pragma: no cover - defensive executor boundary
+                    errors.append(
+                        "matrix:"
+                        f"{adapter.minecraft_version}/{adapter.loader}:{query!r}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
 
-        jobs = [
-            (adapter, project_id)
-            for adapter in adapters
-            for project_id in sorted(project_to_queries)
-        ]
-        inspection_successes = 0
-
-        def inspect(adapter: Any, project_id: str) -> tuple[str, str, bool]:
-            value = client.inspect_modrinth_project(
-                project_id,
-                minecraft_version=adapter.minecraft_version,
-                loader=adapter.loader,
-            )
-            metrics = optimizer._inspection_metrics(value)
-            return adapter.adapter_id, project_id, bool(metrics.get("eligible"))
-
-        if jobs:
-            with ThreadPoolExecutor(
-                max_workers=min(optimizer._workers(), len(jobs)),
-                thread_name_prefix="mmm-platform-mod-compat",
-            ) as pool:
-                futures = {
-                    pool.submit(inspect, adapter, project_id): (adapter, project_id)
-                    for adapter, project_id in jobs
-                }
-                for future in as_completed(futures):
-                    adapter, project_id = futures[future]
-                    try:
-                        adapter_id, resolved_project, eligible = future.result()
-                        inspection_successes += 1
-                        if not eligible:
-                            continue
-                        candidate_id = f"modrinth:{resolved_project}"
-                        for query in project_to_queries.get(resolved_project, ()):
-                            matrix_lists[adapter_id][query].append(candidate_id)
-                    except Exception as exc:  # noqa: BLE001 - classify source failure
-                        errors.append(
-                            "compat:"
-                            f"{adapter.minecraft_version}/{adapter.loader}:"
-                            f"{project_id}: {type(exc).__name__}: {exc}"
-                        )
-
-        if jobs and inspection_successes == 0 and errors:
-            detail = "; ".join(errors[-8:])
+        if jobs and successful_requests == 0 and errors:
+            detail = "; ".join(errors[:8])
             raise ValueError(
-                "Modrinth compatibility metadata source unavailable; refusing to "
+                "Modrinth compatibility search source unavailable; refusing to "
                 "interpret transport failures as unsupported mods or downgrade the "
                 f"Minecraft target. Diagnostics: {detail}"
             )
