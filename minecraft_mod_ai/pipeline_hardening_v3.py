@@ -2,8 +2,6 @@ from __future__ import annotations
 
 """Compatibility repair for machine-only Minecraft pack metadata discovery."""
 
-from typing import Any
-
 from .pipeline_hardening import _replace_bound_references
 
 _INSTALLED = False
