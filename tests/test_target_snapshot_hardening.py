@@ -180,7 +180,7 @@ def test_live_lowering_preserves_validated_retain_only_plan_with_base_content(
         ),
     )
 
-    lowered = central_contract.lower_live_modules(result)
+    lowered = central_contract.lower_live_modules(SimpleNamespace(), result)
 
     assert lowered is result
     assert result.modules == ()
