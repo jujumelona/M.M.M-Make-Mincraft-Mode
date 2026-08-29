@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as project_rag
@@ -60,22 +62,41 @@ def test_legacy_pre_design_collector_is_not_runtime_owner() -> None:
     )
 
 
-def test_forced_project_rag_is_scoped_to_current_domain() -> None:
+def test_forced_project_rag_is_scoped_and_externalized_by_current_domain(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    huge_gameplay = "gameplay-evidence-" + ("G" * 20_000)
+    huge_assets = "asset-evidence-" + ("A" * 20_000)
+    forced = {
+        "schema_version": "mmm/forced-pre-design-rag-v2",
+        "query_count": 2,
+        "domains": [
+            {
+                "domain_id": "gameplay",
+                "queries": [{"query": "gameplay", "content": huge_gameplay}],
+            },
+            {
+                "domain_id": "assets",
+                "queries": [{"query": "assets", "content": huge_assets}],
+            },
+        ],
+    }
+
     value = agentic._domain_evidence_slice(
         "gameplay",
-        {
-            "forced_project_rag": {
-                "schema_version": "mmm/forced-pre-design-rag-v2",
-                "query_count": 2,
-                "domains": [
-                    {"domain_id": "gameplay", "queries": [{"query": "gameplay"}]},
-                    {"domain_id": "assets", "queries": [{"query": "assets"}]},
-                ],
-            }
-        },
+        {"forced_project_rag": forced},
     )
 
-    forced = value["forced_project_rag"]
-    assert forced["domain_id"] == "gameplay"
-    assert forced["queries"] == [{"query": "gameplay"}]
-    assert "domains" not in forced
+    assert set(value) == {"evidence_document"}
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    assert huge_gameplay not in rendered
+    assert huge_assets not in rendered
+
+    document = value["evidence_document"]
+    raw = json.loads(Path(document["raw_path"]).read_text(encoding="utf-8"))
+    scoped = raw["forced_project_rag"]
+    assert scoped["domain_id"] == "gameplay"
+    assert scoped["queries"] == [{"query": "gameplay", "content": huge_gameplay}]
+    assert "domains" not in scoped
+    assert huge_assets not in json.dumps(raw, ensure_ascii=False)
