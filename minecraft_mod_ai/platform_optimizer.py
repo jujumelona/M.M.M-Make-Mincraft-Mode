@@ -27,6 +27,28 @@ from .platform_catalog import (
 )
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_+.-]{2,}")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SEARCH_TOKEN_RE = re.compile(r"[A-Za-z0-9.+]+|[가-힣]{2,}")
+_GENERIC_QUERY_TOKENS = frozenset(
+    {
+        "minecraft",
+        "mod",
+        "mods",
+        "system",
+        "semantic",
+        "implementation",
+        "implement",
+        "task",
+        "feature",
+        "mechanic",
+        "module",
+        "generated",
+        "generator",
+        "interaction",
+        "logic",
+        "code",
+    }
+)
 _DEPENDENCY_NODE_BUDGET = 64
 
 
@@ -81,8 +103,6 @@ class TargetEvidence:
 
     @property
     def rank_key(self) -> tuple[float | int, ...]:
-        # Hard implementation coverage and verified reuse dominate quality/risk.
-        # Adoption and freshness are intentionally last.
         return (
             self.mandatory_coverage,
             self.reuse_coverage,
@@ -180,6 +200,36 @@ VersionFn = Callable[[str], Sequence[Mapping[str, Any]]]
 TargetResearchFn = Callable[[PlatformAdapter], Mapping[str, Any]]
 
 
+def _stable_unique(values: Sequence[str], *, limit: int | None = None) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+        if limit is not None and len(result) >= limit:
+            break
+    return tuple(result)
+
+
+def _search_variants(query: str) -> tuple[str, ...]:
+    """Keep the authored query and one bounded de-noised semantic variant."""
+
+    original = " ".join(str(query or "").split()).strip()
+    if not original:
+        return ()
+    expanded = _CAMEL_BOUNDARY.sub(" ", original)
+    expanded = re.sub(r"[_/:\-]+", " ", expanded)
+    useful = [
+        token
+        for token in _SEARCH_TOKEN_RE.findall(expanded)
+        if token.casefold() not in _GENERIC_QUERY_TOKENS and len(token.strip()) >= 2
+    ]
+    return _stable_unique((original, " ".join(useful[:6]).strip()), limit=2)
+
+
 def capability_queries(
     prompt: str,
     *,
@@ -253,12 +303,7 @@ def optimize_platform(
     search_fn: SearchFn | None = None,
     version_fn: VersionFn | None = None,
 ) -> PlatformOptimization:
-    """Select an executable target from verified evidence, never newest-first policy.
-
-    Synthetic ``search_fn``/``version_fn`` hooks exist only for deterministic unit
-    fixtures. Production discovery goes exclusively through ``EcosystemDiscoveryClient``
-    so network, cursor, license and exact-target policy have one owner.
-    """
+    """Select an executable target from verified evidence, never newest-first policy."""
 
     queries = capability_queries(prompt, design=design, module_kinds=module_kinds)
     platform_diagnostics: list[str] = []
@@ -283,14 +328,13 @@ def optimize_platform(
     for loader, version in target_keys:
         try:
             adapters.append(adapter_for_target(version, loader))
-        except Exception as exc:  # noqa: BLE001 - one target must not abort target evaluation
+        except Exception as exc:  # noqa: BLE001
             message = (
                 f"target resolution skipped loader={loader} version={version}: "
                 f"{type(exc).__name__}: {exc}"
             )
             resolution_errors.append(message)
             _emit_discovery_log(message, exc_info=True)
-            continue
     if not adapters:
         detail = "; ".join((*platform_diagnostics, *resolution_errors))
         raise ValueError(
@@ -310,10 +354,6 @@ def optimize_platform(
     if discovery_mode not in {"auto", "on", "off"}:
         raise ValueError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
     if discovery_mode == "off":
-        # Do not silently perform public-network discovery when the operator or test
-        # harness disabled it. A single executable provider receipt is sufficient to
-        # preserve exact target ownership; multiple unscored candidates are ambiguous
-        # and therefore fail closed instead of falling back to newest/order bias.
         if len(adapters) != 1:
             raise ValueError(
                 "Ecosystem discovery is disabled and multiple executable platform "
@@ -392,9 +432,23 @@ def _parallel_neutral_shallow(
     found: dict[str, tuple[str, ...]] = {}
     errors: list[str] = []
 
-    def run(query: str) -> tuple[str, tuple[str, ...]]:
-        page = client.search("modrinth", query, limit=20, target_profile="minecraft_mod")
-        return query, _candidate_ids(page)
+    def run(query: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        ids: list[str] = []
+        local_errors: list[str] = []
+        for variant in _search_variants(query) or (query,):
+            try:
+                page = client.search(
+                    "modrinth",
+                    variant,
+                    limit=30,
+                    target_profile="minecraft_mod",
+                )
+                ids.extend(_candidate_ids(page))
+            except Exception as exc:  # noqa: BLE001
+                local_errors.append(
+                    f"neutral:{query!r} variant={variant!r}: {type(exc).__name__}: {exc}"
+                )
+        return query, _stable_unique(ids, limit=40), tuple(local_errors)
 
     with ThreadPoolExecutor(
         max_workers=min(_workers(), max(1, len(queries))),
@@ -404,14 +458,19 @@ def _parallel_neutral_shallow(
         for future in as_completed(futures):
             query = futures[future]
             try:
-                key, ids = future.result()
+                key, ids, local_errors = future.result()
                 found[key] = ids
-            except Exception as exc:  # noqa: BLE001 - optional search failure is recorded
+                errors.extend(local_errors)
+            except Exception as exc:  # pragma: no cover
                 found[query] = ()
-                message = f"neutral:{query}: {type(exc).__name__}: {exc}"
-                errors.append(message)
-                _emit_discovery_log(f"discovery {message}", exc_info=True)
-    return found, tuple(sorted(errors))
+                errors.append(f"neutral:{query}: {type(exc).__name__}: {exc}")
+                _emit_discovery_log(
+                    f"discovery neutral:{query}: {type(exc).__name__}: {exc}",
+                    exc_info=True,
+                )
+    for query in queries:
+        found.setdefault(query, ())
+    return found, tuple(sorted(set(errors)))
 
 
 def _parallel_support_matrix(
@@ -419,21 +478,45 @@ def _parallel_support_matrix(
     queries: Sequence[str],
     client: EcosystemDiscoveryClient,
 ) -> tuple[dict[str, dict[str, tuple[str, ...]]], tuple[str, ...]]:
-    matrix: dict[str, dict[str, tuple[str, ...]]] = {
-        adapter.adapter_id: {} for adapter in adapters
+    matrix_lists: dict[str, dict[str, list[str]]] = {
+        adapter.adapter_id: {query: [] for query in queries}
+        for adapter in adapters
     }
     errors: list[str] = []
+    successful_requests = 0
 
-    def run(adapter: PlatformAdapter, query: str) -> tuple[str, str, tuple[str, ...]]:
-        page = client.search(
-            "modrinth",
+    def run(
+        adapter: PlatformAdapter,
+        query: str,
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], int]:
+        ids: list[str] = []
+        local_errors: list[str] = []
+        successes = 0
+        for variant in _search_variants(query) or (query,):
+            try:
+                page = client.search(
+                    "modrinth",
+                    variant,
+                    limit=16,
+                    minecraft_version=adapter.minecraft_version,
+                    loader=adapter.loader,
+                    target_profile="minecraft_mod",
+                )
+                successes += 1
+                ids.extend(_candidate_ids(page))
+            except Exception as exc:  # noqa: BLE001
+                local_errors.append(
+                    "matrix:"
+                    f"{adapter.minecraft_version}/{adapter.loader}:{query!r} "
+                    f"variant={variant!r}: {type(exc).__name__}: {exc}"
+                )
+        return (
+            adapter.adapter_id,
             query,
-            limit=8,
-            minecraft_version=adapter.minecraft_version,
-            loader=adapter.loader,
-            target_profile="minecraft_mod",
+            _stable_unique(ids, limit=24),
+            tuple(local_errors),
+            successes,
         )
-        return adapter.adapter_id, query, _candidate_ids(page)
 
     jobs = [(adapter, query) for adapter in adapters for query in queries]
     with ThreadPoolExecutor(
@@ -447,17 +530,32 @@ def _parallel_support_matrix(
         for future in as_completed(futures):
             adapter, query = futures[future]
             try:
-                adapter_id, key, ids = future.result()
-                matrix[adapter_id][key] = ids
-            except Exception as exc:  # noqa: BLE001 - optional matrix failure is recorded
-                matrix[adapter.adapter_id][query] = ()
-                message = (
+                adapter_id, key, ids, local_errors, successes = future.result()
+                matrix_lists[adapter_id][key].extend(ids)
+                errors.extend(local_errors)
+                successful_requests += successes
+            except Exception as exc:  # pragma: no cover
+                errors.append(
                     f"matrix:{adapter.minecraft_version}/{adapter.loader}:{query}: "
                     f"{type(exc).__name__}: {exc}"
                 )
-                errors.append(message)
-                _emit_discovery_log(f"discovery {message}", exc_info=True)
-    return matrix, tuple(sorted(errors))
+
+    if jobs and successful_requests == 0 and errors:
+        detail = "; ".join(errors[:8])
+        raise ValueError(
+            "Modrinth compatibility search source unavailable; refusing to interpret "
+            "transport failures as unsupported mods or downgrade the Minecraft target. "
+            f"Diagnostics: {detail}"
+        )
+
+    matrix = {
+        adapter_id: {
+            query: _stable_unique(candidate_ids)
+            for query, candidate_ids in by_query.items()
+        }
+        for adapter_id, by_query in matrix_lists.items()
+    }
+    return matrix, tuple(sorted(set(errors)))
 
 
 def _support_score(
@@ -502,13 +600,16 @@ def _parallel_deep(
         for future in as_completed(futures):
             try:
                 result.append(future.result())
-            except Exception as exc:  # noqa: BLE001 - one target gets fresh-only evidence
+            except Exception as exc:  # noqa: BLE001
                 adapter = futures[future]
                 message = (
                     f"deep:{adapter.minecraft_version}/{adapter.loader}: "
                     f"{type(exc).__name__}: {exc}"
                 )
-                _emit_discovery_log(f"discovery {message}; using fresh-only evidence", exc_info=True)
+                _emit_discovery_log(
+                    f"discovery {message}; using fresh-only evidence",
+                    exc_info=True,
+                )
                 result.append(
                     _fresh_only_evidence(
                         adapter,
@@ -517,7 +618,6 @@ def _parallel_deep(
                         shallow_candidate_count=shallow_candidate_count,
                     )
                 )
-                continue
     return tuple(result)
 
 
@@ -565,7 +665,7 @@ def _deep_evidence(
                     value = future.result()
                     if isinstance(value, Mapping):
                         root_inspections[project_id] = dict(value)
-                except Exception as exc:  # noqa: BLE001 - one inspection may be unavailable
+                except Exception as exc:  # noqa: BLE001
                     message = f"inspect:{project_id}: {type(exc).__name__}: {exc}"
                     errors.append(message)
                     _emit_discovery_log(f"discovery {message}; continuing", exc_info=True)
@@ -574,7 +674,7 @@ def _deep_evidence(
                     value = research_future.result()
                     if isinstance(value, Mapping):
                         research_payload = dict(value)
-                except Exception as exc:  # noqa: BLE001 - research is optional evidence
+                except Exception as exc:  # noqa: BLE001
                     message = (
                         f"rag:{adapter.minecraft_version}/{adapter.loader}: "
                         f"{type(exc).__name__}: {exc}"
@@ -710,13 +810,6 @@ def _resolve_dependency_closure(
     *,
     errors: list[str],
 ) -> dict[str, Any]:
-    """Resolve only the dependency graph reachable from candidate roots.
-
-    This is deliberately on-demand rather than a static ecosystem graph. A safety
-    budget prevents a malicious/degenerate metadata graph from expanding without
-    bound; hitting it is recorded as incomplete evidence and penalised by ranking.
-    """
-
     pending = sorted({str(value).strip() for value in seed_projects if str(value).strip()})
     seen: set[str] = set()
     exact_versions = 0
@@ -753,7 +846,7 @@ def _resolve_dependency_closure(
                 seen.add(project_id)
                 try:
                     inspection = future.result()
-                except Exception as exc:  # noqa: BLE001 - dependency evidence is optional
+                except Exception as exc:  # noqa: BLE001
                     unresolved += 1
                     message = f"dependency:{project_id}: {type(exc).__name__}: {exc}"
                     errors.append(message)
@@ -886,8 +979,6 @@ def _fresh_only_evidence(
     errors: Sequence[str],
     shallow_candidate_count: int,
 ) -> TargetEvidence:
-    """Keep an exact provider target usable when optional evidence I/O fails."""
-
     return TargetEvidence(
         adapter=adapter,
         requested_capabilities=tuple(queries),
@@ -1043,6 +1134,7 @@ __all__ = [
     "PlatformOptimization",
     "TargetEvidence",
     "TargetResearchFn",
+    "_search_variants",
     "capability_queries",
     "optimize_platform",
 ]
