@@ -18,7 +18,7 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     )
 
     domains = brief["domains"]
-    assert [domain["domain_id"] for domain in domains] == ["pre_design_request"]
+    assert [domain["domain_id"] for domain in domains] == ["request"]
     providers = set(domains[0]["providers"])
     assert "official_docs" in providers
     assert "project_rag" in providers
@@ -61,8 +61,8 @@ def test_host_parser_accepts_compact_qwen_claim_variants() -> None:
         '{"claims":["Fabric API 근거"],"gaps":[],"next_queries":[],'
         '"sufficient":true}'
     )
-    note = agentic._parse_research_note(raw, "pre_design_request")
+    note = agentic._parse_research_note(raw, "request")
 
-    assert note["domain_id"] == "pre_design_request"
+    assert note["domain_id"] == "request"
     assert note["claims"] == [{"claim": "Fabric API 근거", "evidence_refs": []}]
     assert note["sufficient"] is True
