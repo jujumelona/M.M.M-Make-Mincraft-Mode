@@ -51,9 +51,9 @@ def _copy_request_with(request: Any, **changes: Any) -> Any:
 def _structured_repair_request(request: Any, exc: Any) -> Any:
     """Build one compact serialization-repair turn without replaying the task.
 
-    The invalid output is embedded verbatim rather than JSON-escaping it.  This keeps
-    already-valid values visible to the repair model while the validator diagnostics and
-    response schema remain host-owned constraints.
+    The invalid output is embedded verbatim rather than JSON-escaping it. This keeps
+    already-valid values visible to the repair model while validator diagnostics and
+    the response schema remain host-owned constraints.
     """
 
     schema = getattr(request, "response_schema", None)
@@ -61,11 +61,11 @@ def _structured_repair_request(request: Any, exc: Any) -> Any:
     errors = list(getattr(exc, "errors", ()) or ())
     schema_payload = dict(schema) if isinstance(schema, Mapping) else None
     repair_context = (
-        "INVALID OUTPUT (verbatim)\n"
+        "invalid_output (verbatim):\n"
         f"{invalid_output}\n"
-        "VALIDATION ERRORS\n"
+        "validation_errors:\n"
         + json.dumps(errors, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        + "\nRESPONSE SCHEMA\n"
+        + "\nresponse_schema:\n"
         + json.dumps(schema_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     )
     messages = (
