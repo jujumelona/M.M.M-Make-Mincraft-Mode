@@ -27,6 +27,12 @@ _EXTERNAL_AGENT_TOOLS = frozenset(
         "external_mcp_call",
     }
 )
+_PRE_TARGET_RESEARCH_TOOLS = frozenset(
+    {
+        "discover_ecosystem_resources",
+        "search_project_rag",
+    }
+)
 _COMPACT_CONTEXT_MARKER = "_mmm_compact_skill_context_v1"
 
 
@@ -81,6 +87,15 @@ def _reviewed_stage_for_model_tool(name: str, stage: str) -> bool:
     return stage in REVIEWED_TOOL_STAGES.get(canonical, frozenset())
 
 
+def _target_is_bound() -> bool:
+    """Return whether a concrete Minecraft target is available to standalone MCP tools."""
+
+    return bool(
+        os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
+        or os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+    )
+
+
 def filter_tool_schemas_for_role(
     stage: str,
     model_role: str,
@@ -107,10 +122,13 @@ def filter_tool_schemas_for_role(
         allowed.update(_EXTERNAL_AGENT_TOOLS)
 
     selected_stage = stage.strip().lower()
+    pre_target_research = selected_stage == "research" and not _target_is_bound()
     result: list[Mapping[str, Any]] = []
     for schema in surface:
         name = _schema_tool_name(schema)
         if not name:
+            continue
+        if pre_target_research and name in _PRE_TARGET_RESEARCH_TOOLS:
             continue
         if name in _EXTERNAL_AGENT_TOOLS:
             if name in allowed:
@@ -313,7 +331,10 @@ def _tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
 
 def _environment_target() -> dict[str, str]:
     return {
-        "minecraft_version": os.environ.get("MMM_MINECRAFT_VERSION", "").strip(),
+        "minecraft_version": (
+            os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
+            or os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
+        ),
         "loader": os.environ.get("MMM_LOADER", "fabric").strip() or "fabric",
         "mappings": os.environ.get("MMM_MAPPINGS", "").strip(),
     }
