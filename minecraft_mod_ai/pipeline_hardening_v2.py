@@ -11,7 +11,7 @@ target-faceted search result.
 
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
