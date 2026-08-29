@@ -22,6 +22,7 @@ from .minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
 )
+from .pre_design_domain_research import research_document_domain
 from .pre_design_local_project_evidence import collect_local_project_evidence
 from .research_coordinator import collect_technology_radar
 from .retrieval import BUILTIN_CORPUS, OfficialCorpusIndex
@@ -588,8 +589,9 @@ def collect_design_research(
                 domain_evidence,
             )
             with target_neutral_research_scope():
-                raw_note = project_rag._research_document_domain(
+                raw_note = research_document_domain(
                     agentic,
+                    project_rag,
                     router,
                     prompt=prompt,
                     domain=domain,
