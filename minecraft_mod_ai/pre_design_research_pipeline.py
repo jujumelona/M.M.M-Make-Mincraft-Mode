@@ -20,7 +20,9 @@ from copy import deepcopy
 from typing import Any
 
 from .central_research import normalize_research_brief, retrieve_domain_evidence
+from .external_procedural_skill_contract import attach_procedural_skillbank
 from .research_coordinator import collect_technology_radar
+from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
 
 
@@ -84,8 +86,6 @@ def _brief_model_index(
     domain_ids: list[str],
     agentic: Any,
 ) -> dict[str, Any]:
-    """Build a compact coverage index; full brief remains in the host ledger."""
-
     summary = ""
     unresolved_count = 0
     if isinstance(research_brief, Mapping):
@@ -118,6 +118,7 @@ def _note_summary(note: Any, *, agentic: Any) -> dict[str, Any]:
     claims = note.get("claims", [])
     gaps = note.get("gaps", [])
     next_queries = note.get("next_queries", [])
+    procedures = note.get("procedures", [])
     return {
         "domain_id": str(note.get("domain_id", "unknown") or "unknown"),
         "sufficient": bool(note.get("sufficient", False)),
@@ -125,6 +126,7 @@ def _note_summary(note: Any, *, agentic: Any) -> dict[str, Any]:
         "claim_count": len(claims) if isinstance(claims, list) else 0,
         "gap_count": len(gaps) if isinstance(gaps, list) else 0,
         "next_query_count": len(next_queries) if isinstance(next_queries, list) else 0,
+        "procedure_count": len(procedures) if isinstance(procedures, list) else 0,
         "note_sha256": agentic._json_sha256(note),
     }
 
@@ -160,14 +162,13 @@ def _enrich_note_detail(
     note_index: int,
     note: Mapping[str, Any],
 ) -> None:
-    """Add evidence in place and roll back only the item that exceeds the live budget."""
-
     summary = dict(view["domain_notes"][note_index])
     base_detail = {
         **summary,
         "claims": [],
         "gaps": [],
         "next_queries": [],
+        "procedures": [],
     }
     previous = view["domain_notes"][note_index]
     view["domain_notes"][note_index] = base_detail
@@ -175,7 +176,7 @@ def _enrich_note_detail(
         view["domain_notes"][note_index] = previous
         return
 
-    for field in ("claims", "gaps", "next_queries"):
+    for field in ("claims", "gaps", "next_queries", "procedures"):
         raw_items = note.get(field, [])
         if not isinstance(raw_items, list):
             continue
@@ -192,8 +193,6 @@ def _bounded_model_view(
     prompt: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Preserve the full ledger and project only budget-proven detail to design workers."""
-
     if _design_request_fits(agentic, router, prompt, payload):
         return payload
 
@@ -206,6 +205,7 @@ def _bounded_model_view(
     host_ledger = {
         "research_brief": deepcopy(research_brief),
         "domain_notes": deepcopy(domain_notes),
+        "procedural_skillbank": deepcopy(payload.get("procedural_skillbank")),
         "research_sha256": full_research_sha256,
     }
     view = dict(payload)
@@ -235,6 +235,7 @@ def _bounded_model_view(
             "research_brief": view.get("research_brief"),
             "domain_notes": view.get("domain_notes"),
             "deterministic": view.get("deterministic"),
+            "procedural_skillbank": view.get("procedural_skillbank"),
             "errors": view.get("errors"),
         }
     )
@@ -249,6 +250,7 @@ def _bounded_model_view(
             {
                 "research_brief": brief,
                 "deterministic": view.get("deterministic"),
+                "procedural_skillbank": view.get("procedural_skillbank"),
             }
         )
     return view
@@ -260,7 +262,7 @@ def collect_design_research(
     *,
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collect all pre-design evidence once, then run domain agents over one model slot."""
+    """Collect evidence once, compile explicit skills, then project the live-budget view."""
 
     from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
@@ -315,7 +317,7 @@ def collect_design_research(
             )
         )
 
-    payload = {
+    payload: dict[str, Any] = {
         "schema_version": "mmm/agentic-pre-design-research-v1",
         "research_brief": research_brief,
         "deterministic": deterministic,
@@ -329,6 +331,8 @@ def collect_design_research(
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
         },
     }
+    payload = attach_procedural_skillbank(router, prompt, payload)
+    payload = compose_research_skillbank(router, prompt, payload)
     payload["research_sha256"] = agentic._json_sha256(payload)
     return _bounded_model_view(agentic, router, prompt, payload)
 
