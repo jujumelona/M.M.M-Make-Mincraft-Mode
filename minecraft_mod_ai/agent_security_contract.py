@@ -24,13 +24,7 @@ def install(
     agentic_optimization_module: Any | None = None,
     agent_tool_runtime_module: Any | None = None,
 ) -> None:
-    """Harden composed agent boundaries without introducing another runtime.
-
-    Existing retrieval and repair-memory owners stay authoritative. This contract
-    narrows their model-facing boundaries with scoped RAG receipts, deterministic
-    evidence gating, and sanitized hierarchical repair memory. Skill/tool context is
-    owned directly by ``agent_capability_context`` and is not rewrapped here.
-    """
+    """Harden active agent boundaries without reviving retired research wrappers."""
 
     if getattr(model_router_module, _INSTALL_MARKER, False):
         return
@@ -40,17 +34,9 @@ def install(
     if agent_tool_runtime_module is None:
         from . import agent_tool_runtime as agent_tool_runtime_module
 
-    original_harden = pre_design_rag_module.harden_pre_design_research
-
-    def harden(agentic_module: Any) -> None:
-        original_harden(agentic_module)
-        _install_scoped_domain_receipt(pre_design_rag_module, agentic_module)
-
-    harden.__wrapped__ = original_harden  # type: ignore[attr-defined]
-    pre_design_rag_module.harden_pre_design_research = harden
-
-    # The production research module was composed before this post-bootstrap contract
-    # is installed, so harden its current outermost evidence slice once as well.
+    # Pre-design collection is now owned directly by pre_design_research_pipeline.
+    # Security scopes the active research slice in place; it must not depend on or
+    # recreate the retired harden_pre_design_research monkeypatch.
     _install_scoped_domain_receipt(pre_design_rag_module, agentic_research_module)
     model_router_module._usable_rag_result = usable_rag_result
     _install_repair_memory_boundary(
