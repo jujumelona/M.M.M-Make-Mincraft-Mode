@@ -5,6 +5,7 @@ from functools import wraps
 import pytest
 
 import minecraft_mod_ai  # noqa: F401  # package import must complete runtime bootstrap
+from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.runtime_wrapper_integrity import (
     RuntimeWrapperIntegrityError,
     audit_installed_wrappers,
@@ -19,6 +20,15 @@ def test_all_installed_mmm_wrappers_preserve_original_call_surface() -> None:
     assert report.ok, "runtime wrapper API drift detected:\n" + "\n".join(
         f"{issue.binding}: {issue.error}" for issue in report.issues
     )
+
+
+def test_live_target_lowering_does_not_rebind_complete_planner_session() -> None:
+    current = CompleteGameDesignPlanner._plan_in_session
+    seen: set[int] = set()
+    while callable(current) and id(current) not in seen:
+        seen.add(id(current))
+        assert not getattr(current, "_mmm_live_ai_module_lowering", False)
+        current = getattr(current, "__wrapped__", None)
 
 
 def test_outer_wrapper_cannot_hide_narrow_signature_with_wraps() -> None:
