@@ -7,7 +7,6 @@ validators or changing public APIs. It is installed before the package API surfa
 imported so already-bound internal references can be updated consistently.
 """
 
-import inspect
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -149,27 +148,15 @@ def _version_key(value: str) -> tuple[int, ...]:
 
 
 def _install_machine_only_pack_metadata() -> None:
-    from . import platform_live_discovery as live
+    """Keep the canonical cached pack resolver intact.
 
-    original = getattr(live, "_official_pack_versions", None)
-    machine = getattr(live, "_mojang_pack_versions", None)
-    if original is None or machine is None or getattr(original, "_mmm_machine_only", False):
-        return
+    ``platform_live_discovery._official_pack_versions`` already uses Mojang's machine
+    metadata as the primary source, preserves a bounded official fallback, returns the
+    three-value public contract, and exposes ``lru_cache`` helpers such as
+    ``cache_clear``. Replacing it here used to discard all of those guarantees.
+    """
 
-    original_signature = inspect.signature(original)
-    machine_signature = inspect.signature(machine)
-
-    def machine_only(*args: Any, **kwargs: Any) -> Any:
-        bound = original_signature.bind_partial(*args, **kwargs)
-        forwarded = {
-            name: value
-            for name, value in bound.arguments.items()
-            if name in machine_signature.parameters
-        }
-        return machine(**forwarded)
-
-    machine_only._mmm_machine_only = True  # type: ignore[attr-defined]
-    live._official_pack_versions = machine_only
+    return
 
 
 def _install_two_stage_platform_optimizer() -> None:
