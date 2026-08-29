@@ -5,7 +5,7 @@ from __future__ import annotations
 A valid part of a structured planner response is evidence: do not discard it because a
 sibling field failed validation. This contract freezes valid fields, requests only the
 invalid/missing subtree, merges the patch host-side, and records machine-readable JSON-path
-diagnostics. Exact repeated repair states are treated as no-progress fixed points.
+diagnostics. Repair continues only while the validator frontier changes.
 """
 
 import json
@@ -66,34 +66,112 @@ def _diag(
     }
 
 
-def _validate_value(value: Any, schema: Mapping[str, Any], path: str) -> list[dict[str, Any]]:
+def _validate_value(
+    value: Any,
+    schema: Mapping[str, Any],
+    path: str,
+) -> list[dict[str, Any]]:
     expected = schema.get("type")
     if expected == "string":
         if not isinstance(value, str):
-            return [_diag("invalid_type", path, message="expected string", expected="string", observed=value)]
+            return [
+                _diag(
+                    "invalid_type",
+                    path,
+                    message="expected string",
+                    expected="string",
+                    observed=value,
+                )
+            ]
         if int(schema.get("minLength", 0) or 0) and len(value) < int(schema["minLength"]):
-            return [_diag("min_length", path, message="string is shorter than schema minimum", expected={"minLength": schema["minLength"]}, observed=value)]
+            return [
+                _diag(
+                    "min_length",
+                    path,
+                    message="string is shorter than schema minimum",
+                    expected={"minLength": schema["minLength"]},
+                    observed=value,
+                )
+            ]
         if schema.get("maxLength") is not None and len(value) > int(schema["maxLength"]):
-            return [_diag("max_length", path, message="string exceeds schema maximum", expected={"maxLength": schema["maxLength"]}, observed=value)]
+            return [
+                _diag(
+                    "max_length",
+                    path,
+                    message="string exceeds schema maximum",
+                    expected={"maxLength": schema["maxLength"]},
+                    observed=value,
+                )
+            ]
         return []
     if expected == "boolean":
-        return [] if isinstance(value, bool) else [_diag("invalid_type", path, message="expected boolean", expected="boolean", observed=value)]
+        return (
+            []
+            if isinstance(value, bool)
+            else [
+                _diag(
+                    "invalid_type",
+                    path,
+                    message="expected boolean",
+                    expected="boolean",
+                    observed=value,
+                )
+            ]
+        )
     if expected == "number":
-        return [] if isinstance(value, (int, float)) and not isinstance(value, bool) else [_diag("invalid_type", path, message="expected number", expected="number", observed=value)]
+        return (
+            []
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+            else [
+                _diag(
+                    "invalid_type",
+                    path,
+                    message="expected number",
+                    expected="number",
+                    observed=value,
+                )
+            ]
+        )
     if expected == "array":
         if not isinstance(value, list):
-            return [_diag("invalid_type", path, message="expected array", expected="array", observed=value)]
+            return [
+                _diag(
+                    "invalid_type",
+                    path,
+                    message="expected array",
+                    expected="array",
+                    observed=value,
+                )
+            ]
         diagnostics: list[dict[str, Any]] = []
         if schema.get("maxItems") is not None and len(value) > int(schema["maxItems"]):
-            diagnostics.append(_diag("max_items", path, message="array exceeds schema maximum", expected={"maxItems": schema["maxItems"]}, observed=value))
+            diagnostics.append(
+                _diag(
+                    "max_items",
+                    path,
+                    message="array exceeds schema maximum",
+                    expected={"maxItems": schema["maxItems"]},
+                    observed=value,
+                )
+            )
         item_schema = schema.get("items")
         if isinstance(item_schema, Mapping):
             for index, item in enumerate(value):
-                diagnostics.extend(_validate_value(item, item_schema, _json_path(path, index)))
+                diagnostics.extend(
+                    _validate_value(item, item_schema, _json_path(path, index))
+                )
         return diagnostics
     if expected == "object":
         if not isinstance(value, Mapping):
-            return [_diag("invalid_type", path, message="expected object", expected="object", observed=value)]
+            return [
+                _diag(
+                    "invalid_type",
+                    path,
+                    message="expected object",
+                    expected="object",
+                    observed=value,
+                )
+            ]
         diagnostics: list[dict[str, Any]] = []
         properties = schema.get("properties")
         required = schema.get("required")
@@ -101,21 +179,45 @@ def _validate_value(value: Any, schema: Mapping[str, Any], path: str) -> list[di
             for key in required:
                 key_str = str(key)
                 if key_str not in value:
-                    diagnostics.append(_diag("missing_required", _json_path(path, key_str), message="required field is missing", expected="present", observed=None, repair_scope=path))
+                    diagnostics.append(
+                        _diag(
+                            "missing_required",
+                            _json_path(path, key_str),
+                            message="required field is missing",
+                            expected="present",
+                            observed=None,
+                            repair_scope=path,
+                        )
+                    )
         if isinstance(properties, Mapping):
             for key, child_schema in properties.items():
                 if key in value and isinstance(child_schema, Mapping):
-                    diagnostics.extend(_validate_value(value[key], child_schema, _json_path(path, str(key))))
+                    diagnostics.extend(
+                        _validate_value(
+                            value[key], child_schema, _json_path(path, str(key))
+                        )
+                    )
         additional = schema.get("additionalProperties", True)
         known = set(properties) if isinstance(properties, Mapping) else set()
         if additional is False:
             for key in value:
                 if key not in known:
-                    diagnostics.append(_diag("unexpected_field", _json_path(path, str(key)), message="field is not allowed by schema", expected="absent", observed=value[key], repair_scope=path))
+                    diagnostics.append(
+                        _diag(
+                            "unexpected_field",
+                            _json_path(path, str(key)),
+                            message="field is not allowed by schema",
+                            expected="absent",
+                            observed=value[key],
+                            repair_scope=path,
+                        )
+                    )
         elif isinstance(additional, Mapping):
             for key, child in value.items():
                 if key not in known:
-                    diagnostics.extend(_validate_value(child, additional, _json_path(path, str(key))))
+                    diagnostics.extend(
+                        _validate_value(child, additional, _json_path(path, str(key)))
+                    )
         return diagnostics
     return []
 
@@ -141,7 +243,16 @@ def _section_diagnostics(
     for field in fields:
         path = _json_path("$.section", field)
         if field not in section:
-            diagnostics.append(_diag("missing_required", path, message="required section field is missing", expected="present", observed=None, repair_scope=path))
+            diagnostics.append(
+                _diag(
+                    "missing_required",
+                    path,
+                    message="required section field is missing",
+                    expected="present",
+                    observed=None,
+                    repair_scope=path,
+                )
+            )
             continue
         schema = properties.get(field)
         if isinstance(schema, Mapping):
@@ -158,7 +269,10 @@ def _repair_fields(
     selected: list[str] = []
     for field in fields:
         prefix = _json_path("$.section", field)
-        if any(str(item.get("repair_scope") or item.get("path") or "").startswith(prefix) for item in diagnostics):
+        if any(
+            str(item.get("repair_scope") or item.get("path") or "").startswith(prefix)
+            for item in diagnostics
+        ):
             selected.append(field)
     return selected or list(fields)
 
@@ -167,7 +281,9 @@ def _repair_schema(
     repair_fields: Sequence[str],
     properties: Mapping[str, Any],
 ) -> dict[str, Any]:
-    subset = {field: properties[field] for field in repair_fields if field in properties}
+    subset = {
+        field: properties[field] for field in repair_fields if field in properties
+    }
     return {
         "type": "object",
         "properties": {
@@ -209,11 +325,17 @@ def _repair_messages(
     }
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+        {
+            "role": "user",
+            "content": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        },
     ]
 
 
-def _candidate_from_raw(raw: str, fields: Sequence[str]) -> dict[str, Any] | None:
+def _candidate_from_raw(
+    raw: str,
+    fields: Sequence[str],
+) -> dict[str, Any] | None:
     try:
         payload = _design._extract_json_object(raw)
     except SpecValidationError:
@@ -225,7 +347,10 @@ def _candidate_from_raw(raw: str, fields: Sequence[str]) -> dict[str, Any] | Non
     return direct or None
 
 
-def _repair_from_raw(raw: str, repair_fields: Sequence[str]) -> dict[str, Any] | None:
+def _repair_from_raw(
+    raw: str,
+    repair_fields: Sequence[str],
+) -> dict[str, Any] | None:
     try:
         payload = _design._extract_json_object(raw)
     except SpecValidationError:
@@ -235,6 +360,18 @@ def _repair_from_raw(raw: str, repair_fields: Sequence[str]) -> dict[str, Any] |
         return {field: repair[field] for field in repair_fields if field in repair}
     direct = {field: payload[field] for field in repair_fields if field in payload}
     return direct or None
+
+
+def _diagnostic_frontier(
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> frozenset[tuple[str, str]]:
+    return frozenset(
+        (
+            str(item.get("path") or ""),
+            str(item.get("code") or ""),
+        )
+        for item in diagnostics
+    )
 
 
 def _generate_section_local(
@@ -252,7 +389,10 @@ def _generate_section_local(
         stage=f"game_design_{section_id}",
         prompt=prompt,
         media_paths=media_paths,
-        metadata={"repair_strategy": "field_local", **dict(trace_metadata or {})},
+        metadata={
+            "repair_strategy": "field_local",
+            **dict(trace_metadata or {}),
+        },
     )
     raw = router.generate_text(
         "planner",
@@ -270,15 +410,26 @@ def _generate_section_local(
         enable_tools=False,
     )
     candidate = _candidate_from_raw(raw, fields)
-    diagnostics = _section_diagnostics(candidate, fields=fields, properties=properties)
+    diagnostics = _section_diagnostics(
+        candidate,
+        fields=fields,
+        properties=properties,
+    )
     trace.record_attempt(
         raw_output=raw,
-        validation_error=None if not diagnostics else "; ".join(str(item["message"]) for item in diagnostics),
+        validation_error=(
+            None
+            if not diagnostics
+            else "; ".join(str(item["message"]) for item in diagnostics)
+        ),
         candidate=candidate,
         accepted=candidate if not diagnostics else None,
         context={"section_id": section_id, "repair_strategy": "field_local"},
         diagnostics=diagnostics,
-        repair_scope=[str(item.get("repair_scope") or item.get("path")) for item in diagnostics],
+        repair_scope=[
+            str(item.get("repair_scope") or item.get("path"))
+            for item in diagnostics
+        ],
     )
     if not diagnostics and candidate is not None:
         result = {field: candidate[field] for field in fields}
@@ -286,24 +437,14 @@ def _generate_section_local(
         return result
 
     working = dict(candidate or {})
-    seen: set[str] = set()
     while diagnostics:
         repair_fields = _repair_fields(diagnostics, fields)
-        frozen = {field: working[field] for field in fields if field in working and field not in repair_fields}
-        state = _design._json_sha256(
-            {
-                "repair_fields": repair_fields,
-                "diagnostics": diagnostics,
-                "candidate": {field: working.get(field) for field in repair_fields},
-            }
-        )
-        if state in seen:
-            paths = ", ".join(str(item.get("path") or "$") for item in diagnostics)
-            raise SpecValidationError(
-                f"{section_id} field-local repair reached an exact no-progress cycle at {paths}"
-            )
-        seen.add(state)
-
+        frozen = {
+            field: working[field]
+            for field in fields
+            if field in working and field not in repair_fields
+        }
+        frontier = _diagnostic_frontier(diagnostics)
         repair_raw = router.generate_text(
             "planner",
             _repair_messages(
@@ -315,19 +456,42 @@ def _generate_section_local(
                 research=research,
             ),
             media_paths=media_paths,
-            response_format="text",
-            response_schema=None,
+            response_format="json",
+            response_schema=_repair_schema(repair_fields, properties),
             enable_tools=False,
         )
         patch = _repair_from_raw(repair_raw, repair_fields)
-        if patch:
-            for field in repair_fields:
-                if field in patch:
-                    working[field] = patch[field]
-        diagnostics = _section_diagnostics(working, fields=fields, properties=properties)
+        if not patch:
+            paths = ", ".join(
+                str(item.get("path") or "$") for item in diagnostics
+            )
+            raise SpecValidationError(
+                f"{section_id} field-local repair returned no usable patch at {paths}"
+            )
+        for field in repair_fields:
+            if field in patch:
+                working[field] = patch[field]
+
+        next_diagnostics = _section_diagnostics(
+            working,
+            fields=fields,
+            properties=properties,
+        )
+        if frontier == _diagnostic_frontier(next_diagnostics):
+            paths = ", ".join(
+                str(item.get("path") or "$") for item in next_diagnostics
+            )
+            raise SpecValidationError(
+                f"{section_id} field-local repair made no validator progress at {paths}"
+            )
+        diagnostics = next_diagnostics
         trace.record_attempt(
             raw_output=repair_raw,
-            validation_error=None if not diagnostics else "; ".join(str(item["message"]) for item in diagnostics),
+            validation_error=(
+                None
+                if not diagnostics
+                else "; ".join(str(item["message"]) for item in diagnostics)
+            ),
             candidate=working,
             accepted=working if not diagnostics else None,
             context={
@@ -335,9 +499,12 @@ def _generate_section_local(
                 "repair_strategy": "field_local",
                 "frozen_fields": sorted(frozen),
                 "repair_fields": repair_fields,
+                "validator_frontier_changed": True,
             },
             diagnostics=diagnostics,
-            repair_scope=[_json_path("$.section", field) for field in repair_fields],
+            repair_scope=[
+                _json_path("$.section", field) for field in repair_fields
+            ],
         )
 
     result = {field: working[field] for field in fields}
@@ -377,15 +544,39 @@ def _install_trace_v2() -> None:
                 "raw_output": raw_output,
                 "raw_output_sha256": _trace._sha256_text(raw_output),
                 "validation_error": validation_error,
-                "diagnostics": _trace._json_safe([dict(item) for item in diagnostics or ()]),
+                "diagnostics": _trace._json_safe(
+                    [dict(item) for item in diagnostics or ()]
+                ),
                 "repair_scope": list(repair_scope or ()),
-                "candidate": _trace._json_safe(dict(candidate)) if candidate is not None else None,
-                "accepted": _trace._json_safe(dict(accepted)) if accepted is not None else None,
+                "candidate": (
+                    _trace._json_safe(dict(candidate))
+                    if candidate is not None
+                    else None
+                ),
+                "accepted": (
+                    _trace._json_safe(dict(accepted))
+                    if accepted is not None
+                    else None
+                ),
                 "context": dict(context or {}),
             }
-            self._write_json(self.directory / f"attempt-{index:06d}.json", payload)
-            with (self.directory / "attempts.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str) + "\n")
+            self._write_json(
+                self.directory / f"attempt-{index:06d}.json",
+                payload,
+            )
+            with (self.directory / "attempts.jsonl").open(
+                "a", encoding="utf-8"
+            ) as stream:
+                stream.write(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                    + "\n"
+                )
 
     record_attempt._mmm_typed_diagnostics = True
     cls.record_attempt = record_attempt
@@ -399,6 +590,7 @@ def install_structured_repair_contract() -> None:
     _install_trace_v2()
     original = _design._generate_section
     if not getattr(original, "_mmm_field_local_repair", False):
+
         @wraps(original)
         def generate_section(
             router: Any,
@@ -421,6 +613,7 @@ def install_structured_repair_contract() -> None:
                 media_paths=media_paths,
                 trace_metadata=trace_metadata,
             )
+
         generate_section._mmm_field_local_repair = True
         _design._generate_section = generate_section
 
