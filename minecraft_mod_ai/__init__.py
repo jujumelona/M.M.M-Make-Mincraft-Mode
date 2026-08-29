@@ -6,21 +6,9 @@ from .runtime_finalization import finalize_runtime
 initialize_runtime()
 finalize_runtime()
 
-from .pipeline_hardening import install_pipeline_hardening
-from .pipeline_hardening_v2 import install_pipeline_hardening_v2
-from .pipeline_hardening_v3 import install_pipeline_hardening_v3
-from .pipeline_hardening_v4 import install_pipeline_hardening_v4
-from .pipeline_hardening_v5 import install_pipeline_hardening_v5
-from .pipeline_hardening_v6 import install_pipeline_hardening_v6
-from .pipeline_hardening_v7 import install_pipeline_hardening_v7
+from .runtime_contracts import install_runtime_contracts
 
-install_pipeline_hardening()
-install_pipeline_hardening_v2()
-install_pipeline_hardening_v3()
-install_pipeline_hardening_v4()
-install_pipeline_hardening_v5()
-install_pipeline_hardening_v6()
-install_pipeline_hardening_v7()
+install_runtime_contracts()
 
 from .api import (
     ChatReply,
