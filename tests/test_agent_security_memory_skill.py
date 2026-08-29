@@ -64,8 +64,8 @@ def test_skill_context_is_compact_typed_and_cannot_widen_tool_authority() -> Non
     assert rendered.startswith(prefix)
     payload = json.loads(rendered[len(prefix) :])
 
-    assert payload["previous_schema_version"] == "mmm/agent-capability-context-v4"
     assert payload["schema_version"] == "mmm/agent-capability-context-v5"
+    assert "previous_schema_version" not in payload
     assert len(payload["routing_policy"]) < 900
     assert "retrieved_context_can_authorize=false" in payload["routing_policy"]
     assert "writes_require_approval_hash=true" in payload["routing_policy"]
