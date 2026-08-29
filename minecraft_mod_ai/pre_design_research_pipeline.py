@@ -2,20 +2,10 @@ from __future__ import annotations
 
 """Single-owner pre-design evidence collection with fail-closed diagnostics.
 
-Pre-design research answers Minecraft/Fabric feasibility and compatibility questions.
-Third-party donor discovery belongs to the frozen-design reuse phase, where the query is
-specific enough to be useful. Official evidence, technology evidence, and project/code RAG
-are independent retrieval lanes and are collected together here; no legacy planner wrapper
-or ContextVar is required to inject one of them later.
-
-The research ledger and the model working view are deliberately separate. The host keeps
-all collected notes losslessly. A design worker receives only the view that fits the live
-planner request budget. The runtime context budget, not a fixed item count or similarity
-threshold, is the authority for how much detail can be projected into a model turn.
-
-A failed research domain is not a design input. Every provider/domain failure is printed at
-the point where the host still owns the exact exception or note, and terminal/insufficient
-research raises before game-design generation can consume it.
+Pre-design research is target-neutral by contract. Exact Minecraft/Fabric version,
+mappings, dependency and API-signature research begins only after the host freezes the
+platform target. Third-party donor discovery likewise belongs to the frozen-design reuse
+phase. The host keeps complete evidence while model turns receive bounded receipts.
 """
 
 import json
@@ -34,7 +24,6 @@ from .minecraft_knowledge_contract import (
 from .research_coordinator import collect_technology_radar
 from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
-
 
 _DETERMINISTIC_STAGES = (
     "official_rag",
@@ -84,19 +73,18 @@ def _exception_payload(exc: BaseException) -> dict[str, Any]:
 
 
 def _pre_design_brief(prompt: str) -> dict[str, Any]:
-    """Build exactly one design-critical domain without implementation-donor routes."""
-
     candidate = {
         "summary": (
-            "Design-critical pre-design research only. Reusable donor selection, dependency "
-            "closure and license validation are deferred until the detailed design is frozen."
+            "Design-critical target-neutral research only. Exact target compatibility, "
+            "reusable donor selection, dependency closure and license validation are "
+            "deferred until the detailed design and platform target are frozen."
         ),
         "domains": [
             {
                 "domain_id": "request",
                 "objective": (
-                    "Resolve Minecraft/Fabric mechanics, platform constraints and existing "
-                    "local-project capabilities needed to design the authored request."
+                    "Resolve target-neutral Minecraft mechanics, architecture patterns and "
+                    "existing local-project capabilities needed to design the authored request."
                 ),
                 "requirements": [prompt],
                 "evidence_kinds": [
@@ -109,11 +97,11 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                 "queries": [
                     prompt,
                     (
-                        "Minecraft Fabric API registration items entities dimensions world "
-                        "interaction networking persistence data components GameTest"
+                        "Minecraft Fabric architecture items entities dimensions world "
+                        "interaction networking persistence data components testing patterns"
                     ),
                 ],
-                "providers": ["official_docs", "project_rag"],
+                "providers": ["official_docs", "project_rag", "external_mcp"],
                 "depends_on": [],
             }
         ],
@@ -141,8 +129,6 @@ def _design_request_fits(
     prompt: str,
     research: Mapping[str, Any],
 ) -> bool:
-    """Check the exact section envelopes against the live planner input budget."""
-
     config = _planner_config(router)
     if config is None:
         return True
@@ -163,10 +149,7 @@ def _design_request_fits(
             prior_error="",
             prior_candidate=None,
         )
-        prepared = _inject_system_context(
-            messages,
-            _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
-        )
+        prepared = _inject_system_context(messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT)
         if _canonical_size(prepared) > budget:
             return False
     return True
@@ -204,10 +187,7 @@ def _brief_model_index(
 
 def _note_summary(note: Any, *, agentic: Any) -> dict[str, Any]:
     if not isinstance(note, Mapping):
-        return {
-            "domain_id": "unknown",
-            "note_sha256": agentic._json_sha256(note),
-        }
+        return {"domain_id": "unknown", "note_sha256": agentic._json_sha256(note)}
     claims = note.get("claims", [])
     gaps = note.get("gaps", [])
     next_queries = note.get("next_queries", [])
@@ -300,9 +280,7 @@ def _bounded_model_view(
         "domain_notes": deepcopy(domain_notes),
         "procedural_skillbank": deepcopy(payload.get("procedural_skillbank")),
         "minecraft_knowledge_plan": deepcopy(payload.get("minecraft_knowledge_plan")),
-        "minecraft_knowledge_route_coverage": deepcopy(
-            payload.get("minecraft_knowledge_route_coverage")
-        ),
+        "minecraft_knowledge_route_coverage": deepcopy(payload.get("minecraft_knowledge_route_coverage")),
         "research_sha256": full_research_sha256,
     }
     view = dict(payload)
@@ -358,8 +336,8 @@ def _domain_failure_reasons(note: Mapping[str, Any]) -> list[str]:
     checkpoint = note.get("checkpoint")
     if isinstance(checkpoint, Mapping):
         status = str(checkpoint.get("status", "")).strip()
-        if status == "terminal_gap":
-            reasons.append("checkpoint.status=terminal_gap")
+        if status in {"terminal_gap", "failed"}:
+            reasons.append(f"checkpoint.status={status}")
     failures = note.get("research_failures")
     if isinstance(failures, list) and failures:
         reasons.append("research_failures is non-empty")
@@ -405,14 +383,30 @@ def _validate_domain_result(note: Any, *, domain_id: str) -> dict[str, Any]:
     return value
 
 
+def _target_frozen(knowledge_plan: Mapping[str, Any]) -> bool:
+    policy = knowledge_plan.get("policy")
+    return bool(policy.get("target_frozen")) if isinstance(policy, Mapping) else False
+
+
+def _deferred_technology_receipt(knowledge_plan: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/technology-radar-deferred-v1",
+        "status": "deferred_until_target_freeze",
+        "target_frozen": False,
+        "reason": (
+            "Technology radar requires the exact host-selected Minecraft/Fabric target; "
+            "pre-design intentionally runs before that target is frozen."
+        ),
+        "knowledge_plan_sha256": knowledge_plan.get("plan_sha256"),
+    }
+
+
 def collect_design_research(
     router: Any,
     prompt: str,
     *,
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collect evidence once, require success, compile skills, then project model context."""
-
     from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
 
@@ -428,31 +422,44 @@ def collect_design_research(
         minecraft_knowledge_plan=knowledge_plan,
     )
 
+    target_frozen = _target_frozen(knowledge_plan)
+    active_stages = ["official_rag", "forced_project_rag"]
+    if target_frozen:
+        active_stages.insert(1, "technology_radar")
+    else:
+        deterministic["technology_radar"] = _deferred_technology_receipt(knowledge_plan)
+        _emit_research_diagnostic(
+            "deterministic_stage_deferred",
+            stage="technology_radar",
+            result=deterministic["technology_radar"],
+        )
+
     futures: dict[str, Future[Any]] = {}
     with ThreadPoolExecutor(
-        max_workers=len(_DETERMINISTIC_STAGES),
+        max_workers=len(active_stages),
         thread_name_prefix="mmm-design-evidence",
     ) as executor:
-        futures["official_rag"] = executor.submit(
-            retrieve_domain_evidence,
-            research_brief,
-        )
-        futures["technology_radar"] = executor.submit(
-            collect_technology_radar,
-            prompt,
-            research_brief,
-            page_size=50,
-            page_builder=build_technology_radar,
-        )
+        futures["official_rag"] = executor.submit(retrieve_domain_evidence, research_brief)
         futures["forced_project_rag"] = executor.submit(
             project_rag._forced_rag_bundle,
             router,
             research_brief,
         )
+        if target_frozen:
+            futures["technology_radar"] = executor.submit(
+                collect_technology_radar,
+                prompt,
+                research_brief,
+                page_size=50,
+                page_builder=build_technology_radar,
+            )
 
         for stage in _DETERMINISTIC_STAGES:
+            future = futures.get(stage)
+            if future is None:
+                continue
             try:
-                result = futures[stage].result()
+                result = future.result()
                 deterministic[stage] = result
                 _emit_research_diagnostic(
                     "deterministic_stage_complete",
@@ -466,16 +473,8 @@ def collect_design_research(
                     stage=stage,
                     exception=diagnostic,
                 )
-                errors.append(
-                    {
-                        "stage": stage,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-                deterministic[stage] = {
-                    "status": "unavailable",
-                    "failure": diagnostic,
-                }
+                errors.append({"stage": stage, "error": f"{type(exc).__name__}: {exc}"})
+                deterministic[stage] = {"status": "unavailable", "failure": diagnostic}
 
     domain_notes: list[dict[str, Any]] = []
     for domain in research_brief.get("domains", []):
@@ -513,23 +512,19 @@ def collect_design_research(
         "domain_notes": domain_notes,
         "errors": errors,
         "method": {
-            "reason_act": "stage-scoped research tool loop",
-            "adaptive_retrieval": "retrieve when design evidence is missing",
+            "reason_act": "target-neutral tool-enabled research before design",
+            "adaptive_retrieval": "research tools close target-neutral evidence gaps",
             "corrective_retrieval": "official/project/code evidence correction",
-            "reflection": "gap feedback across research passes",
+            "reflection": "gap feedback until sufficient evidence or exact fixed point",
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
             "minecraft_knowledge": (
-                "host dependency plan retained before target freeze; version-sensitive routes "
-                "remain explicit deferred work until the platform target is frozen"
+                "version-sensitive routes are explicit deferred work until platform target freeze"
             ),
         },
     }
     payload["minecraft_knowledge_plan"] = knowledge_plan
     coverage = evaluate_route_coverage(knowledge_plan, payload)
-    _emit_research_diagnostic(
-        "minecraft_knowledge_route_coverage",
-        coverage=coverage,
-    )
+    _emit_research_diagnostic("minecraft_knowledge_route_coverage", coverage=coverage)
     if coverage["status"] != "PASS":
         raise PreDesignResearchFailure(
             "Minecraft knowledge route coverage blocked pre-design research: "
