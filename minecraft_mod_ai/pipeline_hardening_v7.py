@@ -184,17 +184,19 @@ def _install_source_edit_payload_hardening() -> None:
         compact_request, original_chars, compact_chars = _compact_source_edit_request(request)
         result = dict(original(adapter, compact_request))
 
-        # Raise the output floor only after compaction actually reclaimed context.
-        # This avoids overriding an intentional context clamp for ordinary continuations.
-        if compact_chars < original_chars:
-            current_max = max(1, int(result.get("max_tokens", 1) or 1))
-            result["max_tokens"] = max(
-                current_max,
-                _source_edit_min_tokens(adapter),
-            )
+        # A normal continuation must remain byte-for-byte policy equivalent to the
+        # canonical payload. Do not disable thinking or change any other knobs merely
+        # because the request happens to expose apply_source_edit.
+        if compact_chars >= original_chars:
+            return result
 
-        # Source-edit tool calls need deterministic tool/body capacity rather than
-        # hidden reasoning tokens.
+        # Only a pathological request that was actually compacted receives extra tool
+        # body capacity and deterministic no-thinking mode.
+        current_max = max(1, int(result.get("max_tokens", 1) or 1))
+        result["max_tokens"] = max(
+            current_max,
+            _source_edit_min_tokens(adapter),
+        )
         result["reasoning_effort"] = "none"
         template_kwargs = dict(result.get("chat_template_kwargs") or {})
         template_kwargs["enable_thinking"] = False
