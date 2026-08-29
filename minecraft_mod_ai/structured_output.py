@@ -82,6 +82,57 @@ def _extract_embedded_object(output: str) -> dict[str, Any] | None:
     return None
 
 
+def _research_note(value: Any) -> Mapping[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    nested = value.get("research_note")
+    return nested if isinstance(nested, Mapping) else value
+
+
+def _has_grounded_claim(note: Mapping[str, Any]) -> bool:
+    claims = note.get("claims")
+    if not isinstance(claims, list):
+        return False
+    for claim in claims:
+        if isinstance(claim, str) and claim.strip():
+            return True
+        if isinstance(claim, Mapping):
+            text = str(claim.get("claim") or claim.get("text") or "").strip()
+            if text:
+                return True
+    return False
+
+
+def _research_semantic_errors(value: Any) -> tuple[str, ...]:
+    """Reject only states that the downstream parser could otherwise misclassify as success."""
+
+    note = _research_note(value)
+    if note is None:
+        return ("$: research response does not contain an object note",)
+
+    recognized = {
+        "domain_id",
+        "claims",
+        "gaps",
+        "next_queries",
+        "sufficient",
+        "procedures",
+    }
+    if not (recognized & set(note)):
+        return ("$: research note contains no recognized research fields",)
+
+    sufficient = note.get("sufficient")
+    if sufficient is True and not _has_grounded_claim(note):
+        return (
+            "$: research_note.sufficient=true requires at least one non-empty claim",
+        )
+    if "sufficient" not in note and not _has_grounded_claim(note):
+        return (
+            "$: research note without grounded claims must state sufficient=false explicitly",
+        )
+    return ()
+
+
 def _emit_validation_failure(
     *,
     output: str,
@@ -143,6 +194,13 @@ def _schema_errors(
     )
 
 
+def _research_errors(
+    value: Any,
+    response_schema: Mapping[str, Any],
+) -> tuple[str, ...]:
+    return (*_schema_errors(value, response_schema), *_research_semantic_errors(value))
+
+
 def validate_structured_output(
     output: str,
     *,
@@ -153,9 +211,9 @@ def validate_structured_output(
 
     Normal JSON contracts remain strict. The deliberately loose research-note envelope is
     different: its downstream parser already locates the first JSON object and canonicalizes
-    Qwen variants. For that one contract, surrounding prose must not trigger an expensive
-    full model regeneration. The embedded object is schema-checked here, the original text
-    is returned unchanged, and the host parser remains the semantic authority.
+    Qwen variants. Surrounding prose is therefore recoverable, but an empty note may not call
+    itself sufficient: that exact state previously produced ``claim_count=0`` and let a later
+    aggregate ``terminal_gap`` hide the original model mistake.
     """
 
     if response_schema is None and response_format != "json":
@@ -163,13 +221,14 @@ def validate_structured_output(
     if response_schema is not None and not isinstance(response_schema, Mapping):
         raise ValueError("response_schema must be a mapping")
 
+    parser_owned = _parser_owned_research_schema(response_schema)
     try:
         value = json.loads(output)
     except json.JSONDecodeError as exc:
-        if _parser_owned_research_schema(response_schema):
+        if parser_owned:
             embedded = _extract_embedded_object(output)
             if embedded is not None:
-                errors = _schema_errors(embedded, response_schema)
+                errors = _research_errors(embedded, response_schema)
                 if not errors:
                     _emit_parser_owned_recovery(output, embedded)
                     return output
@@ -200,7 +259,11 @@ def validate_structured_output(
     if response_schema is None:
         return output
 
-    errors = _schema_errors(value, response_schema)
+    errors = (
+        _research_errors(value, response_schema)
+        if parser_owned
+        else _schema_errors(value, response_schema)
+    )
     if errors:
         _emit_validation_failure(
             output=output,
