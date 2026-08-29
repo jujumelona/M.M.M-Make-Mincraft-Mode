@@ -19,7 +19,10 @@ from functools import wraps
 from typing import Any
 
 _INSTALLED = False
-_PRE_DESIGN_DOMAIN_ID = "pre_design_request"
+# "request" is the established pre-design domain identity used by route-coverage,
+# checkpoint and runtime-composition contracts. Keep that stable while changing the
+# phase semantics around it.
+_PRE_DESIGN_DOMAIN_ID = "request"
 
 
 def _pre_design_candidate(prompt: str) -> dict[str, Any]:
