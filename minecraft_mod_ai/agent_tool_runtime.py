@@ -162,63 +162,74 @@ class AgentToolRuntime:
         selected = self._stage(stage)
         with self._lock:
             cached = self._schema_cache.get(selected)
+        if cached is not None:
+            return cached
+
+        # Never hold the runtime lock across MCP I/O. In notebook hosts an asyncio
+        # loop is already running, so _run_async bridges through another thread. The
+        # pooled _session() initializer also needs this lock; holding it here while
+        # joining that bridge creates a cross-thread deadlock and only surfaces as a
+        # misleading MCP synchronous bridge timeout.
+        listed = self._run_async(self._list_tools_async, selected)
+        schemas: list[dict[str, Any]] = []
+        names: set[str] = set()
+        for item in listed:
+            name = str(item.get("name", "")).strip()
+            if (
+                not name
+                or name in _BLOCKED_MODEL_TOOLS
+                or (selected == "generation" and name in _HOST_ONLY_MODEL_TOOLS)
+            ):
+                continue
+            if name in names:
+                raise AgentToolRuntimeError(
+                    f"Duplicate first-party model tool schema: {name!r}"
+                )
+            parameters = item.get("input_schema")
+            if not isinstance(parameters, Mapping):
+                parameters = {"type": "object", "properties": {}}
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": str(item.get("description", "")).strip(),
+                        "parameters": dict(parameters),
+                    },
+                }
+            )
+            names.add(name)
+
+        if selected == "generation":
+            if _SOURCE_EDIT_TOOL in names:
+                raise AgentToolRuntimeError(
+                    "apply_source_edit must have exactly one host-owned model schema"
+                )
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": _SOURCE_EDIT_TOOL,
+                        "description": _SOURCE_EDIT_DESCRIPTION,
+                        "parameters": SOURCE_EDIT_SCHEMA,
+                    },
+                }
+            )
+            names.add(_SOURCE_EDIT_TOOL)
+
+        schemas.extend(self._external_bridge.tool_schemas(selected))
+        result = tuple(schemas)
+        allowed = frozenset(
+            str(item["function"]["name"])
+            for item in result
+        )
+        with self._lock:
+            cached = self._schema_cache.get(selected)
             if cached is not None:
                 return cached
-            listed = self._run_async(self._list_tools_async, selected)
-            schemas: list[dict[str, Any]] = []
-            names: set[str] = set()
-            for item in listed:
-                name = str(item.get("name", "")).strip()
-                if (
-                    not name
-                    or name in _BLOCKED_MODEL_TOOLS
-                    or (selected == "generation" and name in _HOST_ONLY_MODEL_TOOLS)
-                ):
-                    continue
-                if name in names:
-                    raise AgentToolRuntimeError(
-                        f"Duplicate first-party model tool schema: {name!r}"
-                    )
-                parameters = item.get("input_schema")
-                if not isinstance(parameters, Mapping):
-                    parameters = {"type": "object", "properties": {}}
-                schemas.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": str(item.get("description", "")).strip(),
-                            "parameters": dict(parameters),
-                        },
-                    }
-                )
-                names.add(name)
-
-            if selected == "generation":
-                if _SOURCE_EDIT_TOOL in names:
-                    raise AgentToolRuntimeError(
-                        "apply_source_edit must have exactly one host-owned model schema"
-                    )
-                schemas.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": _SOURCE_EDIT_TOOL,
-                            "description": _SOURCE_EDIT_DESCRIPTION,
-                            "parameters": SOURCE_EDIT_SCHEMA,
-                        },
-                    }
-                )
-                names.add(_SOURCE_EDIT_TOOL)
-
-            schemas.extend(self._external_bridge.tool_schemas(selected))
-            result = tuple(schemas)
             self._schema_cache[selected] = result
-            self._allowed_tool_cache[selected] = frozenset(
-                str(item["function"]["name"])
-                for item in result
-            )
-            return result
+            self._allowed_tool_cache[selected] = allowed
+        return result
 
     def call(
         self,
