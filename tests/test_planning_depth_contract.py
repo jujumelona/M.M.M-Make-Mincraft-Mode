@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from minecraft_mod_ai import semantic_requirement_authority as semantic
 from minecraft_mod_ai.planner_graph_integrity_contract import (
     _design_facets,
     _facet_work_index,
     _production_depth_game_design_prompt,
-    _semantic_model_with_leaf_decomposition,
 )
 
 
@@ -28,7 +28,7 @@ class _SemanticRouter:
         return {"requirements": []}
 
 
-def test_semantic_leaf_planning_removes_arbitrary_eight_item_cap() -> None:
+def test_semantic_leaf_planning_has_no_per_clause_item_cap() -> None:
     router = _SemanticRouter()
     clauses = [
         {
@@ -40,12 +40,13 @@ def test_semantic_leaf_planning_removes_arbitrary_eight_item_cap() -> None:
         }
     ]
 
-    _semantic_model_with_leaf_decomposition(router, clauses)
+    semantic._call_semantic_model(router, clauses)
 
     requirements = router.parameters["properties"]["requirements"]
     assert "maxItems" not in requirements
     assert "many independent behaviors" in router.messages[0]["content"]
-    assert "Never compress several verbs" in router.messages[0]["content"]
+    assert "Never compress multiple verbs" in router.messages[0]["content"]
+    assert "no fixed leaf target or per-clause leaf ceiling" in router.messages[0]["content"]
 
 
 def test_game_design_prompt_requires_leaf_subsystems_before_reuse_search() -> None:
@@ -124,3 +125,18 @@ def test_facet_binding_prefers_related_authored_work() -> None:
     index = _facet_work_index(facet, work, 0, 1)
 
     assert index == 1
+
+
+def test_facet_binding_uses_narrative_order_when_language_has_no_token_overlap() -> None:
+    work = [
+        {"work_id": "first", "objective": "첫 번째 요구", "capabilities": ["first"]},
+        {"work_id": "second", "objective": "두 번째 요구", "capabilities": ["second"]},
+    ]
+    facet = {
+        "capability": "design.module.flight",
+        "label": "interstellar flight",
+        "detail": "launch the completed ship into space",
+        "source": "game_design.modules[0]",
+    }
+
+    assert _facet_work_index(facet, work, 1, 2) == 1
