@@ -19,6 +19,11 @@ def _enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _console_enabled() -> bool:
+    value = os.environ.get("MMM_PLANNER_TRACE_CONSOLE", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _default_root() -> Path:
     configured = os.environ.get("MMM_PLANNER_TRACE_DIR", "").strip()
     if configured:
@@ -41,13 +46,29 @@ def _json_safe(value: Any) -> Any:
         return str(value)
 
 
-class PlannerStageTrace:
-    """Persist raw structured-planner attempts for debugging and later SFT/LoRA.
+def _emit_console(payload: Mapping[str, Any]) -> None:
+    if not _console_enabled():
+        return
+    print(
+        "PLANNER STAGE TRACE: "
+        + json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ),
+        flush=True,
+    )
 
-    The trace is deliberately append-only for one logical stage run. Every raw model
-    response is recorded before parsing, together with the host validator result and
-    any safely extracted candidate. This makes failures reproducible without making
-    trace persistence part of the planning correctness contract.
+
+class PlannerStageTrace:
+    """Persist and stream raw structured-planner attempts for debugging and SFT/LoRA.
+
+    Every raw model response is recorded before parsing, together with the host validator
+    result and safely extracted candidate. The same diagnostic payload is printed to the
+    console by default so a Colab/user log contains the actual failure cause instead of a
+    later aggregate counter. Set ``MMM_PLANNER_TRACE_CONSOLE=0`` only when explicitly
+    choosing quieter output; durable trace files remain controlled by ``MMM_PLANNER_TRACE``.
     """
 
     def __init__(
@@ -69,6 +90,18 @@ class PlannerStageTrace:
         self.root = _default_root()
         self.directory = self.root / stage / self.run_id
         self._attempt_index = 0
+        request_payload = {
+            "event": "planner_stage_start",
+            "schema_version": _TRACE_SCHEMA,
+            "run_id": self.run_id,
+            "stage": stage,
+            "prompt": prompt,
+            "prompt_sha256": self.prompt_sha256,
+            "media_paths": [str(Path(path)) for path in media_paths],
+            "metadata": dict(metadata or {}),
+            "trace_directory": str(self.directory),
+        }
+        _emit_console(request_payload)
         if not self.enabled:
             return
         with _TRACE_LOCK:
@@ -95,8 +128,6 @@ class PlannerStageTrace:
         accepted: Mapping[str, Any] | None = None,
         context: Mapping[str, Any] | None = None,
     ) -> None:
-        if not self.enabled:
-            return
         with _TRACE_LOCK:
             index = self._attempt_index
             self._attempt_index += 1
@@ -108,11 +139,17 @@ class PlannerStageTrace:
                 "prompt_sha256": self.prompt_sha256,
                 "raw_output": raw_output,
                 "raw_output_sha256": _sha256_text(raw_output),
+                "raw_output_chars": len(raw_output),
                 "validation_error": validation_error,
                 "candidate": _json_safe(dict(candidate)) if candidate is not None else None,
                 "accepted": _json_safe(dict(accepted)) if accepted is not None else None,
                 "context": dict(context or {}),
+                "trace_directory": str(self.directory),
+                "attempt_path": str(self.directory / f"attempt-{index:06d}.json"),
             }
+            _emit_console({"event": "planner_stage_attempt", **payload})
+            if not self.enabled:
+                return
             self._write_json(
                 self.directory / f"attempt-{index:06d}.json",
                 payload,
@@ -130,6 +167,17 @@ class PlannerStageTrace:
                 )
 
     def record_success(self, design: Mapping[str, Any]) -> None:
+        payload = {
+            "event": "planner_stage_success",
+            "schema_version": _TRACE_SCHEMA,
+            "run_id": self.run_id,
+            "stage": self.stage,
+            "prompt_sha256": self.prompt_sha256,
+            "accepted": dict(design),
+            "trace_directory": str(self.directory),
+            "accepted_path": str(self.directory / "accepted.json"),
+        }
+        _emit_console(payload)
         if not self.enabled:
             return
         with _TRACE_LOCK:
