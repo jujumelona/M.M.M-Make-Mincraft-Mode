@@ -46,7 +46,20 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
 
     def official(_brief):
         barrier.wait(timeout=2)
-        return {"status": "available", "kind": "official"}
+        return {
+            "status": "available",
+            "domains": [
+                {
+                    "domain_id": "fabric_api",
+                    "documents": [
+                        {
+                            "document_id": "fixture-official",
+                            "content": "target-neutral Fabric official evidence",
+                        }
+                    ],
+                }
+            ],
+        }
 
     def forced(_router, _brief):
         barrier.wait(timeout=2)
@@ -65,30 +78,41 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
     def radar_must_not_run(*_args, **_kwargs):
         raise AssertionError("target-specific technology radar ran before target freeze")
 
-    monkeypatch.setattr(pipeline, "retrieve_domain_evidence", official)
+    monkeypatch.setattr(pipeline, "_target_neutral_official_evidence", official)
     monkeypatch.setattr(pipeline, "collect_technology_radar", radar_must_not_run)
     monkeypatch.setattr(project_rag, "_forced_rag_bundle", forced)
 
-    seen_deterministic = []
+    seen_source_keys: list[set[str]] = []
 
-    def domain_agent(_router, **kwargs):
-        deterministic = kwargs["deterministic"]
-        seen_deterministic.append(set(deterministic))
+    def domain_worker(
+        _agentic,
+        _router,
+        *,
+        prompt,
+        domain,
+        document,
+        trace_metadata,
+    ):
+        del prompt, trace_metadata
+        seen_source_keys.append(set(document["source_keys"]))
+        pages = project_rag._read_evidence_pages(document)
+        assert pages
         return {
-            "domain_id": kwargs["domain"]["domain_id"],
+            "domain_id": domain["domain_id"],
             "claims": [
                 {
                     "claim": "Target-neutral Fabric research can proceed before target freeze.",
-                    "evidence_refs": ["sha256:plan"],
+                    "evidence_refs": [pages[0]["page_ref"]],
                 }
             ],
             "gaps": [],
             "next_queries": [],
             "procedures": [],
             "sufficient": True,
+            "checkpoint": {"status": "complete"},
         }
 
-    monkeypatch.setattr(agentic, "_research_domain_with_agent", domain_agent)
+    monkeypatch.setattr(project_rag, "_research_document_domain", domain_worker)
     monkeypatch.setattr(pipeline, "attach_procedural_skillbank", lambda _r, _p, value: value)
     monkeypatch.setattr(pipeline, "compose_research_skillbank", lambda _r, _p, value: value)
 
@@ -98,8 +122,10 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
     assert set(payload["deterministic"]) == expected
     assert payload["deterministic"]["technology_radar"]["status"] == "deferred_until_target_freeze"
     assert "ecosystem_discovery" not in payload["deterministic"]
-    assert seen_deterministic == [expected]
+    assert seen_source_keys == [expected]
     assert payload["domain_notes"][0]["domain_id"] == "fabric_api"
+    assert payload["domain_notes"][0]["claims"][0]["evidence_refs"][0].startswith("sha256:")
+    assert "#page=" in payload["domain_notes"][0]["claims"][0]["evidence_refs"][0]
     assert "deferred" in payload["method"]["planning_search"]
 
 
@@ -108,19 +134,33 @@ def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
 ) -> None:
     brief = {"domains": [{"domain_id": "request", "queries": ["request evidence"]}]}
     monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
-    monkeypatch.setattr(pipeline, "retrieve_domain_evidence", lambda _brief: {"status": "available", "domains": []})
-    monkeypatch.setattr(project_rag, "_forced_rag_bundle", lambda *_args, **_kwargs: {"status": "available", "domains": []})
     monkeypatch.setattr(
-        agentic,
-        "_research_domain_with_agent",
+        pipeline,
+        "_target_neutral_official_evidence",
+        lambda _brief: {"status": "available", "domains": []},
+    )
+    monkeypatch.setattr(
+        project_rag,
+        "_forced_rag_bundle",
+        lambda *_args, **_kwargs: {"status": "available", "domains": []},
+    )
+    monkeypatch.setattr(
+        project_rag,
+        "_research_document_domain",
         lambda *_args, **_kwargs: {
             "domain_id": "request",
             "claims": [],
             "gaps": ["EXACT_SYNTHESIS_GAP"],
             "next_queries": [],
+            "procedures": [],
             "sufficient": False,
             "checkpoint": {"status": "terminal_gap", "request_sha256": "sha256:failure"},
-            "research_failures": [{"unit": "synthesis:0:0", "error": "EXACT_VALIDATOR_FAILURE: missing claim evidence"}],
+            "research_failures": [
+                {
+                    "unit": "synthesis:0:0",
+                    "error": "EXACT_VALIDATOR_FAILURE: missing claim evidence",
+                }
+            ],
             "fixed_point": True,
         },
     )
@@ -146,13 +186,17 @@ def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
 def test_domain_exception_prints_full_traceback_and_escapes(monkeypatch, capsys) -> None:
     brief = {"domains": [{"domain_id": "request", "queries": ["request evidence"]}]}
     monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
-    monkeypatch.setattr(pipeline, "retrieve_domain_evidence", lambda _brief: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_target_neutral_official_evidence",
+        lambda _brief: {"status": "available", "domains": []},
+    )
     monkeypatch.setattr(project_rag, "_forced_rag_bundle", lambda *_args, **_kwargs: {})
 
     def explode(*_args, **_kwargs):
         raise ValueError("EXACT_DOMAIN_EXCEPTION")
 
-    monkeypatch.setattr(agentic, "_research_domain_with_agent", explode)
+    monkeypatch.setattr(project_rag, "_research_document_domain", explode)
 
     with pytest.raises(ValueError, match="EXACT_DOMAIN_EXCEPTION"):
         collect_design_research(object(), "failing request")
