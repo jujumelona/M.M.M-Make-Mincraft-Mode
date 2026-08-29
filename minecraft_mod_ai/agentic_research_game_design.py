@@ -615,7 +615,12 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
     cleaned_claims = []
     for claim in note.get("claims", []):
         if isinstance(claim, dict):
-            claim_text = str(claim.get("claim") or claim.get("text") or "").strip()
+            claim_text = str(
+                claim.get("claim")
+                or claim.get("text")
+                or claim.get("claim_text")
+                or ""
+            ).strip()
             raw_refs = claim.get("evidence_refs", [])
             claim_refs = (
                 [
