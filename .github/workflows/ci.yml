@@ -53,7 +53,7 @@ jobs:
           behavioral = int(payload["behavioral_count"])
           # Exact reviewed surface after removing duplicate planner/capability wrappers.
           # Any new runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 401
+          budget = 400
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
