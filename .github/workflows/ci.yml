@@ -51,10 +51,9 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # 408 is the reviewed surface after the planner graph, Minecraft MCP/Skill
-          # routing, and in-state atomic output recovery were composed together.
-          # Any further runtime rebinding remains a hard CI failure.
-          budget = 408
+          # Exact reviewed surface after removing duplicate planner/capability wrappers.
+          # Any new runtime rebinding is a hard CI failure until deliberately reviewed.
+          budget = 401
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
@@ -76,7 +75,7 @@ jobs:
       - name: Verify packaged Skill catalog
         run: |
           python tools/package_skills.py
-          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json
+          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
 
   runtime-clean:
     needs: audit
