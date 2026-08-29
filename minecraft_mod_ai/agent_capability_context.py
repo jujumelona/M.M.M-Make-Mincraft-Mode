@@ -32,6 +32,9 @@ _EXTERNAL_AGENT_TOOLS = frozenset(
 _PRE_TARGET_RESEARCH_TOOLS = frozenset(
     {
         "discover_ecosystem_resources",
+        "inspect_modrinth_project",
+        "inspect_github_repository",
+        "assess_technology_compatibility",
         "search_project_rag",
     }
 )
@@ -47,7 +50,7 @@ def target_neutral_research_scope() -> Iterator[None]:
     """Mark one request-local research turn as intentionally pre-target.
 
     Global environment coordinates belong to process configuration, not to the semantic
-    state of a particular planning request.  This scope prevents a stale/default target
+    state of a particular planning request. This scope prevents a stale/default target
     from authorizing target-sensitive standalone tools or leaking into MCP capability
     routing while pre-design research is running.
     """
@@ -84,9 +87,7 @@ def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
     selected = stage.strip().lower()
     contracts = compile_skill_catalog()
     return tuple(
-        contract
-        for contract in contracts.values()
-        if selected in contract.stages
+        contract for contract in contracts.values() if selected in contract.stages
     )
 
 
@@ -330,8 +331,6 @@ def build_agent_capability_context(
     )
 
 
-# agent_security_contract recognizes this marker and therefore does not wrap/re-encode
-# the already compact v5 payload a second time.
 setattr(build_agent_capability_context, _COMPACT_CONTEXT_MARKER, True)
 
 
@@ -342,7 +341,9 @@ def _schema_tool_name(schema: Mapping[str, Any]) -> str:
     return str(function.get("name", "")).strip()
 
 
-def _tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+def _tool_names(
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
     surface = tuple(tool_schemas)
     _assert_unique_schema_names(surface, surface="agent-capability-context")
     return tuple(
