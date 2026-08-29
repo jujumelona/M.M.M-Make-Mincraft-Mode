@@ -37,6 +37,49 @@ _DETERMINISTIC_STAGES = (
 )
 
 
+def _pre_design_brief(prompt: str) -> dict[str, Any]:
+    """Build exactly one design-critical domain without implementation-donor routes."""
+
+    candidate = {
+        "summary": (
+            "Design-critical pre-design research only. Reusable donor selection, dependency "
+            "closure and license validation are deferred until the detailed design is frozen."
+        ),
+        "domains": [
+            {
+                "domain_id": "request",
+                "objective": (
+                    "Resolve Minecraft/Fabric mechanics, platform constraints and existing "
+                    "local-project capabilities needed to design the authored request."
+                ),
+                "requirements": [prompt],
+                "evidence_kinds": [
+                    "minecraft_api",
+                    "compatibility",
+                    "runtime_behavior",
+                    "local_project",
+                    "testing",
+                ],
+                "queries": [
+                    prompt,
+                    (
+                        "Minecraft Fabric API registration items entities dimensions world "
+                        "interaction networking persistence data components GameTest"
+                    ),
+                ],
+                "providers": ["official_docs", "project_rag"],
+                "depends_on": [],
+            }
+        ],
+        "unresolved_questions": [],
+    }
+    return normalize_research_brief(
+        prompt,
+        {"title": "pre-design research"},
+        candidate,
+    )
+
+
 def _planner_config(router: Any) -> Any | None:
     registry = getattr(router, "registry", None)
     profile = getattr(router, "profile", None)
@@ -275,10 +318,7 @@ def collect_design_research(
     from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
 
-    research_brief = normalize_research_brief(
-        prompt,
-        {"title": "pre-design research"},
-    )
+    research_brief = _pre_design_brief(prompt)
     knowledge_plan = compile_minecraft_knowledge_plan(prompt)
     deterministic: dict[str, Any] = {}
     errors: list[dict[str, str]] = []
