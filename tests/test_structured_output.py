@@ -140,6 +140,34 @@ def test_parser_owned_research_schema_accepts_prose_wrapped_json_for_host_parser
     assert "MODEL STRUCTURED OUTPUT FAILURE:" not in logged
 
 
+def test_parser_owned_research_rejects_sufficient_true_without_claims(capsys) -> None:
+    output = (
+        '{"research_note":{"domain_id":"request","claims":[],"gaps":[],'
+        '"next_queries":[],"sufficient":true}}'
+    )
+    request = _request(schema=_RESEARCH_SCHEMA)
+
+    with pytest.raises(StructuredOutputValidationError) as raised:
+        _validate(output, request)
+
+    assert any("sufficient=true" in error for error in raised.value.errors)
+    logged = capsys.readouterr().out
+    assert "MODEL STRUCTURED OUTPUT FAILURE:" in logged
+    assert "requires at least one non-empty claim" in logged
+    assert '"claims": []' in logged
+
+
+def test_parser_owned_research_allows_explicit_insufficient_gap_receipt() -> None:
+    output = (
+        '{"research_note":{"domain_id":"request","claims":[],'
+        '"gaps":["missing evidence"],"next_queries":["more evidence"],'
+        '"sufficient":false}}'
+    )
+    request = _request(schema=_RESEARCH_SCHEMA)
+
+    assert _validate(output, request) == output
+
+
 def test_strict_schema_still_rejects_prose_wrapped_json() -> None:
     output = 'prefix {"name":"ok","count":1} suffix'
 
