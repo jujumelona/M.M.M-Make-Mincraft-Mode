@@ -233,26 +233,30 @@ def _install_nonfatal_prefill_calibration(llama_cpp_module: Any) -> None:
     back to the adapter's prefix normalization when it is unavailable.
     """
 
-    original = getattr(
+    original_calibration = getattr(
         llama_cpp_module,
         "_calibrate_assistant_prefill_generation_prompt",
         None,
     )
-    if not callable(original) or getattr(original, _PREFILL_RESILIENCE_MARKER, False):
+    if not callable(original_calibration) or getattr(
+        original_calibration,
+        _PREFILL_RESILIENCE_MARKER,
+        False,
+    ):
         return
 
     def safe_calibration(
         server_url: str,
-        payload: Mapping[str, Any],
+        original: Mapping[str, Any],
     ) -> str:
-        if payload.get("tools"):
+        if original.get("tools"):
             return ""
         try:
-            return str(original(server_url, payload) or "")
+            return str(original_calibration(server_url, original) or "")
         except Exception:
             return ""
 
-    safe_calibration.__wrapped__ = original  # type: ignore[attr-defined]
+    safe_calibration.__wrapped__ = original_calibration  # type: ignore[attr-defined]
     setattr(safe_calibration, _PREFILL_RESILIENCE_MARKER, True)
     llama_cpp_module._calibrate_assistant_prefill_generation_prompt = safe_calibration
 
