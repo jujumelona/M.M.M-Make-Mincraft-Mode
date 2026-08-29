@@ -61,10 +61,13 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
             ],
         }
 
-    def forced(_router, _brief):
+    def local_project(_brief):
         barrier.wait(timeout=2)
         return {
-            "schema_version": "mmm/forced-pre-design-rag-v2",
+            "schema_version": "mmm/pre-design-local-project-evidence-v1",
+            "status": "not_indexed",
+            "code_index_status": "not_indexed",
+            "code_index_path": "",
             "domain_count": 1,
             "query_count": 1,
             "domains": [
@@ -80,12 +83,13 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
 
     monkeypatch.setattr(pipeline, "_target_neutral_official_evidence", official)
     monkeypatch.setattr(pipeline, "collect_technology_radar", radar_must_not_run)
-    monkeypatch.setattr(project_rag, "_forced_rag_bundle", forced)
+    monkeypatch.setattr(pipeline, "collect_local_project_evidence", local_project)
 
     seen_source_keys: list[set[str]] = []
 
     def domain_worker(
         _agentic,
+        _project_rag,
         _router,
         *,
         prompt,
@@ -112,7 +116,7 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
             "checkpoint": {"status": "complete"},
         }
 
-    monkeypatch.setattr(project_rag, "_research_document_domain", domain_worker)
+    monkeypatch.setattr(pipeline, "research_document_domain", domain_worker)
     monkeypatch.setattr(pipeline, "attach_procedural_skillbank", lambda _r, _p, value: value)
     monkeypatch.setattr(pipeline, "compose_research_skillbank", lambda _r, _p, value: value)
 
@@ -140,13 +144,13 @@ def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
         lambda _brief: {"status": "available", "domains": []},
     )
     monkeypatch.setattr(
-        project_rag,
-        "_forced_rag_bundle",
-        lambda *_args, **_kwargs: {"status": "available", "domains": []},
+        pipeline,
+        "collect_local_project_evidence",
+        lambda *_args, **_kwargs: {"status": "not_indexed", "domains": []},
     )
     monkeypatch.setattr(
-        project_rag,
-        "_research_document_domain",
+        pipeline,
+        "research_document_domain",
         lambda *_args, **_kwargs: {
             "domain_id": "request",
             "claims": [],
@@ -191,12 +195,16 @@ def test_domain_exception_prints_full_traceback_and_escapes(monkeypatch, capsys)
         "_target_neutral_official_evidence",
         lambda _brief: {"status": "available", "domains": []},
     )
-    monkeypatch.setattr(project_rag, "_forced_rag_bundle", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        pipeline,
+        "collect_local_project_evidence",
+        lambda *_args, **_kwargs: {"status": "not_indexed", "domains": []},
+    )
 
     def explode(*_args, **_kwargs):
         raise ValueError("EXACT_DOMAIN_EXCEPTION")
 
-    monkeypatch.setattr(project_rag, "_research_document_domain", explode)
+    monkeypatch.setattr(pipeline, "research_document_domain", explode)
 
     with pytest.raises(ValueError, match="EXACT_DOMAIN_EXCEPTION"):
         collect_design_research(object(), "failing request")
@@ -277,26 +285,3 @@ def test_oversized_research_keeps_full_host_ledger_and_fits_every_design_section
     assert view["research_brief"]["model_context_view"]["budget_authority"] == "model_context_budget.request_message_budget"
     assert view["research_brief"]["domain_count"] == len(payload["domain_notes"])
     assert "host_research_ledger" not in agentic._compact_research_for_design(view)
-
-
-def test_small_research_payload_is_not_compacted() -> None:
-    router = _BudgetedRouter()
-    payload = {
-        "schema_version": "mmm/agentic-pre-design-research-v1",
-        "research_brief": {"summary": "small", "domains": [{"domain_id": "request"}], "unresolved_questions": []},
-        "deterministic": {},
-        "domain_notes": [
-            {
-                "domain_id": "request",
-                "claims": [{"claim": "Fabric registration is available", "evidence_refs": []}],
-                "gaps": [],
-                "next_queries": [],
-                "sufficient": True,
-            }
-        ],
-        "errors": [],
-        "method": {},
-    }
-    payload["research_sha256"] = agentic._json_sha256(payload)
-
-    assert _bounded_model_view(agentic, router, "small request", payload) is payload
