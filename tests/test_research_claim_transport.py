@@ -26,7 +26,9 @@ def _qwen_claim_note() -> dict:
 
 
 def test_qwen_claim_text_is_canonicalized_before_grounding_validation() -> None:
-    raw = json.dumps({"research_note": _qwen_claim_note()}, ensure_ascii=False)
+    # Match the observed llama/Qwen transport: no research_note wrapper and a
+    # claim_text field inside claims.
+    raw = json.dumps(_qwen_claim_note(), ensure_ascii=False)
 
     note = agentic._parse_research_note(raw, "request")
 
