@@ -50,7 +50,7 @@ def official(brief):
 
 def radar(*_args, **_kwargs):
     calls["radar"] += 1
-    return {"status": "available", "radar_sha256": "sha256:radar"}
+    raise AssertionError("target-specific radar ran before target freeze")
 
 
 def forced(_router, brief):
@@ -79,6 +79,7 @@ def domain_worker(_router, *, prompt, domain, deterministic, trace_metadata):
         "technology_radar",
         "forced_project_rag",
     }
+    assert deterministic["technology_radar"]["status"] == "deferred_until_target_freeze"
     return {
         "domain_id": domain["domain_id"],
         "claims": [{"claim": "validated request", "evidence_refs": ["probe"]}],
@@ -122,7 +123,8 @@ coverage = result["minecraft_knowledge_route_coverage"]
 coverage_statuses = {item["status"] for item in coverage["domains"]}
 
 assert brief_ids == ["request"]
-assert calls == {"official": 1, "radar": 1, "forced": 1, "domain": 1}
+assert calls == {"official": 1, "radar": 0, "forced": 1, "domain": 1}
+assert result["deterministic"]["technology_radar"]["status"] == "deferred_until_target_freeze"
 assert coverage["status"] == "PASS"
 assert coverage["target_frozen"] is False
 assert coverage_statuses == {"DEFERRED_UNTIL_TARGET_FREEZE"}
@@ -183,7 +185,7 @@ def test_fresh_runtime_uses_single_owner_and_defers_versioned_routes(
         "domain": 1,
         "forced": 1,
         "official": 1,
-        "radar": 1,
+        "radar": 0,
     }
     assert result["coverage_statuses"] == ["DEFERRED_UNTIL_TARGET_FREEZE"]
     assert result["target_frozen"] is False
