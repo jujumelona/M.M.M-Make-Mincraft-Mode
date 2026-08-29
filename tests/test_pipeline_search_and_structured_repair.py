@@ -21,7 +21,7 @@ def test_generated_task_name_gets_bounded_semantic_search_variant() -> None:
     assert "Planet" in variants[1]
 
 
-def test_mod_search_is_broad_then_exact_metadata_verified() -> None:
+def test_mod_search_is_broad_then_exact_target_ranked() -> None:
     class Client:
         def __init__(self) -> None:
             self.search_calls = []
@@ -29,12 +29,17 @@ def test_mod_search_is_broad_then_exact_metadata_verified() -> None:
 
         def search(self, source, query, **kwargs):
             self.search_calls.append((source, query, dict(kwargs)))
-            return {
-                "candidates": [
+            version = kwargs.get("minecraft_version")
+            if version == "1.20.1":
+                candidates = []
+            elif version == "1.21.1":
+                candidates = [{"candidate_id": "modrinth:compatible"}]
+            else:
+                candidates = [
                     {"candidate_id": "modrinth:compatible"},
                     {"candidate_id": "modrinth:other"},
                 ]
-            }
+            return {"candidates": candidates}
 
         def inspect_modrinth_project(self, project_id, *, minecraft_version, loader):
             self.inspect_calls.append((project_id, minecraft_version, loader))
@@ -56,9 +61,9 @@ def test_mod_search_is_broad_then_exact_metadata_verified() -> None:
     assert not errors
     assert found["alien planet"]
 
-    # Candidate recall must not be version/loader-faceted.
-    assert client.search_calls
-    for _source, _query, kwargs in client.search_calls:
+    broad_calls = list(client.search_calls)
+    assert broad_calls
+    for _source, _query, kwargs in broad_calls:
         assert "minecraft_version" not in kwargs
         assert "loader" not in kwargs
         assert kwargs["target_profile"] == "minecraft_mod"
@@ -85,7 +90,18 @@ def test_mod_search_is_broad_then_exact_metadata_verified() -> None:
         "modrinth:compatible",
     )
     assert matrix["probe:fabric:1.20.1"]["alien planet"] == ()
-    assert ("compatible", "1.21.1", "fabric") in client.inspect_calls
+
+    exact_calls = client.search_calls[len(broad_calls):]
+    assert exact_calls
+    assert {call[2].get("minecraft_version") for call in exact_calls} == {
+        "1.21.1",
+        "1.20.1",
+    }
+    assert all(call[2].get("loader") == "fabric" for call in exact_calls)
+
+    # Deep project/version inspection is deliberately deferred until after target
+    # selection, avoiding target x project Cartesian API explosions.
+    assert client.inspect_calls == []
 
 
 def test_mod_search_transport_failure_is_not_treated_as_no_mod_support() -> None:
