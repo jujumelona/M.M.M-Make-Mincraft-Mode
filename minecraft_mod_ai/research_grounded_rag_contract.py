@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -27,6 +28,8 @@ _MAX_HTTP_BYTES = 2 * 1024 * 1024
 _MAX_SOURCE_TEXT_CHARS = 24_000
 _MAX_SOURCE_FILES_PER_REPO = 4
 _MAX_EXTERNAL_PROJECTS = 4
+_MAX_SOURCE_REPOS_PER_QUERY = 2
+_MAX_HTTP_CACHE_ITEMS = 256
 _ALLOWED_SOURCE_SUFFIXES = (
     ".java",
     ".kt",
@@ -41,6 +44,8 @@ _ALLOWED_SOURCE_SUFFIXES = (
     ".mcfunction",
 )
 _TOKEN = re.compile(r"[^\W_]+(?:[.$:/_-][^\W_]+)*", flags=re.UNICODE)
+_HTTP_CACHE_LOCK = threading.RLock()
+_HTTP_CACHE: dict[tuple[str, bool], bytes] = {}
 _INSTALLED = False
 
 
@@ -172,6 +177,12 @@ def _request_headers(*, github: bool = False) -> dict[str, str]:
 
 
 def _http_bytes(url: str, *, github: bool = False) -> bytes:
+    cache_key = (url, github)
+    with _HTTP_CACHE_LOCK:
+        cached = _HTTP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     request = Request(url, headers=_request_headers(github=github))
     with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
         length = response.headers.get("Content-Length")
@@ -180,6 +191,11 @@ def _http_bytes(url: str, *, github: bool = False) -> bytes:
         payload = response.read(_MAX_HTTP_BYTES + 1)
     if len(payload) > _MAX_HTTP_BYTES:
         raise ValueError("remote document exceeded the retrieval byte limit")
+
+    with _HTTP_CACHE_LOCK:
+        if len(_HTTP_CACHE) >= _MAX_HTTP_CACHE_ITEMS:
+            _HTTP_CACHE.pop(next(iter(_HTTP_CACHE)))
+        _HTTP_CACHE[cache_key] = payload
     return payload
 
 
@@ -434,6 +450,7 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
     variants = _query_variants(query)
     projects_by_id: dict[str, dict[str, Any]] = {}
     documents_by_id: dict[str, dict[str, Any]] = {}
+    fetched_repos: set[tuple[str, str]] = set()
     errors: list[str] = []
 
     for variant in variants:
@@ -462,8 +479,11 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
                 documents_by_id.setdefault(document["source_id"], document)
 
             repo_ref = _github_repo_from_url(str(project.get("source_url") or ""))
-            if repo_ref is None:
+            if repo_ref is None or repo_ref in fetched_repos:
                 continue
+            if len(fetched_repos) >= _MAX_SOURCE_REPOS_PER_QUERY:
+                continue
+            fetched_repos.add(repo_ref)
             source_docs, source_errors = _github_repo_documents(
                 repo_ref[0], repo_ref[1], query
             )
@@ -481,7 +501,11 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         corrective_search_used = True
         repositories, repository_errors = _github_repository_search(query)
         errors.extend(repository_errors)
-        for owner, repo in repositories:
+        for owner, repo in repositories[:_MAX_SOURCE_REPOS_PER_QUERY]:
+            repo_ref = (owner, repo)
+            if repo_ref in fetched_repos:
+                continue
+            fetched_repos.add(repo_ref)
             source_docs, source_errors = _github_repo_documents(owner, repo, query)
             errors.extend(source_errors)
             for document in source_docs:
@@ -508,6 +532,7 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         "credentials_required": False,
         "corrective_search_used": corrective_search_used,
         "project_count": len(projects_by_id),
+        "source_repository_count": len(fetched_repos),
         "document_count": len(documents),
         "actual_source_document_count": actual_source_count,
         "coverage_score": coverage,
