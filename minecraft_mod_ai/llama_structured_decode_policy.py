@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 from functools import wraps
 from typing import Any
 
@@ -36,20 +37,37 @@ def _is_qwen35(adapter: Any) -> bool:
     return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
 
 
-def _structured_repair_request(request: Any, exc: Any) -> Any:
-    """Build a compact serialization-repair turn instead of replaying the whole task.
+def _copy_request_with(request: Any, **changes: Any) -> Any:
+    """Copy the request protocol without assuming one concrete request class."""
 
-    The first response is authoritative for already-valid fields. The repair model sees
-    only that response, its validator diagnostics, and the response schema, so a local
-    contract defect cannot trigger research/planning/code context regeneration.
+    if is_dataclass(request) and not isinstance(request, type):
+        return replace(request, **changes)
+    cloned = copy.copy(request)
+    for key, value in changes.items():
+        setattr(cloned, key, value)
+    return cloned
+
+
+def _structured_repair_request(request: Any, exc: Any) -> Any:
+    """Build one compact serialization-repair turn without replaying the task.
+
+    The invalid output is embedded verbatim rather than JSON-escaping it.  This keeps
+    already-valid values visible to the repair model while the validator diagnostics and
+    response schema remain host-owned constraints.
     """
 
     schema = getattr(request, "response_schema", None)
-    payload = {
-        "invalid_output": str(getattr(exc, "output", "") or ""),
-        "validation_errors": list(getattr(exc, "errors", ()) or ()),
-        "response_schema": dict(schema) if isinstance(schema, Mapping) else None,
-    }
+    invalid_output = str(getattr(exc, "output", "") or "")
+    errors = list(getattr(exc, "errors", ()) or ())
+    schema_payload = dict(schema) if isinstance(schema, Mapping) else None
+    repair_context = (
+        "INVALID OUTPUT (verbatim)\n"
+        f"{invalid_output}\n"
+        "VALIDATION ERRORS\n"
+        + json.dumps(errors, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        + "\nRESPONSE SCHEMA\n"
+        + json.dumps(schema_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    )
     messages = (
         {
             "role": "system",
@@ -61,18 +79,9 @@ def _structured_repair_request(request: Any, exc: Any) -> Any:
                 "the corrected JSON object."
             ),
         },
-        {
-            "role": "user",
-            "content": json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ),
-        },
+        {"role": "user", "content": repair_context},
     )
-    return replace(
+    return _copy_request_with(
         request,
         messages=messages,
         media_paths=(),
