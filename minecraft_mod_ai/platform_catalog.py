@@ -167,14 +167,51 @@ def provider_for_loader(loader: str) -> PlatformProvider:
     return provider
 
 
+def _discover_all_versions(
+    provider: PlatformProvider,
+    *,
+    initial_limit: int,
+) -> tuple[str, ...]:
+    """Exhaust a prefix-limited provider without imposing a semantic candidate cap.
+
+    ``discover_versions(n)`` is a bounded I/O interface, not an authorization to ignore
+    older valid targets. Increase the requested prefix until the provider returns fewer
+    than requested. A provider that ignores the larger request is treated as complete at
+    the returned prefix; no fixed project-level maximum participates in target selection.
+    """
+
+    limit = max(1, int(initial_limit))
+    previous: tuple[str, ...] = ()
+    while True:
+        raw = provider.discover_versions(limit)
+        current = tuple(
+            dict.fromkeys(
+                version
+                for item in raw
+                if (version := str(item).strip())
+            )
+        )
+        if not current:
+            return ()
+        if len(current) < limit:
+            return current
+        if current == previous:
+            return current
+        previous = current
+        limit *= 2
+
+
 def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    """Return only provider-discovered versions; no offline version fallback exists."""
+    """Return all provider-discovered versions; no offline version fallback exists."""
     if loader is not None:
-        return provider_for_loader(loader).discover_versions(32)
+        return _discover_all_versions(provider_for_loader(loader), initial_limit=32)
     values: list[str] = []
     seen: set[str] = set()
     for loader_id in executable_loaders():
-        for version in provider_for_loader(loader_id).discover_versions(32):
+        for version in _discover_all_versions(
+            provider_for_loader(loader_id),
+            initial_limit=32,
+        ):
             if version not in seen:
                 seen.add(version)
                 values.append(version)
@@ -188,14 +225,20 @@ def discover_target_keys(
     limit_per_loader: int = 12,
     diagnostics: list[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
+    """Return the complete provider-discovered target set.
+
+    ``limit_per_loader`` is now only the initial provider page size. It cannot truncate
+    the semantic candidate set used by the optimizer.
+    """
+
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
-    limit = max(1, int(limit_per_loader))
+    initial_limit = max(1, int(limit_per_loader))
     requested_version = str(minecraft_version or "").strip()
     result: list[tuple[str, str]] = []
     for loader_id in loaders:
         provider = provider_for_loader(loader_id)
         try:
-            versions = provider.discover_versions(limit)
+            versions = _discover_all_versions(provider, initial_limit=initial_limit)
         except Exception as exc:  # noqa: BLE001 - one provider must not hide other providers
             message = (
                 f"version discovery failed loader={loader_id}: "
@@ -210,7 +253,7 @@ def discover_target_keys(
             if diagnostics is not None:
                 diagnostics.append(message)
             _emit_discovery_log(message)
-        for version in versions[:limit]:
+        for version in versions:
             if requested_version and version != requested_version:
                 continue
             result.append((loader_id, version))
@@ -353,7 +396,9 @@ def platform_catalog_receipt() -> dict[str, Any]:
             {
                 "loader": loader,
                 "provider_id": provider.provider_id,
-                "minecraft_versions": list(provider.discover_versions(32)),
+                "minecraft_versions": list(
+                    _discover_all_versions(provider, initial_limit=32)
+                ),
             }
         )
     return {
