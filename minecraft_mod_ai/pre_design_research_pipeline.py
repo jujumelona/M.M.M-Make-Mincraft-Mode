@@ -154,7 +154,7 @@ def _enrich_note_detail(
     note_index: int,
     note: Mapping[str, Any],
 ) -> None:
-    """Add evidence transactionally; only the live context budget decides acceptance."""
+    """Add evidence in place and roll back only the item that exceeds the live budget."""
 
     summary = dict(view["domain_notes"][note_index])
     base_detail = {
@@ -163,22 +163,21 @@ def _enrich_note_detail(
         "gaps": [],
         "next_queries": [],
     }
-    candidate = deepcopy(view)
-    candidate["domain_notes"][note_index] = base_detail
-    if not _design_request_fits(agentic, router, prompt, candidate):
-        return
+    previous = view["domain_notes"][note_index]
     view["domain_notes"][note_index] = base_detail
+    if not _design_request_fits(agentic, router, prompt, view):
+        view["domain_notes"][note_index] = previous
+        return
 
     for field in ("claims", "gaps", "next_queries"):
         raw_items = note.get(field, [])
         if not isinstance(raw_items, list):
             continue
+        accepted = base_detail[field]
         for item in raw_items:
-            candidate = deepcopy(view)
-            candidate["domain_notes"][note_index][field].append(deepcopy(item))
-            if _design_request_fits(agentic, router, prompt, candidate):
-                view.clear()
-                view.update(candidate)
+            accepted.append(deepcopy(item))
+            if not _design_request_fits(agentic, router, prompt, view):
+                accepted.pop()
 
 
 def _bounded_model_view(
@@ -214,19 +213,15 @@ def _bounded_model_view(
     view["domain_notes"] = []
     view["model_view_sha256"] = ""
 
-    # Preserve broad coverage before spending space on detail. Every accepted summary is
-    # chosen by the real request budget; if the complete index does not fit, the full
-    # domain-id list/hash in research_brief still records the omitted coverage.
-    indexed_notes: list[dict[str, Any]] = []
+    # Preserve broad coverage before spending space on detail. The list itself is mutated
+    # transactionally so packing cost grows with the serialized request, not with repeated
+    # copies of the entire research ledger.
+    indexed_notes: list[dict[str, Any]] = view["domain_notes"]
     for note in domain_notes:
-        summary = _note_summary(note, agentic=agentic)
-        candidate = deepcopy(view)
-        candidate["domain_notes"] = [*indexed_notes, summary]
-        if _design_request_fits(agentic, router, prompt, candidate):
-            indexed_notes.append(summary)
-        else:
+        indexed_notes.append(_note_summary(note, agentic=agentic))
+        if not _design_request_fits(agentic, router, prompt, view):
+            indexed_notes.pop()
             break
-    view["domain_notes"] = indexed_notes
 
     # Spend remaining capacity on exact evidence in source order. There is no fixed top-N
     # or relevance threshold: each claim/gap/query is admitted only when all actual design
