@@ -117,6 +117,7 @@ def finalize_runtime() -> None:
         from .prefill_calibration_strictness_contract import (
             install as install_prefill_calibration_strictness,
         )
+        from .pre_design_phase_contract import install as install_pre_design_phase
         from .procedural_skill_identity_contract import (
             install as install_procedural_skill_identity,
         )
@@ -206,6 +207,9 @@ def finalize_runtime() -> None:
         # current function so the Minecraft knowledge contract remains the documented
         # outermost target-aware expansion instead of being silently bypassed.
         minecraft_knowledge_contract.install(agentic_research_game_design, complete_planner)
+        # Pre-design research must not inherit the post-design obligation fan-out. This
+        # phase boundary is deliberately installed after both wrappers above.
+        install_pre_design_phase(agentic_research_game_design)
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
