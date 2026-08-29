@@ -21,6 +21,10 @@ from typing import Any
 
 from .central_research import normalize_research_brief, retrieve_domain_evidence
 from .external_procedural_skill_contract import attach_procedural_skillbank
+from .minecraft_knowledge_contract import (
+    compile_minecraft_knowledge_plan,
+    evaluate_route_coverage,
+)
 from .research_coordinator import collect_technology_radar
 from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
@@ -206,6 +210,10 @@ def _bounded_model_view(
         "research_brief": deepcopy(research_brief),
         "domain_notes": deepcopy(domain_notes),
         "procedural_skillbank": deepcopy(payload.get("procedural_skillbank")),
+        "minecraft_knowledge_plan": deepcopy(payload.get("minecraft_knowledge_plan")),
+        "minecraft_knowledge_route_coverage": deepcopy(
+            payload.get("minecraft_knowledge_route_coverage")
+        ),
         "research_sha256": full_research_sha256,
     }
     view = dict(payload)
@@ -271,6 +279,7 @@ def collect_design_research(
         prompt,
         {"title": "pre-design research"},
     )
+    knowledge_plan = compile_minecraft_knowledge_plan(prompt)
     deterministic: dict[str, Any] = {}
     errors: list[dict[str, str]] = []
 
@@ -329,8 +338,20 @@ def collect_design_research(
             "corrective_retrieval": "official/project/code evidence correction",
             "reflection": "gap feedback across research passes",
             "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
+            "minecraft_knowledge": (
+                "host dependency plan retained before target freeze; version-sensitive routes "
+                "remain explicit deferred work until the platform target is frozen"
+            ),
         },
     }
+    payload["minecraft_knowledge_plan"] = knowledge_plan
+    coverage = evaluate_route_coverage(knowledge_plan, payload)
+    if coverage["status"] != "PASS":
+        raise RuntimeError(
+            "Minecraft knowledge route coverage blocked pre-design research: "
+            + ", ".join(coverage.get("blocking_requirement_refs", ()))
+        )
+    payload["minecraft_knowledge_route_coverage"] = coverage
     payload = attach_procedural_skillbank(router, prompt, payload)
     payload = compose_research_skillbank(router, prompt, payload)
     payload["research_sha256"] = agentic._json_sha256(payload)
