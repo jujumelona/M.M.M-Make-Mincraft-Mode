@@ -173,7 +173,7 @@ def finalize_runtime() -> None:
             agent_tool_runtime,
             expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
         )
-        install_routing_intent(small_model_max_agent_contract)
+        install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
