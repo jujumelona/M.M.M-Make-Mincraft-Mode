@@ -51,9 +51,9 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Exact reviewed surface after removing duplicate planner/capability wrappers.
+          # Exact reviewed surface after restoring production-depth planner/recovery owners.
           # Any new runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 400
+          budget = 404
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(

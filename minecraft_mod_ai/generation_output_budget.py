@@ -7,6 +7,11 @@ an artificial decode ceiling. Profiles opt into that behavior with
 ``dynamic_output_budget``. Compact reviewed tool calls stay finitely bounded, while
 source mutation/generation actions may use the live context that remains after the
 current request.
+
+Transport token estimation is intentionally conservative, but it is only an estimate.
+A forced structural tool action is never starved down to a few hundred tokens merely
+because that estimate is pessimistic: real context pressure is classified by the llama
+backend and recovered by the canonical context-compaction owner.
 """
 
 import json
@@ -17,8 +22,13 @@ from typing import Any
 from .model_context_budget import effective_context_tokens, tool_action_token_budget
 
 _CONTEXT_GUARD_TOKENS = 2048
-_BYTES_PER_TOKEN_ESTIMATE = 2
+# Qwen's live prompt in production measured materially above two serialized bytes/token.
+# Three remains conservative while avoiding the 2x overestimate that reduced a normal
+# apply_source_edit turn to 523 tokens and its retry to 151 tokens.
+_BYTES_PER_TOKEN_ESTIMATE = 3
 _DEFAULT_DYNAMIC_OUTPUT_TOKENS = 16384
+_MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS = 4096
+_STRUCTURAL_COMPACT_TOOLS = frozenset({"apply_source_edit"})
 _EXPANSIVE_TOOL_EFFECTS = frozenset(
     {
         "project_changed",
@@ -87,8 +97,28 @@ def _tool_name(tool: Any) -> str:
     return str(tool.get("name", "") or "").strip()
 
 
+def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
+    if not tools:
+        return 1
+    names = {_tool_name(tool) for tool in tools}
+    if names and names <= _STRUCTURAL_COMPACT_TOOLS:
+        return max(
+            1,
+            min(
+                _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS,
+                tool_action_token_budget(config),
+            ),
+        )
+    return 1
+
+
 def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
-    """Return true unless every visible tool is reviewed as a compact action."""
+    """Return true unless every visible tool is reviewed as a compact action.
+
+    ``apply_source_edit`` is deliberately compact even though its reviewed transition
+    mutates source: its scalar protocol permits one structural Java operation per model
+    action (type shell, one import, or one member), never a whole Java file.
+    """
 
     if not tools:
         return False
@@ -98,6 +128,8 @@ def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
         name = _tool_name(tool)
         if not name:
             return True
+        if name in _STRUCTURAL_COMPACT_TOOLS:
+            continue
         transition = reviewed_transition(name)
         if transition is None:
             return True
@@ -112,16 +144,23 @@ def generation_output_token_budget(
     input_tokens: int = 0,
     tools: Sequence[Any] = (),
 ) -> int:
-    """Return one finite decode budget without imposing the compact-tool cap globally."""
+    """Return one finite decode budget without starving a forced structural action."""
 
     ceiling = _configured_output_ceiling(config)
     context = effective_context_tokens(config)
+    floor = _structural_tool_floor(config, tools)
+
     if ceiling is not None:
+        # Explicit operator/model ceilings remain authoritative; the floor never raises
+        # a deliberately configured bound.
         budget = ceiling
     elif context > 0:
-        budget = max(1, context - max(0, int(input_tokens)) - _CONTEXT_GUARD_TOKENS)
+        estimated_remaining = (
+            context - max(0, int(input_tokens)) - _CONTEXT_GUARD_TOKENS
+        )
+        budget = max(floor, estimated_remaining, 1)
     else:
-        budget = _DEFAULT_DYNAMIC_OUTPUT_TOKENS
+        budget = max(floor, _DEFAULT_DYNAMIC_OUTPUT_TOKENS)
 
     if tools and not tools_require_expansive_output(tools):
         budget = min(budget, tool_action_token_budget(config))
@@ -129,7 +168,7 @@ def generation_output_token_budget(
 
 
 def payload_input_token_estimate(payload: Mapping[str, Any]) -> int:
-    """Conservatively estimate serialized input tokens for transport-level clamping."""
+    """Estimate serialized input tokens for transport packing, not hard context truth."""
 
     value = dict(payload)
     value.pop("max_tokens", None)
@@ -143,7 +182,11 @@ def payload_input_token_estimate(payload: Mapping[str, Any]) -> int:
         ).encode("utf-8")
     except Exception:
         return 0
-    return max(0, (len(encoded) + _BYTES_PER_TOKEN_ESTIMATE - 1) // _BYTES_PER_TOKEN_ESTIMATE)
+    return max(
+        0,
+        (len(encoded) + _BYTES_PER_TOKEN_ESTIMATE - 1)
+        // _BYTES_PER_TOKEN_ESTIMATE,
+    )
 
 
 def apply_payload_generation_budget(
@@ -170,7 +213,13 @@ def apply_payload_generation_budget(
 
     context = effective_context_tokens(config)
     if context > 0:
-        remaining = max(1, context - input_tokens - _CONTEXT_GUARD_TOKENS)
+        # Serialized-size estimation is deliberately not allowed to squeeze one forced
+        # source edit below the amount needed to finish its function arguments. If the
+        # real server context is tighter, llama_finish_reason_contract reports typed
+        # CONTEXT_PRESSURE and the canonical tool loop compacts observations.
+        floor = _structural_tool_floor(config, tools)
+        estimated_remaining = context - input_tokens - _CONTEXT_GUARD_TOKENS
+        remaining = max(floor, estimated_remaining, 1)
         budget = min(budget, remaining)
 
     try:

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 llama.cpp uses the same finish reason when a bounded decode exhausts ``max_tokens``
 and when the server cannot complete within its context window. Those are different
-agent failures: shrinking observations can recover context pressure, but it cannot
-repair an action that is itself too large. The classification lives here so downstream
-recovery never has to infer semantics from human-readable error strings.
+agent failures: shrinking observations can recover context pressure, while a bounded
+output stop must be continued by the owner that can preserve tool/workspace state.
+
+The canonical inner agent loop gets the first chance to shrink an oversized action.
+If that atomic retry still exhausts output, the typed boundary remains recoverable by
+the outer custom-module checkpoint owner instead of being hidden behind a terminal
+configuration error. This gives the pipeline one state-preserving continuation layer
+rather than aborting the entire generation node.
 """
 
 import copy
@@ -16,6 +21,7 @@ from collections.abc import Mapping
 from typing import Any
 
 _MARKER = "_mmm_llama_finish_reason_classifier"
+_PREFILL_RESILIENCE_MARKER = "_mmm_nonfatal_prefill_calibration"
 CONTEXT_PRESSURE = "context_pressure"
 OUTPUT_EXHAUSTED = "output_exhausted"
 _CONTEXT_ERROR = (
@@ -32,7 +38,6 @@ _HTTP_CONTEXT_MARKERS = (
     '"type": "exceed_context_size"',
 )
 _CONTEXT_RECOVERY_EXHAUSTED_ATTR = "_mmm_context_recovery_exhausted"
-_ATOMIC_ACTION_OUTPUT_STALLED = "ATOMIC_ACTION_OUTPUT_STALLED:"
 
 
 class LlamaCompletionBoundaryError(RuntimeError):
@@ -104,41 +109,17 @@ def context_recovery_exhausted(exc: BaseException) -> bool:
     )
 
 
-def _atomic_output_recovery_terminal(exc: BaseException) -> bool:
-    """Return true when the canonical agent loop already exhausted atomic recovery.
-
-    ``progress_aware_tool_loop`` raises one stable host-owned error code after its
-    bounded atomic mutation retry also exhausts output.  The original llama boundary
-    remains in the cause chain for diagnostics, but outer generators must not treat it
-    as a fresh recovery opportunity and start a second continuation protocol.
-    """
-
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if _ATOMIC_ACTION_OUTPUT_STALLED in str(current):
-            return True
-        wrapped = getattr(current, "cause", None)
-        if isinstance(wrapped, BaseException) and id(wrapped) not in seen:
-            current = wrapped
-            continue
-        current = current.__cause__ or current.__context__
-    return False
-
-
 def completion_boundary_kind(exc: BaseException) -> str:
     """Return a recoverable completion-boundary kind through wrapper chains.
 
-    A context boundary whose one canonical overflow-recovery attempt is exhausted is
-    deliberately no longer advertised as recoverable. Likewise an output boundary
-    beneath ``ATOMIC_ACTION_OUTPUT_STALLED`` has already consumed the canonical
-    agent-state recovery and must not trigger a legacy outer continuation. The original
-    typed exception remains discoverable through :func:`completion_boundary_error`.
+    Context recovery has a single canonical owner and therefore becomes terminal once
+    that owner marks it exhausted. Output exhaustion is different: after the inner
+    atomic retry, the outer custom-module generator still owns a stronger recovery
+    mechanism because it can persist staged edits and restart from a compact checkpoint.
+    Therefore an ``ATOMIC_ACTION_OUTPUT_STALLED`` wrapper does not erase the underlying
+    typed OUTPUT_EXHAUSTED boundary.
     """
 
-    if _atomic_output_recovery_terminal(exc):
-        return ""
     boundary = completion_boundary_error(exc)
     if boundary is None:
         return ""
@@ -201,7 +182,10 @@ def _http_context_pressure(status_code: Any, body: str) -> bool:
     return any(marker in normalized for marker in _HTTP_CONTEXT_MARKERS)
 
 
-def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> LlamaCompletionBoundaryError:
+def _length_error(
+    data: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> LlamaCompletionBoundaryError:
     prompt_tokens, completion_tokens = _usage(data)
     max_tokens = _int_value(payload.get("max_tokens"))
     choices = data.get("choices")
@@ -239,13 +223,51 @@ def _length_error(data: Mapping[str, Any], payload: Mapping[str, Any]) -> LlamaC
     )
 
 
-def install(llama_cpp_module: Any) -> None:
-    """Own completion decoding directly, without adding another wrapper chain layer."""
+def _install_nonfatal_prefill_calibration(llama_cpp_module: Any) -> None:
+    """Make live assistant-prefill probing advisory rather than a fatal dependency.
 
+    Some llama.cpp/Qwen builds emit one or more model/template tokens even when the
+    calibration request uses ``max_tokens=0``. That server-specific behavior must not
+    turn an otherwise recoverable output boundary into a ModelBackendError. Tool turns
+    skip the zero-token probe entirely; non-tool turns retain the old probe but fall
+    back to the adapter's prefix normalization when it is unavailable.
+    """
+
+    original = getattr(
+        llama_cpp_module,
+        "_calibrate_assistant_prefill_generation_prompt",
+        None,
+    )
+    if not callable(original) or getattr(original, _PREFILL_RESILIENCE_MARKER, False):
+        return
+
+    def safe_calibration(
+        server_url: str,
+        payload: Mapping[str, Any],
+    ) -> str:
+        if payload.get("tools"):
+            return ""
+        try:
+            return str(original(server_url, payload) or "")
+        except Exception:
+            return ""
+
+    safe_calibration.__wrapped__ = original  # type: ignore[attr-defined]
+    setattr(safe_calibration, _PREFILL_RESILIENCE_MARKER, True)
+    llama_cpp_module._calibrate_assistant_prefill_generation_prompt = safe_calibration
+
+
+def install(llama_cpp_module: Any) -> None:
+    """Own completion decoding directly and install non-fatal prefill resilience."""
+
+    _install_nonfatal_prefill_calibration(llama_cpp_module)
     if bool(getattr(llama_cpp_module, _MARKER, False)):
         return
 
-    def completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    def completion_message(
+        server_url: str,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         response = llama_cpp_module._post_completion(server_url, payload)
         if response.status_code >= 400:
             body = llama_cpp_module._bounded_response_body(response)
