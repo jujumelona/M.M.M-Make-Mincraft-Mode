@@ -3,17 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from .central_research import normalize_research_brief, retrieve_domain_evidence
-from .ecosystem_discovery import discover_seed_bundle
 from .planner_stage_trace import PlannerStageTrace
-from .research_coordinator import (
-    collect_ecosystem_seed_bundle,
-    collect_technology_radar,
-)
+from .research_coordinator import collect_technology_radar
 from .spec import SpecValidationError
 from .technology_radar import build_technology_radar
 
@@ -174,180 +169,6 @@ def supports_agentic_research_router(router: Any) -> bool:
     return isinstance(router, ModelRouter)
 
 
-def bind_game_design_planner(game_design_module: Any) -> None:
-    """Install research-first, sectioned game-design generation exactly once.
-
-    Research is a prerequisite rather than a post-design decoration. Each bounded
-    research domain gets official/curated retrieval plus a ReAct-style research turn
-    with the stage-scoped MCP tools. The final design is emitted as several independent
-    JSON-schema-constrained sections, validated and merged by the host.
-    """
-
-    cls = game_design_module.GameDesignPlanner
-    current = cls.plan
-    if getattr(current, "_mmm_agentic_research_sectioned", False):
-        return
-
-    original = current
-    original_sharded = game_design_module._generate_sharded_design_page
-
-    def sharded_page(
-        router: Any,
-        *,
-        request_text: str,
-        media_paths: Sequence[str | Path],
-        page_index: int,
-        page_count: int,
-    ) -> dict[str, Any]:
-        if not supports_agentic_research_router(router):
-            return original_sharded(
-                router,
-                request_text=request_text,
-                media_paths=media_paths,
-                page_index=page_index,
-                page_count=page_count,
-            )
-        research = collect_pre_design_research(
-            router,
-            request_text,
-            trace_metadata={"page_index": page_index, "page_count": page_count},
-        )
-        return generate_sectioned_game_design(
-            game_design_module,
-            router,
-            request_text,
-            media_paths=media_paths,
-            research=research,
-            trace_metadata={"page_index": page_index, "page_count": page_count},
-        )
-
-    sharded_page._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
-    sharded_page.__wrapped__ = original_sharded  # type: ignore[attr-defined]
-    game_design_module._generate_sharded_design_page = sharded_page
-
-    def plan(self: Any, prompt: str, *, media_paths=()):
-        if not supports_agentic_research_router(self.router):
-            return original(self, prompt, media_paths=media_paths)
-        if not prompt.strip():
-            raise SpecValidationError("프롬프트를 입력해 주세요.")
-
-        request_pages = game_design_module._authoritative_request_pages(prompt, self.router)
-        if len(request_pages) > 1:
-            # The original host paging/receipt machinery remains authoritative. Its
-            # page model has been replaced above with the research-first sectioned path.
-            return original(self, prompt, media_paths=media_paths)
-
-        research = collect_pre_design_research(self.router, prompt)
-        design = generate_sectioned_game_design(
-            game_design_module,
-            self.router,
-            prompt,
-            media_paths=media_paths,
-            research=research,
-        )
-        design = game_design_module._canonical_game_design(design)
-        design = {
-            **design,
-            "_research_brief": research["research_brief"],
-            "_pre_design_research": research,
-        }
-        build_slice = game_design_module._deterministic_bootstrap(prompt, design)
-        proposal = game_design_module._proposal_from_model_data(prompt, build_slice)
-        if proposal.requested_prompt != prompt:
-            proposal = replace(
-                proposal,
-                requested_prompt=prompt,
-                approval_hash="",
-            ).with_hash()
-        return design, proposal
-
-    plan._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
-    plan.__wrapped__ = original  # type: ignore[attr-defined]
-    cls.plan = plan
-
-
-def collect_pre_design_research(
-    router: Any,
-    prompt: str,
-    *,
-    trace_metadata: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Collect deterministic RAG and agentic research before design generation.
-
-    There is no global research-round ceiling. Each domain agent continues while it
-    reports unresolved gaps and produces a new semantic state; an exact repeated state
-    is a host-proven fixed point and is recorded instead of looping forever.
-    """
-
-    research_brief = normalize_research_brief(
-        prompt,
-        {"title": "pre-design research"},
-    )
-    deterministic: dict[str, Any] = {}
-    errors: list[dict[str, str]] = []
-
-    try:
-        deterministic["official_rag"] = retrieve_domain_evidence(research_brief)
-    except Exception as exc:
-        errors.append(_error("official_rag", exc))
-        deterministic["official_rag"] = {"status": "unavailable"}
-
-    try:
-        deterministic["technology_radar"] = collect_technology_radar(
-            prompt,
-            research_brief,
-            page_size=50,
-            page_builder=build_technology_radar,
-        )
-    except Exception as exc:
-        errors.append(_error("technology_radar", exc))
-        deterministic["technology_radar"] = {"status": "unavailable"}
-
-    try:
-        deterministic["ecosystem_discovery"] = collect_ecosystem_seed_bundle(
-            prompt,
-            {},
-            research_brief=research_brief,
-            route_limit=12,
-            page_builder=discover_seed_bundle,
-            planning_seed_only=True,
-        )
-    except Exception as exc:
-        errors.append(_error("ecosystem_discovery", exc))
-        deterministic["ecosystem_discovery"] = {"status": "unavailable"}
-
-    domain_notes: list[dict[str, Any]] = []
-    for domain in research_brief.get("domains", []):
-        if not isinstance(domain, dict):
-            continue
-        domain_notes.append(
-            _research_domain_with_agent(
-                router,
-                prompt=prompt,
-                domain=domain,
-                deterministic=deterministic,
-                trace_metadata=trace_metadata,
-            )
-        )
-
-    payload = {
-        "schema_version": "mmm/agentic-pre-design-research-v1",
-        "research_brief": research_brief,
-        "deterministic": deterministic,
-        "domain_notes": domain_notes,
-        "errors": errors,
-        "method": {
-            "reason_act": "ReAct-style stage-scoped research tool loop",
-            "adaptive_retrieval": "Self-RAG/FLARE-style retrieve when evidence is missing",
-            "corrective_retrieval": "CRAG-style official correction and ecosystem expansion",
-            "reflection": "Reflexion-style gap feedback across research passes",
-            "planning_search": "existing MMM verifier/candidate search remains downstream",
-        },
-    }
-    payload["research_sha256"] = _json_sha256(payload)
-    return payload
-
-
 def _research_domain_with_agent(
     router: Any,
     *,
@@ -452,8 +273,6 @@ def generate_sectioned_game_design(
         )
         merged.update(section)
 
-    # art_direction is optional in the canonical contract. An empty object is a
-    # section placeholder, not a requested feature.
     if merged.get("art_direction") == {}:
         merged.pop("art_direction", None)
     game_design_module._validate_design(merged)
@@ -547,7 +366,6 @@ def _generate_section(
             prior_error = str(exc)
             prior_candidate = candidate
             continue
-
 
 
 def _research_messages(
@@ -791,8 +609,4 @@ def _json_sha256(value: Any) -> str:
     ).hexdigest()
 
 
-__all__ = [
-    "bind_game_design_planner",
-    "collect_pre_design_research",
-    "generate_sectioned_game_design",
-]
+__all__ = ["generate_sectioned_game_design"]
