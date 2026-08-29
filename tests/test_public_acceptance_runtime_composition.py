@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import unwrap
 from typing import Any
 
 from minecraft_mod_ai import complete_planner, production_contract
@@ -72,7 +73,8 @@ def test_evidence_handoff_keeps_task_acceptance_internal(monkeypatch) -> None:
 
 
 def test_complete_planner_resolves_finalized_production_contract_dynamically() -> None:
-    globals_map = complete_planner.CompleteGameDesignPlanner._plan_in_session.__globals__
+    canonical = unwrap(complete_planner.CompleteGameDesignPlanner._plan_in_session)
+    globals_map = canonical.__globals__
 
     assert globals_map["production_contract"] is production_contract
     assert "compile_production_contract" not in globals_map
