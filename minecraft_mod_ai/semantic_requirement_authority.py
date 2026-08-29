@@ -33,6 +33,7 @@ _ALL_PROVENANCE_ROLES = frozenset(
 )
 _CAPABILITY_ID = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _OPAQUE_CAPABILITY = re.compile(r"^(?:semantic_[0-9a-f]{6,}|unresolved:)", re.IGNORECASE)
+_WORD = re.compile(r"\w+", re.UNICODE)
 
 
 def _canonical(value: Any) -> str:
@@ -220,15 +221,40 @@ def _similarity_projection(value: str) -> tuple[str, list[int]]:
     return "".join(characters), raw_positions
 
 
+def _semantic_terms(values: Sequence[Any]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            match.group(0).casefold()
+            for value in values
+            for match in _WORD.finditer(str(value or ""))
+        )
+    )
+
+
+def _projected_span(
+    clause: Mapping[str, Any],
+    positions: Sequence[int],
+    start: int,
+    end: int,
+) -> tuple[int, int, str]:
+    text = str(clause["text"])
+    raw_start = positions[start]
+    raw_end = positions[end - 1] + 1
+    absolute_start = int(clause["char_start"]) + raw_start
+    return absolute_start, absolute_start + (raw_end - raw_start), text[raw_start:raw_end]
+
+
 def _ground_source_anchor(
     clause: Mapping[str, Any],
     source_anchor: str,
+    *,
+    semantic_context: Sequence[Any] = (),
 ) -> dict[str, Any] | None:
     """Resolve a model semantic locator to an exact host-owned source span.
 
-    Exact unique matches are preferred. Minor spelling/spacing drift is tolerated by a
-    bounded alignment around SequenceMatcher blocks. This keeps source provenance
-    deterministic without an O(clause_length * anchor_length * window_count) scan.
+    The locator may be short, repeated, whitespace-normalized, or contain a copy error.
+    Grounding is based on evidence in the authored clause, not magic character counts or
+    fixed similarity thresholds. Exact host text always remains the provenance authority.
     """
 
     text = str(clause["text"])
@@ -236,13 +262,13 @@ def _ground_source_anchor(
     if not anchor:
         return None
 
-    first = text.find(anchor)
-    if first >= 0 and text.find(anchor, first + 1) < 0:
-        start = int(clause["char_start"]) + first
+    raw_start = text.find(anchor)
+    if raw_start >= 0 and text.find(anchor, raw_start + len(anchor)) < 0:
+        absolute_start = int(clause["char_start"]) + raw_start
         return {
-            "source_quote": text[first : first + len(anchor)],
-            "source_start": start,
-            "source_end": start + len(anchor),
+            "source_quote": text[raw_start : raw_start + len(anchor)],
+            "source_start": absolute_start,
+            "source_end": absolute_start + len(anchor),
             "grounding_method": "exact",
             "grounding_similarity": 1.0,
             "model_anchor": anchor,
@@ -250,69 +276,56 @@ def _ground_source_anchor(
 
     anchor_form, _ = _similarity_projection(anchor)
     text_form, text_positions = _similarity_projection(text)
-    if len(anchor_form) < 5 or not text_form:
+    if not anchor_form or not text_form:
+        return None
+
+    normalized_start = text_form.find(anchor_form)
+    if normalized_start >= 0:
+        start, end, quote = _projected_span(
+            clause,
+            text_positions,
+            normalized_start,
+            normalized_start + len(anchor_form),
+        )
+        return {
+            "source_quote": quote,
+            "source_start": start,
+            "source_end": end,
+            "grounding_method": "normalized_exact_host_alignment",
+            "grounding_similarity": 1.0,
+            "model_anchor": anchor,
+        }
+
+    # For typo-tolerant alignment, require semantic lexical evidence already present in
+    # the authored clause. This rejects unrelated anchors without imposing an arbitrary
+    # length or ratio cutoff. The model's Given/When/Then boilerplate is intentionally not
+    # used as grounding evidence because generic words such as "player" are not provenance.
+    terms = _semantic_terms((anchor, *semantic_context))
+    supported_terms = tuple(term for term in terms if term and term in text_form)
+    if not supported_terms:
         return None
 
     matcher = SequenceMatcher(None, anchor_form, text_form, autojunk=False)
-    matching_blocks = [block for block in matcher.get_matching_blocks() if block.size]
-    if not matching_blocks:
+    blocks = [block for block in matcher.get_matching_blocks() if block.size]
+    if not blocks:
+        return None
+    projected_start = min(block.b for block in blocks)
+    projected_end = max(block.b + block.size for block in blocks)
+    if projected_start >= projected_end:
         return None
 
-    radius = max(1, min(6, int(round(len(anchor_form) * 0.15))))
-    predicted_starts = {
-        max(0, min(len(text_form) - 1, block.b - block.a))
-        for block in matching_blocks
-    }
-    minimum_length = max(1, len(anchor_form) - radius)
-    maximum_length = min(len(text_form), len(anchor_form) + radius)
-    span_scores: dict[tuple[int, int], float] = {}
-
-    for predicted in predicted_starts:
-        start_low = max(0, predicted - radius)
-        start_high = min(len(text_form) - 1, predicted + radius)
-        for normalized_start in range(start_low, start_high + 1):
-            longest = min(maximum_length, len(text_form) - normalized_start)
-            for length in range(minimum_length, longest + 1):
-                normalized_end = normalized_start + length
-                candidate_form = text_form[normalized_start:normalized_end]
-                score = SequenceMatcher(
-                    None,
-                    anchor_form,
-                    candidate_form,
-                    autojunk=False,
-                ).ratio()
-                raw_start = text_positions[normalized_start]
-                raw_end = text_positions[normalized_end - 1] + 1
-                key = (raw_start, raw_end)
-                span_scores[key] = max(score, span_scores.get(key, 0.0))
-
-    if not span_scores:
-        return None
-
-    ranked = sorted(
-        (
-            (score, start, end)
-            for (start, end), score in span_scores.items()
-        ),
-        key=lambda item: (-item[0], item[2] - item[1], item[1]),
+    start, end, quote = _projected_span(
+        clause,
+        text_positions,
+        projected_start,
+        projected_end,
     )
-    best_score, best_start, best_end = ranked[0]
-    threshold = 0.90 if len(anchor_form) < 10 else 0.82
-    if best_score < threshold:
-        return None
-
-    for score, start, end in ranked[1:]:
-        disjoint = end <= best_start or start >= best_end
-        if disjoint and score >= best_score - 0.015:
-            return None
-
-    absolute_start = int(clause["char_start"]) + best_start
     return {
-        "source_quote": text[best_start:best_end],
-        "source_start": absolute_start,
-        "source_end": absolute_start + (best_end - best_start),
+        "source_quote": quote,
+        "source_start": start,
+        "source_end": end,
         "grounding_method": "fuzzy_host_alignment",
-        "grounding_similarity": round(best_score, 6),
+        "grounding_similarity": round(matcher.ratio(), 6),
         "model_anchor": anchor,
     }
 
@@ -388,7 +401,11 @@ def _normalize_requirement(
         )
 
     source_anchor = str(raw.get("source_anchor") or "").strip()
-    grounding = _ground_source_anchor(clauses_by_index[clause_index], source_anchor)
+    grounding = _ground_source_anchor(
+        clauses_by_index[clause_index],
+        source_anchor,
+        semantic_context=(semantic_statement,),
+    )
     if grounding is None:
         return (
             None,
@@ -397,8 +414,8 @@ def _normalize_requirement(
                 path + ".source_anchor",
                 source_anchor,
                 (
-                    "a semantic locator that can be deterministically aligned to one "
-                    "unambiguous authored span; exact copying is not required"
+                    "a semantic locator supported by the authored clause; host owns exact "
+                    "source offsets and does not require a minimum locator length"
                 ),
                 f"clause:{clause_index}",
             ),
@@ -473,11 +490,9 @@ def _evaluate_batch(
     if global_failure:
         invalid_clauses = set(all_indices)
 
-    covered = {
-        int(node["source_clause_index"])
-        for node in nodes
-        if int(node["source_clause_index"]) not in invalid_clauses
-    }
+    # A bad leaf must not erase its valid siblings. The clause remains in the targeted
+    # repair set, but already-grounded leaves survive and are merged with the repaired leaf.
+    covered = {int(node["source_clause_index"]) for node in nodes}
     for clause_index in sorted(all_indices - covered):
         invalid_clauses.add(clause_index)
         diagnostics.append(
@@ -489,13 +504,6 @@ def _evaluate_batch(
                 f"clause:{clause_index}",
             )
         )
-
-    if invalid_clauses:
-        nodes = [
-            node
-            for node in nodes
-            if int(node["source_clause_index"]) not in invalid_clauses
-        ]
 
     deduplicated: list[dict[str, Any]] = []
     seen: set[tuple[int, str, str]] = set()
@@ -515,6 +523,7 @@ def _evaluate_batch(
 def _assign_local_ids(nodes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     counters: dict[int, int] = {}
     result: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, str]] = set()
     for raw in sorted(
         nodes,
         key=lambda item: (
@@ -523,6 +532,14 @@ def _assign_local_ids(nodes: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
             str(item["capability_id"]),
         ),
     ):
+        key = (
+            int(raw["source_clause_index"]),
+            str(raw["capability_id"]),
+            str(raw["semantic_statement"]).casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
         clause_index = int(raw["source_clause_index"])
         ordinal = counters.get(clause_index, 0)
         counters[clause_index] = ordinal + 1
