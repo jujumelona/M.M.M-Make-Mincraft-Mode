@@ -79,7 +79,7 @@ def test_domain_merge_is_sufficient_only_with_grounded_claims() -> None:
 def test_strict_research_validator_rejects_missing_or_unissued_refs() -> None:
     allowed = frozenset({"sha256:host-page#page=1/1"})
 
-    with pytest.raises(agentic.SpecValidationError, match="evidence_refs"):
+    with pytest.raises(agentic.SpecValidationError, match="host-issued evidence_ref"):
         agentic._validate_sufficient_research(
             {
                 "sufficient": True,
