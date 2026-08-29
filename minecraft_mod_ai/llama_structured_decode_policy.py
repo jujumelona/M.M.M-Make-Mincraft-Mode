@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Mapping
+from dataclasses import replace
 from functools import wraps
 from typing import Any
 
 _MARKER = "_mmm_server_constrained_structured_decode_v1"
-_RETRY_MARKER = "_mmm_structured_generation_retry_v1"
+_RETRY_MARKER = "_mmm_structured_generation_retry_v2"
 
 
 def _bounded_section_output_tokens(adapter: Any) -> int:
@@ -34,8 +36,54 @@ def _is_qwen35(adapter: Any) -> bool:
     return "qwen3.5-9b" in model_id and ("mtp" in model_id or "mtp" in filename)
 
 
+def _structured_repair_request(request: Any, exc: Any) -> Any:
+    """Build a compact serialization-repair turn instead of replaying the whole task.
+
+    The first response is authoritative for already-valid fields. The repair model sees
+    only that response, its validator diagnostics, and the response schema, so a local
+    contract defect cannot trigger research/planning/code context regeneration.
+    """
+
+    schema = getattr(request, "response_schema", None)
+    payload = {
+        "invalid_output": str(getattr(exc, "output", "") or ""),
+        "validation_errors": list(getattr(exc, "errors", ()) or ()),
+        "response_schema": dict(schema) if isinstance(schema, Mapping) else None,
+    }
+    messages = (
+        {
+            "role": "system",
+            "content": (
+                "Repair one already-generated JSON value. Preserve every field/value that "
+                "does not violate the supplied validation errors. Change only the minimum "
+                "invalid or missing fields needed to satisfy the schema. Do not redo the "
+                "underlying research, planning, reasoning, or implementation. Return only "
+                "the corrected JSON object."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        },
+    )
+    return replace(
+        request,
+        messages=messages,
+        media_paths=(),
+        tools=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+
 def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
-    """Validate native structured text and regenerate the whole response at most once."""
+    """Validate JSON and perform one compact local serialization repair if needed."""
 
     from .structured_output import (
         StructuredOutputValidationError,
@@ -63,35 +111,41 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
                 response_schema=request.response_schema,
             )
         except StructuredOutputValidationError as exc:
+            repair_request = _structured_repair_request(request, exc)
+            original_chars = sum(
+                len(str(message.get("content", "") or ""))
+                for message in getattr(request, "messages", ())
+                if isinstance(message, Mapping)
+            )
+            repair_chars = sum(
+                len(str(message.get("content", "") or ""))
+                for message in repair_request.messages
+                if isinstance(message, Mapping)
+            )
             print(
-                "llama structured recovery: regenerating rejected response once",
+                "llama structured recovery: compact local repair once",
                 f" errors={len(exc.errors)}",
+                f" original_input_chars={original_chars}",
+                f" repair_input_chars={repair_chars}",
                 file=sys.stderr,
                 flush=True,
             )
 
-        regenerated = current(self, request)
+        repaired = current(self, repair_request)
         return validate_structured_output(
-            regenerated,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
+            repaired,
+            response_format=repair_request.response_format,
+            response_schema=repair_request.response_schema,
         )
 
     setattr(generate, _RETRY_MARKER, True)
+    generate._mmm_local_structured_repair = True  # type: ignore[attr-defined]
     adapter_type.generate = generate
 
 
 def bind_structured_decode_policy(hardware_module: Any) -> None:
-    """Keep structured validation host-owned and bound JSON page budgets.
+    """Keep structured validation host-owned and bind bounded JSON page budgets."""
 
-    Native llama transport must never receive a second JSON-schema or grammar contract:
-    the host validates the completed response and may regenerate it once. This avoids
-    conflicting server/tool grammars while keeping bounded JSON section policy local.
-    """
-
-    # Runtime bootstrap passes the real hardware-policy module. Keep isolated policy
-    # unit tests free of process-global adapter mutation when they pass module-shaped
-    # test doubles.
     if getattr(hardware_module, "__name__", "") == "minecraft_mod_ai.llama_server_hardware_policy":
         from .model_adapters import llama_cpp_adapter
 
@@ -105,8 +159,6 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
         result = current(adapter, request)
         if getattr(request, "response_format", None) == "json":
-            # A prior compatibility wrapper may have added an OpenAI response
-            # constraint. The host is the sole JSON-schema authority for native llama.
             result = dict(result)
             for key in ("response_format", "json_schema", "grammar"):
                 result.pop(key, None)
@@ -144,4 +196,8 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
     hardware_module._server_payload = payload
 
 
-__all__ = ["_bind_structured_generation_retry", "bind_structured_decode_policy"]
+__all__ = [
+    "_bind_structured_generation_retry",
+    "_structured_repair_request",
+    "bind_structured_decode_policy",
+]
