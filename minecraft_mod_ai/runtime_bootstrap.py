@@ -174,9 +174,6 @@ def _install_generation_contracts() -> None:
 
 def _install_platform_contracts() -> None:
     from . import (
-        agentic_pre_design_rag,
-        agentic_research_game_design,
-        central_intelligence_amplifier,
         central_research,
         complete_orchestrator,
         complete_planner,
@@ -185,7 +182,6 @@ def _install_platform_contracts() -> None:
         game_design,
         geckolib_generator,
         generator,
-        minecraft_knowledge_contract,
         mineflayer_bridge,
         production_contract,
         repair_engine,
@@ -234,10 +230,6 @@ def _install_platform_contracts() -> None:
     )
     install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
-    central_intelligence_amplifier.install_parallel_core(agentic_research_game_design)
-    agentic_pre_design_rag.harden_pre_design_research(agentic_research_game_design)
-    central_intelligence_amplifier.install(agentic_research_game_design)
-    minecraft_knowledge_contract.install(agentic_research_game_design, complete_planner)
     install_platform_central_ai(
         game_design_module=game_design,
         complete_planner_module=complete_planner,
@@ -404,7 +396,6 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_optimization_contract,
         agentic_pre_design_rag,
         agentic_research_game_design,
-        central_intelligence_amplifier,
         model_router,
         production_tools,
         qwen_agent_family_contract,
@@ -426,7 +417,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .research_bottleneck_runtime import (
         install as install_research_bottleneck_runtime,
     )
-    from .small_model_adaptive_compute import harden as harden_adaptive_compute
     from .small_model_execution_extensions_contract import (
         install as install_small_model_execution_extensions,
     )
@@ -472,10 +462,6 @@ def _install_post_bootstrap_contracts() -> None:
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
     install_small_model_execution_extensions()
-    harden_adaptive_compute(
-        agentic_research_game_design,
-        central_intelligence_amplifier,
-    )
     install_long_run_resilience()
     qwen_agent_family_contract.install()
     install_small_model_research_extensions()
