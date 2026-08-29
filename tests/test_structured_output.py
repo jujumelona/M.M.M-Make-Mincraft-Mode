@@ -125,7 +125,7 @@ def test_schema_failure_console_log_contains_exact_path_schema_and_raw_output(ca
     assert '"required": ["name", "count"]' in logged
 
 
-def test_parser_owned_research_schema_accepts_prose_wrapped_json_for_host_parser(capsys) -> None:
+def test_parser_owned_research_schema_recovers_prose_wrapped_json(capsys) -> None:
     output = (
         "연구 결과입니다.\n"
         '{"research_note":{"domain_id":"request","claims":["grounded"],'
@@ -133,7 +133,8 @@ def test_parser_owned_research_schema_accepts_prose_wrapped_json_for_host_parser
     )
     request = _request(schema=_RESEARCH_SCHEMA)
 
-    assert _validate(output, request) == output
+    recovered = json.loads(_validate(output, request))
+    assert recovered["research_note"]["claims"] == ["grounded"]
     logged = capsys.readouterr().out
     assert "MODEL STRUCTURED OUTPUT RECOVERED:" in logged
     assert "parser_owned_embedded_json_recovery" in logged
@@ -141,24 +142,46 @@ def test_parser_owned_research_schema_accepts_prose_wrapped_json_for_host_parser
     assert "MODEL STRUCTURED OUTPUT FAILURE:" not in logged
 
 
-def test_parser_owned_research_rejects_sufficient_true_without_claims(capsys) -> None:
+def test_parser_owned_research_leaves_semantic_rejection_to_host_parser(capsys) -> None:
     output = (
         '{"research_note":{"domain_id":"request","claims":[],"gaps":[],'
         '"next_queries":[],"sufficient":true}}'
     )
     request = _request(schema=_RESEARCH_SCHEMA)
 
-    with pytest.raises(StructuredOutputValidationError) as raised:
-        _validate(output, request)
+    recovered = json.loads(_validate(output, request))
+    assert recovered["research_note"]["sufficient"] is True
+    assert recovered["research_note"]["claims"] == []
+    assert "MODEL STRUCTURED OUTPUT FAILURE:" not in capsys.readouterr().out
 
-    assert any("sufficient=true" in error for error in raised.value.errors)
-    logged = capsys.readouterr().out
-    prefix = "MODEL STRUCTURED OUTPUT FAILURE: "
-    assert logged.startswith(prefix)
-    diagnostic = json.loads(logged[len(prefix) :].strip())
-    assert diagnostic["event"] == "structured_output_validation_failure"
-    assert "requires at least one non-empty claim" in " ".join(diagnostic["errors"])
-    assert json.loads(diagnostic["output"])["research_note"]["claims"] == []
+
+def test_parser_owned_research_normalizes_pre_design_aliases() -> None:
+    output = json.dumps(
+        {
+            "pre_design_claims": [
+                {
+                    "claim_id": "PC-001",
+                    "content": "Target-neutral architecture claim",
+                    "evidence_refs": ["source:receipt"],
+                }
+            ],
+            "procedures": [],
+            "deferred_questions": [
+                {
+                    "question_id": "DQ-001",
+                    "content": "Resolve exact mappings after target freeze",
+                    "reason": "target_version_unknown",
+                }
+            ],
+        }
+    )
+    request = _request(schema=_RESEARCH_SCHEMA)
+
+    note = json.loads(_validate(output, request))["research_note"]
+    assert note["claims"][0]["claim"] == "Target-neutral architecture claim"
+    assert note["claims"][0]["evidence_refs"] == ["source:receipt"]
+    assert note["next_queries"] == ["Resolve exact mappings after target freeze"]
+    assert note["sufficient"] is True
 
 
 def test_parser_owned_research_allows_explicit_insufficient_gap_receipt() -> None:
@@ -169,7 +192,9 @@ def test_parser_owned_research_allows_explicit_insufficient_gap_receipt() -> Non
     )
     request = _request(schema=_RESEARCH_SCHEMA)
 
-    assert _validate(output, request) == output
+    recovered = json.loads(_validate(output, request))
+    assert recovered["research_note"]["sufficient"] is False
+    assert recovered["research_note"]["gaps"] == ["missing evidence"]
 
 
 def test_strict_schema_still_rejects_prose_wrapped_json() -> None:
