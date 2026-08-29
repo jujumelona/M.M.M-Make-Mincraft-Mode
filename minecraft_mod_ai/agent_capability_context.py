@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
 
@@ -33,7 +35,28 @@ _PRE_TARGET_RESEARCH_TOOLS = frozenset(
         "search_project_rag",
     }
 )
+_TARGET_NEUTRAL_RESEARCH: ContextVar[bool] = ContextVar(
+    "mmm_target_neutral_research",
+    default=False,
+)
 _COMPACT_CONTEXT_MARKER = "_mmm_compact_skill_context_v1"
+
+
+@contextmanager
+def target_neutral_research_scope() -> Iterator[None]:
+    """Mark one request-local research turn as intentionally pre-target.
+
+    Global environment coordinates belong to process configuration, not to the semantic
+    state of a particular planning request.  This scope prevents a stale/default target
+    from authorizing target-sensitive standalone tools or leaking into MCP capability
+    routing while pre-design research is running.
+    """
+
+    token = _TARGET_NEUTRAL_RESEARCH.set(True)
+    try:
+        yield
+    finally:
+        _TARGET_NEUTRAL_RESEARCH.reset(token)
 
 
 def _policy_model_role(stage: str, model_role: str) -> str:
@@ -88,8 +111,10 @@ def _reviewed_stage_for_model_tool(name: str, stage: str) -> bool:
 
 
 def _target_is_bound() -> bool:
-    """Return whether a concrete Minecraft target is available to standalone MCP tools."""
+    """Return whether this request may expose target-sensitive standalone tools."""
 
+    if _TARGET_NEUTRAL_RESEARCH.get():
+        return False
     return bool(
         os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
         or os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
@@ -330,6 +355,8 @@ def _tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
 
 
 def _environment_target() -> dict[str, str]:
+    if _TARGET_NEUTRAL_RESEARCH.get():
+        return {"minecraft_version": "", "loader": "", "mappings": ""}
     return {
         "minecraft_version": (
             os.environ.get("MMM_MCP_MINECRAFT_VERSION", "").strip()
