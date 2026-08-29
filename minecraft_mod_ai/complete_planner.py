@@ -131,7 +131,7 @@ class CompleteGameDesignPlanner:
             "production_outline": [_batch_dict(batch) for batch in batches],
             "_production_contract": compiled.contract,
         }
-        return complete_proposal_from_parts(
+        proposal = complete_proposal_from_parts(
             requested_prompt=prompt,
             base_proposal=base_proposal,
             game_design=internal_design,
@@ -140,6 +140,11 @@ class CompleteGameDesignPlanner:
             acceptance_tests=tuple(compiled.acceptance_tests),
             existing_input_sha256=existing_input_sha256,
         )
+        # Platform lowering is an explicit, inspectable post-plan step. Do not hide it
+        # behind a runtime monkeypatch of this method.
+        from .platform_central_ai_contract import lower_live_modules
+
+        return lower_live_modules(self, proposal)
 
     def _expand_batches(
         self,
