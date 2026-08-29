@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -44,6 +45,42 @@ def _validator_for(schema: Mapping[str, Any]):
     return validator_cls(schema_dict)
 
 
+def _sha256_text(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _emit_validation_failure(
+    *,
+    output: str,
+    errors: Sequence[str],
+    response_format: str,
+    response_schema: Mapping[str, Any] | None,
+) -> None:
+    """Print the complete failed model response and validation contract immediately.
+
+    Debugging a local agent must not collapse a concrete parse/schema failure into a later
+    ``failure_count``. This event is emitted at the first authority that has all three facts:
+    the exact model text, the exact validation errors, and the exact schema used for the turn.
+    The raw output is intentionally preserved verbatim in the JSON event; its SHA makes it
+    easy to correlate the same response with downstream research/checkpoint diagnostics.
+    """
+
+    payload = {
+        "event": "structured_output_validation_failure",
+        "response_format": response_format,
+        "output_sha256": _sha256_text(output),
+        "output_chars": len(output),
+        "output": output,
+        "errors": list(errors),
+        "response_schema": dict(response_schema) if response_schema is not None else None,
+    }
+    print(
+        "MODEL STRUCTURED OUTPUT FAILURE: "
+        + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
 def validate_structured_output(
     output: str,
     *,
@@ -66,31 +103,45 @@ def validate_structured_output(
     try:
         value = json.loads(output)
     except json.JSONDecodeError as exc:
+        errors = (
+            f"$: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
+        )
+        _emit_validation_failure(
+            output=output,
+            errors=errors,
+            response_format=response_format,
+            response_schema=response_schema,
+        )
         raise StructuredOutputValidationError(
             output=output,
-            errors=(
-                f"$: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
-            ),
+            errors=errors,
         ) from exc
 
     if response_schema is None:
         return output
 
     validator = _validator_for(response_schema)
-    errors = sorted(
+    validation_errors = sorted(
         validator.iter_errors(value),
         key=lambda error: (
             tuple(str(part) for part in error.absolute_path),
             error.message,
         ),
     )
-    if errors:
+    if validation_errors:
+        errors = tuple(
+            f"{_json_path(tuple(error.absolute_path))}: {error.message}"
+            for error in validation_errors
+        )
+        _emit_validation_failure(
+            output=output,
+            errors=errors,
+            response_format=response_format,
+            response_schema=response_schema,
+        )
         raise StructuredOutputValidationError(
             output=output,
-            errors=tuple(
-                f"{_json_path(tuple(error.absolute_path))}: {error.message}"
-                for error in errors
-            ),
+            errors=errors,
         )
     return output
 
