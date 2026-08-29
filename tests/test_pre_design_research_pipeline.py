@@ -3,10 +3,13 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import agentic_pre_design_rag as project_rag
 from minecraft_mod_ai import agentic_research_game_design as agentic
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 from minecraft_mod_ai.pre_design_research_pipeline import (
+    PreDesignResearchFailure,
     _bounded_model_view,
     _design_request_fits,
     collect_design_research,
@@ -77,6 +80,100 @@ def test_pre_design_research_parallelizes_all_evidence_and_defers_donor_search(
     assert seen_deterministic == [expected]
     assert payload["domain_notes"][0]["domain_id"] == "fabric_api"
     assert "deferred" in payload["method"]["planning_search"]
+
+
+def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
+    monkeypatch, capsys
+) -> None:
+    brief = {
+        "domains": [
+            {
+                "domain_id": "request",
+                "queries": ["request evidence"],
+            }
+        ]
+    }
+    monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
+    monkeypatch.setattr(
+        pipeline,
+        "retrieve_domain_evidence",
+        lambda _brief: {"status": "available", "domains": []},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "collect_technology_radar",
+        lambda *_args, **_kwargs: {"status": "available"},
+    )
+    monkeypatch.setattr(
+        project_rag,
+        "_forced_rag_bundle",
+        lambda *_args, **_kwargs: {"status": "available", "domains": []},
+    )
+    monkeypatch.setattr(
+        agentic,
+        "_research_domain_with_agent",
+        lambda *_args, **_kwargs: {
+            "domain_id": "request",
+            "claims": [],
+            "gaps": ["EXACT_SYNTHESIS_GAP"],
+            "next_queries": [],
+            "sufficient": False,
+            "checkpoint": {
+                "status": "terminal_gap",
+                "request_sha256": "sha256:failure",
+            },
+            "research_failures": [
+                {
+                    "unit": "synthesis:0:0",
+                    "error": "EXACT_VALIDATOR_FAILURE: missing claim evidence",
+                }
+            ],
+            "fixed_point": True,
+        },
+    )
+
+    def must_not_continue(*_args, **_kwargs):
+        raise AssertionError("post-research processing must not run after terminal_gap")
+
+    monkeypatch.setattr(pipeline, "attach_procedural_skillbank", must_not_continue)
+    monkeypatch.setattr(pipeline, "compose_research_skillbank", must_not_continue)
+
+    with pytest.raises(PreDesignResearchFailure, match="terminal_gap"):
+        collect_design_research(object(), "failing request")
+
+    logged = capsys.readouterr().out
+    assert "PRE-DESIGN RESEARCH DIAGNOSTIC:" in logged
+    assert '"event": "domain_result"' in logged
+    assert "terminal_gap" in logged
+    assert "synthesis:0:0" in logged
+    assert "EXACT_VALIDATOR_FAILURE: missing claim evidence" in logged
+    assert "EXACT_SYNTHESIS_GAP" in logged
+
+
+def test_domain_exception_prints_full_traceback_and_escapes(monkeypatch, capsys) -> None:
+    brief = {"domains": [{"domain_id": "request", "queries": ["request evidence"]}]}
+    monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
+    monkeypatch.setattr(pipeline, "retrieve_domain_evidence", lambda _brief: {})
+    monkeypatch.setattr(
+        pipeline,
+        "collect_technology_radar",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(project_rag, "_forced_rag_bundle", lambda *_args, **_kwargs: {})
+
+    def explode(*_args, **_kwargs):
+        raise ValueError("EXACT_DOMAIN_EXCEPTION")
+
+    monkeypatch.setattr(agentic, "_research_domain_with_agent", explode)
+
+    with pytest.raises(ValueError, match="EXACT_DOMAIN_EXCEPTION"):
+        collect_design_research(object(), "failing request")
+
+    logged = capsys.readouterr().out
+    assert '"event": "domain_execution_exception"' in logged
+    assert "EXACT_DOMAIN_EXCEPTION" in logged
+    assert "ValueError" in logged
+    assert "Traceback (most recent call last)" in logged
 
 
 class _Registry:
