@@ -13,7 +13,13 @@ from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 
 
 def _adapter():
-    return SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            max_new_tokens=8192,
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        )
+    )
 
 
 def _request(*, response_format: str, tools=(), response_schema=None):
@@ -29,7 +35,7 @@ def _request(*, response_format: str, tools=(), response_schema=None):
     )
 
 
-def test_installed_payload_keeps_structured_validation_host_side() -> None:
+def test_qwen35_payload_keeps_structured_validation_host_side() -> None:
     schema = {
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},
@@ -46,7 +52,7 @@ def test_installed_payload_keeps_structured_validation_host_side() -> None:
     assert "grammar" not in payload
 
 
-def test_schema_less_json_keeps_validation_host_side() -> None:
+def test_qwen35_schema_less_json_keeps_validation_host_side() -> None:
     module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
     bind_structured_decode_policy(module)
 
@@ -60,7 +66,7 @@ def test_schema_less_json_keeps_validation_host_side() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_explicit_schema_stays_out_of_native_llama_payload() -> None:
+def test_qwen35_explicit_schema_stays_out_of_native_llama_payload() -> None:
     module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
     bind_structured_decode_policy(module)
     schema = {
@@ -76,9 +82,11 @@ def test_explicit_schema_stays_out_of_native_llama_payload() -> None:
     )
 
     assert "response_format" not in payload
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
 
 
-def test_native_structured_invalid_then_valid_regenerates_exactly_once() -> None:
+def test_native_structured_invalid_output_fails_closed_after_one_call() -> None:
     class FakeAdapter:
         def __init__(self) -> None:
             self.outputs = ['{"broken"', '{"ok":true}']
@@ -93,13 +101,14 @@ def test_native_structured_invalid_then_valid_regenerates_exactly_once() -> None
     _bind_structured_generation_retry(module)
     adapter = FakeAdapter()
 
-    result = adapter.generate(_request(response_format="json"))
+    with pytest.raises(StructuredOutputValidationError):
+        adapter.generate(_request(response_format="json"))
 
-    assert result == '{"ok":true}'
-    assert adapter.calls == 2
+    assert adapter.calls == 1
+    assert adapter.outputs == ['{"ok":true}']
 
 
-def test_native_structured_second_invalid_response_escapes_after_two_calls() -> None:
+def test_native_structured_repeated_invalid_candidate_is_never_requested() -> None:
     class FakeAdapter:
         def __init__(self) -> None:
             self.calls = 0
@@ -116,7 +125,7 @@ def test_native_structured_second_invalid_response_escapes_after_two_calls() -> 
     with pytest.raises(StructuredOutputValidationError):
         adapter.generate(_request(response_format="json"))
 
-    assert adapter.calls == 2
+    assert adapter.calls == 1
 
 
 def test_non_structured_native_generation_is_not_retried_or_validated() -> None:

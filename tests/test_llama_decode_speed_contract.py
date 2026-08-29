@@ -172,8 +172,14 @@ def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
     assert _kv_autotune_enabled(autotune) is False
 
 
-def test_structured_local_payload_keeps_json_validation_host_side_and_native_tools() -> None:
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=8192))
+def test_qwen35_structured_local_payload_keeps_json_validation_host_side_and_native_tools() -> None:
+    adapter = SimpleNamespace(
+        config=SimpleNamespace(
+            max_new_tokens=8192,
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        )
+    )
     schema = {
         "type": "object",
         "properties": {"value": {"type": "string"}},

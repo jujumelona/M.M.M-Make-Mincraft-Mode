@@ -29,8 +29,14 @@ def _tool_request(tool: dict) -> GenerationRequest:
     )
 
 
-def test_json_requests_keep_validation_host_side_without_grammar():
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
+def test_qwen35_json_requests_keep_validation_host_side_without_grammar():
+    adapter = SimpleNamespace(
+        config=SimpleNamespace(
+            max_new_tokens=512,
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        )
+    )
     request = SimpleNamespace(
         messages=({"role": "user", "content": "return JSON"},),
         tools=(),
@@ -72,7 +78,7 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
         AdapterConfig(
             role="planner",
             adapter="llama_cpp",
-            model_id="local-test",
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
             max_new_tokens=512,
         )
     )

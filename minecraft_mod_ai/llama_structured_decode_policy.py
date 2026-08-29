@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import copy
-import json
 import os
 from collections.abc import Mapping
-from dataclasses import is_dataclass, replace
 from functools import wraps
 from typing import Any
 
@@ -36,67 +33,6 @@ def _is_qwen35(adapter: Any) -> bool:
         else ""
     )
     return "qwen3.5" in model_id or "qwen3.5" in filename
-
-
-def _copy_request_with(request: Any, **changes: Any) -> Any:
-    """Copy the request protocol without assuming one concrete request class."""
-
-    if is_dataclass(request) and not isinstance(request, type):
-        return replace(request, **changes)
-    cloned = copy.copy(request)
-    for key, value in changes.items():
-        setattr(cloned, key, value)
-    return cloned
-
-
-def _structured_repair_request(request: Any, exc: Any) -> Any:
-    """Legacy compatibility helper; normal planner execution does not call it."""
-
-    schema = getattr(request, "response_schema", None)
-    invalid_output = str(getattr(exc, "output", "") or "")
-    errors = list(getattr(exc, "errors", ()) or ())
-    schema_payload = dict(schema) if isinstance(schema, Mapping) else None
-    repair_context = (
-        "invalid_output (verbatim):\n"
-        f"{invalid_output}\n"
-        "validation_errors:\n"
-        + json.dumps(
-            errors,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        + "\nresponse_schema:\n"
-        + json.dumps(
-            schema_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    )
-    messages = (
-        {
-            "role": "system",
-            "content": (
-                "Repair one already-generated JSON value. Preserve every field/value that "
-                "does not violate the supplied validation errors. Change only the minimum "
-                "invalid or missing fields needed to satisfy the schema. Do not redo the "
-                "underlying research, planning, reasoning, or implementation. Return only "
-                "the corrected JSON object."
-            ),
-        },
-        {"role": "user", "content": repair_context},
-    )
-    return _copy_request_with(
-        request,
-        messages=messages,
-        media_paths=(),
-        tools=(),
-        tool_choice=None,
-        parallel_tool_calls=False,
-    )
 
 
 def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
@@ -225,6 +161,5 @@ __all__ = [
     "_bind_structured_generation_retry",
     "_is_qwen35",
     "_remove_native_json_constraints",
-    "_structured_repair_request",
     "bind_structured_decode_policy",
 ]

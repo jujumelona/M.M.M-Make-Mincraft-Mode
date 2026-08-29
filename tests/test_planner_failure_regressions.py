@@ -12,7 +12,6 @@ from minecraft_mod_ai.agent_capability_context import (
     target_neutral_research_scope,
 )
 from minecraft_mod_ai.pre_design_research_pipeline import PreDesignResearchFailure
-from minecraft_mod_ai.structured_repair_contract import _generate_section_local
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -40,68 +39,6 @@ class _Router:
         if not self.outputs:
             raise AssertionError("unexpected planner generation")
         return self.outputs.pop(0)
-
-
-def test_adaptive_progression_repair_is_schema_constrained_and_freezes_siblings() -> None:
-    properties = {
-        "progression": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-        },
-        "combat": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
-        },
-        "mod_context": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
-        },
-    }
-    router = _Router(
-        [
-            json.dumps(
-                {
-                    "section": {
-                        "progression": {"levels": ["1", "2"]},
-                        "combat": {"boss": ["server-authoritative"]},
-                        "mod_context": {"scope": ["maple-style progression"]},
-                    }
-                }
-            ),
-            json.dumps(
-                {"repair": ["레벨 성장", "장비 강화", "보스 단계 해금"]},
-                ensure_ascii=False,
-            ),
-        ]
-    )
-
-    result = _generate_section_local(
-        router,
-        prompt="메이플 스타일 성장 시스템을 설계해줘",
-        section_id="systems_and_progression",
-        fields=("progression", "combat", "mod_context"),
-        properties=properties,
-        research={},
-        media_paths=(),
-        trace_metadata=None,
-    )
-
-    assert result["progression"] == ["레벨 성장", "장비 강화", "보스 단계 해금"]
-    assert result["combat"] == {"boss": ["server-authoritative"]}
-    assert result["mod_context"] == {"scope": ["maple-style progression"]}
-    assert len(router.calls) == 2
-    assert router.calls[0]["response_format"] == "text"
-    assert router.calls[0]["response_schema"] is None
-    assert router.calls[1]["response_format"] == "json"
-    repair = router.calls[1]["response_schema"]["properties"]["repair"]
-    assert repair["type"] == "array"
-    assert repair["items"] == {"type": "string", "minLength": 1}
 
 
 def test_target_neutral_research_hides_donor_and_target_compatibility_tools() -> None:

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as project_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
+import minecraft_mod_ai.research_grounded_rag_contract as grounded_rag
 
 
 def _brief():
@@ -16,8 +17,40 @@ def _brief():
     }
 
 
-def test_forced_rag_searches_every_research_query(monkeypatch, tmp_path) -> None:
+def _fake_external(query: str, versions) -> dict[str, object]:
+    del versions
+    return {
+        "schema_version": "mmm/external-grounded-rag-v1",
+        "status": "available",
+        "query": query,
+        "providers": ["fixture"],
+        "credentials_required": False,
+        "corrective_search_used": False,
+        "project_count": 1,
+        "source_repository_count": 1,
+        "document_count": 1,
+        "actual_source_document_count": 1,
+        "coverage_score": 1.0,
+        "projects": [],
+        "documents": [
+            {
+                "source_id": f"fixture:{query}",
+                "source_type": "github_source",
+                "url": "https://example.invalid/source",
+                "content": "grounded source fixture",
+            }
+        ],
+        "errors": [],
+    }
+
+
+def test_forced_rag_builds_missing_index_and_searches_every_research_query(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MMM_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("MMM_PROJECT_RAG_INDEX", raising=False)
+    monkeypatch.setattr(grounded_rag, "_external_retrieval", _fake_external)
     router = SimpleNamespace()
 
     bundle = project_rag._forced_rag_bundle(router, _brief())
@@ -25,15 +58,23 @@ def test_forced_rag_searches_every_research_query(monkeypatch, tmp_path) -> None
     assert bundle["query_count"] == 3
     assert bundle["domain_count"] == 2
     assert bundle["project_source_count"] > 0
-    assert bundle["code_index_status"] == "not_indexed"
+    assert bundle["code_index_status"] == "available"
+    assert bundle["local_index"]["status"] == "available"
+    assert bundle["local_index"]["built"] is True
+    assert bundle["external_query_count"] == 3
+    assert bundle["external_source_count"] == 3
     queries = [item for domain in bundle["domains"] for item in domain["queries"]]
     assert len(queries) == 3
     assert all(item["project_rag"]["sources"] for item in queries)
-    assert all(item["code_rag"]["status"] == "not_indexed" for item in queries)
+    assert all(item["code_rag"]["status"] == "available" for item in queries)
+    assert all(item["external_rag"]["status"] == "available" for item in queries)
 
 
 def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MMM_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("MMM_PROJECT_RAG_INDEX", raising=False)
+    monkeypatch.setattr(grounded_rag, "_external_retrieval", _fake_external)
     router = SimpleNamespace(_mmm_requested_minecraft_version="1.21.1")
 
     bundle = project_rag._forced_rag_bundle(router, _brief())
@@ -44,6 +85,7 @@ def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> N
             sources = query["project_rag"]["sources"]
             assert sources
             assert all(source["matched_version"] == "1.21.1" for source in sources)
+            assert query["external_rag"]["status"] == "available"
 
 
 def test_legacy_pre_design_collector_is_not_runtime_owner() -> None:

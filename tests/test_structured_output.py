@@ -60,8 +60,14 @@ def _validate(output: str, request: GenerationRequest | None = None) -> str:
     )
 
 
-def test_llama_server_keeps_schema_validation_host_owned() -> None:
-    adapter = SimpleNamespace(config=SimpleNamespace(max_new_tokens=512))
+def test_qwen35_llama_server_keeps_schema_validation_host_owned() -> None:
+    adapter = SimpleNamespace(
+        config=SimpleNamespace(
+            max_new_tokens=512,
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+        )
+    )
     payload = _server_payload(adapter, _request())
 
     for forbidden in ("response_format", "json_schema", "grammar"):

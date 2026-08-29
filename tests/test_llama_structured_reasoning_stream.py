@@ -46,7 +46,7 @@ def _adapter(
     )
 
 
-def test_json_request_keeps_schema_host_side() -> None:
+def test_qwen35_json_request_keeps_schema_host_side() -> None:
     schema = {
         "type": "object",
         "properties": {"value": {"type": "string"}},
@@ -62,9 +62,16 @@ def test_json_request_keeps_schema_host_side() -> None:
         response_schema=schema,
         tools=(),
     )
-    payload = _server_payload(_adapter(), request)
+    payload = _server_payload(
+        _adapter(
+            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+            qwen_family="qwen3.5",
+        ),
+        request,
+    )
     assert request.response_schema == schema
     assert "response_format" not in payload
+    assert "json_schema" not in payload
     assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}

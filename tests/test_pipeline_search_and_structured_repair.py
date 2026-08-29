@@ -5,8 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import platform_optimizer
-from minecraft_mod_ai.llama_structured_decode_policy import _structured_repair_request
-from minecraft_mod_ai.model_adapters import GenerationRequest
 from minecraft_mod_ai.pipeline_hardening_v2 import _search_variants
 from minecraft_mod_ai.pipeline_hardening_v4 import (
     _strict_provenance_repair,
@@ -126,35 +124,6 @@ def test_mod_search_transport_failure_is_not_treated_as_no_mod_support() -> None
     )
     with pytest.raises(ValueError, match="source unavailable"):
         platform_optimizer._parallel_support_matrix((probe,), queries, client)
-
-
-def test_structured_retry_uses_compact_repair_context_not_original_task() -> None:
-    request = GenerationRequest(
-        messages=(
-            {"role": "system", "content": "S" * 20000},
-            {"role": "user", "content": "U" * 30000},
-        ),
-        response_format="json",
-        response_schema={
-            "type": "object",
-            "properties": {"answer": {"type": "string"}},
-            "required": ["answer"],
-        },
-    )
-    exc = SimpleNamespace(
-        output='{"answer":7,"keep":"unchanged"}',
-        errors=('$["answer"]: 7 is not of type "string"',),
-    )
-    repaired = _structured_repair_request(request, exc)
-    joined = "\n".join(str(item.get("content", "")) for item in repaired.messages)
-
-    assert len(joined) < 5000
-    assert '"keep":"unchanged"' in joined
-    assert "validation_errors" in joined
-    assert "Change only the minimum" in joined
-    assert repaired.media_paths == ()
-    assert repaired.tools == ()
-    assert repaired.tool_choice is None
 
 
 def test_seed_query_stays_bounded_and_keeps_domain_terms() -> None:
