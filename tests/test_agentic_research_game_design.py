@@ -67,12 +67,13 @@ class _ResearchRouter:
                     "domain_id": "request",
                     "claims": [
                         {
-                            "claim": "요청은 일반 Minecraft 모드 기능 설계다.",
+                            "claim": "요청은 target-neutral Minecraft 모드 기능 설계로 조사할 수 있다.",
                             "evidence_refs": ["official_rag:request"],
                         }
                     ],
                     "gaps": [],
-                    "next_queries": [],
+                    "next_queries": ["정확한 API 이름은 target freeze 뒤 검증"],
+                    "procedures": [],
                     "sufficient": True,
                 }
             },
@@ -107,9 +108,7 @@ def test_sectioned_game_design_uses_four_host_validated_text_calls() -> None:
     assert "art_direction" not in result
 
 
-def test_research_domain_ledgers_pages_then_runs_one_bounded_synthesis(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_research_domain_runs_one_tool_enabled_target_neutral_turn(monkeypatch) -> None:
     router = _ResearchRouter()
 
     class _Trace:
@@ -122,7 +121,6 @@ def test_research_domain_ledgers_pages_then_runs_one_bounded_synthesis(
         def record_success(self, value):
             self.success = value
 
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
     monkeypatch.setattr(agentic, "PlannerStageTrace", _Trace)
 
     result = agentic._research_domain_with_agent(
@@ -134,33 +132,43 @@ def test_research_domain_ledgers_pages_then_runs_one_bounded_synthesis(
             "requirements": ["기능"],
             "evidence_kinds": ["minecraft_api"],
             "queries": ["minecraft mod feature"],
-            "providers": ["official_docs", "project_rag", "github"],
+            "providers": ["official_docs", "project_rag", "external_mcp"],
             "depends_on": [],
         },
-        deterministic={"official_rag": {"domains": []}},
+        deterministic={
+            "official_rag": {"status": "deferred_until_platform_selected"},
+            "technology_radar": {"status": "deferred_until_target_freeze", "target_frozen": False},
+            "forced_project_rag": {
+                "schema_version": "mmm/forced-pre-design-rag-v2",
+                "research_sha256": "sha256:forced",
+                "domain_count": 1,
+                "query_count": 1,
+                "project_source_count": 6,
+                "domains": [{"domain_id": "request", "queries": [{"query": "feature"}]}],
+            },
+        },
         trace_metadata=None,
     )
 
     assert result["sufficient"] is True
+    assert result["claims"]
     assert len(router.calls) == 1
-    synthesis_call = router.calls[0]
-    assert all(call["tool_stage"] == "research" for call in router.calls)
-    assert all(call["response_format"] == "json" for call in router.calls)
-    bound_schema = synthesis_call["response_schema"]
-    assert bound_schema is not agentic._RESEARCH_NOTE_SCHEMA
-    note_schema = bound_schema["properties"]["research_note"]
-    assert note_schema["properties"]["domain_id"]["const"] == "request"
-    assert note_schema["allOf"]
-    base_domain = agentic._RESEARCH_NOTE_SCHEMA["properties"]["research_note"]["properties"]["domain_id"]
-    assert "const" not in base_domain
-    assert synthesis_call["enable_tools"] is False
-    assert "evidence_document" in result
-    assert result["evidence_ledger"]["record_count"] == 1
+    call = router.calls[0]
+    assert call["tool_stage"] == "research"
+    assert call["response_format"] == "json"
+    assert call["response_schema"] is agentic._RESEARCH_NOTE_SCHEMA
+    assert call["enable_tools"] is True
+    rendered = json.dumps(call["messages"], ensure_ascii=False)
+    assert "intentionally not frozen" in rendered
+    assert "Do not ask the user" in rendered
+    assert "evidence_document" not in rendered
 
 
 def test_evidence_document_preserves_full_raw_and_bounds_every_page(
     monkeypatch, tmp_path: Path
 ) -> None:
+    """Legacy evidence-document utilities remain lossless for explicit callers only."""
+
     monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
     huge_official = "official:" + ("A" * 45_000)
     huge_forced = "forced:" + ("B" * 55_000)
@@ -213,6 +221,8 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
 def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
     monkeypatch, tmp_path: Path
 ) -> None:
+    """Explicit paged helper still preserves all fragments when called directly."""
+
     monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path / "evidence"))
     monkeypatch.setenv("MMM_RESEARCH_CHECKPOINT_ROOT", str(tmp_path / "checkpoints"))
     evidence = {
@@ -251,6 +261,7 @@ def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
                         ],
                         "gaps": [],
                         "next_queries": [],
+                        "procedures": [],
                         "sufficient": True,
                     }
                 },
@@ -283,14 +294,14 @@ def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
     assert result["checkpoint"]["status"] == "complete"
 
 
-def test_domain_slice_persists_raw_forced_receipt_instead_of_inlining_it(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> None:
     huge_forced = "F" * 40_000
     forced = {
         "schema_version": "mmm/forced-pre-design-rag-v2",
+        "research_sha256": "sha256:forced",
         "query_count": 1,
+        "project_source_count": 6,
+        "code_index_status": "not_indexed",
         "domains": [
             {
                 "domain_id": "request",
@@ -301,18 +312,17 @@ def test_domain_slice_persists_raw_forced_receipt_instead_of_inlining_it(
     prompt_slice = agentic._domain_evidence_slice(
         "request",
         {
-            "official_rag": {"domains": []},
+            "official_rag": {"status": "deferred_until_platform_selected", "domains": []},
             "forced_project_rag": forced,
         },
     )
 
     rendered = json.dumps(prompt_slice, ensure_ascii=False, sort_keys=True)
     assert huge_forced not in rendered
-    assert set(prompt_slice) == {"evidence_document"}
-
-    document = prompt_slice["evidence_document"]
-    raw_text = Path(document["raw_path"]).read_text(encoding="utf-8")
-    assert huge_forced in raw_text
+    assert set(prompt_slice) == {"official_rag", "forced_project_rag"}
+    assert prompt_slice["forced_project_rag"]["research_sha256"] == "sha256:forced"
+    assert prompt_slice["forced_project_rag"]["project_source_count"] == 6
+    assert "evidence_document" not in prompt_slice
 
 
 def test_each_page_reader_prompt_stays_bounded(monkeypatch, tmp_path: Path) -> None:
