@@ -31,6 +31,9 @@ _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
 _HTTP_CLIENT: httpx.Client | None = None
+_GITHUB_QUERY_BOILERPLATE = frozenset(
+    {"minecraft", "mod", "mods", "custom", "implementation", "source"}
+)
 
 
 @dataclass
@@ -200,8 +203,6 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
                 _append_query(values, seen, query)
 
     if not exact_canonical:
-        # Unknown/custom IDs keep their exact approved semantics as compact
-        # fallback queries after any recognized authored aliases.
         for query in search_queries_for_capability(capability):
             _append_query(values, seen, query)
     return tuple(values)
@@ -237,6 +238,33 @@ def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
 
     limit = _query_variant_limit()
     return tuple(values[:limit] or (capability,))
+
+
+def _provider_query(provider: str, query: str) -> str:
+    """Adapt one semantic query to the provider's search semantics.
+
+    GitHub repository search is an AND-heavy metadata search and the ecosystem
+    client already appends ``minecraft mod``. Passing ontology phrases that already
+    contain those words made queries needlessly over-constrained (and duplicated
+    the suffix). Keep at most two semantic terms there; Modrinth and CurseForge
+    retain the richer full-text phrase.
+    """
+
+    if provider != "github":
+        return query
+    tokens = [
+        token
+        for token in _TOKEN.findall(query.casefold())
+        if token not in _GITHUB_QUERY_BOILERPLATE
+    ]
+    if not tokens:
+        return query
+    if "fabric" in tokens and len(tokens) > 2:
+        semantic = [token for token in tokens if token != "fabric"][:1]
+        tokens = [*semantic, "fabric"]
+    else:
+        tokens = tokens[:2]
+    return " ".join(tokens)
 
 
 def _github_repository(value: Any) -> str:
@@ -391,10 +419,11 @@ def discover_repositories_for_graph(
             item.rank_score += rank
 
     def provider_search(capability: str, provider: str, query: str) -> tuple[str, str, list[tuple[str, float]]]:
+        provider_query = _provider_query(provider, query)
         if provider == "curseforge":
-            return capability, provider, _search_curseforge(query, limit=_query_limit())
+            return capability, provider, _search_curseforge(provider_query, limit=_query_limit())
         try:
-            page = client.search(provider, query, limit=_query_limit(), target_profile="minecraft_mod")
+            page = client.search(provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod")
         except Exception:
             return capability, provider, []
         raw = page.get("candidates") if isinstance(page, Mapping) else None
