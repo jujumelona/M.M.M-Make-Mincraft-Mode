@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from minecraft_mod_ai.generation_output_budget import (
     apply_payload_generation_budget,
+    generation_output_token_budget,
     tools_require_expansive_output,
 )
 
@@ -38,9 +39,17 @@ class _StaticConfig:
 
 
 def test_apply_source_edit_keeps_expansive_effect_classification() -> None:
-    # Source mutation remains an expansive project effect even though its scalar
-    # function arguments are intentionally compact for generation budgeting.
     assert tools_require_expansive_output((_source_edit_schema(),)) is True
+
+
+def test_source_mutation_is_not_capped_by_compact_tool_action_budget() -> None:
+    budget = generation_output_token_budget(
+        _DynamicConfig(),
+        input_tokens=1_000,
+        tools=(_source_edit_schema(),),
+    )
+
+    assert budget > 8192
 
 
 def test_large_prompt_does_not_starve_forced_source_edit_output() -> None:
@@ -59,10 +68,9 @@ def test_large_prompt_does_not_starve_forced_source_edit_output() -> None:
     bounded = apply_payload_generation_budget(payload, config=_DynamicConfig())
 
     assert bounded["max_tokens"] >= 4096
-    assert bounded["max_tokens"] <= 8192
 
 
-def test_dynamic_normal_source_edit_gets_full_structural_page() -> None:
+def test_dynamic_normal_source_edit_uses_remaining_context_not_compact_ceiling() -> None:
     payload = {
         "model": "local",
         "messages": [{"role": "user", "content": "x" * 55_000}],
@@ -71,7 +79,7 @@ def test_dynamic_normal_source_edit_gets_full_structural_page() -> None:
 
     bounded = apply_payload_generation_budget(payload, config=_DynamicConfig())
 
-    assert bounded["max_tokens"] == 8192
+    assert bounded["max_tokens"] > 8192
 
 
 def test_explicit_static_output_ceiling_is_never_raised_by_floor() -> None:

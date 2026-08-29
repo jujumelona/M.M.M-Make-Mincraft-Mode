@@ -124,7 +124,8 @@ def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
     ``apply_source_edit`` remains expansive here because it mutates project source and
     preflight/recovery policy depends on that effect classification. Its scalar protocol
     is nevertheless a compact *call shape* (one type shell, import, or member); output
-    budgeting handles that separately through ``_structural_tool_call_is_compact``.
+    budgeting handles that separately by guaranteeing a minimum page, not by imposing
+    the compact-tool maximum.
     """
 
     if not tools:
@@ -167,10 +168,10 @@ def generation_output_token_budget(
     else:
         budget = max(floor, _DEFAULT_DYNAMIC_OUTPUT_TOKENS)
 
-    if tools and (
-        not tools_require_expansive_output(tools)
-        or _structural_tool_call_is_compact(tools)
-    ):
+    # Only genuinely non-expansive effects receive the compact action ceiling. Source
+    # mutation is allowed to use the remaining context; its scalar protocol is protected
+    # by the structural minimum above rather than by a small hard maximum.
+    if tools and not tools_require_expansive_output(tools):
         budget = min(budget, tool_action_token_budget(config))
     return max(1, int(budget))
 
