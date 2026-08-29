@@ -4,9 +4,8 @@ from __future__ import annotations
 
 The language model performs semantic interpretation only. The host owns authored source
 text, exact offsets, provenance, stable IDs, and downstream authority. Semantic analysis
-is batched so normal planning needs one model turn rather than one turn per clause. A
-single targeted repair batch is allowed only for clauses whose semantic payload is
-structurally invalid or cannot be grounded to the authored source.
+is batched so normal planning needs exactly one model turn. Invalid or ungrounded semantic
+output fails closed at the host boundary; there is no semantic retry or repair turn.
 """
 
 import hashlib
@@ -143,8 +142,6 @@ def _parse_json(raw: Any) -> Any:
 
 def _model_messages(
     clauses: Sequence[Mapping[str, Any]],
-    *,
-    repair_diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, str]]:
     system = (
         "Interpret only the authored Minecraft-mod requirements in the supplied host clauses. "
@@ -174,7 +171,6 @@ def _model_messages(
             }
             for clause in clauses
         ],
-        "repair_diagnostics": [dict(item) for item in repair_diagnostics],
     }
     return [
         {"role": "system", "content": system},
@@ -185,12 +181,10 @@ def _model_messages(
 def _call_semantic_model(
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
-    *,
-    repair_diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> Any:
     max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
     parameters = _semantic_schema(max_clause_index)
-    messages = _model_messages(clauses, repair_diagnostics=repair_diagnostics)
+    messages = _model_messages(clauses)
     native = getattr(router, "generate_tool_decision", None)
     if callable(native):
         return native(
@@ -550,80 +544,37 @@ def _generate_approved_nodes(
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Compile all authored clauses in one model turn, with one repair turn at most."""
+    """Compile all authored clauses in exactly one semantic-model turn."""
 
     try:
-        first_payload = _call_semantic_model(router, clauses)
-    except Exception as exc:
-        first_payload = {}
-        first_diagnostics = [
-            _diagnostic(
-                "REQ_MODEL_RESPONSE",
-                "$",
-                f"{type(exc).__name__}: {exc}",
-                "one batched semantic requirements payload",
-                "semantic_batch",
-            )
-        ]
-        first_nodes: list[dict[str, Any]] = []
-        invalid_clauses = {int(clause["clause_index"]) for clause in clauses}
-    else:
-        first_nodes, invalid_clauses, first_diagnostics = _evaluate_batch(
-            first_payload,
-            clauses,
-        )
-
-    if not invalid_clauses:
-        return _assign_local_ids(first_nodes)
-
-    repair_clauses = [
-        clause
-        for clause in clauses
-        if int(clause["clause_index"]) in invalid_clauses
-    ]
-    try:
-        repair_payload = _call_semantic_model(
-            router,
-            repair_clauses,
-            repair_diagnostics=first_diagnostics,
-        )
+        payload = _call_semantic_model(router, clauses)
     except Exception as exc:
         raise _evidence.EvidencePlanError(
-            "semantic repair batch failed: "
+            "semantic requirement authority model call failed: "
             + _canonical(
                 _diagnostic(
-                    "REQ_REPAIR_MODEL_RESPONSE",
+                    "REQ_MODEL_RESPONSE",
                     "$",
                     f"{type(exc).__name__}: {exc}",
-                    "one targeted semantic repair payload",
-                    "semantic_repair_batch",
+                    "one batched semantic requirements payload",
+                    "semantic_batch",
                 )
             )
         ) from exc
 
-    repair_nodes, remaining_invalid, repair_diagnostics = _evaluate_batch(
-        repair_payload,
-        repair_clauses,
-    )
-    if remaining_invalid:
+    nodes, invalid_clauses, diagnostics = _evaluate_batch(payload, clauses)
+    if invalid_clauses:
         raise _evidence.EvidencePlanError(
-            "semantic repair batch could not satisfy the host contract: "
+            "semantic requirement authority rejected invalid model output: "
             + _canonical(
                 {
-                    "invalid_clause_indices": sorted(remaining_invalid),
-                    "diagnostics": repair_diagnostics,
+                    "invalid_clause_indices": sorted(invalid_clauses),
+                    "diagnostics": diagnostics,
                 }
             )
         )
 
-    merged = [*first_nodes, *repair_nodes]
-    covered = {int(node["source_clause_index"]) for node in merged}
-    expected = {int(clause["clause_index"]) for clause in clauses}
-    if covered != expected:
-        raise _evidence.EvidencePlanError(
-            "REQ_SOURCE_COVERAGE: semantic compilation did not cover every authored clause."
-        )
-    return _assign_local_ids(merged)
+    return _assign_local_ids(nodes)
 
 
 def _build_catalog(
@@ -712,7 +663,7 @@ def _build_catalog(
             "unsupported_design_choice_count": 0,
             "provenance_roles": sorted(_ALL_PROVENANCE_ROLES),
             "normal_model_turns": 1,
-            "max_repair_turns": 1,
+            "max_repair_turns": 0,
             "source_grounding_owner": "host",
         },
         "catalog_sha256": "",
