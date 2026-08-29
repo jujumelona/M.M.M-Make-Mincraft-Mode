@@ -65,6 +65,7 @@ def finalize_runtime() -> None:
             install as install_observation_determinism,
         )
         from .agent_routing_intent_contract import install as install_routing_intent
+        from .authored_scope_research_contract import install as install_authored_scope_research
         from .context_budget_preflight import run_context_budget_preflight
         from .deep_design_execution_contract import install as install_deep_design_execution
         from .design_resolution_provenance_contract import (
@@ -188,6 +189,9 @@ def finalize_runtime() -> None:
         install_planner_graph_integrity()
         install_deep_design_execution()
         install_evidence_obligation_contract()
+        # The approved graph is now frozen and the obligation DAG owner is installed.
+        # Rebind stale import-by-value edges before any planning request can execute.
+        install_authored_scope_research()
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
