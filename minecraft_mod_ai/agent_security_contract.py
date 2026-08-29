@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 _INSTALL_MARKER = "_mmm_agent_security_contract_v5"
-_SLICE_MARKER = "_mmm_scoped_forced_rag_receipt_v1"
 _MEMORY_MARKER = "_mmm_scoped_sanitized_repair_memory_v3"
 _TERMINAL_RAG_WARNINGS = frozenset({"required_metadata_mismatch"})
 _LEGACY_EVIDENCE_KEYS = frozenset(
@@ -29,15 +28,16 @@ def install(
     if getattr(model_router_module, _INSTALL_MARKER, False):
         return
 
+    # These arguments remain in the bootstrap-facing signature while callers migrate,
+    # but research evidence scoping is natively owned by agentic_research_game_design.
+    # Security must not wrap that owner a second time.
+    del pre_design_rag_module, agentic_research_module
+
     if agentic_optimization_module is None:
         from . import agentic_optimization_contract as agentic_optimization_module
     if agent_tool_runtime_module is None:
         from . import agent_tool_runtime as agent_tool_runtime_module
 
-    # Pre-design collection is now owned directly by pre_design_research_pipeline.
-    # Security scopes the active research slice in place; it must not depend on or
-    # recreate the retired harden_pre_design_research monkeypatch.
-    _install_scoped_domain_receipt(pre_design_rag_module, agentic_research_module)
     model_router_module._usable_rag_result = usable_rag_result
     _install_repair_memory_boundary(
         agentic_optimization_module,
@@ -45,55 +45,6 @@ def install(
     )
 
     setattr(model_router_module, _INSTALL_MARKER, True)
-
-
-def _install_scoped_domain_receipt(pre_design_rag_module: Any, agentic_module: Any) -> None:
-    current = agentic_module._domain_evidence_slice
-    if getattr(current, _SLICE_MARKER, False):
-        return
-
-    def scoped_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
-        result = dict(current(domain_id, deterministic))
-        if isinstance(result.get("evidence_document"), Mapping):
-            return result
-        if isinstance(result.get("forced_project_rag"), Mapping):
-            return result
-
-        context = getattr(pre_design_rag_module, "_FORCED_RAG_CONTEXT", None)
-        forced = context.get() if context is not None else None
-        if not isinstance(forced, Mapping):
-            forced = deterministic.get("forced_project_rag")
-        receipt = _scoped_forced_receipt(domain_id, forced)
-        if receipt is not None:
-            result["forced_project_rag"] = receipt
-        return result
-
-    scoped_slice.__wrapped__ = current  # type: ignore[attr-defined]
-    setattr(scoped_slice, _SLICE_MARKER, True)
-    agentic_module._domain_evidence_slice = scoped_slice
-
-
-def _scoped_forced_receipt(
-    domain_id: str,
-    forced: Any,
-) -> dict[str, Any] | None:
-    if not isinstance(forced, Mapping):
-        return None
-    receipt = {str(key): value for key, value in forced.items() if key != "domains"}
-    domains = forced.get("domains")
-    if isinstance(domains, list):
-        selected = next(
-            (
-                item
-                for item in domains
-                if isinstance(item, Mapping)
-                and str(item.get("domain_id", "")).strip() == domain_id
-            ),
-            None,
-        )
-        if isinstance(selected, Mapping):
-            receipt.update({str(key): value for key, value in selected.items()})
-    return receipt
 
 
 def usable_rag_result(value: Any) -> bool:
