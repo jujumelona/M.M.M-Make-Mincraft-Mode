@@ -9,10 +9,12 @@ finalize_runtime()
 from .pipeline_hardening import install_pipeline_hardening
 from .pipeline_hardening_v2 import install_pipeline_hardening_v2
 from .pipeline_hardening_v3 import install_pipeline_hardening_v3
+from .pipeline_hardening_v4 import install_pipeline_hardening_v4
 
 install_pipeline_hardening()
 install_pipeline_hardening_v2()
 install_pipeline_hardening_v3()
+install_pipeline_hardening_v4()
 
 from .api import (
     ChatReply,
