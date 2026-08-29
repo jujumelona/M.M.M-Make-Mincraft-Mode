@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
-
 import minecraft_mod_ai.agentic_research_game_design as agentic
-import minecraft_mod_ai.pre_design_phase_contract as phase
+import minecraft_mod_ai.pre_design_research_pipeline as pipeline
 
 
 def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
@@ -12,10 +10,7 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
         "무기를 사고 우주선 성능을 업그레이드한다."
     )
 
-    brief = agentic.normalize_research_brief(
-        prompt,
-        {"title": "pre-design research"},
-    )
+    brief = pipeline._pre_design_brief(prompt)
 
     domains = brief["domains"]
     assert [domain["domain_id"] for domain in domains] == ["request"]
@@ -27,33 +22,35 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     assert all(not domain["domain_id"].startswith("obl_") for domain in domains)
 
 
-def test_pre_design_ecosystem_donor_search_is_deferred() -> None:
-    brief = phase._pre_design_candidate("우주선 모드를 설계해줘")
-    result = agentic.collect_ecosystem_seed_bundle(
-        "우주선 모드를 설계해줘",
-        {},
-        research_brief=brief,
-        route_limit=12,
-        page_builder=lambda *args, **kwargs: None,
-        planning_seed_only=True,
-    )
+def test_pre_design_donor_search_is_deferred_by_the_owning_pipeline() -> None:
+    brief = pipeline._pre_design_brief("우주선 모드를 설계해줘")
+    providers = {
+        provider
+        for domain in brief["domains"]
+        for provider in domain.get("providers", [])
+    }
 
-    assert result["status"] == "deferred_until_design_freeze"
-    assert result["candidate_count"] == 0
+    assert "modrinth" not in providers
+    assert "github" not in providers
+    assert set(pipeline._DETERMINISTIC_STAGES) == {
+        "official_rag",
+        "technology_radar",
+        "forced_project_rag",
+    }
 
 
 def test_research_transport_schema_matches_host_normalization_surface() -> None:
-    schema = deepcopy(agentic._RESEARCH_NOTE_SCHEMA)
+    schema = agentic._RESEARCH_NOTE_SCHEMA
     assert "required" not in schema
     assert schema["additionalProperties"] is True
 
     note = schema["properties"]["research_note"]
     assert "required" not in note
     assert note["additionalProperties"] is True
-    assert "maxItems" not in note["properties"]["claims"]
     assert note["properties"]["claims"]["items"] == {}
-    assert "maxItems" not in note["properties"]["gaps"]
-    assert "maxItems" not in note["properties"]["next_queries"]
+    assert note["properties"]["gaps"]["items"] == {}
+    assert note["properties"]["next_queries"]["items"] == {}
+    assert note["properties"]["procedures"]["items"] == {}
 
 
 def test_host_parser_accepts_compact_qwen_claim_variants() -> None:
@@ -66,3 +63,4 @@ def test_host_parser_accepts_compact_qwen_claim_variants() -> None:
     assert note["domain_id"] == "request"
     assert note["claims"] == [{"claim": "Fabric API 근거", "evidence_refs": []}]
     assert note["sufficient"] is True
+    assert note["procedures"] == []
