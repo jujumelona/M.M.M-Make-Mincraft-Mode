@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 
+from minecraft_mod_ai import agent_capability_context as capability_context
 from minecraft_mod_ai.agent_capability_context import (
     build_agent_capability_context,
     filter_tool_schemas_for_role,
     skills_for_tool,
+    target_neutral_research_scope,
 )
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, REVIEWED_STAGES
 
@@ -114,6 +116,49 @@ def test_resident_planner_research_turn_uses_research_agent_policy() -> None:
         "search_code_rag",
         model_role="planner",
     )
+
+
+def test_target_neutral_research_ignores_process_target_for_tool_surface(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_MCP_MINECRAFT_VERSION", "1.21.99")
+    monkeypatch.setenv("MMM_MINECRAFT_VERSION", "1.21.98")
+    schemas = (
+        _schema("search_project_rag"),
+        _schema("discover_ecosystem_resources"),
+        _schema("search_code_rag"),
+        *_external_proxy_schemas(),
+    )
+
+    with target_neutral_research_scope():
+        filtered = filter_tool_schemas_for_role("research", "planner", schemas)
+
+    names = _tool_names(filtered)
+    assert "search_project_rag" not in names
+    assert "discover_ecosystem_resources" not in names
+    assert "search_code_rag" in names
+
+
+def test_target_neutral_research_blanks_external_manifest_target(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_MCP_MINECRAFT_VERSION", "1.21.99")
+    monkeypatch.setenv("MMM_MINECRAFT_VERSION", "1.21.98")
+    monkeypatch.setenv("MMM_LOADER", "fabric")
+    monkeypatch.setenv("MMM_MAPPINGS", "stale-mappings")
+    captured: list[dict[str, str]] = []
+
+    class _ManifestRouter:
+        def capability_manifest(self, *, stage, target, max_access):
+            del stage, max_access
+            captured.append(dict(target))
+            return {"capabilities": {}}
+
+    monkeypatch.setattr(capability_context, "_manifest_router", lambda: _ManifestRouter())
+    with target_neutral_research_scope():
+        build_agent_capability_context(
+            "research",
+            _external_proxy_schemas(),
+            model_role="planner",
+        )
+
+    assert captured == [{"minecraft_version": "", "loader": "", "mappings": ""}]
 
 
 def test_runtime_context_discovers_gated_write_and_admin_minecraft_mcp_routes() -> None:
