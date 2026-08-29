@@ -21,6 +21,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .canonical_capability_ontology import (
+    resolve_capabilities_from_phrase_structured,
+    search_queries_for_capability,
+)
+
 _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
@@ -148,33 +153,81 @@ def _graph_search_terms(
     return result
 
 
-def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
+def _append_query(values: list[str], seen: set[str], raw: Any) -> None:
+    text = " ".join(str(raw or "").split())[:512]
+    folded = text.casefold()
+    if text and folded not in seen:
+        values.append(text)
+        seen.add(folded)
+
+
+def _ontology_search_queries(capability: str) -> tuple[str, ...]:
+    """Return retrieval phrasing without changing the approved capability graph.
+
+    The authoritative planner owns which capabilities exist.  This helper only
+    translates one already-approved capability into catalogue-friendly queries.
+    Canonical ontology matches are therefore safe retrieval aliases, not scope
+    expansion or dependency invention.
+    """
+
     values: list[str] = []
-    seen_values: set[str] = set()
-    semantic = " ".join(_TOKEN.findall(capability.replace(".", " ").replace("-", " ")))
-    for raw in [*terms, semantic]:
-        text = " ".join(str(raw or "").split())
-        folded = text.casefold()
-        if text and folded not in seen_values:
-            values.append(text[:512])
-            seen_values.add(folded)
-    expanded: list[str] = []
-    expanded_seen: set[str] = set()
-    for text in values:
-        expanded.append(text)
-        expanded_seen.add(text.casefold())
-        if len(expanded) >= _query_variant_limit():
-            break
-    if len(expanded) < _query_variant_limit() and semantic:
-        for suffix in ("system", "implementation source"):
-            query = f"{semantic} {suffix}"
-            folded = query.casefold()
-            if folded not in expanded_seen:
-                expanded.append(query)
-                expanded_seen.add(folded)
-            if len(expanded) >= _query_variant_limit():
-                break
-    return tuple(expanded or (capability,))
+    seen: set[str] = set()
+    for query in search_queries_for_capability(capability):
+        _append_query(values, seen, query)
+
+    semantic = " ".join(
+        _TOKEN.findall(
+            capability.replace(".", " ")
+            .replace("_", " ")
+            .replace("-", " ")
+            .replace(":", " ")
+        )
+    )
+    try:
+        resolution = resolve_capabilities_from_phrase_structured(semantic)
+    except Exception:
+        resolution = None
+    if resolution is not None:
+        for node in resolution.nodes:
+            if node.origin not in {"explicit", "archetype_inferred"}:
+                continue
+            if str(node.capability_id).startswith(("unresolved:", "provisional:")):
+                continue
+            for query in search_queries_for_capability(node.capability_id):
+                _append_query(values, seen, query)
+    return tuple(values)
+
+
+def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
+    """Build bounded provider queries while preserving unbounded semantic scope.
+
+    The bound here is an external-I/O budget, not a planning cardinality cap.  The
+    most reusable, ontology-backed search phrases are deliberately placed first so
+    long source clauses cannot crowd them out of the provider budget.
+    """
+
+    values: list[str] = []
+    seen: set[str] = set()
+    for query in _ontology_search_queries(capability):
+        _append_query(values, seen, query)
+
+    semantic = " ".join(
+        _TOKEN.findall(
+            capability.replace(".", " ")
+            .replace("_", " ")
+            .replace("-", " ")
+            .replace(":", " ")
+        )
+    )
+    if semantic:
+        _append_query(values, seen, f"minecraft {semantic} mod")
+        _append_query(values, seen, f"{semantic} fabric mod")
+
+    for raw in terms:
+        _append_query(values, seen, raw)
+
+    limit = _query_variant_limit()
+    return tuple(values[:limit] or (capability,))
 
 
 def _github_repository(value: Any) -> str:
