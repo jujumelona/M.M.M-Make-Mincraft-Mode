@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -152,9 +153,12 @@ def test_parser_owned_research_rejects_sufficient_true_without_claims(capsys) ->
 
     assert any("sufficient=true" in error for error in raised.value.errors)
     logged = capsys.readouterr().out
-    assert "MODEL STRUCTURED OUTPUT FAILURE:" in logged
-    assert "requires at least one non-empty claim" in logged
-    assert '"claims": []' in logged
+    prefix = "MODEL STRUCTURED OUTPUT FAILURE: "
+    assert logged.startswith(prefix)
+    diagnostic = json.loads(logged[len(prefix) :].strip())
+    assert diagnostic["event"] == "structured_output_validation_failure"
+    assert "requires at least one non-empty claim" in " ".join(diagnostic["errors"])
+    assert json.loads(diagnostic["output"])["research_note"]["claims"] == []
 
 
 def test_parser_owned_research_allows_explicit_insufficient_gap_receipt() -> None:
