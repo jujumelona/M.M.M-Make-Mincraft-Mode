@@ -8,13 +8,22 @@ from typing import Any
 
 
 def start(model_registry_module: Any) -> None:
-    """Start native metadata warmup; never replace runtime implementations."""
+    """Start metadata warmup only inside an actual Colab setup lifecycle.
+
+    Package import must be side-effect free with respect to background network threads.
+    Starting a daemon prefetch during ``import minecraft_mod_ai`` lets the interpreter exit
+    while the worker is still creating thread pools, which can abort Python during shutdown.
+    The Colab setup receipt is the host-owned lifecycle signal that a long-running runtime
+    exists and can safely benefit from asynchronous warmup.
+    """
+
     del model_registry_module
+    if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+        return
+
     from .platform_live_discovery import start_platform_prefetch
 
     start_platform_prefetch()
-    if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
-        return
     discovery_workers, research_workers = _colab_worker_defaults()
     os.environ.setdefault("MMM_DISCOVERY_WORKERS", str(discovery_workers))
     os.environ.setdefault("MMM_RESEARCH_WORKERS", str(research_workers))
