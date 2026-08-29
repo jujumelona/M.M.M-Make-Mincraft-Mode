@@ -26,7 +26,7 @@ _EVIDENCE_PAGE_SCHEMA = "mmm/research-evidence-page-v1"
 # v3 invalidates old terminal-gap/synthesis caches created before failure-state and
 # procedure preservation became part of the canonical contract.
 _DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v3"
-_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-continuation-v2"
+_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-host-completion-v3"
 _SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v3"
 _SYNTHESIS_INPUT_BYTES = 3_600
 _SYNTHESIS_GROUP_ITEMS = 4
@@ -87,7 +87,7 @@ def _research_page_messages(
     page: Mapping[str, Any],
     continuation_offset: int = 0,
 ) -> list[dict[str, str]]:
-    """Create one bounded page-reading request; raw cross-page evidence is never inlined."""
+    """Create one bounded page-reading request with a host-owned completion cursor."""
 
     system = (
         "You are reading exactly one bounded page from a host-owned Minecraft research "
@@ -95,16 +95,14 @@ def _research_page_messages(
         "Do not assume unseen pages are absent; the host will read every page and synthesize "
         "the page notes later. Return one compact JSON object matching research_note. "
         "research_note.domain_id must equal the assigned domain. Evidence refs should use "
-        "the supplied page_ref. This is a lossless continuation protocol: emit at most the "
-        "schema allowance, advance next_offset beyond continuation_offset, and set complete "
-        "only after inspecting through the final character and echoing tail_sha256. Never "
-        "drop remaining claims merely because one response page is full. Set sufficient=true "
-        "when the supplied continuation span was processed; it does not mean the whole domain "
-        "is complete."
+        "the supplied page_ref. The host owns page delivery, cursor advancement, tail "
+        "verification, and completion. Do not emit continuation, next_offset, tail_sha256, "
+        "processed_span, or any other page-completion field. research_note.sufficient means "
+        "this page produced at least one usable evidence-grounded claim; set it false when "
+        "the page contains no such claim. It never controls pagination."
     )
     content = str(page.get("content", ""))
     offset = max(0, min(len(content), int(continuation_offset)))
-    tail_sha256 = _sha256_text(content)
     payload = {
         "authoritative_request": prompt,
         "domain": dict(domain),
@@ -118,19 +116,12 @@ def _research_page_messages(
             "content_start_offset": offset,
             "content_total_chars": len(content),
             "content_remaining": content[offset:],
-            "tail_sha256": tail_sha256,
-        },
-        "continuation_contract": {
-            "schema_version": _PAGE_PROTOCOL_SCHEMA,
-            "current_offset": offset,
-            "complete_requires_next_offset": len(content),
-            "complete_requires_tail_sha256": tail_sha256,
         },
         "instruction": (
-            "Read the complete supplied page. Preserve source identifiers and concrete "
-            "version/API facts. Put unresolved page-local uncertainty in gaps. If more "
-            "claims remain than fit this response, set complete=false and continue from a "
-            "strictly larger next_offset on the next host request."
+            "Read all of content_remaining in this call. Preserve source identifiers and "
+            "concrete version/API facts, extract every supported design-relevant claim, and "
+            "put unresolved page-local uncertainty in gaps. Return only research_note; the "
+            "host records the raw page losslessly and completes this bounded page."
         ),
     }
     return [
@@ -144,18 +135,15 @@ class _BoundedResearchOutputError(RuntimeError):
 
 
 def _page_response_schema(research_note_schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Project only semantic research fields; mechanical page state is host-owned."""
+
     schema = json.loads(json.dumps(dict(research_note_schema)))
-    schema["properties"]["continuation"] = {
-        "type": "object",
-        "properties": {
-            "complete": {"type": "boolean"},
-            "next_offset": {"type": "integer", "minimum": 0},
-            "tail_sha256": {"type": "string", "minLength": 1, "maxLength": 71},
-        },
-        "required": ["complete", "next_offset", "tail_sha256"],
-        "additionalProperties": False,
-    }
-    schema["required"] = ["research_note", "continuation"]
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        properties.pop("continuation", None)
+    # Keep the loose research envelope parser-owned.  structured_output can then
+    # canonicalize bare/aliased research notes locally without another model call.
+    schema.pop("required", None)
     return schema
 
 
@@ -193,26 +181,21 @@ def _parse_page_response(
     tail_sha256: str,
 ) -> dict[str, Any]:
     note = agentic_module._parse_research_note(raw, domain_id)
-    payload = agentic_module._extract_json_object(raw)
-    continuation = payload.get("continuation")
-    if continuation is None:
-        return {
-            "note": note,
-            "continuation": {
-                "complete": True,
-                "next_offset": content_chars,
-                "tail_sha256": tail_sha256,
-                "legacy_adapter": True,
-            },
-        }
-    validated = _validate_continuation_receipt(
-        agentic_module,
-        continuation,
-        current_offset=current_offset,
-        content_chars=content_chars,
-        tail_sha256=tail_sha256,
-    )
-    return {"note": note, "continuation": validated}
+    if current_offset < 0 or current_offset > content_chars:
+        raise agentic_module.SpecValidationError(
+            "host page cursor is outside the bounded evidence page."
+        )
+    # The complete content_remaining span was supplied in this request.  Page length and
+    # tail hash are already exact host facts, so accepting a model-authored cursor can only
+    # weaken the contract (and previously caused N -> N-1 -> N retry oscillation).
+    return {
+        "note": note,
+        "continuation": {
+            "complete": True,
+            "next_offset": content_chars,
+            "tail_sha256": tail_sha256,
+        },
+    }
 
 
 def _validate_continuation_receipt(

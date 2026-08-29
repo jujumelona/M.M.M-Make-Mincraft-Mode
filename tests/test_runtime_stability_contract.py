@@ -167,7 +167,7 @@ def test_parser_validation_failure_is_not_replayed_by_bounded_layer():
     assert calls == 1
 
 
-def test_page_schema_binds_exact_continuation_receipt_before_generation():
+def test_page_schema_removes_model_owned_continuation_before_generation():
     module = _bounded_module()
     schema = _research_schema()
     schema["properties"]["continuation"] = {
@@ -199,16 +199,13 @@ def test_page_schema_binds_exact_continuation_receipt_before_generation():
     ]
 
     bound, domain_id = contract._bound_research_schema(module, schema, messages)
-    continuation = bound["properties"]["continuation"]
-    next_offset = continuation["properties"]["next_offset"]
 
     assert domain_id == "mk_platform"
-    assert next_offset["minimum"] == 612
-    assert next_offset["maximum"] == 1800
-    rendered = json.dumps(continuation["allOf"], sort_keys=True)
-    assert '"const": 1800' in rendered
-    assert '"const": "sha256:tail"' in rendered
-    assert '"maximum": 1799' in rendered
+    assert "continuation" not in bound["properties"]
+    assert "required" not in bound
+    rendered = json.dumps(bound, sort_keys=True)
+    assert "next_offset" not in rendered
+    assert "tail_sha256" not in rendered
 
 
 def test_synthesis_nodes_are_utf8_bounded_and_pairwise_contracting():

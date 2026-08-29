@@ -1,11 +1,11 @@
 """Runtime safety invariants for bounded research and native llama.cpp tool grammar.
 
 This contract owns three host-side safety boundaries that must hold independently of
-model quality: bounded research has exactly one structured-output repair owner,
-hierarchical synthesis strictly converges, and tool schemas sent to llama.cpp stay
-inside its grammar compiler's conservative JSON-schema subset. Detailed response
-schemas are validated and repaired by ``structured_output`` on the host; transport
-failures are never retried here.
+model quality: bounded research has exactly one structured-output repair owner and no
+model-authored evidence cursor, hierarchical synthesis strictly converges, and tool
+schemas sent to llama.cpp stay inside its grammar compiler's conservative JSON-schema
+subset. Detailed response schemas are validated and repaired by ``structured_output``
+on the host; transport failures are never retried here.
 """
 from __future__ import annotations
 
@@ -214,57 +214,13 @@ def _bound_research_schema(
             }
         )
 
-    continuation_contract = payload.get("continuation_contract")
     evidence_page = payload.get("evidence_page")
-    continuation = properties.get("continuation") if isinstance(properties, Mapping) else None
-    if (
-        isinstance(continuation, dict)
-        and isinstance(continuation_contract, Mapping)
-        and isinstance(evidence_page, Mapping)
-    ):
-        current_offset = int(continuation_contract.get("current_offset", 0))
-        content_chars = int(evidence_page.get("content_total_chars", 0))
-        tail_sha256 = str(evidence_page.get("tail_sha256", ""))
-        remaining = max(0, content_chars - current_offset)
-        minimum_progress = min(
-            int(getattr(module, "_MIN_CONTINUATION_PROGRESS_CHARS", 1)),
-            remaining,
-        )
-        continuation_properties = continuation.get("properties")
-        if isinstance(continuation_properties, dict):
-            next_offset = continuation_properties.get("next_offset")
-            if isinstance(next_offset, dict):
-                next_offset["minimum"] = current_offset + minimum_progress
-                next_offset["maximum"] = content_chars
-        conditions = continuation.setdefault("allOf", [])
-        conditions.append(
-            {
-                "if": {
-                    "properties": {"complete": {"const": True}},
-                    "required": ["complete"],
-                },
-                "then": {
-                    "properties": {
-                        "next_offset": {"const": content_chars},
-                        "tail_sha256": {"const": tail_sha256},
-                    }
-                },
-            }
-        )
-        if content_chars > current_offset:
-            conditions.append(
-                {
-                    "if": {
-                        "properties": {"complete": {"const": False}},
-                        "required": ["complete"],
-                    },
-                    "then": {
-                        "properties": {
-                            "next_offset": {"maximum": content_chars - 1},
-                        }
-                    },
-                }
-            )
+    if isinstance(evidence_page, Mapping) and isinstance(properties, dict):
+        # Defensive projection for callers that still pass the retired v2 continuation
+        # shape. The model extracts semantics; the host already knows the exact supplied
+        # span, page length, and digest and therefore owns its completion receipt.
+        properties.pop("continuation", None)
+        schema.pop("required", None)
 
     return schema, domain_id
 
@@ -280,7 +236,13 @@ def _aligned_research_messages(
     result = [dict(message) for message in messages]
     required = response_schema.get("required")
     required_keys = [str(item) for item in required] if isinstance(required, list) else []
-    if required_keys == ["research_note"]:
+    properties = response_schema.get("properties")
+    research_only = (
+        isinstance(properties, Mapping)
+        and "research_note" in properties
+        and set(properties) <= {"research_note"}
+    )
+    if required_keys == ["research_note"] or research_only:
         shape = 'exactly one top-level JSON object with exactly the key "research_note"'
     elif "research_note" in required_keys and "continuation" in required_keys:
         shape = (
@@ -293,7 +255,8 @@ def _aligned_research_messages(
         f" Return {shape}; do not return a bare research_note body."
         + (f' research_note.domain_id must be exactly "{domain_id}".' if domain_id else "")
         + " If no evidence-backed design claim can be extracted, set sufficient=false and "
-        "record the reason in gaps; never set sufficient=true with an empty claims array."
+        "record the reason in gaps; never set sufficient=true with an empty claims array. "
+        "Do not emit continuation, next_offset, tail_sha256, or page-completion fields."
     )
     for message in result:
         if str(message.get("role", "")) == "system" and isinstance(message.get("content"), str):

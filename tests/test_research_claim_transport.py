@@ -44,6 +44,40 @@ def test_qwen_claim_text_is_canonicalized_before_grounding_validation() -> None:
     )
 
 
+def test_qwen_content_and_source_ref_are_canonicalized() -> None:
+    raw = json.dumps(
+        {
+            "research_note": {
+                "domain_id": "request",
+                "claims": [
+                    {
+                        "claim_id": "fabric-mod-json-metadata",
+                        "content": "Fabric mods declare loader metadata in fabric.mod.json.",
+                        "source_ref": _PAGE_REF,
+                    }
+                ],
+                "gaps": [],
+                "next_queries": [],
+                "procedures": [],
+                "sufficient": True,
+            }
+        }
+    )
+
+    note = agentic._parse_research_note(raw, "request")
+
+    assert note["claims"] == [
+        {
+            "claim": "Fabric mods declare loader metadata in fabric.mod.json.",
+            "evidence_refs": [_PAGE_REF],
+        }
+    ]
+    agentic._validate_sufficient_research(
+        note,
+        allowed_refs=frozenset({_PAGE_REF}),
+    )
+
+
 def test_paged_synthesis_preserves_qwen_claim_text() -> None:
     tail_sha256 = "sha256:page-tail"
     raw = json.dumps(
