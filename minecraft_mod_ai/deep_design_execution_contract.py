@@ -13,6 +13,7 @@ only its bounded design-generation primitive is replaced.
 """
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
@@ -23,6 +24,7 @@ from . import evidence_first_planning as _evidence
 
 _INSTALLED = False
 _GENERATOR_MARKER = "__mmm_research_first_design_generator__"
+_SHARDED_MARKER = "__mmm_research_first_sharded_barrier__"
 _SECTION_MARKER = "__mmm_deep_design_section_prompt__"
 _STEPS_MARKER = "__mmm_design_leaf_semantic_steps__"
 _TASKS_MARKER = "__mmm_design_leaf_reuse_binding__"
@@ -49,6 +51,14 @@ _ACTIVE_DESIGN_EXECUTION: ContextVar[
 ] = ContextVar(
     "mmm_active_design_execution_facets",
     default=None,
+)
+_PRECOLLECTED_PAGE_RESEARCH: ContextVar[tuple[Mapping[str, Any], ...] | None] = ContextVar(
+    "mmm_precollected_page_research",
+    default=None,
+)
+_PRECOLLECTED_PAGE_INDEX: ContextVar[int] = ContextVar(
+    "mmm_precollected_page_research_index",
+    default=0,
 )
 
 
@@ -139,7 +149,16 @@ def _research_first_generate_once(
     # In a sharded request the host JSON envelope is provenance, while fallback_prompt
     # is the exact lossless user page. Research and design must consume the latter.
     design_prompt = str(fallback_prompt or authoritative_prompt)
-    research = collect_design_research(router, design_prompt)
+    precollected = _PRECOLLECTED_PAGE_RESEARCH.get()
+    if precollected is None:
+        research = collect_design_research(router, design_prompt)
+    else:
+        page_index = _PRECOLLECTED_PAGE_INDEX.get()
+        if page_index >= len(precollected):
+            raise RuntimeError("Sharded design consumed more research pages than were collected.")
+        research = dict(precollected[page_index])
+        _PRECOLLECTED_PAGE_INDEX.set(page_index + 1)
+
     design = agentic.generate_sectioned_game_design(
         game_design,
         router,
@@ -152,6 +171,108 @@ def _research_first_generate_once(
         **canonical,
         "_pre_design_research": research,
         "_research_brief": dict(research.get("research_brief") or {}),
+    }
+
+
+def _sharded_research_ledger(
+    prompt: str,
+    request_pages: Sequence[str],
+    page_research: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    pages: list[dict[str, Any]] = []
+    for page_index, (page_text, research) in enumerate(zip(request_pages, page_research, strict=True)):
+        pages.append(
+            {
+                "page_index": page_index,
+                "content_sha256": hashlib.sha256(page_text.encode("utf-8")).hexdigest(),
+                "research_sha256": str(research.get("research_sha256") or ""),
+                "model_view_sha256": str(research.get("model_view_sha256") or ""),
+                "research": dict(research),
+            }
+        )
+    ledger: dict[str, Any] = {
+        "schema_version": "mmm/agentic-pre-design-research-sharded-v1",
+        "request_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "page_count": len(pages),
+        "pages": pages,
+        "method": {
+            "ordering": "all page research completes before any page design",
+            "model_context": "each page design receives its own bounded research view",
+            "host_ledger": "all page research views retained for provenance",
+        },
+    }
+    rendered = json.dumps(
+        ledger,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    ledger["research_sha256"] = "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    return ledger
+
+
+def _research_first_plan_sharded(
+    self: Any,
+    prompt: str,
+    *,
+    request_pages: tuple[str, ...],
+    media_paths: Sequence[Any],
+    page_budget: int,
+) -> dict[str, Any]:
+    original = _research_first_plan_sharded.__wrapped__
+    from . import agentic_research_game_design as agentic
+    from .pre_design_research_pipeline import collect_design_research
+
+    if not agentic.supports_agentic_research_router(self.router):
+        return original(
+            self,
+            prompt,
+            request_pages=request_pages,
+            media_paths=media_paths,
+            page_budget=page_budget,
+        )
+
+    page_count = len(request_pages)
+    page_research = tuple(
+        collect_design_research(
+            self.router,
+            page_text,
+            trace_metadata={
+                "request_page_index": page_index,
+                "request_page_count": page_count,
+            },
+        )
+        for page_index, page_text in enumerate(request_pages)
+    )
+
+    research_token = _PRECOLLECTED_PAGE_RESEARCH.set(page_research)
+    index_token = _PRECOLLECTED_PAGE_INDEX.set(0)
+    try:
+        design = original(
+            self,
+            prompt,
+            request_pages=request_pages,
+            media_paths=media_paths,
+            page_budget=page_budget,
+        )
+        consumed = _PRECOLLECTED_PAGE_INDEX.get()
+        if consumed != page_count:
+            raise RuntimeError(
+                "Sharded design did not consume exactly the precollected research pages: "
+                f"consumed={consumed} expected={page_count}."
+            )
+    finally:
+        _PRECOLLECTED_PAGE_INDEX.reset(index_token)
+        _PRECOLLECTED_PAGE_RESEARCH.reset(research_token)
+
+    return {
+        **design,
+        "_pre_design_research": _sharded_research_ledger(
+            prompt,
+            request_pages,
+            page_research,
+        ),
     }
 
 
@@ -504,6 +625,12 @@ def install() -> None:
         _research_first_generate_once.__wrapped__ = original_generator  # type: ignore[attr-defined]
         setattr(_research_first_generate_once, _GENERATOR_MARKER, True)
         game_design._generate_game_design_once = _research_first_generate_once
+
+    original_sharded = game_design.GameDesignPlanner._plan_sharded_request
+    if not getattr(original_sharded, _SHARDED_MARKER, False):
+        _research_first_plan_sharded.__wrapped__ = original_sharded  # type: ignore[attr-defined]
+        setattr(_research_first_plan_sharded, _SHARDED_MARKER, True)
+        game_design.GameDesignPlanner._plan_sharded_request = _research_first_plan_sharded
 
     original_steps = _evidence._semantic_steps
     if not getattr(original_steps, _STEPS_MARKER, False):
