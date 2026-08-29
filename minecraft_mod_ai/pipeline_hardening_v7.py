@@ -3,16 +3,16 @@ from __future__ import annotations
 """Hardening for tool-enabled coder turns.
 
 Tool calls used by the production coder intentionally bypass the JSON structured-output
-repair path. That also meant they bypassed the token/reasoning budget policy entirely,
-so a large accumulated planning/research transcript could leave only a few hundred
-tokens for ``apply_source_edit``. This module keeps the tool schema and newest task
-context intact while compacting stale transcript text before payload construction.
+repair path. Extremely large accumulated planning/research transcripts can therefore
+leave too little room for ``apply_source_edit``. This module only compacts pathological
+source-edit prompts and otherwise preserves the existing payload contract verbatim.
 """
 
 import os
 import sys
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import wraps
 from typing import Any
 
 from .pipeline_hardening import _replace_bound_references
@@ -85,7 +85,11 @@ def _compact_source_edit_request(request: Any) -> tuple[Any, int, int]:
     messages = tuple(getattr(request, "messages", ()) or ())
     original_chars = sum(len(_message_content(message)) for message in messages)
 
-    trigger = _env_int("MMM_CODER_TOOL_COMPACT_TRIGGER_CHARS", 36000, 8000)
+    # Ordinary multi-page tool continuations are intentional and must remain lossless.
+    # The user's pathological trace was >54k chars with only 523 output tokens, so keep
+    # the default trigger above normal ~40k continuation tests and compact only once the
+    # prompt has clearly entered the context-starvation regime.
+    trigger = _env_int("MMM_CODER_TOOL_COMPACT_TRIGGER_CHARS", 50000, 32000)
     if original_chars <= trigger:
         return request, original_chars, original_chars
 
@@ -159,7 +163,7 @@ def _configured_max_tokens(adapter: Any) -> int:
 
 def _source_edit_min_tokens(adapter: Any) -> int:
     configured = _configured_max_tokens(adapter)
-    requested = _env_int("MMM_CODER_TOOL_MIN_OUTPUT_TOKENS", 2048, 512)
+    requested = _env_int("MMM_CODER_TOOL_MIN_OUTPUT_TOKENS", 4096, 512)
     return min(configured, requested)
 
 
@@ -170,6 +174,9 @@ def _install_source_edit_payload_hardening() -> None:
     if getattr(original, _MARKER, False):
         return
 
+    # update_wrapper preserves every policy marker already attached by the runtime
+    # composition chain (prompt-cache reuse, active-cache reuse, family contracts, ...).
+    @wraps(original)
     def hardened(adapter: Any, request: Any) -> dict[str, Any]:
         if not _is_source_edit_request(request):
             return original(adapter, request)
@@ -178,7 +185,7 @@ def _install_source_edit_payload_hardening() -> None:
         result = dict(original(adapter, compact_request))
 
         # Raise the output floor only after compaction actually reclaimed context.
-        # This prevents overriding a legitimate context clamp if nothing was freed.
+        # This avoids overriding an intentional context clamp for ordinary continuations.
         if compact_chars < original_chars:
             current_max = max(1, int(result.get("max_tokens", 1) or 1))
             result["max_tokens"] = max(
