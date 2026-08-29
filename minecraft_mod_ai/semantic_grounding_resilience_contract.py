@@ -8,9 +8,9 @@ the full semantic payload as evidence and derives exact source offsets from the 
 clause. No fixed anchor-length or similarity cutoff decides whether a requirement survives.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
-import re
 from typing import Any
 
 _INSTALLED = False
@@ -20,7 +20,12 @@ _WORD = re.compile(r"\w+", re.UNICODE)
 
 
 def _terms(value: Any) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(match.group(0).casefold() for match in _WORD.finditer(str(value or ""))))
+    return tuple(
+        dict.fromkeys(
+            match.group(0).casefold()
+            for match in _WORD.finditer(str(value or ""))
+        )
+    )
 
 
 def _raw_span_from_projection(
@@ -50,7 +55,9 @@ def _semantic_support_terms(
     supported: list[str] = []
     for value in values:
         for term in _terms(value):
-            normalized = "".join(character for character in term if not character.isspace())
+            normalized = "".join(
+                character for character in term if not character.isspace()
+            )
             if normalized and normalized in text_form:
                 supported.append(normalized)
     return tuple(dict.fromkeys(supported))
@@ -65,6 +72,18 @@ def _ground_requirement(
     anchor = str(raw.get("source_anchor") or "").strip()
     if not anchor:
         return None
+
+    raw_start = text.find(anchor)
+    if raw_start >= 0 and text.find(anchor, raw_start + len(anchor)) < 0:
+        absolute_start = int(clause["char_start"]) + raw_start
+        return {
+            "source_quote": text[raw_start : raw_start + len(anchor)],
+            "source_start": absolute_start,
+            "source_end": absolute_start + len(anchor),
+            "grounding_method": "exact",
+            "grounding_similarity": 1.0,
+            "model_anchor": anchor,
+        }
 
     anchor_form, _ = semantic._similarity_projection(anchor)
     text_form, text_positions = semantic._similarity_projection(text)
@@ -117,7 +136,7 @@ def _ground_requirement(
         "source_quote": quote,
         "source_start": start,
         "source_end": end,
-        "grounding_method": "semantic_host_alignment",
+        "grounding_method": "fuzzy_host_alignment",
         "grounding_similarity": round(matcher.ratio(), 6),
         "model_anchor": anchor,
     }
@@ -133,69 +152,95 @@ def _normalize_requirement(
 
     path = f"$.requirements[{item_index}]"
     if not isinstance(raw, Mapping):
-        return None, semantic._diagnostic(
-            "REQ_SCHEMA_ITEM", path, raw, "semantic requirement object", path
-        ), None
+        return (
+            None,
+            semantic._diagnostic(
+                "REQ_SCHEMA_ITEM", path, raw, "semantic requirement object", path
+            ),
+            None,
+        )
 
     clause_index = raw.get("source_clause_index")
     if type(clause_index) is not int or clause_index not in clauses_by_index:
-        return None, semantic._diagnostic(
-            "REQ_SOURCE_CLAUSE",
-            path + ".source_clause_index",
-            clause_index,
-            f"one supplied host clause index: {sorted(clauses_by_index)}",
-            path,
-        ), None
+        return (
+            None,
+            semantic._diagnostic(
+                "REQ_SOURCE_CLAUSE",
+                path + ".source_clause_index",
+                clause_index,
+                f"one supplied host clause index: {sorted(clauses_by_index)}",
+                path,
+            ),
+            None,
+        )
 
     capability = str(raw.get("capability_id") or "").strip().casefold()
-    if not semantic._CAPABILITY_ID.fullmatch(capability) or semantic._OPAQUE_CAPABILITY.match(capability):
-        return None, semantic._diagnostic(
-            "REQ_CAPABILITY_ID",
-            path + ".capability_id",
-            raw.get("capability_id"),
-            "meaningful lower-case dotted semantic ID; no opaque semantic hash",
-            f"clause:{clause_index}",
-        ), clause_index
+    if not semantic._CAPABILITY_ID.fullmatch(
+        capability
+    ) or semantic._OPAQUE_CAPABILITY.match(capability):
+        return (
+            None,
+            semantic._diagnostic(
+                "REQ_CAPABILITY_ID",
+                path + ".capability_id",
+                raw.get("capability_id"),
+                "meaningful lower-case dotted semantic ID; no opaque semantic hash",
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
 
     semantic_statement = str(raw.get("semantic_statement") or "").strip()
     given = str(raw.get("given") or "").strip()
     when = str(raw.get("when") or "").strip()
     then = str(raw.get("then") or "").strip()
     if not semantic_statement or not (given and when and then):
-        return None, semantic._diagnostic(
-            "REQ_SEMANTIC_CONTRACT",
-            path,
-            {
-                "semantic_statement": raw.get("semantic_statement"),
-                "given": raw.get("given"),
-                "when": raw.get("when"),
-                "then": raw.get("then"),
-            },
-            "non-empty semantic_statement and concrete given/when/then strings",
-            f"clause:{clause_index}",
-        ), clause_index
+        return (
+            None,
+            semantic._diagnostic(
+                "REQ_SEMANTIC_CONTRACT",
+                path,
+                {
+                    "semantic_statement": raw.get("semantic_statement"),
+                    "given": raw.get("given"),
+                    "when": raw.get("when"),
+                    "then": raw.get("then"),
+                },
+                "non-empty semantic_statement and concrete given/when/then strings",
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
 
     grounding = _ground_requirement(semantic, clauses_by_index[clause_index], raw)
     if grounding is None:
-        return None, semantic._diagnostic(
-            "REQ_SOURCE_GROUNDING",
-            path + ".source_anchor",
-            raw.get("source_anchor"),
-            "a semantic locator supported by the authored clause; host owns exact offsets",
-            f"clause:{clause_index}",
-        ), clause_index
+        return (
+            None,
+            semantic._diagnostic(
+                "REQ_SOURCE_GROUNDING",
+                path + ".source_anchor",
+                raw.get("source_anchor"),
+                "a semantic locator supported by the authored clause; host owns exact offsets",
+                f"clause:{clause_index}",
+            ),
+            clause_index,
+        )
 
-    return {
-        "capability_id": capability,
-        "provenance_role": "explicit",
-        "source_clause_index": clause_index,
-        **grounding,
-        "semantic_statement": semantic_statement,
-        "derived_from": [],
-        "depends_on": [],
-        "derivation_reason": "",
-        "observable_behavior": {"given": given, "when": when, "then": then},
-    }, None, clause_index
+    return (
+        {
+            "capability_id": capability,
+            "provenance_role": "explicit",
+            "source_clause_index": clause_index,
+            **grounding,
+            "semantic_statement": semantic_statement,
+            "derived_from": [],
+            "depends_on": [],
+            "derivation_reason": "",
+            "observable_behavior": {"given": given, "when": when, "then": then},
+        },
+        None,
+        clause_index,
+    )
 
 
 def _evaluate_batch(
@@ -209,23 +254,35 @@ def _evaluate_batch(
     clauses_by_index = {int(clause["clause_index"]): clause for clause in clauses}
     all_indices = set(clauses_by_index)
     if not isinstance(payload, Mapping):
-        return [], set(all_indices), [semantic._diagnostic(
-            "REQ_SCHEMA_ROOT",
-            "$",
-            type(payload).__name__,
-            "JSON object with a requirements array",
-            "semantic_batch",
-        )]
+        return (
+            [],
+            set(all_indices),
+            [
+                semantic._diagnostic(
+                    "REQ_SCHEMA_ROOT",
+                    "$",
+                    type(payload).__name__,
+                    "JSON object with a requirements array",
+                    "semantic_batch",
+                )
+            ],
+        )
 
     raw_requirements = payload.get("requirements")
     if not isinstance(raw_requirements, list) or not raw_requirements:
-        return [], set(all_indices), [semantic._diagnostic(
-            "REQ_SCHEMA_REQUIREMENTS",
-            "$.requirements",
-            raw_requirements,
-            "non-empty requirements array",
-            "semantic_batch",
-        )]
+        return (
+            [],
+            set(all_indices),
+            [
+                semantic._diagnostic(
+                    "REQ_SCHEMA_REQUIREMENTS",
+                    "$.requirements",
+                    raw_requirements,
+                    "non-empty requirements array",
+                    "semantic_batch",
+                )
+            ],
+        )
 
     nodes: list[dict[str, Any]] = []
     invalid_clauses: set[int] = set()
@@ -253,13 +310,15 @@ def _evaluate_batch(
     covered = {int(node["source_clause_index"]) for node in nodes}
     for clause_index in sorted(all_indices - covered):
         invalid_clauses.add(clause_index)
-        diagnostics.append(semantic._diagnostic(
-            "REQ_SOURCE_COVERAGE",
-            "$.requirements",
-            clause_index,
-            "at least one explicit semantic requirement for every supplied clause",
-            f"clause:{clause_index}",
-        ))
+        diagnostics.append(
+            semantic._diagnostic(
+                "REQ_SOURCE_COVERAGE",
+                "$.requirements",
+                clause_index,
+                "at least one explicit semantic requirement for every supplied clause",
+                f"clause:{clause_index}",
+            )
+        )
 
     deduplicated: list[dict[str, Any]] = []
     seen: set[tuple[int, str, str]] = set()
