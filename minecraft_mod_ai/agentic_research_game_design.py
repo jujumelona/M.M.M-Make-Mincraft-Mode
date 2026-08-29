@@ -6,11 +6,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .central_research import normalize_research_brief, retrieve_domain_evidence
 from .planner_stage_trace import PlannerStageTrace
-from .research_coordinator import collect_technology_radar
 from .spec import SpecValidationError
-from .technology_radar import build_technology_radar
 
 _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -335,10 +332,25 @@ def _generate_section(
             section = payload.get("section")
             if not isinstance(section, dict):
                 section = {k: v for k, v in payload.items() if k in fields}
-            for f in fields:
-                if f not in section:
-                    section[f] = [] if f in {"core_loop", "progression", "acceptance_tests", "modules", "assets"} else ({} if f in {"combat", "mod_context", "art_direction"} else f"Generated {f}")
-            section = {f: section[f] for f in fields}
+            for field in fields:
+                if field not in section:
+                    section[field] = (
+                        []
+                        if field
+                        in {
+                            "core_loop",
+                            "progression",
+                            "acceptance_tests",
+                            "modules",
+                            "assets",
+                        }
+                        else (
+                            {}
+                            if field in {"combat", "mod_context", "art_direction"}
+                            else f"Generated {field}"
+                        )
+                    )
+            section = {field: section[field] for field in fields}
             _validate_section_types(section_id, section, fields)
             trace.record_attempt(
                 raw_output=raw,
@@ -365,7 +377,6 @@ def _generate_section(
             seen.add(state)
             prior_error = str(exc)
             prior_candidate = candidate
-            continue
 
 
 def _research_messages(
@@ -486,9 +497,6 @@ def _domain_evidence_slice(
     return {
         "official_rag": official_domain,
         "technology_radar": _research_receipt(deterministic.get("technology_radar")),
-        "ecosystem_discovery": _research_receipt(
-            deterministic.get("ecosystem_discovery")
-        ),
     }
 
 
@@ -502,16 +510,30 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
         note = payload if isinstance(payload, dict) else {}
 
     cleaned_claims = []
-    for c in note.get("claims", []):
-        if isinstance(c, dict):
-            c_text = str(c.get("claim") or c.get("text") or "Verified domain pattern").strip()
-            c_refs = [str(r).strip() for r in c.get("evidence_refs", []) if str(r).strip()]
-            cleaned_claims.append({"claim": c_text, "evidence_refs": c_refs})
-        elif isinstance(c, str) and c.strip():
-            cleaned_claims.append({"claim": c.strip(), "evidence_refs": []})
+    for claim in note.get("claims", []):
+        if isinstance(claim, dict):
+            claim_text = str(
+                claim.get("claim") or claim.get("text") or "Verified domain pattern"
+            ).strip()
+            claim_refs = [
+                str(ref).strip()
+                for ref in claim.get("evidence_refs", [])
+                if str(ref).strip()
+            ]
+            cleaned_claims.append(
+                {"claim": claim_text, "evidence_refs": claim_refs}
+            )
+        elif isinstance(claim, str) and claim.strip():
+            cleaned_claims.append({"claim": claim.strip(), "evidence_refs": []})
 
-    cleaned_gaps = [str(g).strip() for g in note.get("gaps", []) if str(g).strip()]
-    cleaned_queries = [str(q).strip() for q in note.get("next_queries", []) if str(q).strip()]
+    cleaned_gaps = [
+        str(gap).strip() for gap in note.get("gaps", []) if str(gap).strip()
+    ]
+    cleaned_queries = [
+        str(query).strip()
+        for query in note.get("next_queries", [])
+        if str(query).strip()
+    ]
     sufficient = bool(note.get("sufficient", True))
 
     return {
@@ -528,17 +550,24 @@ def _validate_section_types(
     section: Mapping[str, Any],
     fields: Sequence[str],
 ) -> None:
+    del section_id
     for field in fields:
         value = section.get(field)
         if field in {"title", "pitch"}:
             if not isinstance(value, str) or not value.strip():
                 section[field] = str(value or f"Generated {field}").strip()
-        elif field in {"core_loop", "progression", "acceptance_tests", "modules", "assets"}:
+        elif field in {
+            "core_loop",
+            "progression",
+            "acceptance_tests",
+            "modules",
+            "assets",
+        }:
             if not isinstance(value, list):
                 if isinstance(value, (str, int, float, bool)):
                     section[field] = [str(value).strip()] if str(value).strip() else []
                 elif isinstance(value, dict):
-                    section[field] = [str(v) for v in value.values()]
+                    section[field] = [str(item) for item in value.values()]
                 else:
                     section[field] = []
         elif field in {"combat", "mod_context", "art_direction"}:
@@ -546,7 +575,9 @@ def _validate_section_types(
                 if isinstance(value, str) and value.strip():
                     section[field] = {"summary": [value.strip()]}
                 elif isinstance(value, list):
-                    section[field] = {"items": [str(x) for x in value if str(x).strip()]}
+                    section[field] = {
+                        "items": [str(item) for item in value if str(item).strip()]
+                    }
                 else:
                     section[field] = {}
     for field in ("combat", "mod_context"):
@@ -556,14 +587,16 @@ def _validate_section_types(
             continue
         cleaned_map: dict[str, list[str]] = {}
         for key, items in list(value.items()):
-            k_str = str(key).strip() or "general"
+            key_text = str(key).strip() or "general"
             if isinstance(items, list):
-                c_items = [str(item).strip() for item in items if str(item).strip()]
-                cleaned_map[k_str] = c_items if c_items else [k_str]
+                cleaned_items = [
+                    str(item).strip() for item in items if str(item).strip()
+                ]
+                cleaned_map[key_text] = cleaned_items if cleaned_items else [key_text]
             elif isinstance(items, str) and items.strip():
-                cleaned_map[k_str] = [items.strip()]
+                cleaned_map[key_text] = [items.strip()]
             else:
-                cleaned_map[k_str] = [str(items)]
+                cleaned_map[key_text] = [str(items)]
         section[field] = cleaned_map
 
 
