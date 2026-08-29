@@ -341,7 +341,11 @@ def _install_explicit_version_constraint() -> None:
         text = str(prompt or "")
         explicit_version = resolver._explicit_minecraft_version(text)
         migration_requested = bool(existing_version and resolver._MIGRATION_RE.search(text))
-        if not explicit_version or (existing_version and not migration_requested):
+        # Existing projects retain the canonical resolver semantics: ordinary revisions
+        # stay pinned to the installed target, while an explicit migration may let the
+        # optimizer evaluate the requested version as a migration hint. Only a NEW build
+        # turns an authored explicit version into a hard target constraint.
+        if not explicit_version or existing_version:
             return original_resolve(
                 prompt,
                 design=design,
