@@ -138,9 +138,6 @@ def finalize_runtime() -> None:
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
-        from .semantic_grounding_resilience_contract import (
-            install as install_semantic_grounding_resilience,
-        )
         from .semantic_requirement_authority import install_semantic_requirement_authority
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .structured_repair_contract import install_structured_repair_contract
@@ -202,7 +199,6 @@ def finalize_runtime() -> None:
         # post-finalize package-init sequence while moving composition under one owner.
         install_evidence_request_guard()
         install_semantic_requirement_authority()
-        install_semantic_grounding_resilience()
         install_planner_graph_integrity()
         install_deep_design_execution()
         install_evidence_obligation_contract()
