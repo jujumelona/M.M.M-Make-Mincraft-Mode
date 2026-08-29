@@ -19,6 +19,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
+from .central_research import normalize_research_brief, retrieve_domain_evidence
+from .research_coordinator import collect_technology_radar
+from .technology_radar import build_technology_radar
+
 
 _DETERMINISTIC_STAGES = (
     "official_rag",
@@ -261,7 +265,7 @@ def collect_design_research(
     from . import agentic_pre_design_rag as project_rag
     from . import agentic_research_game_design as agentic
 
-    research_brief = agentic.normalize_research_brief(
+    research_brief = normalize_research_brief(
         prompt,
         {"title": "pre-design research"},
     )
@@ -274,15 +278,15 @@ def collect_design_research(
         thread_name_prefix="mmm-design-evidence",
     ) as executor:
         futures["official_rag"] = executor.submit(
-            agentic.retrieve_domain_evidence,
+            retrieve_domain_evidence,
             research_brief,
         )
         futures["technology_radar"] = executor.submit(
-            agentic.collect_technology_radar,
+            collect_technology_radar,
             prompt,
             research_brief,
             page_size=50,
-            page_builder=agentic.build_technology_radar,
+            page_builder=build_technology_radar,
         )
         futures["forced_project_rag"] = executor.submit(
             project_rag._forced_rag_bundle,
