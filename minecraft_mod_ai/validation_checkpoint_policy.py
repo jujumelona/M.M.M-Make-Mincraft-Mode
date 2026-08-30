@@ -112,6 +112,27 @@ def _nonnegative_int(value: Any) -> int | None:
     return value
 
 
+def _complete_source_receipt(value: Mapping[str, Any]) -> bool:
+    checks_run = _nonnegative_int(value.get("checks_run"))
+    findings = value.get("findings")
+    if (
+        value.get("status") != "PASS"
+        or checks_run is None
+        or checks_run <= 0
+        or not isinstance(findings, list)
+    ):
+        return False
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            return False
+        severity = finding.get("severity")
+        if not isinstance(severity, str):
+            return False
+        if severity.casefold() in {"error", "fatal"}:
+            return False
+    return True
+
+
 def _diagnostic_sort_key(value: Mapping[str, Any]) -> str:
     return json.dumps(
         dict(value),
@@ -215,7 +236,7 @@ def cached_validation_is_reusable(checkpoint_id: str, value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     if checkpoint_id == "validate-source":
-        return value.get("status") == "PASS"
+        return _complete_source_receipt(value)
     if checkpoint_id == "validate-jdt":
         return _complete_jdt_receipt(value)
     return False
