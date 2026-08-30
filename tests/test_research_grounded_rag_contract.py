@@ -220,6 +220,7 @@ def test_bundle_augmentation_keeps_external_source_content(monkeypatch) -> None:
         payload,
         versions=(),
         local_index={"status": "available", "index_path": "/tmp/index.db"},
+        external_queries=("mob spawn",),
     )
 
     query = result["domains"][0]["queries"][0]
