@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,6 +20,14 @@ from minecraft_mod_ai.diagnostics import (
     render_failure_summary,
 )
 
+if __package__:
+    from .audit_stream_redactor import StreamingRedactor
+else:
+    from audit_stream_redactor import StreamingRedactor
+
+_OUTPUT_CHUNK_CHARS = 64 * 1024
+_DEFAULT_TIMEOUT_SECONDS = 2400
+
 
 @dataclass(frozen=True)
 class JUnitAnalysis:
@@ -29,8 +39,25 @@ class JUnitAnalysis:
     affected: dict[str, list[str]]
 
 
+def _environment_secret_values() -> tuple[str, ...]:
+    values: list[str] = []
+    for name, secret in os.environ.items():
+        upper = name.upper()
+        if secret and any(
+            marker in upper
+            for marker in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "COOKIE")
+        ):
+            values.append(secret)
+    return tuple(dict.fromkeys(values))
+
+
+def _sanitize_text(value: object) -> str:
+    redactor = StreamingRedactor(_environment_secret_values())
+    return redactor.feed(str(value)) + redactor.finish()
+
+
 def _compact_message(value: str, *, limit: int = 1200) -> str:
-    text = " ".join(value.split())
+    text = " ".join(_sanitize_text(value).split())
     if not text:
         return "pytest test failed"
     if len(text) <= limit:
@@ -73,8 +100,8 @@ def analyze_junit(path: Path) -> JUnitAnalysis:
             failed += 1
         else:
             errors += 1
-        classname = str(element.attrib.get("classname") or "pytest")
-        name = str(element.attrib.get("name") or "unknown")
+        classname = _sanitize_text(str(element.attrib.get("classname") or "pytest"))
+        name = _sanitize_text(str(element.attrib.get("name") or "unknown"))
         nodeid = f"{classname}::{name}"
         message = _compact_message(
             str(node.attrib.get("message") or node.text or "pytest test failed")
@@ -142,12 +169,13 @@ def render_junit_failure_summary(path: Path) -> str:
 
 def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run pytest while preserving raw output as an artifact and printing compact causal diagnostics."
+        description="Run pytest while preserving redacted raw output and printing compact causal diagnostics."
     )
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--junit", type=Path, required=True)
     parser.add_argument("--maxfail", type=int, default=25)
     parser.add_argument("--durations", type=int, default=15)
+    parser.add_argument("--timeout-seconds", type=int, default=_DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("tests", nargs="+")
     return parser.parse_args(argv)
 
@@ -167,10 +195,10 @@ def _render_internal_failure(
             operation=operation,
             category=category,
             cause_type=cause_type,
-            cause=cause,
-            retryable=False,
+            cause=_compact_message(cause),
+            retryable=category is FailureCategory.TRANSIENT,
             final_status=FailureStatus.FAILED,
-            fallback=fallback,
+            fallback=_compact_message(fallback),
         )
     )
     return render_failure_summary(collector.groups())
@@ -196,7 +224,7 @@ def _prepare_output_directories(log_path: Path, junit_path: Path) -> bool:
             _render_internal_failure(
                 operation="prepare diagnostic output directories",
                 cause_type=type(exc).__name__,
-                cause=_compact_message(str(exc)),
+                cause=str(exc),
                 fallback=f"log={log_path}; junit={junit_path}",
             )
         )
@@ -216,12 +244,83 @@ def _remove_stale_outputs(log_path: Path, junit_path: Path) -> bool:
                 _render_internal_failure(
                     operation=operation,
                     cause_type=type(exc).__name__,
-                    cause=_compact_message(str(exc)),
+                    cause=str(exc),
                     fallback="pytest was not started; no current raw evidence is available",
                 )
             )
             return False
     return True
+
+
+def _redact_file(source: Path, destination: Path) -> None:
+    redactor = StreamingRedactor(_environment_secret_values())
+    with source.open("r", encoding="utf-8", errors="replace") as source_handle, destination.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as destination_handle:
+        while True:
+            chunk = source_handle.read(_OUTPUT_CHUNK_CHARS)
+            if not chunk:
+                break
+            safe = redactor.feed(chunk)
+            if safe:
+                destination_handle.write(safe)
+        final = redactor.finish()
+        if final:
+            destination_handle.write(final)
+
+
+def _redact_file_in_place(path: Path) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".redacted.tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+        _redact_file(path, temporary_path)
+        temporary_path.replace(path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _capture_pytest(command: list[str], log_path: Path, *, timeout_seconds: int) -> tuple[int | None, BaseException | None]:
+    temporary_path: Path | None = None
+    try:
+        log_path.write_text("", encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            errors="replace",
+            dir=log_path.parent,
+            prefix=".pytest-output-",
+            suffix=".log",
+            delete=False,
+        ) as raw_handle:
+            temporary_path = Path(raw_handle.name)
+            try:
+                process = subprocess.run(
+                    command,
+                    stdout=raw_handle,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    timeout=None if timeout_seconds <= 0 else timeout_seconds,
+                )
+                returncode: int | None = process.returncode
+                failure: BaseException | None = None
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                returncode = None
+                failure = exc
+        _redact_file(temporary_path, log_path)
+        return returncode, failure
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -257,23 +356,60 @@ def main(argv: Iterable[str] | None = None) -> int:
     command.extend(args.tests)
 
     try:
-        with args.log.open("w", encoding="utf-8", errors="replace") as log_handle:
-            process = subprocess.run(
-                command,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
+        process_returncode, launch_failure = _capture_pytest(
+            command,
+            args.log,
+            timeout_seconds=args.timeout_seconds,
+        )
     except OSError as exc:
         print(
             _render_internal_failure(
-                operation="launch pytest",
+                operation="preserve redacted pytest output",
                 cause_type=type(exc).__name__,
-                cause=_compact_message(str(exc)),
-                fallback=f"raw output target={args.log}",
+                cause=str(exc),
+                fallback=f"redacted output target={args.log}",
             )
         )
         return 1
+
+    if launch_failure is not None:
+        if isinstance(launch_failure, subprocess.TimeoutExpired):
+            print(
+                _render_internal_failure(
+                    operation="run pytest",
+                    cause_type="TimeoutExpired",
+                    cause=f"pytest exceeded timeout={args.timeout_seconds}s",
+                    fallback=f"redacted pytest output preserved at {args.log}",
+                    category=FailureCategory.TRANSIENT,
+                )
+            )
+            print(f"RAW OUTPUT {args.log}")
+            return 124
+        print(
+            _render_internal_failure(
+                operation="launch pytest",
+                cause_type=type(launch_failure).__name__,
+                cause=str(launch_failure),
+                fallback=f"redacted output target={args.log}",
+            )
+        )
+        return 1
+
+    assert process_returncode is not None
+
+    if args.junit.is_file():
+        try:
+            _redact_file_in_place(args.junit)
+        except OSError as exc:
+            print(
+                _render_internal_failure(
+                    operation="redact JUnit",
+                    cause_type=type(exc).__name__,
+                    cause=str(exc),
+                    fallback=f"redacted pytest output preserved at {args.log}",
+                )
+            )
+            return _safe_exit_code(process_returncode)
 
     analysis: JUnitAnalysis | None = None
     if args.junit.is_file():
@@ -284,13 +420,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                 _render_internal_failure(
                     operation="parse JUnit",
                     cause_type=type(exc).__name__,
-                    cause=_compact_message(str(exc)),
-                    fallback=f"raw pytest output preserved at {args.log}",
+                    cause=str(exc),
+                    fallback=f"redacted pytest output preserved at {args.log}",
                 )
             )
             print(f"RAW OUTPUT {args.log}")
             print(f"JUNIT {args.junit}")
-            return _safe_exit_code(process.returncode)
+            return _safe_exit_code(process_returncode)
 
     if analysis is None:
         print(
@@ -298,14 +434,14 @@ def main(argv: Iterable[str] | None = None) -> int:
                 operation="produce JUnit",
                 cause_type="MissingJUnit",
                 cause="pytest did not produce the requested JUnit report for this run",
-                fallback=f"raw pytest output preserved at {args.log}",
+                fallback=f"redacted pytest output preserved at {args.log}",
             )
         )
         print(f"RAW OUTPUT {args.log}")
         print(f"JUNIT {args.junit}")
-        return _safe_exit_code(process.returncode)
+        return _safe_exit_code(process_returncode)
 
-    if process.returncode == 0:
+    if process_returncode == 0:
         if analysis.failed or analysis.errors:
             print(
                 _render_internal_failure(
@@ -315,7 +451,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                         f"pytest exit=0 but JUnit reports failed={analysis.failed} "
                         f"errors={analysis.errors}"
                     ),
-                    fallback=f"raw pytest output preserved at {args.log}",
+                    fallback=f"redacted pytest output preserved at {args.log}",
                 )
             )
             return 1
@@ -325,7 +461,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     operation="validate JUnit evidence",
                     cause_type="EmptyJUnit",
                     cause="pytest exited successfully but JUnit contains zero testcases",
-                    fallback=f"raw pytest output preserved at {args.log}",
+                    fallback=f"redacted pytest output preserved at {args.log}",
                 )
             )
             return 1
@@ -345,7 +481,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     print(f"RAW OUTPUT {args.log}")
     print(f"JUNIT {args.junit}")
-    return _safe_exit_code(process.returncode)
+    return _safe_exit_code(process_returncode)
 
 
 if __name__ == "__main__":
