@@ -59,6 +59,7 @@ class ReuseProofReceipt:
     adaptations_applied: tuple[AdapterReceipt, ...]
     verified_capabilities: tuple[str, ...]
     residual_capabilities: tuple[str, ...]
+    dependency_receipts: tuple[Mapping[str, Any], ...] = ()
     verified_artifacts: tuple[str, ...] = ()
     residual_artifacts: tuple[str, ...] = ()
     verified_symbols: tuple[str, ...] = ()
@@ -89,6 +90,7 @@ class ReuseProofReceipt:
             "adaptations_applied": [a.to_dict() for a in self.adaptations_applied],
             "verified_capabilities": list(self.verified_capabilities),
             "residual_capabilities": list(self.residual_capabilities),
+            "dependency_receipts": [dict(item) for item in self.dependency_receipts],
             "verified_artifacts": list(self.verified_artifacts),
             "residual_artifacts": list(self.residual_artifacts),
             "verified_symbols": list(self.verified_symbols),
@@ -992,6 +994,9 @@ def execute_reuse_proof(
         adaptations_applied=tuple(all_receipts),
         verified_capabilities=verified_caps,
         residual_capabilities=residual_caps,
+        dependency_receipts=tuple(
+            receipt.to_dict() for receipt in resolved_dependencies
+        ),
         verified_artifacts=verified_artifacts,
         residual_artifacts=residual_artifacts,
         verified_symbols=verified_symbols,
