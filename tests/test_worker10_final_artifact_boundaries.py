@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import zipfile
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from minecraft_mod_ai.final_artifact import (
     _write_json_receipt,
     append_github_outputs,
     sha256_file,
+    write_downloadable_bundle,
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.validator import validate_jar
@@ -87,6 +89,88 @@ def test_github_output_rejects_unsafe_artifact_name(tmp_path: Path) -> None:
                 "artifact_sha256": "sha256:" + "0" * 64,
             },
         )
+
+
+def test_github_output_rehashes_artifact_and_requires_receipt(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    artifact = bundle_dir / "mod.jar"
+    artifact.write_bytes(b"jar")
+    digest = sha256_file(artifact)
+    output = tmp_path / "github-output.txt"
+
+    with pytest.raises(FinalArtifactError, match="SHA-256"):
+        append_github_outputs(
+            output,
+            {
+                "path": str(bundle_dir),
+                "artifact": "mod.jar",
+                "artifact_sha256": "sha256:" + "0" * 64,
+            },
+        )
+
+    with pytest.raises(FinalArtifactError, match="receipt"):
+        append_github_outputs(
+            output,
+            {
+                "path": str(bundle_dir),
+                "artifact": "mod.jar",
+                "artifact_sha256": digest,
+            },
+        )
+
+    (bundle_dir / "artifact-receipt.json").write_text("{}\n", encoding="utf-8")
+    append_github_outputs(
+        output,
+        {
+            "path": str(bundle_dir),
+            "artifact": "mod.jar",
+            "artifact_sha256": digest,
+        },
+    )
+    values = dict(
+        line.split("=", 1)
+        for line in output.read_text(encoding="utf-8").splitlines()
+    )
+    assert values["artifact_sha256"] == digest
+    assert Path(values["artifact_path"]) == artifact.resolve()
+    assert Path(values["receipt_path"]) == (bundle_dir / "artifact-receipt.json").resolve()
+
+
+@pytest.mark.parametrize("bad_receipt", ["build", "coverage", "runtime"])
+def test_bundle_rejects_receipt_sha_mismatch(
+    tmp_path: Path,
+    bad_receipt: str,
+) -> None:
+    artifact = tmp_path / "mod.jar"
+    artifact.write_bytes(b"jar")
+    digest = sha256_file(artifact)
+    wrong = "sha256:" + "0" * 64
+    artifact_receipt = {
+        "status": "PASS",
+        "artifact_path": str(artifact),
+        "sha256": digest,
+    }
+    build = {"status": "PASS", "artifact_sha256": digest}
+    coverage = {"status": "PASS", "artifact_sha256": digest}
+    runtime = {"status": "NOT_REQUIRED", "artifact_sha256": digest}
+    if bad_receipt == "build":
+        build["artifact_sha256"] = wrong
+    elif bad_receipt == "coverage":
+        coverage["artifact_sha256"] = wrong
+    else:
+        runtime["artifact_sha256"] = wrong
+
+    with pytest.raises(FinalArtifactError, match="final artifact"):
+        write_downloadable_bundle(
+            tmp_path / "bundle",
+            artifact_receipt=artifact_receipt,
+            requirement_coverage=coverage,
+            reuse_manifest={},
+            build_receipt=build,
+            runtime_receipt=runtime,
+        )
+    assert not (tmp_path / "bundle").exists()
 
 
 def test_final_jar_metadata_rejects_windows_drive_entry(tmp_path: Path) -> None:
