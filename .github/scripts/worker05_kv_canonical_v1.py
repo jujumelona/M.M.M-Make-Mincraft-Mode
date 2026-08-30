@@ -14,6 +14,15 @@ def replace_exact(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def replace_expected(path: str, old: str, new: str, *, expected: int) -> None:
+    target = ROOT / path
+    text = target.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} matches, found {count}")
+    target.write_text(text.replace(old, new), encoding="utf-8")
+
+
 # KV correctness is part of the decode-speed owner's semantics, not a runtime wrapper.
 replace_exact(
     "minecraft_mod_ai/llama_decode_speed_contract.py",
@@ -36,7 +45,36 @@ replace_exact(
     '''def _probe_kv_types(\n    autotune: Any,\n    binary: str,\n    model_path: str,\n    config: Any,\n    request: Any,\n    candidates: tuple[str, ...],\n) -> tuple[str, list[dict[str, Any]]]:\n    candidates = _precision_reference_order(candidates)\n    bench_request = autotune._compact_benchmark_request(request)\n''',
 )
 
-# Runtime bootstrap no longer composes the deleted KV monkeypatch shim.
+# Make cache parsing fail only for expected cache corruption/I/O conditions, rather than
+# swallowing arbitrary programming errors. A non-object cache is simply invalid.
+replace_exact(
+    "minecraft_mod_ai/llama_decode_speed_contract.py",
+    '''    try:\n        payload = json.loads(_kv_cache_path(autotune).read_text(encoding="utf-8"))\n    except Exception:\n        return None\n    selected = str(payload.get("selected", "")).strip().lower()\n''',
+    '''    try:\n        payload = json.loads(_kv_cache_path(autotune).read_text(encoding="utf-8"))\n    except (OSError, UnicodeError, json.JSONDecodeError):\n        return None\n    if not isinstance(payload, dict):\n        return None\n    selected = str(payload.get("selected", "")).strip().lower()\n''',
+)
+
+# Probe loops intentionally isolate one hardware/runtime candidate from the next. Those
+# boundaries must catch arbitrary backend failures, but make that policy explicit to Ruff.
+replace_expected(
+    "minecraft_mod_ai/llama_decode_speed_contract.py",
+    "        except Exception as exc:\n",
+    "        except Exception as exc:  # noqa: BLE001 - isolate optional benchmark candidate failures\n",
+    expected=1,
+)
+replace_expected(
+    "minecraft_mod_ai/llama_decode_speed_contract.py",
+    "            except Exception as exc:\n",
+    "            except Exception as exc:  # noqa: BLE001 - isolate optional KV candidate failures\n",
+    expected=1,
+)
+
+# Runtime bootstrap no longer composes the deleted KV monkeypatch shim or imports its
+# canonical owner merely for wrapper injection.
+replace_exact(
+    "minecraft_mod_ai/runtime_bootstrap.py",
+    '        llama_decode_speed_contract,\n',
+    "",
+)
 replace_exact(
     "minecraft_mod_ai/runtime_bootstrap.py",
     '    from .llama_kv_correctness_contract import install as install_kv_correctness\n',
@@ -46,6 +84,11 @@ replace_exact(
     "minecraft_mod_ai/runtime_bootstrap.py",
     '    install_kv_correctness(llama_decode_speed_contract)\n',
     "",
+)
+replace_exact(
+    "minecraft_mod_ai/runtime_bootstrap.py",
+    '    from .llama_completion_liveness_contract import install as install_completion_liveness\n',
+    '''    from .llama_completion_liveness_contract import (\n        install as install_completion_liveness,\n    )\n''',
 )
 
 shim = ROOT / "minecraft_mod_ai/llama_kv_correctness_contract.py"
