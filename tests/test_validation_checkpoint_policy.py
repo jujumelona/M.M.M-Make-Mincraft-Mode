@@ -15,11 +15,23 @@ def test_validation_resume_reuses_only_stable_exact_results() -> None:
     assert str(scoped["_mmm_validation_implementation"]).startswith("sha256:")
     assert validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-source",
+        {"status": "PASS", "checks_run": 3, "findings": []},
+    )
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-source",
         {"status": "PASS"},
     )
     assert not validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-source",
-        {"status": "FAIL"},
+        {
+            "status": "PASS",
+            "checks_run": 3,
+            "findings": [{"severity": "error", "code": "BAD"}],
+        },
+    )
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-source",
+        {"status": "FAIL", "checks_run": 3, "findings": []},
     )
 
 
