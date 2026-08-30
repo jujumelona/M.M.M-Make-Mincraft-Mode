@@ -140,9 +140,6 @@ def finalize_runtime() -> None:
         from .semantic_requirement_authority import install_semantic_requirement_authority
         from .semantic_single_pass_contract import install as install_semantic_single_pass
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
-        from .structured_subtree_repair_dispatch_contract import (
-            install_structured_subtree_repair_dispatch_contract,
-        )
         from .target_grounding_contract import install_target_grounding_contract
         from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import (
@@ -203,9 +200,9 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        # Bind schema-constrained field generation directly; repair contracts are not
-        # installed on the normal planner path.
-        install_structured_subtree_repair_dispatch_contract()
+        # Game-design section generation is owned directly by
+        # agentic_research_game_design._generate_section. Do not install a second
+        # field/subtree generator over that live path.
         install_implementation_kind_boundary(
             complete_spec_module=complete_spec,
             support_module=complete_orchestrator_support,

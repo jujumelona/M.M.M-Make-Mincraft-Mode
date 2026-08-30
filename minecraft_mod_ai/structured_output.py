@@ -49,6 +49,22 @@ def _sha256_text(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_DESIGN_SECTION_FIELDS = frozenset(
+    {
+        "title",
+        "pitch",
+        "core_loop",
+        "progression",
+        "combat",
+        "mod_context",
+        "modules",
+        "assets",
+        "acceptance_tests",
+        "art_direction",
+    }
+)
+
+
 def _parser_owned_research_schema(schema: Mapping[str, Any] | None) -> bool:
     """Identify the intentionally loose envelope whose semantics are host-parser owned."""
 
@@ -66,6 +82,34 @@ def _parser_owned_research_schema(schema: Mapping[str, Any] | None) -> bool:
         and not note.get("required")
         and note.get("additionalProperties") is True
     )
+
+
+def _parser_owned_design_section_schema(schema: Mapping[str, Any] | None) -> bool:
+    """Recognize section envelopes whose semantic normalization is owned downstream.
+
+    Game-design section workers deliberately accept semantically equivalent model shapes
+    (for example a list of combat mechanics) and normalize them in the section owner before
+    final game-design validation. Transport validation must therefore verify only that the
+    model returned a JSON object; it must not reject a recoverable semantic shape first.
+    """
+
+    if not isinstance(schema, Mapping) or schema.get("type") != "object":
+        return False
+    required = schema.get("required")
+    if required != ["section"]:
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or set(properties) != {"section"}:
+        return False
+    section = properties.get("section")
+    if not isinstance(section, Mapping) or section.get("type") != "object":
+        return False
+    section_properties = section.get("properties")
+    section_required = section.get("required")
+    if not isinstance(section_properties, Mapping) or not isinstance(section_required, list):
+        return False
+    fields = set(str(key) for key in section_properties)
+    return bool(fields) and fields.issubset(_DESIGN_SECTION_FIELDS) and set(section_required) == fields
 
 
 def _extract_embedded_object(output: str) -> dict[str, Any] | None:
@@ -162,7 +206,12 @@ def _emit_validation_failure(
     )
 
 
-def _emit_parser_owned_recovery(output: str, value: Mapping[str, Any]) -> None:
+def _emit_parser_owned_recovery(
+    output: str,
+    value: Mapping[str, Any],
+    *,
+    authority: str,
+) -> None:
     print(
         "MODEL STRUCTURED OUTPUT RECOVERED: "
         + json.dumps(
@@ -172,7 +221,7 @@ def _emit_parser_owned_recovery(output: str, value: Mapping[str, Any]) -> None:
                 "output_chars": len(output),
                 "output": output,
                 "recovered_value": dict(value),
-                "authority": "research_host_parser",
+                "authority": authority,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -206,35 +255,41 @@ def validate_structured_output(
     response_format: str,
     response_schema: Mapping[str, Any] | None,
 ) -> str:
-    """Validate transport shape while leaving research semantics to its host parser."""
+    """Validate transport shape while leaving parser-owned semantics to their owner."""
 
     if response_schema is None and response_format != "json":
         return output
     if response_schema is not None and not isinstance(response_schema, Mapping):
         raise ValueError("response_schema must be a mapping")
 
-    parser_owned = _parser_owned_research_schema(response_schema)
+    parser_owned_research = _parser_owned_research_schema(response_schema)
+    parser_owned_section = _parser_owned_design_section_schema(response_schema)
     try:
         value = json.loads(output)
     except json.JSONDecodeError as exc:
-        if parser_owned:
+        if parser_owned_research or parser_owned_section:
             embedded = _extract_embedded_object(output)
             if embedded is not None:
-                canonical = _canonical_research_envelope(embedded)
-                errors = _schema_errors(canonical, response_schema)
-                if not errors:
-                    _emit_parser_owned_recovery(output, canonical)
-                    return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
-                _emit_validation_failure(
-                    output=output,
-                    errors=errors,
-                    response_format=response_format,
-                    response_schema=response_schema,
-                )
-                raise StructuredOutputValidationError(
-                    output=output,
-                    errors=errors,
-                ) from exc
+                if parser_owned_research:
+                    canonical = _canonical_research_envelope(embedded)
+                    errors = _schema_errors(canonical, response_schema)
+                    if errors:
+                        _emit_validation_failure(
+                            output=output,
+                            errors=errors,
+                            response_format=response_format,
+                            response_schema=response_schema,
+                        )
+                        raise StructuredOutputValidationError(
+                            output=output,
+                            errors=errors,
+                        ) from exc
+                    authority = "research_host_parser"
+                else:
+                    canonical = dict(embedded)
+                    authority = "game_design_section_owner"
+                _emit_parser_owned_recovery(output, canonical, authority=authority)
+                return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
         errors = (
             f"$: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
         )
@@ -252,7 +307,7 @@ def validate_structured_output(
     if response_schema is None:
         return output
 
-    if parser_owned and isinstance(value, Mapping):
+    if parser_owned_research and isinstance(value, Mapping):
         canonical = _canonical_research_envelope(value)
         errors = _schema_errors(canonical, response_schema)
         if errors:
@@ -267,6 +322,21 @@ def validate_structured_output(
                 errors=errors,
             )
         return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+
+    if parser_owned_section:
+        if not isinstance(value, Mapping):
+            errors = ("$: game-design section transport must be a JSON object",)
+            _emit_validation_failure(
+                output=output,
+                errors=errors,
+                response_format=response_format,
+                response_schema=response_schema,
+            )
+            raise StructuredOutputValidationError(output=output, errors=errors)
+        # The downstream section owner normalizes semantic aliases/types and the final
+        # game-design validator owns acceptance. Do not pre-empt it with a duplicate
+        # transport-layer semantic validator.
+        return json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
 
     errors = _schema_errors(value, response_schema)
     if errors:
