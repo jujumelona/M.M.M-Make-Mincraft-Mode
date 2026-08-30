@@ -53,6 +53,49 @@ def _is_english_retrieval_query(value: str) -> bool:
     return 2 <= len(words) <= 24
 
 
+def _semantic_interpretation_messages(
+    clauses: Sequence[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    """Interpret noisy/multilingual authored text into atomic gameplay semantics."""
+
+    system = (
+        "Interpret the supplied authored Minecraft-mod request semantically, even when it "
+        "contains typos, missing punctuation, repeated spaces, shorthand, or a language "
+        "different from English. The host owns the original UTF-8 text and exact offsets: "
+        "never rewrite provenance, but normalize the MEANING in semantic_statement and "
+        "capability_id. Return every independently observable player-facing behavior. "
+        "Split long run-on clauses by actions, state changes, resource flows, construction, "
+        "purchases, upgrades, travel stages, encounters, exploration, and progression. "
+        "Do not add an umbrella requirement merely because several concrete leaves share a "
+        "theme; add a mode/integration requirement only when that mode itself has distinct "
+        "observable behavior. Preserve authored causal and temporal structure inside "
+        "Given/When/Then: if the request says one outcome enables another, make the latter "
+        "behavior's Given condition state that prerequisite clearly. This semantic pass does "
+        "not emit graph edges; a later host-bound planner derives edges only between these "
+        "approved requirements. capability_id must be a concise lower-case dotted English "
+        "gameplay semantic identifier, not a translation of a typo and not an implementation "
+        "primitive. source_anchor must remain a short locator supported by the ORIGINAL host "
+        "clause, including its original language/typo when necessary for grounding. Do not "
+        "choose APIs, classes, networking, persistence, UI architecture, libraries, donor "
+        "mods, or other implementation alternatives unless explicitly authored. Return one "
+        "concrete Given/When/Then contract per independent behavior. Do not omit behavior "
+        "just because the request has no punctuation."
+    )
+    payload = {
+        "host_owned_clauses": [
+            {
+                "source_clause_index": int(clause["clause_index"]),
+                "text": str(clause["text"]),
+            }
+            for clause in clauses
+        ],
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
 def _retrieval_plan_schema(requirement_ids: Sequence[str]) -> dict[str, Any]:
     ids = list(dict.fromkeys(str(item) for item in requirement_ids if str(item)))
     return {
@@ -512,6 +555,8 @@ def install() -> None:
     from . import pre_design_research_pipeline as pipeline
     from . import semantic_requirement_authority as semantic
 
+    semantic._model_messages = _semantic_interpretation_messages
+
     current_builder = guard.build_authoritative_request_catalog
     if not getattr(current_builder, _RETRIEVAL_MARKER, False):
         def build_catalog(prompt: str, router: Any | None = None) -> dict[str, Any]:
@@ -583,5 +628,6 @@ __all__ = [
     "_approved_research_normalize",
     "_compile_knowledge_plan_with_active_catalog",
     "_enrich_catalog_with_retrieval_plan",
+    "_semantic_interpretation_messages",
     "install",
 ]
