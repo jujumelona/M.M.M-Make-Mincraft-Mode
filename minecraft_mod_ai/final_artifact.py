@@ -8,6 +8,7 @@ here. A filename heuristic is never sufficient authority for selecting a mod JAR
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import tomllib
@@ -23,6 +24,7 @@ _AUXILIARY_JAR = re.compile(
 )
 _SHA256 = re.compile(r"^(?:sha256:)?([0-9a-fA-F]{64})$")
 _MOD_ID = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:/")
 _METADATA_BY_LOADER = {
     "fabric": "fabric.mod.json",
     "forge": "META-INF/mods.toml",
@@ -54,14 +56,91 @@ class FinalModArtifactReceipt:
         return asdict(self)
 
 
+def _lexical_absolute(value: str | Path) -> Path:
+    return Path(os.path.abspath(os.fspath(Path(value).expanduser())))
+
+
+def _has_symlink_hop(path: Path) -> bool:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _safe_existing_file(value: str | Path) -> Path | None:
+    raw = _lexical_absolute(value)
+    if _has_symlink_hop(raw):
+        return None
+    try:
+        resolved = raw.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _safe_existing_directory(value: str | Path) -> Path | None:
+    raw = _lexical_absolute(value)
+    if _has_symlink_hop(raw):
+        return None
+    try:
+        resolved = raw.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_dir() else None
+
+
+def _ensure_safe_parent(path: Path) -> None:
+    current = path.parent
+    while not current.exists():
+        if current.is_symlink():
+            raise FinalArtifactError(f"Output parent path is unsafe: {current}")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    if _has_symlink_hop(current) or not current.is_dir():
+        raise FinalArtifactError(f"Output parent path is unsafe: {current}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _has_symlink_hop(path.parent):
+        raise FinalArtifactError(f"Output parent path is unsafe: {path.parent}")
+
+
+def _safe_write_target(value: str | Path) -> Path:
+    target = _lexical_absolute(value)
+    if _has_symlink_hop(target):
+        raise FinalArtifactError(f"Output target is unsafe: {target}")
+    if target.exists():
+        if not target.is_file():
+            raise FinalArtifactError(f"Output target is not a regular file: {target}")
+        return target
+    _ensure_safe_parent(target)
+    return target
+
+
+def _safe_new_directory_target(value: str | Path) -> Path:
+    target = _lexical_absolute(value)
+    if target.exists() or target.is_symlink():
+        raise FinalArtifactError(f"Download bundle path already exists: {target}")
+    _ensure_safe_parent(target)
+    return target
+
+
 def sha256_file(path: str | Path) -> str:
-    target = Path(path).expanduser().resolve()
-    if not target.is_file() or target.is_symlink():
-        raise FinalArtifactError(f"Artifact is missing or unsafe: {target}")
+    target = _safe_existing_file(path)
+    if target is None:
+        raise FinalArtifactError(f"Artifact is missing or unsafe: {_lexical_absolute(path)}")
     digest = hashlib.sha256()
-    with target.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    try:
+        with target.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise FinalArtifactError(f"Artifact could not be read safely: {target}") from exc
     return "sha256:" + digest.hexdigest()
 
 
@@ -73,26 +152,33 @@ def normalize_sha256(value: Any) -> str:
 
 
 def select_production_jar(project_root: str | Path) -> Path:
-    """Select exactly one non-classifier JAR from ``build/libs``."""
-
     root = _project_root(project_root)
-    libs = root / "build" / "libs"
-    if not libs.is_dir() or libs.is_symlink():
-        raise FinalArtifactError(f"Final Gradle output directory is missing: {libs}")
+    libs = _safe_existing_directory(root / "build" / "libs")
+    if libs is None:
+        raise FinalArtifactError(
+            f"Final Gradle output directory is missing or unsafe: {root / 'build' / 'libs'}"
+        )
     jar_entries = sorted(libs.glob("*.jar"), key=lambda path: path.name.casefold())
-    unsafe = [path.name for path in jar_entries if path.is_symlink() or not path.is_file()]
+    safe_entries: list[Path] = []
+    unsafe: list[str] = []
+    for path in jar_entries:
+        safe = _safe_existing_file(path)
+        if safe is None:
+            unsafe.append(path.name)
+        else:
+            safe_entries.append(safe)
     if unsafe:
         raise FinalArtifactError(
             "Final Gradle output contains unsafe JAR entries: " + ", ".join(unsafe)
         )
-    production = [path for path in jar_entries if not _AUXILIARY_JAR.search(path.name)]
+    production = [path for path in safe_entries if not _AUXILIARY_JAR.search(path.name)]
     if len(production) != 1:
         names = ", ".join(path.name for path in production) or "none"
         raise FinalArtifactError(
             "Expected exactly one production JAR after excluding source/dev/javadoc "
             f"classifiers; found {len(production)}: {names}"
         )
-    return production[0].resolve()
+    return production[0]
 
 
 def verify_final_mod_artifact(
@@ -105,8 +191,6 @@ def verify_final_mod_artifact(
     expected_gradle: str = "",
     receipt_path: str | Path | None = None,
 ) -> FinalModArtifactReceipt:
-    """Verify the sole production JAR and bind it to the generated target."""
-
     root = _project_root(project_root)
     project_identity = _project_identity(root)
     mod_id = _consistent_value("mod_id", expected_mod_id, project_identity["mod_id"])
@@ -168,8 +252,6 @@ def verify_final_mod_artifact(
 def verify_runtime_artifact_binding(
     runtime_receipt: Mapping[str, Any], expected_sha256: str
 ) -> dict[str, Any]:
-    """Require the runtime source and installed mod to equal the built JAR."""
-
     expected = normalize_sha256(expected_sha256)
     prepared = runtime_receipt.get("prepared")
     if not isinstance(prepared, Mapping):
@@ -205,8 +287,6 @@ def build_requirement_coverage_receipt(
     artifact_sha256: str,
     unresolved_gates: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
-    """Project the immutable requirement catalog onto final release evidence."""
-
     requirements = []
     if isinstance(contract, Mapping):
         raw_requirements = contract.get("requirement_catalog")
@@ -251,8 +331,6 @@ def build_requirement_coverage_receipt(
 
 
 def empty_reuse_manifest(project_name: str) -> dict[str, Any]:
-    """Represent a production path that selected no reusable artifacts."""
-
     return {
         "schema_version": "mmm/reuse-manifest-v1",
         "project_name": project_name,
@@ -281,14 +359,11 @@ def write_downloadable_bundle(
     build_receipt: Mapping[str, Any],
     runtime_receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Write the installable JAR plus its five human-auditable receipts."""
-
     if artifact_receipt.get("status") != "PASS":
         raise FinalArtifactError("Only a passing final artifact receipt may be bundled.")
-    artifact = Path(str(artifact_receipt.get("artifact_path") or "")).expanduser()
-    if artifact.is_symlink():
-        raise FinalArtifactError("Final artifact path is unsafe.")
-    artifact = artifact.resolve()
+    artifact = _safe_existing_file(str(artifact_receipt.get("artifact_path") or ""))
+    if artifact is None:
+        raise FinalArtifactError("Final artifact path is missing or unsafe.")
     expected_sha256 = normalize_sha256(artifact_receipt.get("sha256"))
     if sha256_file(artifact) != expected_sha256:
         raise FinalArtifactError("Final artifact changed after verification.")
@@ -302,10 +377,7 @@ def write_downloadable_bundle(
     if runtime_status == "PASS":
         verify_runtime_artifact_binding(runtime_receipt, expected_sha256)
 
-    target = Path(bundle_dir).expanduser().resolve()
-    if target.exists():
-        raise FinalArtifactError(f"Download bundle path already exists: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _safe_new_directory_target(bundle_dir)
     target.mkdir()
     try:
         installed = target / artifact.name
@@ -323,14 +395,16 @@ def write_downloadable_bundle(
             _write_json_receipt(target / name, payload)
         members = []
         for path in sorted(target.iterdir(), key=lambda item: item.name):
-            if path.is_file() and not path.is_symlink():
-                members.append(
-                    {
-                        "path": path.name,
-                        "sha256": sha256_file(path),
-                        "size_bytes": path.stat().st_size,
-                    }
-                )
+            safe = _safe_existing_file(path)
+            if safe is None:
+                raise FinalArtifactError(f"Download bundle member is unsafe: {path}")
+            members.append(
+                {
+                    "path": safe.name,
+                    "sha256": sha256_file(safe),
+                    "size_bytes": safe.stat().st_size,
+                }
+            )
         bundle_receipt: dict[str, Any] = {
             "schema_version": "mmm/downloadable-mod-bundle-v1",
             "status": "PASS",
@@ -352,14 +426,12 @@ def bundle_from_pipeline_result(
     *,
     require_runtime: bool = False,
 ) -> dict[str, Any]:
-    """Revalidate a serialized complete-run result and create its download bundle."""
-
     if not isinstance(result, Mapping):
         raise FinalArtifactError("Complete pipeline result must be a JSON object.")
-    project_root = Path(str(result.get("project_root") or "")).expanduser().resolve()
+    project_root = _project_root(str(result.get("project_root") or ""))
     artifact = verify_final_mod_artifact(project_root).to_dict()
-    result_jar = Path(str(result.get("jar_path") or "")).expanduser().resolve()
-    if result_jar != Path(artifact["artifact_path"]):
+    result_jar = _safe_existing_file(str(result.get("jar_path") or ""))
+    if result_jar is None or result_jar != Path(artifact["artifact_path"]):
         raise FinalArtifactError("Pipeline result JAR is not the sole verified production JAR.")
     build = result.get("build_report")
     if not isinstance(build, Mapping) or build.get("status") != "PASS":
@@ -408,12 +480,16 @@ def bundle_from_pipeline_result(
 
 
 def append_github_outputs(path: str | Path, bundle: Mapping[str, Any]) -> None:
-    """Expose exact verified paths to subsequent GitHub Actions steps."""
-
-    target = Path(path).expanduser().resolve()
-    bundle_path = Path(str(bundle.get("path") or "")).resolve()
+    target = _safe_write_target(path)
+    bundle_path = _safe_existing_directory(str(bundle.get("path") or ""))
+    if bundle_path is None:
+        raise FinalArtifactError("Download bundle path is missing or unsafe.")
     artifact_name = str(bundle.get("artifact") or "")
-    artifact_path = bundle_path / artifact_name
+    if not artifact_name or Path(artifact_name).name != artifact_name:
+        raise FinalArtifactError("Download bundle artifact name is unsafe.")
+    artifact_path = _safe_existing_file(bundle_path / artifact_name)
+    if artifact_path is None:
+        raise FinalArtifactError("Download bundle artifact is missing or unsafe.")
     values = {
         "artifact_path": str(artifact_path),
         "artifact_sha256": normalize_sha256(bundle.get("artifact_sha256")),
@@ -428,10 +504,13 @@ def append_github_outputs(path: str | Path, bundle: Mapping[str, Any]) -> None:
 
 
 def _project_root(value: str | Path) -> Path:
-    raw = Path(value).expanduser()
-    if raw.is_symlink():
-        raise FinalArtifactError("Final project root may not be a symlink.")
-    root = raw.resolve()
+    raw = _lexical_absolute(value)
+    if _has_symlink_hop(raw):
+        raise FinalArtifactError("Final project root may not traverse symbolic links.")
+    try:
+        root = raw.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise FinalArtifactError(f"Final project root is missing: {raw}") from exc
     if not root.is_dir():
         raise FinalArtifactError(f"Final project root is missing: {root}")
     return root
@@ -441,9 +520,10 @@ def _project_identity(root: Path) -> dict[str, str]:
     loader, mod_id = _source_metadata_identity(root)
     minecraft = java = gradle = ""
     lock_path = root / ".minecraft_ai" / "platform-lock.json"
-    if lock_path.is_file() and not lock_path.is_symlink():
+    lock = _optional_safe_file(lock_path)
+    if lock is not None:
         try:
-            raw = json.loads(lock_path.read_text(encoding="utf-8"))
+            raw = json.loads(lock.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise FinalArtifactError("Generated platform lock is invalid.") from exc
         if not isinstance(raw, dict):
@@ -466,10 +546,10 @@ def _source_metadata_identity(root: Path) -> tuple[str, str]:
     resources = root / "src" / "main" / "resources"
     found: list[tuple[str, str]] = []
     for loader, relative in _METADATA_BY_LOADER.items():
-        path = resources / Path(relative)
-        if not path.is_file() or path.is_symlink():
+        safe = _optional_safe_file(resources / Path(relative))
+        if safe is None:
             continue
-        raw = path.read_bytes()
+        raw = safe.read_bytes()
         _, ids, _ = _parse_metadata(raw, loader=loader, metadata_path=relative)
         if len(ids) != 1:
             raise FinalArtifactError(
@@ -486,17 +566,25 @@ def _source_metadata_identity(root: Path) -> tuple[str, str]:
 def _read_jar_metadata(
     jar: Path, *, loader: str, metadata_path: str
 ) -> tuple[dict[str, Any], tuple[str, ...], Any]:
-    if not zipfile.is_zipfile(jar):
-        raise FinalArtifactError("Production artifact is not a ZIP/JAR archive.")
+    safe_jar = _safe_existing_file(jar)
+    if safe_jar is None or not zipfile.is_zipfile(safe_jar):
+        raise FinalArtifactError("Production artifact is missing, unsafe, or not a ZIP/JAR archive.")
     try:
-        with zipfile.ZipFile(jar) as archive:
+        with zipfile.ZipFile(safe_jar) as archive:
             infos = archive.infolist()
             names = [info.filename for info in infos]
             if len(names) != len(set(names)):
                 raise FinalArtifactError("Production JAR contains duplicate entries.")
             for info in infos:
                 normalized = info.filename.replace("\\", "/")
-                if normalized.startswith("/") or ".." in Path(normalized).parts:
+                if (
+                    not normalized
+                    or "\x00" in normalized
+                    or normalized.startswith("/")
+                    or normalized.startswith("//")
+                    or _WINDOWS_DRIVE_PATH.match(normalized)
+                    or ".." in Path(normalized).parts
+                ):
                     raise FinalArtifactError(
                         f"Production JAR contains unsafe path: {info.filename}"
                     )
@@ -515,9 +603,9 @@ def _read_jar_metadata(
             if info.file_size > 2 * 1024 * 1024:
                 raise FinalArtifactError("Production JAR metadata is unreasonably large.")
             raw = archive.read(metadata_path)
-    except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
-        if isinstance(exc, FinalArtifactError):
-            raise
+    except FinalArtifactError:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError, ValueError) as exc:
         raise FinalArtifactError("Production JAR integrity verification failed.") from exc
     return _parse_metadata(raw, loader=loader, metadata_path=metadata_path)
 
@@ -606,25 +694,33 @@ def _canonical_sha256(value: Any) -> str:
 
 
 def _write_json_receipt(path: str | Path, payload: Mapping[str, Any]) -> None:
-    target = Path(path).expanduser().resolve()
-    if target.exists() and (target.is_symlink() or not target.is_file()):
-        raise FinalArtifactError(f"Receipt target is unsafe: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _safe_write_target(path)
     target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
 
+def _optional_safe_file(path: Path) -> Path | None:
+    raw = _lexical_absolute(path)
+    if not raw.exists() and not raw.is_symlink():
+        return None
+    safe = _safe_existing_file(raw)
+    if safe is None:
+        raise FinalArtifactError(f"Receipt or metadata path is unsafe: {raw}")
+    return safe
+
+
 def _read_optional_json(path: Path) -> dict[str, Any] | None:
-    if not path.is_file() or path.is_symlink():
+    safe = _optional_safe_file(path)
+    if safe is None:
         return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(safe.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise FinalArtifactError(f"Invalid receipt JSON: {path}") from exc
+        raise FinalArtifactError(f"Invalid receipt JSON: {safe}") from exc
     if not isinstance(value, dict):
-        raise FinalArtifactError(f"Receipt must be a JSON object: {path}")
+        raise FinalArtifactError(f"Receipt must be a JSON object: {safe}")
     return value
 
 
@@ -634,9 +730,12 @@ def _coverage_from_project(
     try:
         from .proposal_store import load_sharded_complete_proposal
 
-        proposal = load_sharded_complete_proposal(
+        proposal_path = _safe_existing_file(
             project_root / ".minecraft_ai/complete-proposal.json"
         )
+        if proposal_path is None:
+            raise FinalArtifactError("Complete proposal path is missing or unsafe.")
+        proposal = load_sharded_complete_proposal(proposal_path)
     except Exception as exc:
         raise FinalArtifactError(
             "Final project has no readable requirement-bound complete proposal."
