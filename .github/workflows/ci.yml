@@ -178,7 +178,7 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Run deterministic pytest shard
+      - name: Run deterministic pytest shard with compact diagnostics
         env:
           SHARD: ${{ matrix.shard }}
         run: |
@@ -202,7 +202,8 @@ jobs:
               "test_repair_candidate_purity_contract.py",
               "test_llama_parallel_runtime_contract.py",
           }
-          shard = int(os.environ["SHARD"]) - 1
+          shard_number = int(os.environ["SHARD"])
+          shard = shard_number - 1
           files = [
               str(path)
               for index, path in enumerate(sorted(Path("tests").glob("test_*.py")))
@@ -214,14 +215,27 @@ jobs:
               subprocess.call(
                   [
                       sys.executable,
-                      "-m",
-                      "pytest",
-                      "-vv",
-                      "--tb=short",
-                      "--durations=15",
-                      "--maxfail=25",
+                      "tools/pytest_diagnostics.py",
+                      "--log",
+                      f"audit/pytest-shard-{shard_number}.log",
+                      "--junit",
+                      f"audit/pytest-shard-{shard_number}.xml",
+                      "--durations",
+                      "15",
+                      "--maxfail",
+                      "25",
                       *files,
                   ]
               )
           )
           PY
+      - name: Upload raw pytest diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-shard-${{ matrix.shard }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            audit/pytest-shard-${{ matrix.shard }}.log
+            audit/pytest-shard-${{ matrix.shard }}.xml
