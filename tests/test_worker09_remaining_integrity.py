@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
+from minecraft_mod_ai import execution_feedback_replan_contract as feedback
 from minecraft_mod_ai.remote_trajectory_store import _stamp_remote_record
 from minecraft_mod_ai.trajectory_memory import build_work_trajectory
 from minecraft_mod_ai.trajectory_record_integrity import (
@@ -16,6 +18,7 @@ from minecraft_mod_ai.work_graph import (
     DurableWorkLedger,
     WorkGraphPlan,
     WorkNode,
+    WorkState,
 )
 
 
@@ -96,7 +99,7 @@ def _ledger(tmp_path: Path) -> DurableWorkLedger:
             graph_hash="sha256:graph",
             module_count=1,
             nodes=(
-                WorkNode("a", "generate", "sha256:a", (), {"kind": "a"}),
+                WorkNode("a", "generate:test", "sha256:a", (), {"kind": "a"}),
             ),
         )
     )
@@ -129,3 +132,124 @@ def test_portable_export_keeps_receipt_hash_distinct_from_artifact_hash(
     assert task["output_hash"] == "sha256:artifact"
     assert task["receipt_hash"] == expected_receipt_hash
     assert task["receipt_hash"] != task["output_hash"]
+
+
+def test_task_page_invalidates_receipt_tampered_after_runtime_audit(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.begin("a")
+    ledger.succeed(
+        "a",
+        {
+            "semantic_observations": [
+                {
+                    "task_ids": ["trusted-owner"],
+                    "touched_paths": ["src/main/java/Trusted.java"],
+                }
+            ]
+        },
+    )
+
+    with sqlite3.connect(ledger.path) as connection:
+        connection.execute(
+            "UPDATE tasks SET receipt_json = ? WHERE node_id = 'a'",
+            (
+                json.dumps(
+                    {
+                        "semantic_observations": [
+                            {
+                                "task_ids": ["forged-owner"],
+                                "touched_paths": ["src/main/java/Forged.java"],
+                            }
+                        ]
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        connection.commit()
+
+    page = ledger.tasks(limit=10)
+    task = next(row for row in page["tasks"] if row["node_id"] == "a")
+
+    assert task["state"] == WorkState.PENDING.value
+    assert task["receipt"] is None
+    assert ledger.cached_receipt("a") is None
+
+
+def _validation_receipt() -> dict[str, object]:
+    return {
+        "status": "FAIL",
+        "diagnostics": [
+            {
+                "path": "src/main/java/Demo.java",
+                "message": "cannot resolve symbol",
+                "code": "E100",
+                "severity": 1,
+            }
+        ],
+    }
+
+
+def _validation_checkpoint(ledger: DurableWorkLedger) -> None:
+    ledger.begin_checkpoint(
+        "validate-jdt",
+        stage="validate:jdt",
+        input_hash="sha256:validation-input",
+    )
+    ledger.succeed_checkpoint(
+        "validate-jdt",
+        input_hash="sha256:validation-input",
+        receipt=_validation_receipt(),
+    )
+
+
+def test_replan_reader_rejects_checkpoint_tampered_after_runtime_audit(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    _validation_checkpoint(ledger)
+    with sqlite3.connect(ledger.path) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET receipt_json = ? WHERE checkpoint_id = 'validate-jdt'",
+            ('{"status":"FAIL","diagnostics":[{"message":"forged"}]}',),
+        )
+        connection.commit()
+
+    try:
+        raise RuntimeError("JDT reported errors")
+    except RuntimeError:
+        current = feedback._latest_failed_feedback(ledger)
+
+    assert current is None
+    assert ledger.cached_checkpoint(
+        "validate-jdt",
+        input_hash="sha256:validation-input",
+    ) is None
+    with sqlite3.connect(ledger.path) as connection:
+        state, receipt_json, receipt_hash = connection.execute(
+            "SELECT state, receipt_json, receipt_hash FROM checkpoints "
+            "WHERE checkpoint_id = 'validate-jdt'"
+        ).fetchone()
+    assert state == WorkState.FAILED.value
+    assert receipt_json is None
+    assert receipt_hash is None
+
+
+def test_replan_reader_accepts_verified_current_exception_checkpoint(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    _validation_checkpoint(ledger)
+
+    try:
+        raise RuntimeError("JDT reported errors")
+    except RuntimeError:
+        current = feedback._latest_failed_feedback(ledger)
+
+    assert current is not None
+    assert current["checkpoint_id"] == "validate-jdt"
+    assert current["failure_scope"] == "current_exception"
+    assert current["diagnostics"]
