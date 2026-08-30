@@ -79,13 +79,15 @@ def test_streaming_junit_parser_handles_namespaces_and_counts(tmp_path: Path) ->
     assert len(analysis.groups) == 2
 
 
-def test_main_never_reuses_stale_junit(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_main_never_reuses_stale_junit_or_raw_log(tmp_path: Path, monkeypatch, capsys) -> None:
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
+    log.write_text("stale pytest output\n", encoding="utf-8")
     _write_passing_junit(junit)
 
     def fake_run(*args, **kwargs):
         assert not junit.exists(), "stale JUnit must be removed before pytest starts"
+        assert log.read_text(encoding="utf-8") == ""
         assert kwargs["stdout"] is not subprocess.PIPE
         kwargs["stdout"].write("pytest crashed before producing JUnit\n")
         return SimpleNamespace(returncode=5)
@@ -98,6 +100,7 @@ def test_main_never_reuses_stale_junit(tmp_path: Path, monkeypatch, capsys) -> N
     output = capsys.readouterr().out
     assert "MissingJUnit" in output
     assert "FINAL STATUS\nPASS" not in output
+    assert log.read_text(encoding="utf-8").startswith("pytest crashed")
 
 
 def test_success_without_junit_fails_closed(tmp_path: Path, monkeypatch, capsys) -> None:
