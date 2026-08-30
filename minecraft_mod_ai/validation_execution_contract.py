@@ -18,8 +18,7 @@ from .validation_diagnostic_contract import (
 )
 
 _CACHE_LOCK = threading.RLock()
-_SUCCESSFUL_BUILDS: dict[tuple[str, str, bool], Any] = {}
-_RECENT_BUILDS: dict[tuple[str, str, bool], Any] = {}
+_SUCCESSFUL_BUILDS: dict[tuple[Any, ...], Any] = {}
 _JDT_RESULTS: dict[tuple[Any, ...], dict[str, Any]] = {}
 _CACHE_LIMIT = 24
 
@@ -181,21 +180,34 @@ def gametest_resource_errors(
     project_root: str | Path,
     log_path: str | Path,
 ) -> tuple[str, ...]:
-    """Return high-signal generated-namespace resource loading errors."""
+    """Return resource errors, failing closed when GameTest evidence is unavailable."""
 
     root = Path(project_root).expanduser().resolve()
     fabric = root / "src/main/resources/fabric.mod.json"
+    if fabric.is_symlink() or not fabric.is_file():
+        return ("GameTest resource validation unavailable: fabric.mod.json is missing or unsafe.",)
     try:
         payload = json.loads(fabric.read_text(encoding="utf-8"))
-        mod_id = str(payload["id"])
+        raw_mod_id = payload["id"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
-        return ()
+        return ("GameTest resource validation unavailable: fabric.mod.json is unreadable or invalid.",)
+    if (
+        type(raw_mod_id) is not str
+        or not raw_mod_id
+        or raw_mod_id != raw_mod_id.strip()
+        or any(ord(character) < 0x20 for character in raw_mod_id)
+    ):
+        return ("GameTest resource validation unavailable: fabric.mod.json has an invalid mod id.",)
 
-    path = Path(log_path)
-    if not path.is_file() or path.is_symlink():
-        return ()
+    path = Path(log_path).expanduser()
+    if path.is_symlink() or not path.is_file():
+        return ("GameTest resource validation unavailable: GameTest log is missing or unsafe.",)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return (f"GameTest resource validation unavailable: {type(exc).__name__}: {exc}",)
 
-    namespace = f"{mod_id}:"
+    namespace = f"{raw_mod_id}:"
     markers = (
         "couldn't parse element",
         "parsing error loading",
@@ -207,7 +219,7 @@ def gametest_resource_errors(
         "unknown registry",
     )
     findings: list[str] = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw in lines:
         lowered = raw.lower()
         if namespace not in raw or not any(marker in lowered for marker in markers):
             continue
@@ -215,19 +227,6 @@ def gametest_resource_errors(
         if compact and compact not in findings:
             findings.append(compact[:2000])
     return tuple(findings)
-
-
-def _consume_recent_build(
-    project_root: Path,
-    *,
-    run_gametest: bool,
-) -> Any | None:
-    root = Path(project_root).expanduser().resolve()
-    fingerprint = project_build_fingerprint(root)
-    key = (str(root), fingerprint, bool(run_gametest))
-    with _CACHE_LOCK:
-        value = _RECENT_BUILDS.pop(key, None)
-    return copy.deepcopy(value) if value is not None else None
 
 
 def _jdt_cache_profile(self: Any, *, timeout_seconds: int) -> tuple[Any, ...]:
@@ -262,9 +261,6 @@ def _install_jdt_cache(java_lsp_module: Any) -> None:
         root = Path(project_root).expanduser().resolve()
         full_scope = relative_files is None
 
-        # Canonicalize and authorize paths before fingerprinting. This prevents an
-        # unsafe relative path from being read merely to construct a cache key and
-        # lets fingerprinting/JDT share one discovered full-project file list.
         files = tuple(java_lsp_module._java_files(root, relative_files))
         normalized = tuple(path.relative_to(root).as_posix() for path in files)
         fingerprint, fingerprint_files = _java_fingerprint(root, normalized)
@@ -294,15 +290,13 @@ def _install_jdt_cache(java_lsp_module: Any) -> None:
             )
             if final_normalized != normalized:
                 raise java_lsp_module.JDTLanguageServerError(
-                    "Java source set changed during JDT validation; result is not "
-                    "certifiable."
+                    "Java source set changed during JDT validation; result is not certifiable."
                 )
 
         final_fingerprint, final_files = _java_fingerprint(root, normalized)
         if final_files != normalized or final_fingerprint != fingerprint:
             raise java_lsp_module.JDTLanguageServerError(
-                "Java/config inputs changed during JDT validation; result is not "
-                "certifiable."
+                "Java/config inputs changed during JDT validation; result is not certifiable."
             )
 
         with _CACHE_LOCK:
@@ -368,21 +362,17 @@ def _install_progressive_repair(repair_module: Any) -> None:
                 },
             }
 
-        cached = _consume_recent_build(root, run_gametest=run_gametest)
-        if cached is not None:
-            build = cached.to_dict()
-        else:
-            try:
-                build = self.runner_factory(self.gradle_cache).build(
-                    root,
-                    run_gametest=run_gametest,
-                ).to_dict()
-            except (BuildRunnerError, OSError, TimeoutError) as exc:
-                build = {
-                    "status": "FAIL",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "commands": [],
-                }
+        try:
+            build = self.runner_factory(self.gradle_cache).build(
+                root,
+                run_gametest=run_gametest,
+            ).to_dict()
+        except (BuildRunnerError, OSError, TimeoutError) as exc:
+            build = {
+                "status": "FAIL",
+                "error": f"{type(exc).__name__}: {exc}",
+                "commands": [],
+            }
         return {
             "passed": build.get("status") == "PASS" and not errors,
             "diagnostics": diagnostics,
