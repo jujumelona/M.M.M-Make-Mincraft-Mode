@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .reuse_license import is_reusable_source_license
 from .source_transplant import DonorSlice, materialize_pinned_donor
 
 
@@ -81,6 +82,24 @@ def _hashes_match(
     )
 
 
+def _proof_dependencies_are_exact(values: Sequence[Any]) -> bool:
+    for raw in values:
+        if not isinstance(raw, Mapping):
+            return False
+        if raw.get("is_resolved") is not True:
+            return False
+        if not str(raw.get("resolved_coordinate") or "").strip():
+            return False
+        if not str(raw.get("repository") or "").strip():
+            return False
+        if not str(raw.get("gradle_configuration") or "").strip():
+            return False
+        fingerprint = str(raw.get("resolution_fingerprint") or "").strip()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint):
+            return False
+    return True
+
+
 def bundle_proof_allows_reuse(
     bundle: "ReusableArtifactBundle", receipt: Any,
 ) -> bool:
@@ -88,7 +107,8 @@ def bundle_proof_allows_reuse(
 
     from .proof_level import ProofLevel
 
-    if not ProofLevel.from_value(_receipt_value(receipt, "proof_level")).allows_reuse():
+    level = ProofLevel.from_value(_receipt_value(receipt, "proof_level"))
+    if not level.allows_reuse():
         return False
     if str(_receipt_value(receipt, "capability", "")).strip() != bundle.capability:
         return False
@@ -97,6 +117,37 @@ def bundle_proof_allows_reuse(
 
     if bundle.origin_kind == "external_donor":
         if str(_receipt_value(receipt, "candidate_id", "")).strip() != bundle.source_ref:
+            return False
+        repository = str(bundle.provenance.get("repository") or "").strip()
+        commit_sha = str(bundle.provenance.get("commit_sha") or "").strip()
+        license_id = str(bundle.provenance.get("license_id") or "").strip()
+        if (
+            not repository
+            or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha)
+            or not is_reusable_source_license(license_id)
+            or bundle.source_ref != f"{repository}@{commit_sha}"
+        ):
+            return False
+        if level.is_verified() and _receipt_value(receipt, "compile_passed") is not True:
+            return False
+        if level.is_partial() and not tuple(
+            _receipt_value(receipt, "verified_artifacts", ()) or ()
+        ):
+            return False
+        proof_dependencies = tuple(
+            _receipt_value(receipt, "dependency_receipts", ()) or ()
+        )
+        if tuple(bundle.dependency_receipts) != proof_dependencies:
+            return False
+        donor_payload = bundle.provenance.get("donor_slice")
+        declared_dependencies = (
+            tuple(donor_payload.get("required_dependencies", ()) or ())
+            if isinstance(donor_payload, Mapping)
+            else ()
+        )
+        if declared_dependencies and not proof_dependencies:
+            return False
+        if not _proof_dependencies_are_exact(proof_dependencies):
             return False
         contract = _receipt_value(receipt, "contract")
         protected = _receipt_value(contract, "protected_artifacts", {})
@@ -214,6 +265,9 @@ class ReusableArtifactBundle:
             _receipt_value(proof_receipt, "verified_symbols", ())
             or donor.source_symbols
         )
+        dependency_receipts = tuple(
+            _receipt_value(proof_receipt, "dependency_receipts", ()) or ()
+        )
 
         # Detect owned namespace from donor files or repository name
         repo_name = donor.repository.split("/")[-1].lower().replace("-", "_") if donor.repository else ""
@@ -242,7 +296,7 @@ class ReusableArtifactBundle:
             requirement_ids=tuple(requirement_ids) or (donor.capability,),
             protected_paths=protected_paths,
             protected_symbols=protected_symbols,
-            dependency_receipts=tuple(donor.required_dependencies),
+            dependency_receipts=dependency_receipts,
             target_compatibility=donor.target_compatibility,
             proof_receipt=proof_receipt,
             provenance={
