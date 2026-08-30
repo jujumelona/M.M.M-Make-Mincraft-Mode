@@ -157,13 +157,18 @@ def derive_levels(row: Mapping[str, Any]) -> dict[str, Any] | None:
 
     passed = {str(item.get("kind")) for item in chain if item.get("status") == "PASS"}
     failed = {str(item.get("kind")) for item in chain if item.get("status") == "FAIL"}
-    static_pass = "static" in passed
-    build_pass = "build" in passed
-    test_pass = bool(passed & {"test", "gametest"})
-    runtime_pass = "runtime" in passed
-    acceptance_pass = "acceptance" in passed
-    explicit_reproduction = "reproduction" in passed
-    independent_replay = static_pass and "synthetic_counterexample" in passed
+    effective_passed = passed - failed
+    static_pass = "static" in effective_passed
+    build_pass = "build" in effective_passed
+    test_pass = bool(effective_passed & {"test", "gametest"}) and not bool(
+        failed & {"test", "gametest"}
+    )
+    runtime_pass = "runtime" in effective_passed
+    acceptance_pass = "acceptance" in effective_passed
+    explicit_reproduction = "reproduction" in effective_passed
+    independent_replay = (
+        static_pass and "synthetic_counterexample" in effective_passed
+    )
     reproduced = explicit_reproduction or independent_replay
 
     level = 0
@@ -180,7 +185,7 @@ def derive_levels(row: Mapping[str, Any]) -> dict[str, Any] | None:
     failure_level = max((_FAILURE_LEVEL[kind] for kind in failed if kind in _FAILURE_LEVEL), default=0)
 
     success = outcome == "SUCCESS"
-    pass_diversity = len(passed)
+    pass_diversity = len(effective_passed)
     fail_diversity = len(failed)
     confidence = min(1.0, 0.12 * level + 0.05 * min(pass_diversity, 5) + (0.12 if reproduced else 0.0))
     if not success and failure_level >= 1:
