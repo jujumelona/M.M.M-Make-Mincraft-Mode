@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_completion_liveness_contract as contract
+from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 
 
 def test_current_slot_shape_reads_next_token_decode_progress() -> None:
@@ -86,3 +87,11 @@ def test_install_wraps_nonstream_chat_completion_without_changing_timeout() -> N
     assert calls[0][1]["json"]["return_progress"] is True
     assert calls[0][1]["json"]["sse_ping_interval"] == 4
     assert stream_module._slot_progress_from_payload is contract._slot_progress_from_payload
+
+
+def test_runtime_completion_transport_has_one_progress_aware_owner() -> None:
+    assert getattr(
+        llama_cpp_adapter._post_completion,
+        "_mmm_single_progress_aware_completion_owner_v1",
+        False,
+    )
