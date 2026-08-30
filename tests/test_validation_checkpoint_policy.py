@@ -73,6 +73,27 @@ def test_jdt_resume_never_reuses_unavailable_or_partial_result() -> None:
     )
 
 
+def test_jdt_resume_cross_checks_orchestrator_transformed_receipt() -> None:
+    transformed = _complete_jdt_receipt()
+    diagnostics_by_uri = transformed["diagnostics"]
+    assert isinstance(diagnostics_by_uri, dict)
+    expected_error = diagnostics_by_uri["file:///B.java"][0]
+    transformed["diagnostics_by_uri"] = diagnostics_by_uri
+    transformed["diagnostics"] = [expected_error]
+    assert validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jdt",
+        transformed,
+    )
+
+    missing_legacy_error = _complete_jdt_receipt()
+    missing_legacy_error["diagnostics_by_uri"] = missing_legacy_error["diagnostics"]
+    missing_legacy_error["diagnostics"] = []
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jdt",
+        missing_legacy_error,
+    )
+
+
 def test_validation_checkpoint_scope_changes_with_mmm_runtime_policy(monkeypatch) -> None:
     monkeypatch.setenv("MMM_VALIDATION_CACHE_TEST_SCOPE", "one")
     first = validation_checkpoint_policy.validation_implementation_fingerprint(
