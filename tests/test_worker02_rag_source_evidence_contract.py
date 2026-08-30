@@ -112,6 +112,41 @@ def test_incomplete_acquisition_fails_closed(flag):
     _assert_insufficient(_grounded([_record()], **{flag: True}))
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "source_request_budget_exhausted",
+        "search_request_budget_exhausted",
+        "source_byte_budget_exhausted",
+        "repository_metadata_failed",
+        "repository_tree_failed",
+    ],
+)
+def test_production_github_saturation_failure_cannot_false_pass(reason):
+    _assert_insufficient(
+        _grounded([_record()], github_saturation_reason=reason)
+    )
+
+
+def test_production_github_provider_limited_cannot_false_pass():
+    _assert_insufficient(
+        _grounded([_record()], github_provider_status="provider_limited")
+    )
+
+
+def test_successful_github_coverage_saturation_remains_usable():
+    receipt = quality._requirement_evidence_sufficiency(
+        DOMAIN,
+        _grounded(
+            [_record()],
+            github_saturation_reason="evidence_coverage_satisfied",
+        ),
+    )
+
+    assert receipt is not None
+    assert receipt["sufficient"] is True
+
+
 @pytest.mark.parametrize("flag", ["body_retrieved", "raw_retrieved", "blob_retrieved"])
 def test_github_body_or_raw_not_retrieved_is_not_evidence(flag):
     _assert_insufficient(_grounded([_record(**{flag: False})]))
