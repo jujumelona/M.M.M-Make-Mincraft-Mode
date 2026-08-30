@@ -203,7 +203,7 @@ def test_bundle_augmentation_keeps_external_source_content(monkeypatch) -> None:
         "versions": [],
         "domains": [
             {
-                "domain_id": "mob",
+                "domain_id": "request",
                 "queries": [
                     {
                         "query": "mob spawn",
