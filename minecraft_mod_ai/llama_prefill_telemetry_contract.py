@@ -14,6 +14,7 @@ def install(hardware_policy_module: Any) -> None:
         llama_decode_speed_contract,
         llama_stream_efficiency_contract,
         model_context_budget,
+        model_router,
     )
     from .llama_completion_liveness_contract import install as install_completion_liveness
     from .llama_context_safety_contract import install as install_context_safety
@@ -21,11 +22,13 @@ def install(hardware_policy_module: Any) -> None:
         install as install_forced_tool_capability,
     )
     from .llama_kv_correctness_contract import install as install_kv_correctness
+    from .llama_tool_round_safety_contract import install as install_tool_round_safety
     from .model_adapters import llama_cpp_adapter
 
     install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
     install_kv_correctness(llama_decode_speed_contract)
     install_context_safety(model_context_budget)
+    install_tool_round_safety(model_router)
     # forced_tool_execution.install runs immediately after this prefill hook. Patching
     # its module-level probe owners now makes the later adapter wrapper capture the
     # recoverable capability policy without adding a second bootstrap stage.
