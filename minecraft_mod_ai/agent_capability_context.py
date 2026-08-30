@@ -100,9 +100,12 @@ def _manifest_router() -> ExternalMCPRouter:
 
 def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]:
     stage_contracts = _stage_contracts(stage)
-    assigned = skills_for_model_role(_policy_model_role(stage, model_role))
-    if not assigned:
+    policy_role = _policy_model_role(stage, model_role)
+    if not policy_role:
         return stage_contracts
+    if not routes_for_model_role(policy_role):
+        return ()
+    assigned = skills_for_model_role(policy_role)
     return tuple(contract for contract in stage_contracts if contract.name in assigned)
 
 
@@ -135,9 +138,11 @@ def filter_tool_schemas_for_role(
         surface=f"role-filter:{stage.strip().lower()}:{model_role.strip()}",
     )
     policy_role = _policy_model_role(stage, model_role)
+    if not policy_role:
+        return surface
     role_routes = routes_for_model_role(policy_role)
     if not role_routes:
-        return surface
+        return ()
 
     allowed = {
         tool
@@ -266,7 +271,7 @@ def build_agent_capability_context(
                         if isinstance(route, Mapping)
                         and str(route.get("server", "")).strip()
                         and (
-                            not role_routes
+                            not policy_role
                             or str(route.get("server", "")).strip()
                             in reviewed_servers
                         )
