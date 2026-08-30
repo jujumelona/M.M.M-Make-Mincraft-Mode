@@ -60,7 +60,7 @@ def test_modrinth_source_seed_is_resolved_before_github_search(monkeypatch):
     coordinator.executor.shutdown(wait=True, cancel_futures=True)
 
 
-def test_pre_design_routes_schedule_no_public_donor_queries():
+def test_pre_design_schedules_explicit_queries_independent_of_provider_labels():
     brief = {
         "domains": [
             {
@@ -71,7 +71,10 @@ def test_pre_design_routes_schedule_no_public_donor_queries():
         ]
     }
 
-    assert runtime._external_brief_queries(brief) == ()
+    assert runtime._external_brief_queries(brief) == (
+        "space mode",
+        "Minecraft architecture",
+    )
 
 
 def test_required_github_route_is_scheduled_after_design():
