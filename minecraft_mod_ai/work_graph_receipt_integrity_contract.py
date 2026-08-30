@@ -3,9 +3,9 @@ from __future__ import annotations
 """Bind durable work state to independently verified receipt identity.
 
 ``output_hash`` may identify a produced artifact, so it must not double as the
-integrity proof for ``receipt_json``.  This contract adds a separate receipt hash,
+integrity proof for ``receipt_json``. This contract adds a separate receipt hash,
 migrates only legacy rows whose old output hash actually proves the receipt body,
-and invalidates unverifiable successful state at resume boundaries.
+and invalidates unverifiable successful state at resume/read boundaries.
 """
 
 import hashlib
@@ -154,6 +154,8 @@ def install(work_graph_module: Any) -> None:
     original_initialize = ledger_cls._initialize
     original_resume_run = ledger_cls.resume_run
     original_export_receipts = ledger_cls.export_receipts
+    original_task = ledger_cls.task
+    original_tasks = ledger_cls.tasks
 
     @wraps(original_initialize)
     def initialize(self: Any) -> None:
@@ -310,6 +312,46 @@ def install(work_graph_module: Any) -> None:
                 connection.commit()
             return None
 
+    def _verified_task_view(self: Any, row: dict[str, Any]) -> dict[str, Any]:
+        state = str(row.get("state") or "")
+        if state != work_graph_module.WorkState.SUCCEEDED.value:
+            if row.get("receipt") is None:
+                return row
+            sanitized = dict(row)
+            sanitized["receipt"] = None
+            return sanitized
+
+        node_id = str(row.get("node_id") or "")
+        input_hash = str(row.get("input_hash") or "")
+        verified = cached_receipt(self, node_id, input_hash=input_hash)
+        if verified is None:
+            refreshed = original_task(self, node_id)
+            refreshed["receipt"] = None
+            return refreshed
+        result = dict(row)
+        result["receipt"] = verified
+        return result
+
+    @wraps(original_task)
+    def task(self: Any, node_id: str) -> dict[str, Any]:
+        return _verified_task_view(self, original_task(self, node_id))
+
+    @wraps(original_tasks)
+    def tasks(
+        self: Any,
+        *,
+        cursor: str = "",
+        limit: int = 100,
+        state: Any = None,
+    ) -> dict[str, Any]:
+        page = dict(original_tasks(self, cursor=cursor, limit=limit, state=state))
+        page["tasks"] = [
+            _verified_task_view(self, dict(row))
+            for row in page.get("tasks", ())
+            if isinstance(row, dict)
+        ]
+        return page
+
     @wraps(original_resume_run)
     def resume_run(self: Any) -> dict[str, Any]:
         result = original_resume_run(self)
@@ -388,6 +430,8 @@ def install(work_graph_module: Any) -> None:
     ledger_cls.succeed_checkpoint = succeed_checkpoint
     ledger_cls.cached_receipt = cached_receipt
     ledger_cls.cached_checkpoint = cached_checkpoint
+    ledger_cls.task = task
+    ledger_cls.tasks = tasks
     ledger_cls.resume_run = resume_run
     ledger_cls.export_receipts = export_receipts
     _INSTALLED = True
