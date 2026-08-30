@@ -15,6 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
 
       - name: Apply deep hardening
         run: python scripts/worker6_deep_audit_once.py
