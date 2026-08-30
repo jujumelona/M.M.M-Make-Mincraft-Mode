@@ -23,3 +23,9 @@ replace_once(
     '''        for p in protected_paths:\n            if p.startswith("src/main/resources/assets/"):\n                parts = p.split("/")\n                if len(parts) > 4 and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge"):\n                    if parts[4] not in owned_ns:\n                        owned_ns.append(parts[4])\n            elif p.startswith("src/main/resources/data/"):\n                parts = p.split("/")\n                if len(parts) > 4 and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge"):\n                    if parts[4] not in owned_ns:\n                        owned_ns.append(parts[4])\n''',
     '''        for path in protected_paths:\n            if not path.startswith((\n                "src/main/resources/assets/",\n                "src/main/resources/data/",\n            )):\n                continue\n            parts = path.split("/")\n            if (\n                len(parts) > 4\n                and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge")\n                and parts[4] not in owned_ns\n            ):\n                owned_ns.append(parts[4])\n''',
 )
+
+replace_once(
+    "minecraft_mod_ai/reuse_proof_executor.py",
+    '''        if path.endswith(".java") or path.endswith(".kt")\n''',
+    '''        if path.endswith((".java", ".kt"))\n''',
+)
