@@ -4,9 +4,9 @@ from __future__ import annotations
 
 Task architecture may legitimately derive implementation branches from a requirement, but
 that does not mean the user authored that architecture or that the planner compared and
-selected one design alternative over others.  This contract records branch decisions as
-derived architecture and leaves ``selected_design_alternatives`` empty unless a future
-explicit comparative-evidence contract supplies candidates and a selection receipt.
+selected one design alternative over others. This contract records branch decisions as
+derived architecture and accepts selected alternatives only when an explicit comparative
+receipt identifies the exact evaluation payload.
 """
 
 from collections.abc import Mapping, Sequence
@@ -33,20 +33,43 @@ def _branch_evidence(
     return []
 
 
-def _explicit_selected_alternatives(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Accept selection claims only from an explicit comparative-evidence receipt."""
+def _evaluation_receipt_hash(evaluation: Mapping[str, Any]) -> str:
+    """Hash only the comparative-evaluation body, never the receipt field itself."""
+
+    payload = dict(evaluation)
+    payload.pop("evaluation_sha256", None)
+    return _planning._sha(payload)
+
+
+def _explicit_selected_alternatives(
+    plan: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Accept selection claims only from an explicit, content-bound receipt.
+
+    The digest proves identity/integrity of the evaluation payload. Candidate,
+    requirement, and evidence checks remain independent semantic prerequisites and
+    are never inferred from hash equality.
+    """
 
     raw = plan.get("design_alternative_evaluations")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
         return []
+
     selected: list[dict[str, Any]] = []
     for evaluation in raw:
         if not isinstance(evaluation, Mapping):
             continue
+
         candidates = evaluation.get("candidates")
-        selected_id = str(evaluation.get("selected_candidate_id") or "").strip()
-        evidence_refs = list(_planning._strings(evaluation.get("evidence_refs")))
-        requirement_refs = list(_planning._strings(evaluation.get("requirement_refs")))
+        selected_id = str(
+            evaluation.get("selected_candidate_id") or ""
+        ).strip()
+        evidence_refs = list(
+            _planning._strings(evaluation.get("evidence_refs"))
+        )
+        requirement_refs = list(
+            _planning._strings(evaluation.get("requirement_refs"))
+        )
         if (
             not isinstance(candidates, Sequence)
             or isinstance(candidates, (str, bytes, bytearray))
@@ -56,17 +79,32 @@ def _explicit_selected_alternatives(plan: Mapping[str, Any]) -> list[dict[str, A
             or not requirement_refs
         ):
             continue
+
         candidate_ids = {
             str(item.get("candidate_id") or "").strip()
             for item in candidates
-            if isinstance(item, Mapping) and str(item.get("candidate_id") or "").strip()
+            if isinstance(item, Mapping)
+            and str(item.get("candidate_id") or "").strip()
         }
         if selected_id not in candidate_ids:
             continue
+
+        supplied_receipt = evaluation.get("evaluation_sha256")
+        if not isinstance(supplied_receipt, str) or not supplied_receipt.strip():
+            continue
+        expected_receipt = _evaluation_receipt_hash(evaluation)
+        if supplied_receipt.strip() != expected_receipt:
+            continue
+
         selected.append(
             {
                 "decision_id": _planning._stable_id(
-                    "design", selected_id, {"requirements": requirement_refs, "evidence": evidence_refs}
+                    "design",
+                    selected_id,
+                    {
+                        "requirements": requirement_refs,
+                        "evidence": evidence_refs,
+                    },
                 ),
                 "provenance_role": "selected_design_alternative",
                 "authority": "comparative_evidence",
@@ -74,10 +112,7 @@ def _explicit_selected_alternatives(plan: Mapping[str, Any]) -> list[dict[str, A
                 "selection": selected_id,
                 "candidate_ids": sorted(candidate_ids),
                 "evidence_refs": evidence_refs,
-                "selection_receipt_sha256": str(
-                    evaluation.get("evaluation_sha256")
-                    or _planning._sha(dict(evaluation))
-                ),
+                "selection_receipt_sha256": expected_receipt,
             }
         )
     return selected
@@ -90,20 +125,28 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
     seen_obligations: set[str] = set()
 
     tasks = plan.get("tasks")
-    if isinstance(tasks, Sequence) and not isinstance(tasks, (str, bytes, bytearray)):
+    if isinstance(tasks, Sequence) and not isinstance(
+        tasks, (str, bytes, bytearray)
+    ):
         for task in tasks:
             if not isinstance(task, Mapping):
                 continue
             task_id = str(task.get("task_id") or "").strip()
-            requirement_refs = list(_planning._strings(task.get("requirement_refs")))
-            predicates = list(_planning._strings(task.get("conditional_predicates")))
+            requirement_refs = list(
+                _planning._strings(task.get("requirement_refs"))
+            )
+            predicates = list(
+                _planning._strings(task.get("conditional_predicates"))
+            )
             for requirement_ref in requirement_refs:
                 for predicate in predicates:
                     key = (requirement_ref, predicate)
                     if key in seen_architecture:
                         continue
                     seen_architecture.add(key)
-                    evidence_refs = _branch_evidence(plan, predicate, requirement_ref)
+                    evidence_refs = _branch_evidence(
+                        plan, predicate, requirement_ref
+                    )
                     architecture.append(
                         {
                             "decision_id": _planning._stable_id(
@@ -134,7 +177,9 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
             for artifact in artifacts:
                 if not isinstance(artifact, Mapping):
                     continue
-                artifact_id = str(artifact.get("artifact_id") or "").strip()
+                artifact_id = str(
+                    artifact.get("artifact_id") or ""
+                ).strip()
                 if not artifact_id or artifact_id in seen_obligations:
                     continue
                 seen_obligations.add(artifact_id)
@@ -145,14 +190,20 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                         "authority": "compiled_task_architecture",
                         "requirement_refs": list(
                             _planning._strings(
-                                artifact.get("requirement_refs") or requirement_refs
+                                artifact.get("requirement_refs")
+                                or requirement_refs
                             )
                         ),
-                        "task_ref": str(artifact.get("task_ref") or task_id),
+                        "task_ref": str(
+                            artifact.get("task_ref") or task_id
+                        ),
                         "kind": artifact.get("kind"),
                         "locator": artifact.get("locator"),
                         "status": artifact.get("status"),
-                        "reason": "compiled task architecture requires this artifact; it is not an authored gameplay mandate",
+                        "reason": (
+                            "compiled task architecture requires this artifact; "
+                            "it is not an authored gameplay mandate"
+                        ),
                     }
                 )
 
@@ -162,7 +213,10 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
             "decision_id": item["decision_id"],
             "requirement_refs": list(item["requirement_refs"]),
             "predicate": item["predicate"],
-            "reason": "derived architecture lacks exact requirement-scoped evidence",
+            "reason": (
+                "derived architecture lacks exact "
+                "requirement-scoped evidence"
+            ),
         }
         for item in architecture
         if item["status"] == "UNRESOLVED_PROVENANCE"
@@ -177,12 +231,16 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
             "minimum_candidates_for_selection": 2,
             "comparative_evidence_required": True,
             "requirement_binding_required": True,
+            "explicit_integrity_receipt_required": True,
+            "hash_proves_correctness": False,
             "heuristic_single_candidate_selection_allowed": False,
         },
         "policy": (
-            "Authored requirements remain the sole gameplay authority. Conditional branches and "
-            "artifact obligations are implementation-only derivations. A selected design alternative "
-            "requires an explicit candidate set, requirement bindings, and comparative evidence."
+            "Authored requirements remain the sole gameplay authority. "
+            "Conditional branches and artifact obligations are "
+            "implementation-only derivations. A selected design alternative "
+            "requires an explicit candidate set, requirement bindings, "
+            "comparative evidence, and a content-bound integrity receipt."
         ),
     }
 
@@ -197,6 +255,7 @@ def install_design_resolution_provenance_contract() -> None:
 
 __all__ = [
     "_design_resolution",
+    "_evaluation_receipt_hash",
     "_explicit_selected_alternatives",
     "install_design_resolution_provenance_contract",
 ]
