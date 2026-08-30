@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -164,8 +165,8 @@ def _raw_log_fallback() -> str:
     try:
         relative = RUNNER_LOG_PATH.relative_to(ROOT)
     except ValueError:
-        return f"raw runner output preserved at {RUNNER_LOG_PATH}"
-    return f"raw runner output preserved at {relative}"
+        return f"raw runner output target={RUNNER_LOG_PATH}"
+    return f"raw runner output target={relative}"
 
 
 def _render_internal_report_error(exc: BaseException, operation: str) -> str:
@@ -199,16 +200,35 @@ def _render_internal_event(cause_type: str, cause: str, operation: str) -> str:
     return render_failure_summary(collector.groups())
 
 
-def _atomic_write_report(report: dict[str, Any]) -> None:
-    temporary = REPORT_PATH.with_name(REPORT_PATH.name + ".tmp")
+def _prepare_audit_directory() -> bool:
     try:
-        temporary.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(_render_internal_report_error(exc, "prepare audit directory"))
+        return False
+    return True
+
+
+def _atomic_write_report(report: dict[str, Any]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
             encoding="utf-8",
-        )
-        temporary.replace(REPORT_PATH)
+            dir=REPORT_PATH.parent,
+            prefix=f".{REPORT_PATH.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+        temporary_path.replace(REPORT_PATH)
+        temporary_path = None
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _run_audit() -> int | None:
@@ -234,7 +254,8 @@ def _run_audit() -> int | None:
 
 
 def main() -> int:
-    AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    if not _prepare_audit_directory():
+        return 1
     process_returncode = _run_audit()
     if process_returncode is None:
         return 1
