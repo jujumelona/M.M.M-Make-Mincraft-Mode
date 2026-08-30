@@ -31,21 +31,26 @@ jobs:
 
           path = Path('minecraft_mod_ai/agent_capability_context.py')
           text = path.read_text(encoding='utf-8')
-          old = '''from . import model_tool_aliases as _model_tool_aliases
-from .agent_roles import AgentRoleRoute, load_agent_role_routes, skills_for_model_role
-'''
-          new = '''from . import agent_roles as _agent_roles
-from . import model_tool_aliases as _model_tool_aliases
-from .agent_roles import AgentRoleRoute, load_agent_role_routes
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one compatibility import block, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-          anchor = 'from .tool_validation_surface_contract import _assert_unique_schema_names\n'
-          export = '\nskills_for_model_role = _agent_roles.skills_for_model_role\n'
+          role_line = 'from .agent_roles import AgentRoleRoute, load_agent_role_routes, skills_for_model_role'
+          clean_role_line = 'from .agent_roles import AgentRoleRoute, load_agent_role_routes'
+          alias_line = 'from . import model_tool_aliases as _model_tool_aliases'
+          if text.count(role_line) != 1 or text.count(alias_line) != 1:
+              raise SystemExit('expected one compatibility import surface')
+          text = text.replace(role_line, clean_role_line, 1)
+          text = text.replace(
+              alias_line,
+              'from . import agent_roles as _agent_roles' + chr(10) + alias_line,
+              1,
+          )
+          anchor = 'from .tool_validation_surface_contract import _assert_unique_schema_names'
           if text.count(anchor) != 1:
-              raise SystemExit(f'expected one compatibility export anchor, found {text.count(anchor)}')
-          path.write_text(text.replace(anchor, anchor + export, 1), encoding='utf-8')
+              raise SystemExit('expected one compatibility export anchor')
+          text = text.replace(
+              anchor,
+              anchor + chr(10) + chr(10) + 'skills_for_model_role = _agent_roles.skills_for_model_role',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
 
           path = Path('minecraft_mod_ai/temporary_skill_contract.py')
           text = path.read_text(encoding='utf-8')
