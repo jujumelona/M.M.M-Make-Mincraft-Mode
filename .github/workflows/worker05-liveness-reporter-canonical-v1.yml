@@ -28,10 +28,12 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply semantic-progress reporter cleanup
-        run: python .github/scripts/worker05_liveness_reporter_canonical_v1.py
+        run: |
+          python .github/scripts/worker05_liveness_installer_fix_v1.py
+          python .github/scripts/worker05_liveness_reporter_canonical_v1.py
       - name: Verify liveness reporter ownership
         run: |
-          # V1.1: no redundant reporter thread; explicit stream type/probe/cleanup boundaries.
+          # V1.2: no redundant reporter thread; optional stream surface; explicit owner boundaries.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/llama_stream_efficiency_contract.py minecraft_mod_ai/llama_completion_liveness_contract.py tests/test_llama_completion_liveness_contract.py
