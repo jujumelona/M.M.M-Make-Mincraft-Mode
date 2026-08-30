@@ -68,9 +68,16 @@ class CapabilityImplementationLocator:
         capability: str,
         index: RepositoryArtifactIndex,
         *,
-        max_seeds: int = 8,
+        max_seeds: int | None = None,
     ) -> tuple[CapabilitySeedEvidence, ...]:
-        """Locate candidate implementation seeds using multi-evidence scoring."""
+        """Locate all evidence-bearing implementation seeds by default.
+
+        ``max_seeds`` is an explicit operator resource control only.  The reuse
+        pipeline deliberately leaves it unset so ordinal rank cannot turn an
+        existing implementation into a false negative.
+        """
+        if max_seeds is not None and max_seeds < 1:
+            raise ValueError("max_seeds must be positive when explicitly configured.")
         cap_tokens = _tokens(capability)
         search_terms = search_queries_for_capability(capability)
         term_tokens = {
@@ -152,4 +159,6 @@ class CapabilityImplementationLocator:
             )
 
         ranked.sort(key=lambda s: (-s.score, s.node_id))
+        if max_seeds is None:
+            return tuple(ranked)
         return tuple(ranked[:max_seeds])
