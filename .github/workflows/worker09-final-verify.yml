@@ -53,3 +53,4 @@ jobs:
             tests/test_worker09_remaining_integrity.py \
             tests/test_worker09_research_receipt_consensus.py \
             tests/test_trajectory_store_v3.py
+# rerun: remote-format-alignment
