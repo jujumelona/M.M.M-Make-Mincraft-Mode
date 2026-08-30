@@ -110,7 +110,7 @@ def _iter_build_inputs(root: Path) -> tuple[tuple[str, Path], ...]:
             path = directory / name
             relative = path.relative_to(root).as_posix()
             if path.is_symlink():
-                if _is_build_input(relative):
+                if _is_build_input(relative) or relative in _SKIP_WRAPPER_PATHS:
                     raise ValueError(
                         f"Build input file is a symbolic link: {relative}"
                     )
