@@ -7,13 +7,19 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 _PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
 _PROJECT_BUILD_LOCKS: dict[str, threading.RLock] = {}
+_BUILD_POLICY_ENV = (
+    "JAVA_HOME",
+    "JDK_HOME",
+    "PATH",
+    "GRADLE_OPTS",
+    "JAVA_OPTS",
+)
 
 
 def _path_lock(path: Path) -> threading.RLock:
@@ -25,6 +31,111 @@ def _path_lock(path: Path) -> threading.RLock:
             lock = threading.RLock()
             _PROJECT_BUILD_LOCKS[key] = lock
         return lock
+
+
+def _safe_regular_file(root: Path, path_value: str | Path | None) -> Path | None:
+    """Resolve a regular file while rejecting root escape and every symlink hop."""
+
+    if path_value is None:
+        return None
+    root = Path(root).expanduser().resolve()
+    candidate = Path(path_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    lexical = Path(os.path.abspath(os.fspath(candidate)))
+    try:
+        relative = lexical.relative_to(root)
+    except ValueError:
+        return None
+
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return None
+    try:
+        resolved = current.resolve(strict=True)
+        resolved.relative_to(root)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _file_digest(root: Path, path_value: str | Path | None) -> str | None:
+    path = _safe_regular_file(root, path_value)
+    if path is None:
+        return None
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _build_cache_profile(self: Any) -> tuple[Any, ...]:
+    return (
+        str(Path(self.cache_dir).expanduser().resolve()),
+        int(getattr(self, "download_timeout_seconds", 0)),
+        int(getattr(self, "command_timeout_seconds", 0)),
+        tuple((name, os.environ.get(name, "")) for name in _BUILD_POLICY_ENV),
+    )
+
+
+def _cache_entry(root: Path, report: Any, *, run_gametest: bool) -> dict[str, Any] | None:
+    if not getattr(report, "passed", False):
+        return None
+    jar_digest = _file_digest(root, getattr(report, "jar_path", None))
+    if jar_digest is None:
+        return None
+    gametest_digest: str | None = None
+    if run_gametest:
+        gametest_digest = _file_digest(root, getattr(report, "gametest_report", None))
+        if gametest_digest is None:
+            return None
+    return {
+        "report": copy.deepcopy(report),
+        "jar_sha256": jar_digest,
+        "gametest_sha256": gametest_digest,
+    }
+
+
+def _cached_report(
+    root: Path,
+    cached: Any,
+    *,
+    run_gametest: bool,
+) -> Any | None:
+    if not isinstance(cached, dict):
+        return None
+    report = cached.get("report")
+    if not getattr(report, "passed", False):
+        return None
+    jar_digest = cached.get("jar_sha256")
+    if not isinstance(jar_digest, str) or _file_digest(
+        root, getattr(report, "jar_path", None)
+    ) != jar_digest:
+        return None
+    if run_gametest:
+        gametest_digest = cached.get("gametest_sha256")
+        if not isinstance(gametest_digest, str) or _file_digest(
+            root, getattr(report, "gametest_report", None)
+        ) != gametest_digest:
+            return None
+    return copy.deepcopy(report)
+
+
+def _uncertifiable_report(runner_module: Any, report: Any, message: str) -> Any:
+    return runner_module.BuildReport(
+        status="FAIL",
+        gradle_version=report.gradle_version,
+        commands=report.commands,
+        jar_path=report.jar_path,
+        gametest_report=report.gametest_report,
+        error=message,
+    )
 
 
 def _marker_path(cache_dir: Path, version: str, sha256: str) -> Path:
@@ -72,19 +183,6 @@ def _write_distribution_marker(path: Path, version: str, sha256: str) -> None:
     os.replace(temporary, path)
 
 
-def _base_ensure_gradle(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Find the target-aware runner implementation under legacy cache wrappers."""
-    candidate = method
-    seen: set[int] = set()
-    while id(candidate) not in seen:
-        seen.add(id(candidate))
-        wrapped = getattr(candidate, "__wrapped__", None)
-        if wrapped is None:
-            break
-        candidate = wrapped
-    return candidate
-
-
 def _wrapper_template_dir(cache_dir: Path, version: str, sha256: str) -> Path:
     token = hashlib.sha256(f"{version}\0{sha256}".encode()).hexdigest()[:12]
     return cache_dir / f"wrapper-template-{version}-{token}"
@@ -100,6 +198,8 @@ def _wrapper_artifacts(root: Path) -> tuple[Path, ...]:
 
 
 def _valid_wrapper_template(root: Path, version: str, sha256: str) -> bool:
+    if root.is_symlink() or not root.is_dir():
+        return False
     artifacts = _wrapper_artifacts(root)
     if not all(path.is_file() and not path.is_symlink() for path in artifacts):
         return False
@@ -139,16 +239,16 @@ def _sync_wrapper(
     log_path = logs / "gradle-wrapper.log"
 
     if not _valid_wrapper_template(template, version, sha256):
-        # Only shared wrapper-template creation is serialized. Once the template is
-        # valid, copies into distinct project roots proceed independently.
         with runner_module._exclusive_cache_lock(
             self.cache_dir,
             timeout_seconds=max(300, self.command_timeout_seconds * 3),
         ):
             if not _valid_wrapper_template(template, version, sha256):
-                if template.exists():
+                if template.is_symlink():
+                    template.unlink()
+                elif template.exists():
                     shutil.rmtree(template)
-                template.mkdir(parents=True, exist_ok=True)
+                template.mkdir(parents=True, exist_ok=False)
                 (template / "settings.gradle").write_text(
                     "rootProject.name = 'mmm-wrapper-template'\n",
                     encoding="utf-8",
@@ -196,7 +296,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
 
     current_ensure = cls._ensure_gradle
     if not getattr(current_ensure, "_mmm_target_parallel_distribution", False):
-        base_ensure = _base_ensure_gradle(current_ensure)
+        base_ensure = current_ensure
 
         @wraps(base_ensure)
         def target_cached_ensure(
@@ -212,24 +312,29 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 )
             executable = _distribution_executable(self.cache_dir, version)
             marker = _marker_path(self.cache_dir, version, sha256)
-            if executable.is_file() and _valid_distribution_marker(
+            safe_executable = _safe_regular_file(self.cache_dir, executable)
+            if safe_executable is not None and _valid_distribution_marker(
                 marker, version, sha256
             ):
-                return executable
+                return safe_executable
 
-            # The download/extract directory is shared. Serialize only this mutation,
-            # then release the lock before any project Gradle invocation begins.
             with runner_module._exclusive_cache_lock(
                 self.cache_dir,
                 timeout_seconds=max(300, self.command_timeout_seconds * 3),
             ):
-                if executable.is_file() and _valid_distribution_marker(
+                safe_executable = _safe_regular_file(self.cache_dir, executable)
+                if safe_executable is not None and _valid_distribution_marker(
                     marker, version, sha256
                 ):
-                    return executable
+                    return safe_executable
                 executable = base_ensure(self, version, sha256)
+                safe_executable = _safe_regular_file(self.cache_dir, executable)
+                if safe_executable is None:
+                    raise runner_module.BuildRunnerError(
+                        "Gradle executable is missing or unsafe after extraction."
+                    )
                 _write_distribution_marker(marker, version, sha256)
-                return executable
+                return safe_executable
 
         target_cached_ensure._mmm_target_parallel_distribution = True
         cls._ensure_gradle = target_cached_ensure
@@ -253,7 +358,12 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             ) from exc
         version = str(adapter.gradle)
         sha256 = str(adapter.gradle_sha256)
-        logs = root / ".minecraft_ai" / "logs"
+        state = root / ".minecraft_ai"
+        logs = state / "logs"
+        if state.is_symlink() or logs.is_symlink():
+            raise runner_module.BuildRunnerError(
+                "Validation log state must not traverse symbolic links."
+            )
         logs.mkdir(parents=True, exist_ok=True)
 
         gradle = self._ensure_gradle(version, sha256)
@@ -261,6 +371,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
         commands: list[Any] = []
+        gametest_report: str | None = None
 
         wrapper_result = _sync_wrapper(
             self,
@@ -323,7 +434,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                     gradle_version=version,
                     commands=tuple(commands),
                     jar_path=self._find_release_jar(root),
-                    gametest_report=self._gametest_report(root),
+                    gametest_report=None,
                     error="Headless Fabric GameTest failed.",
                 )
             resource_errors = validation_module.gametest_resource_errors(
@@ -336,12 +447,27 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                     gradle_version=version,
                     commands=tuple(commands),
                     jar_path=self._find_release_jar(root),
-                    gametest_report=self._gametest_report(root),
+                    gametest_report=None,
                     error=(
-                        "Headless Fabric GameTest loaded generated resources with errors: "
+                        "Headless Fabric GameTest resource evidence failed: "
                         + " | ".join(resource_errors[:8])
                     ),
                 )
+            report_candidate = root / "build" / "gametest-report.xml"
+            safe_report = _safe_regular_file(root, report_candidate)
+            if safe_report is None:
+                return runner_module.BuildReport(
+                    status="FAIL",
+                    gradle_version=version,
+                    commands=tuple(commands),
+                    jar_path=self._find_release_jar(root),
+                    gametest_report=None,
+                    error=(
+                        "GameTest reported success but no safe gametest-report.xml "
+                        "evidence was produced."
+                    ),
+                )
+            gametest_report = str(safe_report)
 
         jar_path = self._find_release_jar(root)
         if jar_path is None:
@@ -350,7 +476,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 gradle_version=version,
                 commands=tuple(commands),
                 jar_path=None,
-                gametest_report=self._gametest_report(root),
+                gametest_report=gametest_report,
                 error="Gradle reported success but no remapped release JAR was found.",
             )
         return runner_module.BuildReport(
@@ -358,7 +484,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             gradle_version=version,
             commands=tuple(commands),
             jar_path=jar_path,
-            gametest_report=self._gametest_report(root),
+            gametest_report=gametest_report,
             error=None,
         )
 
@@ -377,49 +503,47 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         run_gametest: bool = True,
     ) -> Any:
         root = Path(project_root).expanduser().resolve()
-        # Build directories, wrapper files and logs are project-local mutable state.
-        # Serialize the same canonical project only; unrelated projects can validate
-        # concurrently even when they share GRADLE_USER_HOME/build cache.
         with _path_lock(root):
             fingerprint = validation_module.project_build_fingerprint(root)
-            key = (str(root), fingerprint, bool(run_gametest))
+            profile = _build_cache_profile(self)
+            key = (str(root), fingerprint, bool(run_gametest), profile)
             with validation_module._CACHE_LOCK:
                 cached = validation_module._SUCCESSFUL_BUILDS.get(key)
+                reusable = _cached_report(root, cached, run_gametest=run_gametest)
+                if reusable is not None:
+                    return reusable
                 if cached is not None:
-                    return copy.deepcopy(cached)
+                    validation_module._SUCCESSFUL_BUILDS.pop(key, None)
 
             report = self._build_locked(root, run_gametest=run_gametest)
             final_fingerprint = validation_module.project_build_fingerprint(root)
             if final_fingerprint != fingerprint:
-                # A successful compiler result for moving inputs is not evidence for
-                # either snapshot. Do not place it in RECENT/SUCCESS caches where the
-                # repair/release path could certify the post-build project by mistake.
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=report.gradle_version,
-                    commands=report.commands,
-                    jar_path=report.jar_path,
-                    gametest_report=report.gametest_report,
-                    error="Project inputs changed during validation; result is not certifiable.",
+                return _uncertifiable_report(
+                    runner_module,
+                    report,
+                    "Project inputs changed during validation; result is not certifiable.",
                 )
 
-            final_key = (str(root), final_fingerprint, bool(run_gametest))
-            with validation_module._CACHE_LOCK:
-                validation_module._bounded_put(
-                    validation_module._RECENT_BUILDS,
-                    final_key,
-                    copy.deepcopy(report),
+            entry = _cache_entry(root, report, run_gametest=run_gametest)
+            if report.passed and entry is None:
+                return _uncertifiable_report(
+                    runner_module,
+                    report,
+                    "Validation outputs changed, disappeared, or became unsafe before certification.",
                 )
-                if report.passed:
+            if entry is not None:
+                final_key = (str(root), final_fingerprint, bool(run_gametest), profile)
+                with validation_module._CACHE_LOCK:
                     validation_module._bounded_put(
                         validation_module._SUCCESSFUL_BUILDS,
                         final_key,
-                        copy.deepcopy(report),
+                        entry,
                     )
             return report
 
     parallel_cached_build._mmm_project_parallel_validation = True
     parallel_cached_build._mmm_exact_input_cache = True
+    parallel_cached_build._mmm_output_bound_validation_cache = True
     cls.build = parallel_cached_build
 
 
