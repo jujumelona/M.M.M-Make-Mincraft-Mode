@@ -471,20 +471,43 @@ def _collect_diagnostics(
     timeout_seconds: float,
     quiet_seconds: float,
 ) -> dict[str, list[dict[str, Any]]]:
+    if timeout_seconds <= 0:
+        raise ValueError("JDT diagnostics timeout must be positive.")
+    if quiet_seconds < 0:
+        raise ValueError("JDT diagnostics quiet period cannot be negative.")
+    if not expected_uris:
+        return {}
+
     diagnostics: dict[str, list[dict[str, Any]]] = {}
-    deadline = time.monotonic() + timeout_seconds
-    quiet_since = time.monotonic()
-    while time.monotonic() < deadline:
-        if time.monotonic() - quiet_since >= quiet_seconds:
-            break
+    deadline = time.monotonic() + float(timeout_seconds)
+    while True:
+        if expected_uris.issubset(diagnostics):
+            return dict(sorted(diagnostics.items()))
+
+        reader_failure = getattr(rpc, "_mmm_reader_failure", None)
+        if reader_failure is not None:
+            raise JDTLanguageServerError(
+                "JDT LS stdout reader failed while collecting diagnostics: "
+                f"{type(reader_failure).__name__}: {reader_failure}"
+            ) from reader_failure
+
+        process = getattr(rpc, "process", None)
+        poll = getattr(process, "poll", None)
+        if callable(poll):
+            returncode = poll()
+            if returncode is not None:
+                stderr = "\n".join(list(getattr(rpc, "stderr", ())) [-8:])
+                detail = f"; stderr={stderr}" if stderr else ""
+                raise JDTLanguageServerError(
+                    "JDT LS exited before publishing complete diagnostics: "
+                    f"returncode={returncode}{detail}"
+                )
+
         remaining = deadline - time.monotonic()
-        wait_seconds = min(
-            0.25,
-            max(0.001, quiet_seconds),
-            max(0.001, remaining),
-        )
+        if remaining <= 0:
+            break
         try:
-            message = rpc.messages.get(timeout=wait_seconds)
+            message = rpc.messages.get(timeout=min(0.25, remaining))
         except queue.Empty:
             continue
         if _respond_to_server_request(rpc, message):
@@ -492,13 +515,28 @@ def _collect_diagnostics(
         if message.get("method") != "textDocument/publishDiagnostics":
             continue
         params = message.get("params", {})
-        uri = str(params.get("uri", ""))
-        values = params.get("diagnostics", [])
-        if uri not in expected_uris or not isinstance(values, list):
+        if not isinstance(params, dict):
             continue
-        diagnostics[uri] = _sorted_diagnostics(values)
-        quiet_since = time.monotonic()
-    return dict(sorted(diagnostics.items()))
+        uri = str(params.get("uri", ""))
+        if uri not in expected_uris:
+            continue
+        values = params.get("diagnostics")
+        if not isinstance(values, list):
+            raise JDTLanguageServerError(
+                "JDT LS published a malformed diagnostics payload for an opened "
+                "Java file."
+            )
+        diagnostics[uri] = _sorted_diagnostics(
+            item for item in values if isinstance(item, dict)
+        )
+
+    missing_count = len(expected_uris.difference(diagnostics))
+    raise JDTLanguageServerError(
+        "JDT LS did not publish diagnostics for every opened Java file before the "
+        "validation deadline: "
+        f"observed={len(diagnostics)}, expected={len(expected_uris)}, "
+        f"missing={missing_count}."
+    )
 
 
 def _sorted_diagnostics(
