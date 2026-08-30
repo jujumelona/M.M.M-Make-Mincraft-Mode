@@ -24,17 +24,33 @@ from .minecraft_knowledge_contract import (
     evaluate_route_coverage,
 )
 from .pre_design_domain_research import research_document_domain
+from .pre_design_rag_quality_contract import _source_body
 from .research_coordinator import collect_technology_radar
-from .retrieval import BUILTIN_CORPUS, OfficialCorpusIndex
+from .retrieval import BUILTIN_CORPUS
 from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
 
-_CONTENT_FIELDS = ("content", "excerpt", "snippet", "text", "body")
 _QUERY_STOP_TERMS = frozenset(
     {
-        "fabric", "minecraft", "mod", "mods", "requested", "existing", "host",
-        "resolved", "target", "implementation", "mechanic", "system", "game",
-        "player", "players", "official", "documentation", "docs", "source",
+        "fabric",
+        "minecraft",
+        "mod",
+        "mods",
+        "requested",
+        "existing",
+        "host",
+        "resolved",
+        "target",
+        "implementation",
+        "mechanic",
+        "system",
+        "game",
+        "player",
+        "players",
+        "official",
+        "documentation",
+        "docs",
+        "source",
     }
 )
 
@@ -96,7 +112,7 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                 "requirements": [prompt],
                 "evidence_kinds": [
                     "minecraft_api",
-                            "runtime_behavior",
+                    "runtime_behavior",
                     "local_project",
                     "testing",
                 ],
@@ -135,68 +151,24 @@ def _document_relevance(query: str, document: Mapping[str, Any]) -> int:
         return 0
     searchable = " ".join(
         str(document.get(field, ""))
-        for field in ("document_id", "source_id", "title", "url", "topics", "content")
+        for field in (
+            "document_id",
+            "source_id",
+            "title",
+            "url",
+            "topics",
+            "content",
+        )
     )
     return len(query_tokens & _evidence_tokens(searchable))
-
-
-def _target_neutral_official_evidence(
-    research_brief: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Return only query-relevant reviewed documents, never the whole corpus/TOC."""
-
-    index = OfficialCorpusIndex(BUILTIN_CORPUS)
-    reviewed = [
-        {**document.public_metadata(), "content": document.content}
-        for document in index.documents
-    ]
-    domains: list[dict[str, Any]] = []
-    raw_domains = research_brief.get("domains", [])
-    if isinstance(raw_domains, list):
-        for domain in raw_domains:
-            if not isinstance(domain, Mapping):
-                continue
-            raw_queries = domain.get("queries", [])
-            queries = (
-                [str(item).strip() for item in raw_queries if str(item).strip()]
-                if isinstance(raw_queries, list)
-                else []
-            )
-            query_text = " ".join([str(domain.get("objective", "")), *queries])
-            scored = [
-                (_document_relevance(query_text, document), document)
-                for document in reviewed
-            ]
-            selected = [
-                document
-                for score, document in sorted(
-                    scored,
-                    key=lambda item: (-item[0], str(item[1].get("document_id", ""))),
-                )
-                if score > 0
-            ]
-            domains.append(
-                {
-                    "domain_id": str(domain.get("domain_id", "")),
-                    "queries": queries,
-                    "documents": selected,
-                }
-            )
-    return {
-        "schema_version": "mmm/pre-design-official-evidence",
-        "status": "available",
-        "target_scope": "target_neutral",
-        "target_frozen": False,
-        "corpus_snapshot_hash": index.snapshot_hash,
-        "document_count": sum(len(item["documents"]) for item in domains),
-        "domains": domains,
-    }
 
 
 def _builtin_content_record(
     record: Mapping[str, Any], query: str
 ) -> dict[str, Any] | None:
-    source_id = str(record.get("source_id") or record.get("document_id") or "").strip()
+    source_id = str(
+        record.get("source_id") or record.get("document_id") or ""
+    ).strip()
     for document in BUILTIN_CORPUS:
         document_id = str(getattr(document, "document_id", "")).strip()
         if not source_id or source_id != document_id:
@@ -213,14 +185,6 @@ def _builtin_content_record(
     return None
 
 
-def _record_content(record: Mapping[str, Any]) -> str:
-    for field in _CONTENT_FIELDS:
-        value = record.get(field)
-        if isinstance(value, str) and len(value.strip()) >= 24:
-            return value.strip()
-    return ""
-
-
 def _section_records(section: Any) -> list[Mapping[str, Any]]:
     if not isinstance(section, Mapping):
         return []
@@ -233,6 +197,8 @@ def _section_records(section: Any) -> list[Mapping[str, Any]]:
 
 
 def _query_content_records(query_item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Materialize only verified source bodies before any evidence document is written."""
+
     query = str(query_item.get("query", ""))
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -240,17 +206,19 @@ def _query_content_records(query_item: Mapping[str, Any]) -> list[dict[str, Any]
         section = query_item.get(section_name)
         for raw in _section_records(section):
             item = dict(raw)
-            content = _record_content(item)
+            content = _source_body(item)
             if not content and section_name == "project_rag":
                 materialized = _builtin_content_record(item, query)
                 if materialized is not None:
                     item = materialized
-                    content = _record_content(item)
+                    content = _source_body(item)
             if not content:
                 continue
             digest = str(item.get("content_sha256", "")).strip()
             if not digest:
-                digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                digest = "sha256:" + hashlib.sha256(
+                    content.encode("utf-8")
+                ).hexdigest()
                 item["content_sha256"] = digest
             if digest in seen:
                 continue
@@ -269,7 +237,11 @@ def _is_github_record(record: Mapping[str, Any]) -> bool:
         if isinstance(metadata, Mapping)
         else ""
     )
-    return source_id.startswith("github:") or "github.com/" in url or bool(repository)
+    return (
+        source_id.startswith("github:")
+        or "github.com/" in url
+        or bool(repository)
+    )
 
 
 def _grounded_domain_evidence(
@@ -302,11 +274,11 @@ def _grounded_domain_evidence(
                     "github_saturation_reason": str(
                         github.get("saturation_reason") or ""
                     ),
-                    "retrieval_errors": [
-                        str(error) for error in external.get("errors", ())[:3]
-                    ]
-                    if isinstance(external.get("errors"), list)
-                    else [],
+                    "retrieval_errors": (
+                        [str(error) for error in external.get("errors", ())[:3]]
+                        if isinstance(external.get("errors"), list)
+                        else []
+                    ),
                 }
             )
     return {
@@ -318,6 +290,7 @@ def _grounded_domain_evidence(
 
 def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
     domains: list[dict[str, Any]] = []
+    content_record_count = 0
     raw_domains = bundle.get("domains", [])
     for domain in raw_domains if isinstance(raw_domains, list) else []:
         if not isinstance(domain, Mapping):
@@ -328,6 +301,7 @@ def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(item, Mapping):
                 continue
             records = _query_content_records(item)
+            content_record_count += len(records)
             external = item.get("external_rag")
             external = external if isinstance(external, Mapping) else {}
             github = external.get("github_retrieval")
@@ -346,23 +320,28 @@ def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
                     "github_saturation_reason": str(
                         github.get("saturation_reason") or ""
                     ),
-                    "github_search_requests": int(github.get("search_requests") or 0),
-                    "github_source_requests": int(github.get("source_requests") or 0),
-                    "retrieval_errors": [
-                        str(error) for error in external.get("errors", ())[:3]
-                    ]
-                    if isinstance(external.get("errors"), list)
-                    else [],
+                    "github_search_requests": int(
+                        github.get("search_requests") or 0
+                    ),
+                    "github_source_requests": int(
+                        github.get("source_requests") or 0
+                    ),
+                    "retrieval_errors": (
+                        [str(error) for error in external.get("errors", ())[:3]]
+                        if isinstance(external.get("errors"), list)
+                        else []
+                    ),
                 }
             )
         domains.append(
             {"domain_id": str(domain.get("domain_id", "")), "queries": queries}
         )
     return {
-        "schema_version": "mmm/pre-design-grounded-rag-receipt",
-        "status": "available",
+        "schema_version": "mmm/pre-design-grounded-rag-receipt-v2",
+        "status": "available" if content_record_count else "unavailable",
         "research_sha256": bundle.get("research_sha256"),
         "domain_count": len(domains),
+        "content_record_count": content_record_count,
         "domains": domains,
         "source_content_omitted": True,
     }
@@ -399,8 +378,12 @@ def _validate_domain_provider_grounding(
         diagnostics = [
             {
                 "query": str(query.get("query") or ""),
-                "provider_status": str(query.get("github_provider_status") or "unknown"),
-                "saturation_reason": str(query.get("github_saturation_reason") or ""),
+                "provider_status": str(
+                    query.get("github_provider_status") or "unknown"
+                ),
+                "saturation_reason": str(
+                    query.get("github_saturation_reason") or ""
+                ),
                 "errors": list(query.get("retrieval_errors") or ()),
             }
             for query in grounded.get("queries", [])
@@ -413,7 +396,6 @@ def _validate_domain_provider_grounding(
         )
 
 
-
 def _domain_document_evidence(
     agentic: Any,
     domain_id: str,
@@ -422,7 +404,9 @@ def _domain_document_evidence(
     grounded_bundle: Mapping[str, Any],
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
-        "grounded_rag": _grounded_domain_evidence(agentic, domain_id, grounded_bundle)
+        "grounded_rag": _grounded_domain_evidence(
+            agentic, domain_id, grounded_bundle
+        )
     }
     for source, value in deterministic.items():
         if source == "grounded_rag":
@@ -501,7 +485,9 @@ def _design_request_fits(
             prior_error="",
             prior_candidate=None,
         )
-        prepared = _inject_system_context(messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT)
+        prepared = _inject_system_context(
+            messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT
+        )
         if _canonical_size(prepared) > budget:
             return False
     return True
@@ -539,7 +525,10 @@ def _brief_model_index(
 
 def _note_summary(note: Any, *, agentic: Any) -> dict[str, Any]:
     if not isinstance(note, Mapping):
-        return {"domain_id": "unknown", "note_sha256": agentic._json_sha256(note)}
+        return {
+            "domain_id": "unknown",
+            "note_sha256": agentic._json_sha256(note),
+        }
     claims = note.get("claims", [])
     gaps = note.get("gaps", [])
     next_queries = note.get("next_queries", [])
@@ -631,8 +620,12 @@ def _bounded_model_view(
         "research_brief": deepcopy(research_brief),
         "domain_notes": deepcopy(domain_notes),
         "procedural_skillbank": deepcopy(payload.get("procedural_skillbank")),
-        "minecraft_knowledge_plan": deepcopy(payload.get("minecraft_knowledge_plan")),
-        "minecraft_knowledge_route_coverage": deepcopy(payload.get("minecraft_knowledge_route_coverage")),
+        "minecraft_knowledge_plan": deepcopy(
+            payload.get("minecraft_knowledge_plan")
+        ),
+        "minecraft_knowledge_route_coverage": deepcopy(
+            payload.get("minecraft_knowledge_route_coverage")
+        ),
         "research_sha256": full_research_sha256,
     }
     view = dict(payload)
@@ -693,10 +686,10 @@ def _domain_failure_reasons(note: Mapping[str, Any]) -> list[str]:
     failures = note.get("research_failures")
     if isinstance(failures, list) and failures:
         reasons.append("research_failures is non-empty")
-    if note.get("sufficient") is False:
-        reasons.append("sufficient=false")
-    if note.get("fixed_point") is True and note.get("sufficient") is not True:
-        reasons.append("fixed_point reached without sufficient evidence")
+    if note.get("sufficient") is not True:
+        reasons.append("sufficient is not true")
+    if note.get("fixed_point") is True:
+        reasons.append("fixed_point=true")
     return list(dict.fromkeys(reasons))
 
 
@@ -737,10 +730,14 @@ def _validate_domain_result(note: Any, *, domain_id: str) -> dict[str, Any]:
 
 def _target_frozen(knowledge_plan: Mapping[str, Any]) -> bool:
     policy = knowledge_plan.get("policy")
-    return bool(policy.get("target_frozen")) if isinstance(policy, Mapping) else False
+    return (
+        bool(policy.get("target_frozen")) if isinstance(policy, Mapping) else False
+    )
 
 
-def _deferred_technology_receipt(knowledge_plan: Mapping[str, Any]) -> dict[str, Any]:
+def _deferred_technology_receipt(
+    knowledge_plan: Mapping[str, Any]
+) -> dict[str, Any]:
     return {
         "schema_version": "mmm/technology-radar-deferred-v1",
         "status": "deferred_until_target_freeze",
@@ -810,7 +807,7 @@ def collect_design_research(
                 stage="technology_radar",
                 result=deterministic["technology_radar"],
             )
-        except Exception as exc:  # noqa: BLE001 - diagnostic boundary must capture provider failures
+        except Exception as exc:  # noqa: BLE001 - diagnostic boundary captures provider failures
             diagnostic = _exception_payload(exc)
             _emit_research_diagnostic(
                 "deterministic_stage_failure",
@@ -818,14 +815,19 @@ def collect_design_research(
                 exception=diagnostic,
             )
             errors.append(
-                {"stage": "technology_radar", "error": f"{type(exc).__name__}: {exc}"}
+                {
+                    "stage": "technology_radar",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             )
             deterministic["technology_radar"] = {
                 "status": "unavailable",
                 "failure": diagnostic,
             }
     else:
-        deterministic["technology_radar"] = _deferred_technology_receipt(knowledge_plan)
+        deterministic["technology_radar"] = _deferred_technology_receipt(
+            knowledge_plan
+        )
         _emit_research_diagnostic(
             "deterministic_stage_deferred",
             stage="technology_radar",
@@ -883,7 +885,9 @@ def collect_design_research(
                 exception=diagnostic,
             )
             raise
-        domain_notes.append(_validate_domain_result(raw_note, domain_id=domain_id))
+        domain_notes.append(
+            _validate_domain_result(raw_note, domain_id=domain_id)
+        )
 
     payload: dict[str, Any] = {
         "schema_version": "mmm/agentic-pre-design-research-v1",
@@ -893,18 +897,32 @@ def collect_design_research(
         "errors": errors,
         "method": {
             "reason_act": "target-neutral host evidence collection before design",
-            "adaptive_retrieval": "query-scoped claim-bearing evidence is paged to the model within bounded context",
-            "corrective_retrieval": "one grounded retrieval owner supplies local, official and external source evidence",
-            "reflection": "final sufficient claims must cite exact host-owned evidence page refs",
-            "planning_search": "pre-design source discovery is grounded; donor selection remains a frozen-design reuse decision",
+            "adaptive_retrieval": (
+                "query-scoped claim-bearing evidence is paged to the model within "
+                "bounded context"
+            ),
+            "corrective_retrieval": (
+                "one grounded retrieval owner supplies local, official and external "
+                "source evidence"
+            ),
+            "reflection": (
+                "final sufficient claims must cite exact host-owned evidence page refs"
+            ),
+            "planning_search": (
+                "pre-design source discovery is grounded; donor selection remains a "
+                "frozen-design reuse decision"
+            ),
             "minecraft_knowledge": (
-                "version-sensitive routes are explicit deferred work until platform target freeze"
+                "version-sensitive routes are explicit deferred work until platform "
+                "target freeze"
             ),
         },
     }
     payload["minecraft_knowledge_plan"] = knowledge_plan
     coverage = evaluate_route_coverage(knowledge_plan, payload)
-    _emit_research_diagnostic("minecraft_knowledge_route_coverage", coverage=coverage)
+    _emit_research_diagnostic(
+        "minecraft_knowledge_route_coverage", coverage=coverage
+    )
     if coverage["status"] != "PASS":
         raise PreDesignResearchFailure(
             "Minecraft knowledge route coverage blocked pre-design research: "
