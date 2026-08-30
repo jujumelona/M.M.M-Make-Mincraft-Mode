@@ -33,22 +33,12 @@ jobs:
           source_path = Path('minecraft_mod_ai/pre_design_research_pipeline.py')
           source = source_path.read_text(encoding='utf-8')
 
-          old_provider = '''    providers = {
-              str(item).casefold()
-              for item in domain.get("providers", [])
-              if str(item).strip()
-          }
-          if "github" in providers and not any(_is_github_record(record) for record in records):
-              raise PreDesignResearchFailure(
-                  f"Pre-design retrieval gap for domain {domain_id!r}: required provider 'github' "
-                  "returned no content-bearing source document."
-              )
-          '''
-          new_provider = '''    # ``providers`` describes eligible retrieval routes. It is deliberately OR
-              # semantics: one claim-bearing route is enough to continue pre-design research.
-              # A provider is mandatory only when the caller explicitly places it in
-              # ``required_providers``. This prevents an empty donor/GitHub search from
-              # turning a valid local/official evidence result into a fatal retrieval gap.
+          func_start = source.index('def _validate_domain_provider_grounding(')
+          func_end = source.index('\n\n\ndef _domain_document_evidence(', func_start)
+          providers_start = source.index('    providers = {', func_start, func_end)
+          provider_replacement = '''    # ``providers`` lists eligible retrieval routes (OR semantics). A route may
+              # legitimately return zero hits when another route already supplied claim-bearing
+              # evidence. Only ``required_providers`` is fail-closed per provider.
               required_providers = {
                   str(item).casefold()
                   for item in domain.get("required_providers", [])
@@ -62,52 +52,23 @@ jobs:
                       "provider 'github' returned no content-bearing source document."
                   )
           '''
-          if old_provider not in source:
-              raise SystemExit('provider validation anchor drifted')
-          source = source.replace(old_provider, new_provider, 1)
+          source = source[:providers_start] + provider_replacement + source[func_end:]
 
-          old_kinds = '''                "evidence_kinds": [
-                      "minecraft_api",
-                      "compatibility",
-                      "runtime_behavior",
-                      "local_project",
-                      "testing",
-                  ],
-          '''
-          new_kinds = '''                "evidence_kinds": [
-                      "minecraft_api",
-                      "runtime_behavior",
-                      "local_project",
-                      "testing",
-                  ],
-          '''
-          if old_kinds not in source:
-              raise SystemExit('pre-design evidence-kinds anchor drifted')
-          source = source.replace(old_kinds, new_kinds, 1)
+          brief_start = source.index('def _pre_design_brief(')
+          brief_end = source.index('\n\n\ndef _evidence_tokens(', brief_start)
+          brief = source[brief_start:brief_end]
+          compatibility_line = '            "compatibility",\n'
+          if compatibility_line not in brief:
+              raise SystemExit('pre-design compatibility evidence-kind anchor drifted')
+          brief = brief.replace(compatibility_line, '', 1)
+          source = source[:brief_start] + brief + source[brief_end:]
           source_path.write_text(source, encoding='utf-8')
 
           test_path = Path('tests/test_pre_design_rag_root_cause.py')
           tests = test_path.read_text(encoding='utf-8')
-          old_test = '''def test_required_github_gap_fails_before_model_extraction():
-              with pytest.raises(subject.PreDesignResearchFailure, match="github"):
-                  subject._validate_domain_provider_grounding(
-                      {"domain_id": "resource", "providers": ["github"]},
-                      {
-                          "queries": [
-                              {
-                                  "query": "resource gathering",
-                                  "evidence_records": [
-                                      {
-                                          "source_id": "official:resource-doc",
-                                          "content": "A sufficiently long official resource gathering explanation for the test.",
-                                      }
-                                  ],
-                              }
-                          ]
-                      },
-                  )
-          '''
-          new_test = '''def test_provider_routes_are_alternatives_when_claim_bearing_content_exists():
+          test_start = tests.index('def test_required_github_gap_fails_before_model_extraction():')
+          test_end = tests.index('\n\n\ndef test_live_collect_design_research_uses_unified_grounded_owner', test_start)
+          replacement = '''def test_provider_routes_are_alternatives_when_claim_bearing_content_exists():
               subject._validate_domain_provider_grounding(
                   {
                       "domain_id": "resource",
@@ -163,9 +124,7 @@ jobs:
               assert "dependency" not in domain.get("evidence_kinds", [])
               assert "license" not in domain.get("evidence_kinds", [])
           '''
-          if old_test not in tests:
-              raise SystemExit('provider regression-test anchor drifted')
-          tests = tests.replace(old_test, new_test, 1)
+          tests = tests[:test_start] + replacement + tests[test_end:]
           test_path.write_text(tests, encoding='utf-8')
           PY
 
