@@ -10,7 +10,6 @@ core cannot fit, the request fails before inference instead of entering repeated
 context-pressure retries.
 """
 
-import sys
 from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
@@ -18,6 +17,7 @@ from typing import Any
 _MARKER = "_mmm_hard_context_capacity_v1"
 _FIT_MARKER = "_mmm_hard_context_fit_v1"
 _EMERGENCY_MARKER = "_mmm_protocol_safe_emergency_fit_v1"
+_REPLACE_MARKER = "_mmm_protocol_safe_live_replace_v1"
 
 
 class ContextPackingError(RuntimeError):
@@ -155,6 +155,57 @@ def _protocol_safe_minimal_fit(
     )
 
 
+def _is_unsafe_three_message_fallback(
+    messages: Sequence[Mapping[str, Any]],
+    replacement: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Detect the legacy overflow fallback that drops middle authority/task messages."""
+
+    if len(messages) <= 3 or len(replacement) != 3:
+        return False
+    return (
+        replacement[0] == messages[0]
+        and replacement[1] == messages[-2]
+        and replacement[2] == messages[-1]
+    )
+
+
+def _install_tool_loop_guards(context_module: Any) -> None:
+    # Import eagerly so the local names captured by progress_aware_tool_loop cannot
+    # retain pre-guard context functions when runtime bootstrap finishes.
+    from . import progress_aware_tool_loop as tool_loop
+
+    tool_loop.request_message_budget = context_module.request_message_budget
+    tool_loop.emergency_fit_messages = context_module.emergency_fit_messages
+    tool_loop.fit_messages_to_context = context_module.fit_messages_to_context
+
+    current_replace = tool_loop._replace_live_messages
+    if getattr(current_replace, _REPLACE_MARKER, False):
+        return
+
+    @wraps(current_replace)
+    def protocol_safe_live_replace(
+        messages: list[dict[str, Any]],
+        fitted: tuple[Mapping[str, Any], ...],
+    ) -> bool:
+        replacement = tuple(fitted)
+        if _is_unsafe_three_message_fallback(messages, replacement):
+            # Repeated backend context pressure used to discard every middle message,
+            # including the original task after host-injected system instructions.
+            # Keep no more bytes than that legacy triple, but preserve mandatory context.
+            legacy_budget = max(1, context_module._canonical_size(replacement))
+            replacement = _protocol_safe_minimal_fit(
+                context_module,
+                tuple(messages),
+                budget=legacy_budget,
+            )
+        return current_replace(messages, replacement)
+
+    setattr(protocol_safe_live_replace, _REPLACE_MARKER, True)
+    protocol_safe_live_replace.__wrapped__ = current_replace  # type: ignore[attr-defined]
+    tool_loop._replace_live_messages = protocol_safe_live_replace
+
+
 def install(context_module: Any) -> None:
     """Install hard-capacity guards after the canonical semantic compaction owner."""
 
@@ -238,18 +289,13 @@ def install(context_module: Any) -> None:
         safe_fit_messages_to_context.__wrapped__ = current_fit  # type: ignore[attr-defined]
         context_module.fit_messages_to_context = safe_fit_messages_to_context
 
-    # A submodule imported unusually early may have captured the old functions. Patch
-    # only that already-loaded consumer; normal imports resolve the guarded owners later.
-    tool_loop = sys.modules.get("minecraft_mod_ai.progress_aware_tool_loop")
-    if tool_loop is not None:
-        tool_loop.request_message_budget = context_module.request_message_budget
-        tool_loop.emergency_fit_messages = context_module.emergency_fit_messages
-        tool_loop.fit_messages_to_context = context_module.fit_messages_to_context
+    _install_tool_loop_guards(context_module)
 
 
 __all__ = [
     "ContextPackingError",
     "_hard_llama_message_budget",
+    "_is_unsafe_three_message_fallback",
     "_protocol_safe_minimal_fit",
     "install",
 ]
