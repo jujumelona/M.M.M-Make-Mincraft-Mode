@@ -6,7 +6,7 @@ Base main SHA: `763dffa290a07d17ce24b16329bd65aef0ce5bce`
 
 Final focused verification SHA: `53927aab5defc1c8f90d640d1a019a44eb5f319f`
 
-Latest moving `main` rechecked before this completion update: `ef65a6f32783e83e6b7955338d07d5489ecf56f9`
+Pre-handoff moving `main` rechecked: `879a5e9690a387922181ce207e6bee6a623a611a`
 
 ## Root causes closed
 
@@ -93,6 +93,10 @@ Earlier focused runs exposed two real defects (remote-format identity mismatch a
 No branch was created and no force push was used. Changes were written directly to `main`. When concurrent workers advanced `main`, files were re-read and SHA-conditional updates were used rather than overwriting another worker's changes.
 
 The retained `.github/workflows/worker09-final-verify.yml` provides a scoped regression gate for future changes to Worker 09 trust-boundary files. Repository-wide CI remains a separate shared integration concern and is not used as a waiver for Worker 09 correctness; the owned compile/lint/regression gate is green.
+
+## Downstream handoff recheck
+
+Before downstream handoff, `53927aab5defc1c8f90d640d1a019a44eb5f319f` was compared against moving `main` at `879a5e9690a387922181ce207e6bee6a623a611a`. The verification commit remains in `main` ancestry (`behind_by = 0`), and no Worker 09 implementation, regression-test, or retained workflow file changed after that verified snapshot. Only this progress document changed in Worker 09-owned paths. Key proposal, research-receipt, and live-receipt-authority implementation commits were also rechecked as ancestors of current `main`.
 
 ## Remaining
 
