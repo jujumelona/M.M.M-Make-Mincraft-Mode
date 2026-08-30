@@ -147,7 +147,7 @@ def test_complete_relevant_source_body_passes():
 
     assert receipt is not None
     assert receipt["sufficient"] is True
-    assert receipt["validation_version"] == 2
+    assert receipt["validation_version"] == 3
     assert receipt["requirements"][0]["queries_with_content"] == [QUERY]
     assert receipt["query_evidence_receipts"][0]["usable_source_body_ids"] == [
         "github:example/repo:path/File.java"
