@@ -22,6 +22,7 @@ _MARKER = "_mmm_approved_scope_downstream_authority_v2"
 _RETRIEVAL_MARKER = "_mmm_requirement_retrieval_plan_v1"
 _SPACE = re.compile(r"\s+")
 _ASCII_WORD = re.compile(r"[A-Za-z]")
+_QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
 
 
 def _active_catalog(prompt: str) -> dict[str, Any] | None:
@@ -36,6 +37,20 @@ def _active_catalog(prompt: str) -> dict[str, Any] | None:
 
 def _query_text(value: Any) -> str:
     return _SPACE.sub(" ", str(value or "")).strip()
+
+
+def _is_english_retrieval_query(value: str) -> bool:
+    """Accept concise ASCII/English search queries, never raw non-English prompt text."""
+
+    query = _query_text(value)
+    if not query or not _ASCII_WORD.search(query):
+        return False
+    try:
+        query.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    words = _QUERY_WORD.findall(query)
+    return 2 <= len(words) <= 24
 
 
 def _retrieval_plan_schema(requirement_ids: Sequence[str]) -> dict[str, Any]:
@@ -234,7 +249,7 @@ def _normalize_retrieval_plan(
             key = query.casefold()
             if not query or key in {prompt_key, source_key}:
                 continue
-            if not _ASCII_WORD.search(query):
+            if not _is_english_retrieval_query(query):
                 continue
             if key not in {item.casefold() for item in queries}:
                 queries.append(query)
@@ -367,11 +382,12 @@ def _compile_knowledge_plan_with_active_catalog(
                 else []
             )
             ontology_queries = list(search_queries_for_capability(capability)) if capability else []
+            selected_queries = rewritten if rewritten else ontology_queries
             queries = list(
                 dict.fromkeys(
                     query
-                    for query in [*rewritten, *ontology_queries]
-                    if query and _ASCII_WORD.search(query)
+                    for query in selected_queries
+                    if query and _is_english_retrieval_query(query)
                 )
             )
             routes.append(
@@ -381,7 +397,7 @@ def _compile_knowledge_plan_with_active_catalog(
                     "source_text": source_text,
                     "semantic_statement": semantic,
                     "depends_on": list(raw.get("depends_on") or []),
-                    "research_queries": queries[:8],
+                    "research_queries": queries[:5],
                 }
             )
     plan["authored_capability_routes"] = routes
@@ -437,7 +453,7 @@ def _approved_pre_design_brief(prompt: str) -> dict[str, Any]:
         queries = [
             _query_text(query)
             for query in raw.get("research_queries", [])
-            if _query_text(query) and _ASCII_WORD.search(_query_text(query))
+            if _query_text(query) and _is_english_retrieval_query(_query_text(query))
         ]
         queries = list(dict.fromkeys(queries))
         if not queries:
@@ -460,7 +476,7 @@ def _approved_pre_design_brief(prompt: str) -> dict[str, Any]:
                     "source_code",
                     "runtime_behavior",
                 ],
-                "queries": queries[:8],
+                "queries": queries[:5],
                 "providers": ["project_rag", "modrinth", "github", "official_docs"],
                 "depends_on": dependencies,
             }
