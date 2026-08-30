@@ -1388,7 +1388,11 @@ def generate_with_tools(
                 continue
             if require_rag and not state.has_fresh_evidence:
                 eligible_rag_names = tuple(
-                    sorted(name for name in phase_tool_names if name in _RAG_EVIDENCE_TOOLS)
+                    sorted(
+                        name
+                        for name in phase_tool_names
+                        if name in _RAG_EVIDENCE_TOOLS and name not in state.attempted_sources
+                    )
                 )
                 if not eligible_rag_names:
                     raise ModelConfigurationError(
