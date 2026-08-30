@@ -5,6 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai import model_context_budget
+from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.llama_context_safety_contract import (
     ContextPackingError,
     _protocol_safe_minimal_fit,
@@ -164,6 +165,26 @@ def test_emergency_context_pressure_never_retries_identical_history() -> None:
     assert any(item.get("tool_call_id") == "recent" for item in fitted)
 
 
+def test_ultra_context_fallback_never_silently_drops_authored_task() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "system-a"},
+        {"role": "system", "content": "system-b"},
+        {"role": "user", "content": "original authored task"},
+        _assistant("old", "search_code_rag"),
+        _tool("old", "search_code_rag", {"ok": True, "result": "old"}),
+        _assistant("recent", "search_code_rag"),
+        _tool("recent", "search_code_rag", {"ok": True, "result": "recent"}),
+    ]
+    before = [dict(message) for message in messages]
+    legacy_three = (messages[0], messages[-2], messages[-1])
+
+    with pytest.raises(ContextPackingError, match="Refusing silent task/protocol truncation"):
+        tool_loop._replace_live_messages(messages, legacy_three)
+
+    assert messages == before
+    assert any(item.get("content") == "original authored task" for item in messages)
+
+
 def test_runtime_context_safety_wrappers_are_installed() -> None:
     assert getattr(
         model_context_budget.request_message_budget,
@@ -178,5 +199,10 @@ def test_runtime_context_safety_wrappers_are_installed() -> None:
     assert getattr(
         model_context_budget.emergency_fit_messages,
         "_mmm_protocol_safe_emergency_fit_v1",
+        False,
+    )
+    assert getattr(
+        tool_loop._replace_live_messages,
+        "_mmm_protocol_safe_live_replace_v1",
         False,
     )
