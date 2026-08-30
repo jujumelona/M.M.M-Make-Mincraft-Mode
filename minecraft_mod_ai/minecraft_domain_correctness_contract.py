@@ -59,10 +59,6 @@ def _legacy_project_kinds() -> frozenset[str]:
     return frozenset(_normalize_kind(kind.value) for kind in ContentKind) | {"boss"}
 
 
-def _advertised_kinds(adapter: Any, extended_module: Any) -> frozenset[str]:
-    return _supported_kinds(extended_module).intersection(_raw_advertised_kinds(adapter))
-
-
 def _requested_module_kinds(
     modules: tuple[Any, ...],
     *,
@@ -267,17 +263,4 @@ def install() -> None:
     _install_generate_guard(ScalableFabricProjectGenerator, error_type=GenerationError)
 
 
-__all__ = [
-    "_advertised_kinds",
-    "_callable_lineage",
-    "_guard_extended_content",
-    "_guard_generation_spec",
-    "_install_extended_content_guard",
-    "_install_generate_guard",
-    "_legacy_project_kinds",
-    "_raw_advertised_kinds",
-    "_requested_module_kinds",
-    "_requested_spec_kinds",
-    "_retarget_package_aliases",
-    "install",
-]
+__all__ = ["install"]
