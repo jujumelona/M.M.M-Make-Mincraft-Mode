@@ -28,6 +28,8 @@ jobs:
           git reset --hard origin/main
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Capture pre-Worker07 mutation surface
+        run: python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-before.json
       - name: Apply canonical Worker 07 patch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,9 +40,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          # The unified coder-loop tests use MagicMock configs. Explicitly mark the
-          # input-token override as unset so current llama context-safety code uses
-          # max_context rather than MagicMock's integer fallback.
           path = Path('tests/test_unified_host_execution_loop.py')
           text = path.read_text(encoding='utf-8')
           context_anchor = '    config.max_context = 16384\n'
@@ -51,10 +50,6 @@ jobs:
               text = text.replace(context_anchor, context_replacement)
               path.write_text(text, encoding='utf-8')
 
-          # A concurrent policy refactor removed skills_for_model_role(). The
-          # deterministic content wrapper still called that deleted API, which breaks
-          # every coder tool execution before Worker07 localization can be exercised.
-          # Bind it to the current single policy snapshot owner instead.
           contract = Path('minecraft_mod_ai/deterministic_minecraft_content_contract.py')
           source = contract.read_text(encoding='utf-8')
           stale = '''    policy_role = capability_module._policy_model_role(stage, model_role)\n    assigned = capability_module.skills_for_model_role(policy_role)\n'''
@@ -101,23 +96,34 @@ jobs:
             tests/test_runtime_bootstrap_clean.py \
             tests/test_runtime_wrapper_signature_integrity.py
           python .github/scripts/debug_repo_audit.py
-          python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-mutations.json
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-after.json
           python - <<'PY'
           import json
-          import re
           from pathlib import Path
-          audit = json.loads(Path('/tmp/worker07-runtime-mutations.json').read_text(encoding='utf-8'))
-          ci = Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
-          match = re.search(r'budget\s*=\s*(\d+)', ci)
-          if match is None:
-              raise SystemExit('Worker07: CI mutation budget not found')
-          budget = int(match.group(1))
-          behavioral = int(audit['behavioral_count'])
-          print(f'WORKER07_RUNTIME_MUTATIONS={behavioral} CI_BUDGET={budget}')
-          if behavioral > budget:
-              raise SystemExit(f'Worker07 runtime mutation surface {behavioral} exceeds CI budget {budget}')
+
+          before = json.loads(Path('/tmp/worker07-runtime-before.json').read_text(encoding='utf-8'))
+          after = json.loads(Path('/tmp/worker07-runtime-after.json').read_text(encoding='utf-8'))
+          before_count = int(before['behavioral_count'])
+          after_count = int(after['behavioral_count'])
+          delta = after_count - before_count
+          print(f'WORKER07_RUNTIME_MUTATIONS_BEFORE={before_count}')
+          print(f'WORKER07_RUNTIME_MUTATIONS_AFTER={after_count}')
+          print(f'WORKER07_RUNTIME_MUTATIONS_DELTA={delta}')
+          if delta > -2:
+              raise SystemExit(
+                  'Worker07 canonicalization must remove at least two behavioral late-runtime rebindings; '
+                  f'observed delta={delta}'
+              )
+          path = 'minecraft_mod_ai/implementation_kind_boundary_contract.py'
+          before_path = int(before.get('behavioral_by_path', {}).get(path, 0))
+          after_path = int(after.get('behavioral_by_path', {}).get(path, 0))
+          print(f'WORKER07_BOUNDARY_MUTATIONS={before_path}->{after_path}')
+          if after_path > max(0, before_path - 2):
+              raise SystemExit(
+                  'Worker07 late target-hardening rebindings were not removed from the boundary contract'
+              )
           PY
-          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
       - name: Commit canonical Worker 07 implementation
         run: |
           git config user.name "github-actions[bot]"
@@ -126,7 +132,10 @@ jobs:
           git commit -m "refactor: make coder target hardening canonical"
           git fetch origin main
           git rebase origin/main
-          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/deterministic_minecraft_content_contract.py
+          python -m py_compile \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/implementation_kind_boundary_contract.py \
+            minecraft_mod_ai/deterministic_minecraft_content_contract.py
           python -m pytest -q \
             tests/test_worker07_target_context_hardening.py \
             tests/test_unified_host_execution_loop.py \
