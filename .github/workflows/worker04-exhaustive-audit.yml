@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   audit:
-    if: ${{ github.event.head_commit.message == 'ci: worker04 exhaustive audit' }}
+    if: "${{ github.event.head_commit.message == 'ci: worker04 exhaustive audit' }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
