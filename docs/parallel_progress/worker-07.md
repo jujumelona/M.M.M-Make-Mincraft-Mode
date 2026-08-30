@@ -1,75 +1,128 @@
 # Worker 07 — coder localization / mutation-target hardening
 
+## Status
+
+**COMPLETE** — Worker 07 scope is finalized on `main`.
+
+Canonical implementation commit:
+
+- `a2b295a54af95d9f8520fd12f13b924ae7d022ee` — `refactor: make coder target hardening canonical`
+
+Initial hardening checkpoint:
+
+- `e653e976e15a1ba702dbc08f5c88cc37429011b2` — `fix: harden coder target localization`
+
+Branch policy was respected throughout: direct `main`, no worker branch, no force push. Parallel-worker changes were preserved by re-syncing/rebasing against current `origin/main` before the final push.
+
 ## Scope
 
-Worker 07 owns repository-aware coder targeting, `apply_source_edit` localization safety, and repair-loop target stability. This checkpoint is intentionally limited to that boundary and does not change planner semantics, Minecraft API selection, or other workers' subsystems.
+Worker 07 owns repository-aware coder targeting, `apply_source_edit` / source-mutation localization safety, file-symbol-body target identity, and repair-loop target stability. Planner semantics and Minecraft API/domain selection remain outside this worker's ownership.
 
-## Base
+## Root causes fixed
 
-- synchronized base: `main@ffac1aa9a46c8e648360b1f53818eb5265181c91`
-- branch policy: direct `main`; no worker branch
+1. Fresh-target handling and target-identity hardening had been installed as late runtime monkey-patches from `implementation_kind_boundary_contract.py` instead of being owned by the coder execution loop.
+2. A nominal `fresh` task could be treated as mutation-ready even when contradictory reuse/component/source evidence was present.
+3. `TargetMutationContext.merge` could mix file A's symbol/body/ranges with file B's path and could preserve `is_new_file=True` after exact evidence proved the target already existed.
+4. A host-reserved fresh path already present in bounded initial exact-source evidence could bypass existing-source body localization.
+5. During end-to-end coder-loop verification, `deterministic_minecraft_content_contract._role_dynamic_tools` was found calling the removed `skills_for_model_role()` API, causing coder tool execution to fail before localization. It now consumes the current single role-policy snapshot.
+6. Unified coder-loop tests used `MagicMock` model configs without an explicit `max_input_tokens`, which became invalid after the newer llama context-safety contract. The fixture now explicitly represents the unset override as `0`.
 
-## Root causes found
+## Final architecture
 
-1. `implementation_kind_boundary_contract.py` duplicated the complete fresh-target parser already owned by `progress_aware_tool_loop._fresh_owned_symbol_context`. The late wrapper therefore maintained a second copy of the same routing rule.
-2. A task could carry `reuse_refs`/`component_refs`/`source_refs` while its production binding still said `reuse_action=fresh`. The old late wrapper accepted that contradiction as a mutation-ready new file, allowing source-body localization to be skipped.
-3. `TargetMutationContext.merge` used field-wise fallback plus `self.is_new_file or other.is_new_file`. If localization moved from file A to file B, A's symbol/body/ranges could survive under B's path. Once a context became `is_new_file=True`, later repository evidence for an existing file could also leave the new-file bypass active.
-4. A host-reserved fresh path could still be marked new even when the bounded initial exact-source page already contained that exact path. That can produce `READY` with no existing body inspection despite the file already being present.
+### `minecraft_mod_ai/progress_aware_tool_loop.py`
 
-## Changes
+Coder localization is now owned canonically here, with no Worker-07 late rebinding:
+
+- fresh/reuse contradictions fail closed to repository localization;
+- host-reserved fresh anchors are resolved without guessing a repository file;
+- the already-bounded initial exact-source payload is reused only on an exact reserved-path match;
+- unrelated source cannot hijack a reserved fresh target;
+- cross-file context changes replace the old localization context instead of carrying stale symbol/body/ranges forward;
+- exact existing-file evidence can clear a prospective `is_new_file` state and restore body grounding;
+- same-file file -> symbol -> body localization remains cumulative.
 
 ### `minecraft_mod_ai/implementation_kind_boundary_contract.py`
 
-- Deleted the duplicate fresh-target parsing implementation and retained a thin compatibility delegation to the single host-owned resolver.
-- Added a fail-closed fresh/reuse consistency guard. A prospective new-file context is rejected back to `NEED_FILE` when the evidence task or its fresh production binding already contains reuse/component/source references.
-- Reuses the cached initial exact-source page from `ProjectIndex`; if the reserved fresh path itself is already present, it is treated as an existing target and body grounding is restored. Unrelated initial source cannot replace the reserved path.
-- Hardened `TargetMutationContext.merge` at the existing late-runtime contract boundary:
-  - a different target path replaces the localization context instead of mixing fields across files;
-  - exact repository evidence for the same path can downgrade a prospective new file to an existing-file context, restoring source-body grounding;
-  - same-target incremental file -> symbol -> body localization continues to accumulate normally.
-- Reused the existing runtime wrapper marker instead of adding another repository scanner.
+The module is back to its single responsibility: implementation-kind routing. Worker 07's target-localization monkey-patches and duplicate fresh-target helpers were deleted.
 
-### `tests/test_worker07_target_context_hardening.py`
+### `minecraft_mod_ai/deterministic_minecraft_content_contract.py`
 
-Added focused regressions for:
+Dynamic coder tools now read `capability_module._role_policy_snapshot(stage, model_role).skills`, removing the stale call to the deleted `skills_for_model_role()` API.
 
-- an exact reserved path already present in the bounded initial source page is treated as existing, not new;
-- incidental initial source cannot hijack a legitimate fresh reserved target;
-- legitimate fresh target remains mutation-ready;
-- task-level reuse evidence blocks fresh generation;
-- binding-level source evidence blocks fresh generation;
-- different-file localization cannot inherit stale symbol/body state;
-- path-only retargeting resets prior body/symbol state;
-- repository evidence can convert a prospective new target to an existing target;
-- same-file hierarchical localization remains cumulative.
+## Clean-code / performance result
 
-## Performance / clean-code impact
-
-- No new repository walk, RAG query, index build, or model call was added.
-- Removed a second O(number-of-bindings × anchors) fresh-target parser from the late wrapper path; the canonical host resolver remains the only parser.
-- The new checks inspect only the already-present evidence-task payload, cached initial exact-source page, and mutation contexts.
-- Cross-target resets prevent wasted repair attempts caused by stale body/symbol data being applied to a newly localized file.
+- No new repository walk.
+- No new RAG request.
+- No new model call.
+- No duplicate fresh-target parser.
+- No Worker-07 late `TargetMutationContext.merge` monkey-patch.
+- No Worker-07 late `_extract_mutation_context_from_payload` monkey-patch.
+- Existing bounded source evidence and existing host state are reused.
+- Runtime behavioral mutation surface on the identical current-main baseline decreased from **438 to 436** (`delta = -2`).
+- `implementation_kind_boundary_contract.py` behavioral mutation count decreased from **7 to 5**.
+- Temporary Worker-07 finalization workflow and trigger were deleted by the canonical implementation commit.
 
 ## Verification
 
-Pre-commit checks performed on the exact proposed files:
+The finalization gate ran against the latest `main` available to the job, then rebased once more immediately before push.
+
+Pre-push gate:
 
 ```text
-python -m py_compile implementation_kind_boundary_contract.py test_worker07_target_context_hardening.py
-PASS
+py_compile: PASS
+ruff F/E7/E9: All checks passed
+focused/integration pytest: 62 passed
+static repository audit: PASS — 380 package Python files and 16 workflows checked
+vulture --min-confidence 100: PASS
+runtime mutation comparison: 438 -> 436 (delta -2)
+implementation-kind boundary mutations: 7 -> 5
 ```
 
-Post-push repository CI/status must be checked against the resulting commit before Worker 07 is declared complete.
+After fetching and rebasing onto the newer parallel-worker `origin/main` immediately before push:
+
+```text
+py_compile: PASS
+focused Worker-07 / unified-loop / implementation-boundary / deterministic-content pytest: 44 passed
+push to main: PASS
+```
+
+Final pushed SHA after the rebase:
+
+- `a2b295a54af95d9f8520fd12f13b924ae7d022ee`
+
+## Regression coverage
+
+Worker-07 coverage includes:
+
+- exact reserved target already present => existing target, not blind creation;
+- incidental source cannot hijack a legitimate fresh target;
+- legitimate new target remains creatable;
+- contradictory task/binding reuse evidence blocks fresh bypass;
+- different-file localization cannot inherit stale symbol/body state;
+- path-only retargeting resets previous body/symbol state;
+- repository evidence converts a prospective new target into an existing target;
+- same-file hierarchical localization remains cumulative;
+- no Worker-07 late monkey-patch owner remains;
+- coder tool routing uses the current role-policy API.
 
 ## Completion checklist
 
-- [x] root cause localized
-- [x] duplicate fresh-target implementation removed
+- [x] repository-aware target localization hardened
+- [x] blind new-file bypass blocked when exact existing evidence exists
 - [x] fresh/reuse contradiction fails closed
-- [x] exact existing reserved target cannot use the new-file bypass
-- [x] cross-file context contamination blocked
-- [x] existing-file evidence restores body-grounding semantics
-- [x] focused regression tests added (9 cases)
-- [x] no new repository-scan bottleneck introduced
-- [x] changed-file syntax validation passed
-- [ ] pushed commit CI/status verified
+- [x] file/symbol/body identity contamination blocked
+- [x] legitimate fresh creation preserved
+- [x] duplicate target parser removed
+- [x] Worker-07 late runtime monkey-patches removed
+- [x] stale coder dynamic-skill API repaired
+- [x] no added repository/RAG/model-call bottleneck
+- [x] syntax and focused lint checks pass
+- [x] focused and integration regression suites pass
+- [x] static repository audit passes
+- [x] high-confidence dead-code audit passes
+- [x] runtime mutation surface reduced by two
+- [x] rebase-after-parallel-change verification passes
+- [x] canonical implementation pushed to `main`
+- [x] temporary finalization workflow/trigger removed
+
+No unresolved Worker-07-owned blocker remains.
