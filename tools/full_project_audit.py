@@ -43,11 +43,6 @@ STATUSES = {PASS, WARN, FAIL, SKIP}
 _OUTPUT_TAIL_LIMIT = 1200
 _OUTPUT_CHUNK_CHARS = 64 * 1024
 
-_SECRET_RE = re.compile(
-    r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|cookie)"
-    r"(\s*[:=]\s*)([^\s,;]+)"
-)
-
 
 @dataclass
 class Check:
@@ -101,13 +96,9 @@ def _environment_secret_values() -> tuple[str, ...]:
 
 
 def redact(value: Any, *, secrets: Iterable[str] | None = None) -> str:
-    text = str(value)
-    text = _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", text)
     secret_values = _environment_secret_values() if secrets is None else secrets
-    for secret in secret_values:
-        if secret:
-            text = text.replace(secret, "<redacted>")
-    return text
+    redactor = StreamingRedactor(secret_values)
+    return redactor.feed(str(value)) + redactor.finish()
 
 
 def _append_log(value: str) -> None:
