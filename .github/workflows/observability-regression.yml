@@ -27,8 +27,9 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Inject repeated, internal, and audit failures
+      - name: Inject repeated, internal, audit, and pytest failures
         run: >-
           python -m pytest -q
           tests/test_diagnostics.py
           tests/test_root_cause_audit_wrapper.py
+          tests/test_pytest_diagnostics.py
