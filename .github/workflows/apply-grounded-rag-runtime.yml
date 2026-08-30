@@ -130,3 +130,5 @@ jobs:
           git add -A
           git commit -m "feat: connect grounded RAG to reuse and repair runtime"
           git push origin HEAD:main
+
+# rerun after dependency-monitor-aware coder-context test harness fix
