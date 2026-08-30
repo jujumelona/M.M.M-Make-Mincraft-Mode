@@ -11,6 +11,7 @@ from typing import Any
 _RRF_K = 60.0
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
+_SOURCE_BODY_FIELDS = ("content", "body", "text")
 _GENERIC_QUERY_TERMS = {
     "minecraft",
     "mod",
@@ -32,9 +33,9 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 
 
 def _evidence_byte_budget() -> int:
-    # This is a prompt/evidence budget, not a source-count cutoff.  The fusion layer
+    # This is a prompt/evidence budget, not a source-count cutoff. The fusion layer
     # keeps cross-query coverage first, then spends remaining bytes on the highest
-    # scoring evidence.  It prevents retrieval breadth from becoming hundreds of LLM
+    # scoring evidence. It prevents retrieval breadth from becoming hundreds of LLM
     # page reads.
     return _env_int(
         "MMM_PREDESIGN_EVIDENCE_BYTE_BUDGET",
@@ -94,7 +95,9 @@ def _tokens(value: Any) -> set[str]:
 
 
 def _record_content(record: Mapping[str, Any]) -> str:
-    for field in ("content", "excerpt", "snippet", "text", "body"):
+    """Return source-body text only; snippets/excerpts are never evidence bodies."""
+
+    for field in _SOURCE_BODY_FIELDS:
         value = record.get(field)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -176,7 +179,9 @@ def _evidence_excerpt(content: str, queries: list[str]) -> str:
     return excerpt
 
 
-def _bounded_records(records: list[dict[str, Any]], source_queries: list[str]) -> tuple[list[dict[str, Any]], int]:
+def _bounded_records(
+    records: list[dict[str, Any]], source_queries: list[str]
+) -> tuple[list[dict[str, Any]], int]:
     budget = _evidence_byte_budget()
     prepared: list[dict[str, Any]] = []
     for raw in records:
@@ -184,14 +189,25 @@ def _bounded_records(records: list[dict[str, Any]], source_queries: list[str]) -
         fusion = dict(record.get("retrieval_fusion") or {})
         matched = [str(item) for item in fusion.get("matched_queries", ()) if str(item)]
         original = _record_content(record)
-        excerpt = _evidence_excerpt(original, matched or source_queries)
-        if "content" in record:
-            record["content"] = excerpt
+        projection = _evidence_excerpt(original, matched or source_queries)
+        original_digest = str(record.get("content_sha256") or "").strip() or _sha256_text(original)
+
+        # Canonicalize the model-facing evidence to one trusted body field. Keeping
+        # ``body``/``text`` beside a bounded projection would silently retain the full
+        # payload, while keeping ``snippet``/``excerpt`` would let discovery metadata be
+        # mistaken for source evidence by downstream code.
+        record["content"] = projection
+        for field in ("body", "text", "snippet", "excerpt"):
+            record.pop(field, None)
+        if projection != original:
+            record["source_content_sha256"] = original_digest
+            record["content_sha256"] = _sha256_text(projection)
         else:
-            record["excerpt"] = excerpt
+            record["content_sha256"] = original_digest
+
         fusion["original_content_chars"] = len(original)
-        fusion["selected_content_chars"] = len(excerpt)
-        fusion["evidence_projection"] = "query_centered_contiguous_excerpt"
+        fusion["selected_content_chars"] = len(projection)
+        fusion["evidence_projection"] = "query_centered_contiguous_source_body"
         record["retrieval_fusion"] = fusion
         prepared.append(record)
 
@@ -366,8 +382,8 @@ def fuse_grounded_domain_evidence(
     ]
     result["retrieval_trace"] = trace
     result["fusion"] = {
-        "schema_version": "mmm/pre-design-evidence-fusion-v2",
-        "algorithm": "exact_dedupe+query_rank+rrf+coverage_first_byte_budget",
+        "schema_version": "mmm/pre-design-evidence-fusion-v3",
+        "algorithm": "source_body_only+exact_dedupe+query_rank+rrf+coverage_first_byte_budget",
         "query_count": len(rows),
         "queries_with_content": sum(1 for row in trace if row["unique_record_count"]),
         "query_coverage_ratio": (
