@@ -536,15 +536,31 @@ ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ign
 ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # type: ignore[attr-defined]
 
 
-def _agent_tool_round_limit() -> int | None:
-    raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
+_DEFAULT_AGENT_TOOL_ROUNDS = 128
+_MIN_AGENT_TOOL_ROUNDS = 16
+_MAX_AGENT_TOOL_ROUNDS = 512
+
+
+def _default_agent_tool_rounds() -> int:
+    raw = os.environ.get("MMM_AGENT_DEFAULT_TOOL_ROUNDS", "").strip()
     if not raw:
-        return None
+        return _DEFAULT_AGENT_TOOL_ROUNDS
     try:
         value = int(raw)
     except ValueError:
-        return None
-    return value if value > 0 else None
+        return _DEFAULT_AGENT_TOOL_ROUNDS
+    return max(_MIN_AGENT_TOOL_ROUNDS, min(_MAX_AGENT_TOOL_ROUNDS, value))
+
+
+def _agent_tool_round_limit() -> int:
+    raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
+    if not raw:
+        return _default_agent_tool_rounds()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _default_agent_tool_rounds()
+    return value if value > 0 else _default_agent_tool_rounds()
 
 
 def _parallel_read_workers() -> int:

@@ -1242,13 +1242,8 @@ def _generate_turn_with_context_recovery(
             budget_bytes=emergency_budget,
         )
         if not _replace_live_messages(messages, emergency):
-            if len(messages) > 3:
-                forced = [messages[0], messages[-2], messages[-1]]
-                _replace_live_messages(messages, tuple(forced))
-            else:
-                mark_context_recovery_exhausted(exc)
-                raise
-
+            mark_context_recovery_exhausted(exc)
+            raise
         retry_request = replace(
             turn_request,
             messages=tuple(messages),
@@ -1275,27 +1270,6 @@ def _generate_turn_with_context_recovery(
                     media_paths=media_paths,
                 )
             if retry_kind == CONTEXT_PRESSURE:
-                if len(messages) > 3:
-                    forced = [messages[0], messages[-2], messages[-1]]
-                    if _replace_live_messages(messages, tuple(forced)):
-                        ultra_request = replace(
-                            turn_request,
-                            messages=tuple(messages),
-                            media_paths=media_paths,
-                        )
-                        try:
-                            with router._generation_scope(config):
-                                return adapter.generate_turn(ultra_request)
-                        except Exception as ultra_exc:  # noqa: BLE001 - classify backend boundary
-                            if completion_boundary_kind(ultra_exc) == OUTPUT_EXHAUSTED:
-                                return _retry_atomic_after_output_exhaustion(
-                                    router,
-                                    config=config,
-                                    adapter=adapter,
-                                    request=ultra_request,
-                                    messages=messages,
-                                    media_paths=media_paths,
-                                )
                 mark_context_recovery_exhausted(exc)
                 raise exc from retry_exc
             raise
@@ -1362,15 +1336,15 @@ def generate_with_tools(
     while True:
         state.step_index += 1
 
-        if round_limit is not None and state.step_index > round_limit:
+        if state.step_index > round_limit:
             if require_rag and not state.has_fresh_evidence:
                 raise ModelConfigurationError(
-                    "Agent reached the explicit tool-round limit before required "
+                    "Agent reached the host tool-round limit before required "
                     "evidence became available."
                 )
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 raise ModelConfigurationError(
-                    "Writable coder reached the explicit tool-round limit before a "
+                    "Writable coder reached the host tool-round limit before a "
                     "reviewed source mutation was applied; refusing a prose-only implementation."
                 )
             return _finalize_without_tools(
@@ -1380,7 +1354,7 @@ def generate_with_tools(
                 request,
                 messages,
                 instruction=(
-                    f"The explicitly configured host tool limit was reached after {round_limit} rounds. "
+                    f"The host tool-round limit was reached after {round_limit} rounds. "
                     "Do not call more tools. Return the final answer using only observations already present."
                 ),
                 empty_error="Agent returned an empty final response at the explicit tool-round limit.",

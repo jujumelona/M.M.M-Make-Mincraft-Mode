@@ -13,9 +13,10 @@ active completion liveness no longer polls ``/slots`` on the decode hot path.
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import wraps
-from typing import Any, Callable
+from types import TracebackType
+from typing import Any
 
 _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
@@ -233,7 +234,12 @@ class _ProgressCheckedStream:
         response = self._stream.__enter__()
         return _ProgressCheckedResponse(response, self._idle_seconds)
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Any:
         return self._stream.__exit__(exc_type, exc, tb)
 
 
@@ -271,6 +277,8 @@ class _SemanticProgressClient:
 
 def _wrap_raw_client(client: Any, stream_module: Any) -> Any:
     if getattr(client, "_mmm_semantic_progress_client_v1", False):
+        return client
+    if not callable(getattr(client, "stream", None)):
         return client
     return _SemanticProgressClient(client, stream_module)
 

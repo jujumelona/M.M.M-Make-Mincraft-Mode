@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import httpx
 
-from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
 from minecraft_mod_ai import llama_sse_error_contract as contract
+from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
 
 
 class _FakeResponse:
     status_code = 200
-    headers: dict[str, str] = {}
 
     def __init__(self, lines: tuple[str, ...]) -> None:
+        self.headers: dict[str, str] = {}
         self._lines = lines
 
     def __enter__(self):

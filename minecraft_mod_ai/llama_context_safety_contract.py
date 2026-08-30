@@ -17,7 +17,6 @@ from typing import Any
 _MARKER = "_mmm_hard_context_capacity_v1"
 _FIT_MARKER = "_mmm_hard_context_fit_v1"
 _EMERGENCY_MARKER = "_mmm_protocol_safe_emergency_fit_v1"
-_REPLACE_MARKER = "_mmm_protocol_safe_live_replace_v1"
 
 
 class ContextPackingError(RuntimeError):
@@ -68,6 +67,65 @@ def _leading_authority_indices(messages: Sequence[Mapping[str, Any]]) -> set[int
     if index < len(messages) and str(messages[index].get("role", "")) == "user":
         selected.add(index)
     return selected
+
+
+def _latest_compaction_indices(messages: Sequence[Mapping[str, Any]]) -> set[int]:
+    latest: int | None = None
+    for index, message in enumerate(messages):
+        if str(message.get("role", "")) != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and "HOST COMPACTED VERIFIED CONTEXT" in content:
+            latest = index
+    return {latest} if latest is not None else set()
+
+
+def _close_tool_protocol_indices(
+    messages: Sequence[Mapping[str, Any]],
+    selected: set[int],
+) -> set[int]:
+    owners: dict[str, int] = {}
+    results: dict[str, set[int]] = {}
+    for index, message in enumerate(messages):
+        if str(message.get("role", "")) == "assistant":
+            calls = message.get("tool_calls")
+            if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes, bytearray)):
+                for call in calls:
+                    if not isinstance(call, Mapping):
+                        continue
+                    call_id = str(call.get("id", "")).strip()
+                    if call_id:
+                        owners[call_id] = index
+        elif str(message.get("role", "")) == "tool":
+            call_id = str(message.get("tool_call_id", "")).strip()
+            if call_id:
+                results.setdefault(call_id, set()).add(index)
+
+    closed = set(selected)
+    changed = True
+    while changed:
+        changed = False
+        for index in tuple(closed):
+            message = messages[index]
+            role = str(message.get("role", ""))
+            related: set[int] = set()
+            if role == "tool":
+                call_id = str(message.get("tool_call_id", "")).strip()
+                owner = owners.get(call_id)
+                if owner is not None:
+                    related.add(owner)
+            elif role == "assistant":
+                calls = message.get("tool_calls")
+                if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes, bytearray)):
+                    for call in calls:
+                        if not isinstance(call, Mapping):
+                            continue
+                        call_id = str(call.get("id", "")).strip()
+                        related.update(results.get(call_id, ()))
+            before = len(closed)
+            closed.update(related)
+            changed = changed or len(closed) != before
+    return closed
 
 
 def _latest_mutation_indices(messages: Sequence[Mapping[str, Any]]) -> set[int]:
@@ -125,8 +183,10 @@ def _protocol_safe_minimal_fit(
     budget = max(1, int(budget))
     for width in (6, 4, 2, 1):
         selected = _leading_authority_indices(original)
+        selected.update(_latest_compaction_indices(original))
         selected.update(_latest_mutation_indices(original))
         selected.update(_latest_protocol_tail_indices(original, width=width))
+        selected = _close_tool_protocol_indices(original, selected)
         candidate = tuple(original[index] for index in sorted(selected))
         candidate = context_module._compact_implementation_seed(candidate)
         candidate = context_module._compact_tool_messages(
@@ -138,8 +198,10 @@ def _protocol_safe_minimal_fit(
             return candidate
 
     mandatory = _leading_authority_indices(original)
+    mandatory.update(_latest_compaction_indices(original))
     mandatory.update(_latest_mutation_indices(original))
     mandatory.update(_latest_protocol_tail_indices(original, width=1))
+    mandatory = _close_tool_protocol_indices(original, mandatory)
     candidate = tuple(original[index] for index in sorted(mandatory))
     candidate = context_module._compact_implementation_seed(candidate)
     candidate = context_module._compact_tool_messages(
@@ -154,57 +216,6 @@ def _protocol_safe_minimal_fit(
         "mandatory agent context cannot fit the active llama runtime slot; "
         f"mandatory_bytes={size} budget_bytes={budget}. Refusing silent task/protocol truncation."
     )
-
-
-def _is_unsafe_three_message_fallback(
-    messages: Sequence[Mapping[str, Any]],
-    replacement: Sequence[Mapping[str, Any]],
-) -> bool:
-    """Detect the legacy overflow fallback that drops middle authority/task messages."""
-
-    if len(messages) <= 3 or len(replacement) != 3:
-        return False
-    return (
-        replacement[0] == messages[0]
-        and replacement[1] == messages[-2]
-        and replacement[2] == messages[-1]
-    )
-
-
-def _install_tool_loop_guards(context_module: Any) -> None:
-    # Import eagerly so the local names captured by progress_aware_tool_loop cannot
-    # retain pre-guard context functions when runtime bootstrap finishes.
-    from . import progress_aware_tool_loop as tool_loop
-
-    tool_loop.request_message_budget = context_module.request_message_budget
-    tool_loop.emergency_fit_messages = context_module.emergency_fit_messages
-    tool_loop.fit_messages_to_context = context_module.fit_messages_to_context
-
-    current_replace = tool_loop._replace_live_messages
-    if getattr(current_replace, _REPLACE_MARKER, False):
-        return
-
-    @wraps(current_replace)
-    def protocol_safe_live_replace(
-        messages: list[dict[str, Any]],
-        fitted: tuple[Mapping[str, Any], ...],
-    ) -> bool:
-        replacement = tuple(fitted)
-        if _is_unsafe_three_message_fallback(messages, replacement):
-            # Repeated backend context pressure used to discard every middle message,
-            # including the original task after host-injected system instructions.
-            # Keep no more bytes than that legacy triple, but preserve mandatory context.
-            legacy_budget = max(1, context_module._canonical_size(replacement))
-            replacement = _protocol_safe_minimal_fit(
-                context_module,
-                tuple(messages),
-                budget=legacy_budget,
-            )
-        return current_replace(messages, replacement)
-
-    setattr(protocol_safe_live_replace, _REPLACE_MARKER, True)
-    protocol_safe_live_replace.__wrapped__ = current_replace  # type: ignore[attr-defined]
-    tool_loop._replace_live_messages = protocol_safe_live_replace
 
 
 def install(context_module: Any) -> None:
@@ -250,17 +261,26 @@ def install(context_module: Any) -> None:
             if fitted_size <= exact_budget and fitted_size < original_size:
                 return tuple(fitted)
 
-            # This path is entered after the backend has already proved context pressure.
-            # If the byte estimator believed the unchanged payload fit, force a smaller
-            # protocol-safe window rather than retrying the identical request.
-            target = exact_budget
-            if original_size <= exact_budget:
-                target = max(1, min(exact_budget, int(original_size * 0.75)))
-            return _protocol_safe_minimal_fit(
+            # Backend context pressure requires a strictly smaller retry. Preserve as much
+            # history as possible: the retry target is only one byte below the previous
+            # payload unless the caller's real hard budget is already tighter. Protocol-safe
+            # packing then drops only enough optional history to satisfy that monotonic bound.
+            source = fitted if fitted_size < original_size else original
+            target = min(exact_budget, max(1, original_size - 1))
+            candidate = _protocol_safe_minimal_fit(
                 context_module,
-                fitted if fitted_size < original_size else original,
+                source,
                 budget=target,
             )
+            candidate_size = context_module._canonical_size(candidate)
+            if candidate_size >= original_size:
+                raise ContextPackingError(
+                    "backend context pressure could not be reduced without violating the "
+                    "mandatory task/tool protocol; refusing to retry an identical payload. "
+                    f"original_bytes={original_size} candidate_bytes={candidate_size} "
+                    f"budget_bytes={exact_budget}"
+                )
+            return candidate
 
         setattr(safe_emergency_fit_messages, _EMERGENCY_MARKER, True)
         safe_emergency_fit_messages.__wrapped__ = current_emergency  # type: ignore[attr-defined]
@@ -290,13 +310,11 @@ def install(context_module: Any) -> None:
         safe_fit_messages_to_context.__wrapped__ = current_fit  # type: ignore[attr-defined]
         context_module.fit_messages_to_context = safe_fit_messages_to_context
 
-    _install_tool_loop_guards(context_module)
 
 
 __all__ = [
     "ContextPackingError",
     "_hard_llama_message_budget",
-    "_is_unsafe_three_message_fallback",
     "_protocol_safe_minimal_fit",
     "install",
 ]

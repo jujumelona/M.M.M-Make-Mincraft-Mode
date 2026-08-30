@@ -106,7 +106,6 @@ def _install_model_runtime_contracts() -> None:
     from .llama_stream_efficiency_contract import (
         install as install_llama_stream_efficiency,
     )
-    from .llama_tool_round_safety_contract import install as install_tool_round_safety
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -131,7 +130,6 @@ def _install_model_runtime_contracts() -> None:
     )
     install_kv_correctness(llama_decode_speed_contract)
     install_context_safety(model_context_budget)
-    install_tool_round_safety(model_router)
     install_forced_tool_capability(forced_tool_execution_contract)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
     install_forced_tool_execution(
