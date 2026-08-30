@@ -1,1 +1,1 @@
-worker07 canonical finalize v2
+worker07 canonical finalize v3
