@@ -119,6 +119,19 @@ def test_malformed_expected_diagnostics_payload_fails_closed() -> None:
         )
 
 
+def test_malformed_diagnostic_item_fails_closed() -> None:
+    with pytest.raises(
+        java_lsp.JDTLanguageServerError,
+        match="malformed diagnostics payload",
+    ):
+        java_lsp._collect_diagnostics(
+            _FakeRpc([_published("file:///A.java", [{"severity": 1}, "bad-item"])]),
+            expected_uris={"file:///A.java"},
+            timeout_seconds=1.0,
+            quiet_seconds=0.0,
+        )
+
+
 def test_reader_failure_while_collecting_diagnostics_fails_immediately() -> None:
     rpc = _FakeRpc([])
     rpc._mmm_reader_failure = RuntimeError("reader died")
@@ -132,3 +145,43 @@ def test_reader_failure_while_collecting_diagnostics_fails_immediately() -> None
             timeout_seconds=10.0,
             quiet_seconds=0.0,
         )
+
+
+def test_explicit_java_file_cannot_escape_project_root(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "Outside.java"
+    outside.write_text("class Outside {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical project-relative|escaped"):
+        java_lsp._java_files(project, ("../Outside.java",))
+
+
+def test_explicit_java_file_symlink_is_rejected(tmp_path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    real = project / "Real.java"
+    real.write_text("class Real {}\n", encoding="utf-8")
+    alias = project / "Alias.java"
+    try:
+        alias.symlink_to(real)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        java_lsp._java_files(project, ("Alias.java",))
+
+
+def test_explicit_java_file_symlinked_parent_is_rejected(tmp_path) -> None:
+    project = tmp_path / "project"
+    real_dir = project / "real"
+    alias_dir = project / "alias"
+    real_dir.mkdir(parents=True)
+    (real_dir / "A.java").write_text("class A {}\n", encoding="utf-8")
+    try:
+        alias_dir.symlink_to(real_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        java_lsp._java_files(project, ("alias/A.java",))
