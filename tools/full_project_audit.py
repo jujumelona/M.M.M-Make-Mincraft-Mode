@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -216,6 +217,22 @@ def record(
     _append_log(f"[{normalized}] [{category}] {name}: {safe_detail}")
 
 
+def _record_internal_exception(name: str, exc: BaseException, duration: float = 0.0) -> None:
+    """Keep programming failures compact in reports and detailed only in debug artifacts."""
+
+    _append_log(
+        "[INTERNAL TRACEBACK] "
+        + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    )
+    record(
+        name,
+        FAIL,
+        f"{type(exc).__name__}: {exc}",
+        duration,
+        category="audit-internal",
+    )
+
+
 def isolated_probe(
     name: str,
     category: str,
@@ -231,7 +248,7 @@ def isolated_probe(
         else:
             status, detail = PASS, result
         record(name, status, detail, time.monotonic() - started, category=category)
-    except Exception as exc:
+    except AssertionError as exc:
         record(
             name,
             FAIL,
@@ -239,6 +256,8 @@ def isolated_probe(
             time.monotonic() - started,
             category=category,
         )
+    except Exception as exc:
+        _record_internal_exception(name, exc, time.monotonic() - started)
 
 
 def command(
@@ -261,13 +280,7 @@ def command(
             label=name,
         )
     except Exception as exc:
-        record(
-            name,
-            failure_status,
-            f"{type(exc).__name__}: {exc}",
-            time.monotonic() - started,
-            category=category,
-        )
+        _record_internal_exception(name, exc, time.monotonic() - started)
         return
 
     if result.timed_out:
@@ -295,6 +308,13 @@ def tracked_files() -> list[Path]:
 def audit_syntax_and_data(files: list[Path]) -> None:
     failures: list[str] = []
     counts = {"python": 0, "json": 0, "yaml": 0, "notebook": 0}
+    expected_parse_errors = (
+        OSError,
+        UnicodeError,
+        SyntaxError,
+        ValueError,
+        yaml.YAMLError,
+    )
     for path in files:
         if not path.is_file():
             continue
@@ -315,7 +335,7 @@ def audit_syntax_and_data(files: list[Path]) -> None:
                 if payload.get("nbformat") != 4:
                     raise ValueError("unsupported notebook format")
                 counts["notebook"] += 1
-        except Exception as exc:
+        except expected_parse_errors as exc:
             failures.append(f"{relative}: {type(exc).__name__}: {exc}")
     detail = ", ".join(f"{key}={value}" for key, value in counts.items())
     if failures:
@@ -759,9 +779,17 @@ def main() -> int:
     try:
         files = tracked_files()
         record("tracked_file_inventory", PASS, f"tracked_files={len(files)}")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        files = []
+        record(
+            "tracked_file_inventory",
+            FAIL,
+            f"{type(exc).__name__}: {exc}",
+            category="git",
+        )
     except Exception as exc:
         files = []
-        record("tracked_file_inventory", FAIL, f"{type(exc).__name__}: {exc}")
+        _record_internal_exception("tracked_file_inventory", exc)
 
     families: tuple[tuple[str, Callable[[], None]], ...] = (
         ("syntax", lambda: audit_syntax_and_data(files)),
@@ -783,12 +811,10 @@ def main() -> int:
         try:
             function()
         except Exception as exc:
-            record(
+            _record_internal_exception(
                 f"{family_name}_audit_internal",
-                FAIL,
-                f"{type(exc).__name__}: {exc}",
+                exc,
                 time.monotonic() - started,
-                category="audit-runner",
             )
         if len(CHECKS) == before:
             record(
@@ -834,12 +860,7 @@ def main() -> int:
     try:
         audit_wheel_import()
     except Exception as exc:
-        record(
-            "wheel_clean_environment_import",
-            FAIL,
-            f"{type(exc).__name__}: {exc}",
-            category="packaging",
-        )
+        _record_internal_exception("wheel_clean_environment_import", exc)
 
     counts = {status: sum(check.status == status for check in CHECKS) for status in sorted(STATUSES)}
     failures = [check.name for check in CHECKS if check.status == FAIL]
