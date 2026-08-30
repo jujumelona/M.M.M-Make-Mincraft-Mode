@@ -65,7 +65,7 @@ def test_partial_diagnostics_for_opened_files_fail_closed() -> None:
         )
 
 
-def test_complete_diagnostics_return_without_waiting_for_quiet_period() -> None:
+def test_complete_diagnostics_return_when_coverage_and_quiet_are_satisfied() -> None:
     error = {
         "severity": 1,
         "message": "cannot find symbol",
@@ -82,12 +82,28 @@ def test_complete_diagnostics_return_without_waiting_for_quiet_period() -> None:
             ]
         ),
         expected_uris={"file:///A.java", "file:///B.java"},
-        timeout_seconds=10.0,
-        quiet_seconds=10.0,
+        timeout_seconds=1.0,
+        quiet_seconds=0.0,
     )
     assert set(result) == {"file:///A.java", "file:///B.java"}
     assert result["file:///A.java"] == []
     assert result["file:///B.java"][0]["severity"] == 1
+
+
+def test_republished_diagnostics_replace_initial_empty_result_before_settle() -> None:
+    error = {"severity": 1, "message": "late compiler error"}
+    result = java_lsp._collect_diagnostics(
+        _FakeRpc(
+            [
+                _published("file:///A.java", []),
+                _published("file:///A.java", [error]),
+            ]
+        ),
+        expected_uris={"file:///A.java"},
+        timeout_seconds=1.0,
+        quiet_seconds=0.01,
+    )
+    assert result["file:///A.java"] == [error]
 
 
 def test_malformed_expected_diagnostics_payload_fails_closed() -> None:
