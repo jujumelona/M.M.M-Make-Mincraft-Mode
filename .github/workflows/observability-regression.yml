@@ -31,6 +31,7 @@ jobs:
         run: |
           python -m compileall -q \
             minecraft_mod_ai/diagnostics.py \
+            tools/audit_stream_redactor.py \
             tools/full_project_audit.py \
             tools/root_cause_audit_wrapper.py \
             tools/pytest_diagnostics.py \
@@ -43,6 +44,7 @@ jobs:
             tests/test_ci_test_shard.py
           python -m ruff check \
             minecraft_mod_ai/diagnostics.py \
+            tools/audit_stream_redactor.py \
             tools/full_project_audit.py \
             tools/root_cause_audit_wrapper.py \
             tools/pytest_diagnostics.py \
