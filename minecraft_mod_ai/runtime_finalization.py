@@ -114,6 +114,9 @@ def finalize_runtime() -> None:
         from .planner_graph_integrity_contract import (
             install as install_planner_graph_integrity,
         )
+        from .pre_design_rag_quality_contract import (
+            install as install_pre_design_rag_quality,
+        )
         from .prefill_calibration_strictness_contract import (
             install as install_prefill_calibration_strictness,
         )
@@ -200,6 +203,9 @@ def finalize_runtime() -> None:
         # The approved graph is now frozen and the obligation DAG owner is installed.
         # Rebind stale import-by-value edges before any planning request can execute.
         install_authored_scope_research()
+        # Run retrieval quality after the authored query plan is frozen. This layer
+        # fuses providers, performs bounded corrective retrieval, and support-checks claims.
+        install_pre_design_rag_quality()
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
