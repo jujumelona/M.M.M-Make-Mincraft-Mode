@@ -109,6 +109,9 @@ def finalize_runtime() -> None:
         from .model_tool_alias_permission_policy import (
             install as install_model_tool_alias_permissions,
         )
+        from .planner_design_readiness_contract import (
+            install as install_planner_design_readiness,
+        )
         from .planner_graph_integrity_contract import (
             install as install_planner_graph_integrity,
         )
@@ -189,6 +192,7 @@ def finalize_runtime() -> None:
         install_semantic_single_pass()
         install_semantic_requirement_authority()
         install_planner_graph_integrity()
+        install_planner_design_readiness()
         install_deep_design_execution()
         install_evidence_obligation_contract()
         # The approved graph is now frozen and the obligation DAG owner is installed.
