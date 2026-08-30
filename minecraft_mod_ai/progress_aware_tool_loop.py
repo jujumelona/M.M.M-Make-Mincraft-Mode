@@ -651,7 +651,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
     if fresh is not None:
         return fresh
 
-    # Recursively unwrap envelope fields if present (e.g. MCP structured_content, _mmm_observation)
     for wrapper_key in ("structured_content", "result", "data", "body", "_mmm_observation", "raw_result", "structured", "observation"):
         wrapped = payload.get(wrapper_key)
         if isinstance(wrapped, (Mapping, list, tuple)) and wrapped is not payload:
@@ -659,7 +658,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
             if ctx is not None:
                 return ctx
 
-    # 1. Explicit new file creation
     if _is_new_file_creation(payload):
         target_path = str(payload.get("path") or payload.get("target_path") or "")
         if not target_path and isinstance(payload.get("target_file"), Mapping):
@@ -671,7 +669,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                 evidence_source="new_file_spec",
             )
 
-    # 2. Hits with snippet/code/lines from search_code_rag
     hits = payload.get("hits") or payload.get("results")
     if isinstance(hits, (list, tuple)):
         for hit in hits:
@@ -736,7 +733,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                         evidence_source="search_code_rag_path_only",
                     )
 
-    # 2b. Sources from search_project_rag
     sources = payload.get("sources")
     if isinstance(sources, (list, tuple)):
         for src in sources:
@@ -759,7 +755,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                         evidence_source="sources_path_only",
                     )
 
-    # 3. Symbols from java_workspace_symbols (hierarchical step 2: symbol in file)
     symbols = payload.get("symbols")
     if isinstance(symbols, (list, tuple)) and len(symbols) > 0:
         for sym in symbols:
@@ -792,7 +787,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                         evidence_source="java_workspace_symbols",
                     )
 
-    # 4. Observation records / global_anchors / page_observations / records
     for key in ("global_anchors", "page_observations", "records", "excerpts"):
         records = payload.get(key)
         if isinstance(records, (list, tuple)):
@@ -813,7 +807,6 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                             evidence_source=f"observation_page_{key}",
                         )
 
-    # 5. Files mapping (path -> code or list of {path, content})
     files = payload.get("files")
     if isinstance(files, Mapping):
         for path, content in files.items():
@@ -842,14 +835,12 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     evidence_source="files_names_only",
                 )
 
-    # 6. Nested initial_exact_source_context
     exact = payload.get("initial_exact_source_context")
     if exact is not None and exact is not payload:
         ctx = _extract_mutation_context_from_payload(exact)
         if ctx is not None:
             return ctx
 
-    # 7. Direct target_file / target_source
     target_file = payload.get("target_file")
     if isinstance(target_file, str) and target_file.strip():
         source_val = payload.get("source") or payload.get("content") or payload.get("code")
@@ -906,6 +897,7 @@ def _filter_tools_for_phase(
     mutation_context: TargetMutationContext | None = None,
     attempted_sources: Sequence[str] | set[str] | frozenset[str] = frozenset(),
     localization_active: bool | None = None,
+    semantic_retrieval_choice: bool = False,
 ) -> tuple[Mapping[str, Any], ...]:
     del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
@@ -932,7 +924,11 @@ def _filter_tools_for_phase(
             if stage == LocalizationStage.NEED_FILE:
                 preferred = ("search_code_rag", "search_project_rag", "inspect_existing_mod")
                 untried = [name for name in preferred if name in by_name and name not in attempted_sources]
-                selected_names = [untried[0]] if untried else []
+                if semantic_retrieval_choice:
+                    semantic = [name for name in untried if name in {"search_code_rag", "search_project_rag"}]
+                    selected_names = semantic or ([untried[0]] if untried else [])
+                else:
+                    selected_names = [untried[0]] if untried else []
             elif stage == LocalizationStage.NEED_SYMBOL:
                 preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")
                 untried = [name for name in preferred if name in by_name and name not in attempted_sources]
@@ -1164,6 +1160,7 @@ def generate_with_tools(
     state = HostRunState()
     forced_rag_tool: str | None = None
     forced_rag_attempts = 0
+    required_rag_choice = False
     round_limit = _agent_tool_round_limit()
     host_grounded = host_baseline_evidence_ready(request.messages)
     require_rag = bool(
@@ -1280,7 +1277,18 @@ def generate_with_tools(
             mutation_context=(state.mutation_context if mutation_localization_active else None),
             attempted_sources=phase_attempted_sources,
             localization_active=mutation_localization_active,
+            semantic_retrieval_choice=bool(require_rag and not state.has_fresh_evidence),
         )
+        if required_rag_choice:
+            phase_tools = tuple(
+                schema for schema in phase_tools
+                if _tool_name(schema) in _RAG_EVIDENCE_TOOLS
+            )
+            if not phase_tools:
+                raise ModelConfigurationError(
+                    "Required production evidence is unavailable: no reviewed RAG tool remains "
+                    "eligible for semantic selection."
+                )
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
         if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:
             state.termination_reason = "MUTATION_LOCALIZATION_STALLED"
@@ -1292,7 +1300,10 @@ def generate_with_tools(
         tool_choice = request.tool_choice
         parallel_tool_calls = request.parallel_tool_calls
 
-        if forced_rag_tool is not None:
+        if required_rag_choice:
+            tool_choice = "required"
+            parallel_tool_calls = False
+        elif forced_rag_tool is not None:
             tool_choice = {"type": "function", "function": {"name": forced_rag_tool}}
             parallel_tool_calls = False
         elif state.phase == LoopPhase.ACT:
@@ -1335,6 +1346,11 @@ def generate_with_tools(
             print(f"  model emitted prose -> {content[:80]}...", flush=True)
             if not content:
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
+            if required_rag_choice:
+                raise ModelConfigurationError(
+                    "Production coder did not honor the host-required evidence invariant: "
+                    "one reviewed RAG tool call was required, but the model returned prose."
+                )
             if forced_rag_tool is not None:
                 forced_rag_attempts += 1
                 if forced_rag_attempts >= 1:
@@ -1371,28 +1387,34 @@ def generate_with_tools(
                 state.trajectory.append(trace_entry)
                 continue
             if require_rag and not state.has_fresh_evidence:
-                forced_rag_tool = state.next_untried_internal_tool(
-                    all_exposed_names,
-                    preferred=("search_code_rag", "search_project_rag"),
+                eligible_rag_names = tuple(
+                    sorted(name for name in phase_tool_names if name in _RAG_EVIDENCE_TOOLS)
                 )
-                if forced_rag_tool is None:
+                if not eligible_rag_names:
                     raise ModelConfigurationError(
-                        "Required production evidence is unavailable: every host-forceable "
-                        "RAG source was already attempted without novel usable evidence, and "
-                        "the model selected no other reviewed retrieval route."
+                        "Required production evidence is unavailable: every reviewed RAG route "
+                        "was exhausted without novel usable evidence."
                     )
-                forced_rag_attempts = 0
+                if len(eligible_rag_names) == 1:
+                    forced_rag_tool = eligible_rag_names[0]
+                    forced_rag_attempts = 0
+                    guidance = (
+                        f"Baseline production evidence is still required. Call {forced_rag_tool} "
+                        "exactly once with a concrete query for the current implementation need."
+                    )
+                    action_decision = f"host_required_rag_{forced_rag_tool}"
+                else:
+                    required_rag_choice = True
+                    guidance = (
+                        "Baseline production evidence is still required. Select exactly one currently "
+                        "exposed reviewed RAG function that best matches the information need and call "
+                        "it with a concrete query. The host requires evidence but does not choose the "
+                        "semantic retrieval route for you."
+                    )
+                    action_decision = "host_required_rag_semantic_choice"
                 messages.extend([
                     {"role": "assistant", "content": content},
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Baseline production evidence is still required. Call {forced_rag_tool} "
-                            "exactly once with a concrete query for the current implementation need. "
-                            "After its observation, choose any further retrieval only if it can add "
-                            "materially new evidence; do not repeat exhausted queries."
-                        ),
-                    },
+                    {"role": "system", "content": guidance},
                 ])
                 trace_entry = ExecutionStepTrace(
                     step_index=state.step_index,
@@ -1411,7 +1433,7 @@ def generate_with_tools(
                     phase_after=state.phase.value,
                     turn_made_progress=False,
                     no_progress_streak_after=state.no_progress_streak,
-                    action_decision=f"host_required_rag_{forced_rag_tool}",
+                    action_decision=action_decision,
                 )
                 state.trajectory.append(trace_entry)
                 continue
@@ -1519,6 +1541,19 @@ def generate_with_tools(
 
         calls_desc = [f"{c.name}({json.dumps(dict(c.arguments), ensure_ascii=False)[:80]})" for c in turn.tool_calls]
         print(f"  model emitted calls -> {calls_desc}", flush=True)
+
+        if required_rag_choice:
+            if (
+                len(turn.tool_calls) != 1
+                or turn.tool_calls[0].name not in _RAG_EVIDENCE_TOOLS
+                or turn.tool_calls[0].name not in phase_tool_names
+            ):
+                called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
+                raise ModelConfigurationError(
+                    "Production coder violated the host-required evidence invariant; expected exactly "
+                    f"one reviewed RAG tool from {sorted(phase_tool_names)}, received {called}."
+                )
+            required_rag_choice = False
 
         if forced_rag_tool is not None:
             if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_rag_tool:
