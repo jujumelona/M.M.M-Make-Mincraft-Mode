@@ -397,7 +397,8 @@ def _requirement_evidence_sufficiency(
     receipt = {
         "schema_version": "mmm/pre-design-requirement-evidence-sufficiency-v1",
         "validation_version": 2,
-        "authority": "approved_requirement_retrieval_plan+verified_source_body",
+        "authority": "approved_requirement_retrieval_plan",
+        "evidence_validation": "verified_source_body",
         "required_requirement_count": len(requirement_receipts),
         "satisfied_requirement_count": len(requirement_receipts) - len(unresolved),
         "unresolved_requirement_ids": unresolved,
