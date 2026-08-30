@@ -24,6 +24,26 @@ jobs:
           cache: pip
       - name: Apply Worker 04 patch
         run: python .github/scripts/worker04_quality_patch.py
+      - name: Clean transient patch output
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/agent_capability_context.py')
+          text = path.read_text(encoding='utf-8')
+          stale = ', skills_for_model_role'
+          if text.count(stale) != 1:
+              raise SystemExit(f'expected one stale compatibility import, found {text.count(stale)}')
+          path.write_text(text.replace(stale, '', 1), encoding='utf-8')
+
+          path = Path('minecraft_mod_ai/temporary_skill_contract.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''                except Exception as exc:\n                    print("trajectory remote sync deferred:",'''
+          new = '''                except Exception as exc:  # noqa: BLE001 - best-effort telemetry sync\n                    print("trajectory remote sync deferred:",'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one telemetry recovery boundary, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Static quality
         run: >-
