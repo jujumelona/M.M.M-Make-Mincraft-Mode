@@ -480,8 +480,15 @@ def _collect_diagnostics(
 
     diagnostics: dict[str, list[dict[str, Any]]] = {}
     deadline = time.monotonic() + float(timeout_seconds)
+    settled_since: float | None = None
     while True:
-        if expected_uris.issubset(diagnostics):
+        now = time.monotonic()
+        complete = expected_uris.issubset(diagnostics)
+        if (
+            complete
+            and settled_since is not None
+            and now - settled_since >= quiet_seconds
+        ):
             return dict(sorted(diagnostics.items()))
 
         reader_failure = getattr(rpc, "_mmm_reader_failure", None)
@@ -503,11 +510,15 @@ def _collect_diagnostics(
                     f"returncode={returncode}{detail}"
                 )
 
-        remaining = deadline - time.monotonic()
+        remaining = deadline - now
         if remaining <= 0:
             break
+        wait_seconds = min(0.25, remaining)
+        if complete and settled_since is not None:
+            settle_remaining = quiet_seconds - (now - settled_since)
+            wait_seconds = min(wait_seconds, max(0.001, settle_remaining))
         try:
-            message = rpc.messages.get(timeout=min(0.25, remaining))
+            message = rpc.messages.get(timeout=max(0.001, wait_seconds))
         except queue.Empty:
             continue
         if _respond_to_server_request(rpc, message):
@@ -529,13 +540,19 @@ def _collect_diagnostics(
         diagnostics[uri] = _sorted_diagnostics(
             item for item in values if isinstance(item, dict)
         )
+        settled_since = time.monotonic()
 
     missing_count = len(expected_uris.difference(diagnostics))
+    if missing_count:
+        raise JDTLanguageServerError(
+            "JDT LS did not publish diagnostics for every opened Java file before "
+            "the validation deadline: "
+            f"observed={len(diagnostics)}, expected={len(expected_uris)}, "
+            f"missing={missing_count}."
+        )
     raise JDTLanguageServerError(
-        "JDT LS did not publish diagnostics for every opened Java file before the "
-        "validation deadline: "
-        f"observed={len(diagnostics)}, expected={len(expected_uris)}, "
-        f"missing={missing_count}."
+        "JDT LS diagnostics did not become quiescent before the validation deadline "
+        f"after all {len(expected_uris)} opened Java files were observed."
     )
 
 
