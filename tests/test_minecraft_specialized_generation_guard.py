@@ -149,7 +149,7 @@ def test_unknown_system_pack_fails_closed_without_mutation(
     assert not root.exists()
 
 
-def test_reviewed_specialized_capabilities_execute_original_once(
+def test_semantic_capability_does_not_unlock_specialized_templates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,6 +158,70 @@ def test_reviewed_specialized_capabilities_execute_original_once(
         calls,
         monkeypatch,
         _adapter("quest", "entity"),
+    )
+
+    with pytest.raises(ValueError, match="deterministic templates are not declared"):
+        system.generate_system_pack(
+            project_root=tmp_path / "system",
+            pack_id="quest-system",
+            mod_id="demo",
+            package_name="demo.mod",
+            config={},
+        )
+    with pytest.raises(ValueError, match="deterministic templates are not declared"):
+        gecko.generate_geckolib_entity_assets(
+            project_root=tmp_path / "gecko",
+            mod_id="demo",
+            package_name="demo.mod",
+            module_id="boss",
+            config={},
+        )
+
+    assert calls == []
+    assert not (tmp_path / "system").exists()
+    assert not (tmp_path / "gecko").exists()
+
+
+def test_geckolib_capability_is_bound_to_requested_dependency_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    _system, gecko, _orchestrator = _install_fake_runtime(
+        calls,
+        monkeypatch,
+        _adapter("entity", "geckolib:entity", "geckolib:version:4.8.2"),
+    )
+
+    with pytest.raises(ValueError, match="deterministic templates are not declared"):
+        gecko.generate_geckolib_entity_assets(
+            project_root=tmp_path / "gecko",
+            mod_id="demo",
+            package_name="demo.mod",
+            module_id="boss",
+            config={},
+            geckolib_version="4.9.0",
+        )
+
+    assert calls == []
+    assert not (tmp_path / "gecko").exists()
+
+
+def test_reviewed_specialized_capabilities_execute_original_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    system, gecko, _orchestrator = _install_fake_runtime(
+        calls,
+        monkeypatch,
+        _adapter(
+            "quest",
+            "system-pack:quest-system",
+            "entity",
+            "geckolib:entity",
+            "geckolib:version:4.8.2",
+        ),
     )
 
     system_root = tmp_path / "system"
