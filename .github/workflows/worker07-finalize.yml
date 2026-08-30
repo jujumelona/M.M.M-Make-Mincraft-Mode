@@ -37,37 +37,69 @@ jobs:
           python /tmp/worker07_finalize.py
           python - <<'PY'
           from pathlib import Path
+
+          # The unified coder-loop tests use MagicMock configs. Explicitly mark the
+          # input-token override as unset so current llama context-safety code uses
+          # max_context rather than MagicMock's integer fallback.
           path = Path('tests/test_unified_host_execution_loop.py')
           text = path.read_text(encoding='utf-8')
-
           context_anchor = '    config.max_context = 16384\n'
           context_replacement = context_anchor + '    config.max_input_tokens = 0\n'
           if 'config.max_input_tokens = 0' not in text:
               if context_anchor not in text:
                   raise SystemExit('Worker07: unified-loop config anchor missing')
               text = text.replace(context_anchor, context_replacement)
+              path.write_text(text, encoding='utf-8')
 
-          module_import = 'import minecraft_mod_ai.progress_aware_tool_loop as tool_loop\n'
-          if module_import not in text:
-              import_anchor = 'import pytest\n\n'
-              if import_anchor not in text:
-                  raise SystemExit('Worker07: pytest import anchor missing')
-              text = text.replace(import_anchor, import_anchor + module_import + '\n', 1)
+          # A concurrent policy refactor removed skills_for_model_role(). The
+          # deterministic content wrapper still called that deleted API, which breaks
+          # every coder tool execution before Worker07 localization can be exercised.
+          # Bind it to the current single policy snapshot owner instead.
+          contract = Path('minecraft_mod_ai/deterministic_minecraft_content_contract.py')
+          source = contract.read_text(encoding='utf-8')
+          stale = '''    policy_role = capability_module._policy_model_role(stage, model_role)\n    assigned = capability_module.skills_for_model_role(policy_role)\n'''
+          canonical = '''    policy = capability_module._role_policy_snapshot(stage, model_role)\n    assigned = policy.skills\n'''
+          if stale in source:
+              source = source.replace(stale, canonical, 1)
+              contract.write_text(source, encoding='utf-8')
+          elif canonical not in source:
+              raise SystemExit('Worker07: dynamic-skill policy anchor drifted')
 
-          fixture = '''\n\n@pytest.fixture(autouse=True)\ndef _isolate_unified_loop_from_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:\n    """Keep coder-loop unit tests independent of separately tested skill routing."""\n\n    monkeypatch.setattr(tool_loop, "skills_for_tool", lambda *_args, **_kwargs: ())\n'''
-          fixture_anchor = '\n\ndef _tool_schema(name: str) -> dict[str, object]:\n'
-          if '_isolate_unified_loop_from_skill_catalog' not in text:
-              if fixture_anchor not in text:
-                  raise SystemExit('Worker07: tool-schema fixture anchor missing')
-              text = text.replace(fixture_anchor, fixture + fixture_anchor, 1)
-
-          path.write_text(text, encoding='utf-8')
+          test = Path('tests/test_deterministic_minecraft_content_contract.py')
+          source = test.read_text(encoding='utf-8')
+          old = '''    class _Capability:\n        @staticmethod\n        def _policy_model_role(stage, model_role):\n            return model_role\n\n        @staticmethod\n        def skills_for_model_role(model_role):\n            assert model_role == "coder"\n            return frozenset({"generate-datagen", "patch-existing-project"})\n'''
+          new = '''    class _Capability:\n        @staticmethod\n        def _role_policy_snapshot(stage, model_role):\n            assert stage == "generation"\n            assert model_role == "coder"\n            return SimpleNamespace(\n                skills=frozenset({"generate-datagen", "patch-existing-project"})\n            )\n'''
+          if old in source:
+              source = source.replace(old, new, 1)
+              test.write_text(source, encoding='utf-8')
+          elif '_role_policy_snapshot(stage, model_role)' not in source:
+              raise SystemExit('Worker07: deterministic skill-policy test anchor drifted')
           PY
       - name: Worker 07 focused verification
         run: |
-          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py
-          python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py --select F,E7,E9
-          python -m pytest -q tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py tests/test_implementation_kind_boundary_contract.py tests/test_runtime_bootstrap_clean.py tests/test_runtime_wrapper_signature_integrity.py
+          python -m py_compile \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/implementation_kind_boundary_contract.py \
+            minecraft_mod_ai/deterministic_minecraft_content_contract.py \
+            tests/test_worker07_target_context_hardening.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_deterministic_minecraft_content_contract.py
+          python -m ruff check \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/implementation_kind_boundary_contract.py \
+            minecraft_mod_ai/deterministic_minecraft_content_contract.py \
+            tests/test_worker07_target_context_hardening.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_deterministic_minecraft_content_contract.py \
+            --select F,E7,E9
+          python -m pytest -q \
+            tests/test_worker07_target_context_hardening.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_implementation_kind_boundary_contract.py \
+            tests/test_deterministic_minecraft_content_contract.py \
+            tests/test_agent_capability_context.py \
+            tests/test_runtime_bootstrap_clean.py \
+            tests/test_runtime_wrapper_signature_integrity.py
           python .github/scripts/debug_repo_audit.py
           python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-mutations.json
           python - <<'PY'
@@ -94,5 +126,10 @@ jobs:
           git commit -m "refactor: make coder target hardening canonical"
           git fetch origin main
           git rebase origin/main
-          python -m pytest -q tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py tests/test_implementation_kind_boundary_contract.py
+          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/deterministic_minecraft_content_contract.py
+          python -m pytest -q \
+            tests/test_worker07_target_context_hardening.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_implementation_kind_boundary_contract.py \
+            tests/test_deterministic_minecraft_content_contract.py
           git push origin HEAD:main
