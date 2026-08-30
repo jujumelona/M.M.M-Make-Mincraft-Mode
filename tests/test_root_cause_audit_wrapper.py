@@ -1,4 +1,10 @@
-from tools.root_cause_audit_wrapper import failure_groups_from_report, render_report_summary
+import pytest
+
+from tools.root_cause_audit_wrapper import (
+    failure_groups_from_report,
+    normalize_report_semantics,
+    render_report_summary,
+)
 
 
 def test_duplicate_failed_check_is_collapsed_to_one_root_with_attempt_count() -> None:
@@ -32,3 +38,38 @@ def test_clean_report_is_explicit_pass() -> None:
         "checks": [],
     }
     assert render_report_summary(report).startswith("FINAL STATUS\nPASS\n")
+
+
+def test_normalized_artifact_only_marks_pass_as_passed() -> None:
+    report = {
+        "checks": [
+            {"status": "PASS", "passed": True},
+            {"status": "WARN", "passed": True},
+            {"status": "SKIP", "passed": True},
+            {"status": "FAIL", "passed": False},
+        ]
+    }
+    normalized = normalize_report_semantics(report)
+    assert [check["passed"] for check in normalized["checks"]] == [
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert [check["non_blocking"] for check in normalized["checks"]] == [
+        False,
+        True,
+        True,
+        False,
+    ]
+    assert [check["blocking_failure"] for check in normalized["checks"]] == [
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
+def test_unknown_audit_status_fails_closed() -> None:
+    with pytest.raises(ValueError, match="unsupported status"):
+        normalize_report_semantics({"checks": [{"status": "MAYBE"}]})
