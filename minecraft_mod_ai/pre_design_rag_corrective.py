@@ -21,6 +21,8 @@ from .pre_design_rag_support import (
 
 _DEFAULT_CORRECTIVE_ROUNDS = 2
 _MAX_CORRECTIVE_ROUNDS = 4
+_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"
+_VERIFIED_FIXED_POINT = "verified_claims_sufficient"
 
 
 def _corrective_round_limit() -> int:
@@ -67,7 +69,7 @@ def _generate_gap_queries(
     raw_prompt: str,
     progress_label: str,
 ) -> list[str]:
-    # Queries are the executable contract.  Small diagnostic fields such as
+    # Queries are the executable contract. Small diagnostic fields such as
     # ``sufficient``/``gaps`` are harmless model annotations and must not discard an
     # otherwise valid corrective search plan before the parser can extract it.
     schema = {
@@ -232,7 +234,7 @@ def _read_and_verify_document(
                 "gaps": gaps,
                 "next_queries": next_queries,
                 "procedures": procedures,
-                "sufficient": bool(verified),
+                "sufficient": bool(verified) and not gaps,
             }
         )
     return pages, results, rejected_count
@@ -262,7 +264,7 @@ def _quality_research_document_domain(
     domain_key = project_rag._sha256(
         {
             "base_domain_key": base_key,
-            "research_policy": "corrective-fusion-claim-support-v2",
+            "research_policy": "corrective-fusion-claim-support-v3",
         }
     ).removeprefix("sha256:")
 
@@ -272,8 +274,13 @@ def _quality_research_document_domain(
             domain_key,
             domain_id,
         )
-        if isinstance(cached, Mapping) and isinstance(
-            cached.get("quality_contract"), Mapping
+        cached_quality = cached.get("quality_contract") if isinstance(cached, Mapping) else None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(cached_quality, Mapping)
+            and cached_quality.get("schema_version") == _QUALITY_SCHEMA
+            and cached_quality.get("fixed_point_reason") == _VERIFIED_FIXED_POINT
+            and cached.get("sufficient") is True
         ):
             refs = frozenset(
                 str(ref)
@@ -306,6 +313,7 @@ def _quality_research_document_domain(
         fixed_point = ""
         max_rounds = _corrective_round_limit()
         round_index = 0
+        active_summary = _merge_verified_notes(domain_id, [])
 
         while round_index <= max_rounds:
             pages, notes, rejected = _read_and_verify_document(
@@ -322,30 +330,31 @@ def _quality_research_document_domain(
             all_pages.extend(pages)
             all_notes.extend(notes)
             rejected_total += rejected
-            summary = _merge_verified_notes(domain_id, all_notes)
+            active_summary = _merge_verified_notes(domain_id, notes)
+            active_gaps = list(active_summary.get("gaps") or ())
             unseen = _correction_queries(
-                summary.get("next_queries"),
+                active_summary.get("next_queries"),
                 seen=seen_queries,
                 raw_prompt=prompt,
             )
+
             if failures:
                 fixed_point = "bounded_extraction_or_support_verification_failure"
                 break
-            if round_index >= max_rounds:
-                fixed_point = (
-                    "corrective_round_limit_reached"
-                    if unseen or summary.get("gaps")
-                    else "no_unseen_corrective_query"
-                )
+            if active_summary.get("claims") and not active_gaps:
+                fixed_point = _VERIFIED_FIXED_POINT
                 break
-            if not unseen and summary.get("gaps"):
+            if round_index >= max_rounds:
+                fixed_point = "corrective_round_limit_reached"
+                break
+            if not unseen and active_gaps:
                 try:
                     unseen = _generate_gap_queries(
                         agentic_module,
                         project_rag,
                         router,
                         domain=domain,
-                        gaps=list(summary.get("gaps") or ()),
+                        gaps=active_gaps,
                         prior_queries=searched,
                         seen=seen_queries,
                         raw_prompt=prompt,
@@ -355,9 +364,9 @@ def _quality_research_document_domain(
                     unseen = []
             if not unseen:
                 fixed_point = (
-                    "verified_claims_sufficient"
-                    if summary.get("claims")
-                    else "no_valid_unseen_corrective_query"
+                    "unresolved_evidence_gaps"
+                    if active_gaps
+                    else "no_support_verified_claims"
                 )
                 break
 
@@ -408,7 +417,14 @@ def _quality_research_document_domain(
             documents.append(dict(next_document))
             round_index += 1
 
-        summary = _merge_verified_notes(domain_id, all_notes)
+        accumulated = _merge_verified_notes(domain_id, all_notes)
+        summary = dict(accumulated)
+        # Historical gaps are diagnostics, not live obligations. Terminal sufficiency is
+        # decided from the latest evidence round so a gap that was actually resolved does
+        # not remain forever, while a current unresolved gap can never be hidden by an old
+        # verified claim.
+        summary["gaps"] = list(active_summary.get("gaps") or ())
+        summary["next_queries"] = list(active_summary.get("next_queries") or ())
         claims = list(summary["claims"])
         catalog = project_rag._materialize_claim_catalog(
             domain_key,
@@ -430,6 +446,13 @@ def _quality_research_document_domain(
             reasons.append("bounded extraction/support verification failure")
         if not claims:
             reasons.append("zero support-verified grounded claims")
+        if fixed_point != _VERIFIED_FIXED_POINT:
+            reasons.append(
+                "corrective retrieval did not reach verified sufficiency: "
+                + (fixed_point or "no_terminal_state")
+            )
+        if summary.get("gaps"):
+            reasons.append("unresolved evidence gaps remain")
         status = "failed" if reasons else "complete"
 
         note: dict[str, Any] = {
@@ -443,8 +466,8 @@ def _quality_research_document_domain(
             "claim_catalog": catalog,
             "evidence_ledger": ledger,
             "quality_contract": {
-                "schema_version": "mmm/pre-design-rag-quality-v2",
-                "fusion": "exact_content_dedupe+query_local_lexical_rank+rrf",
+                "schema_version": _QUALITY_SCHEMA,
+                "fusion": "verified_source_body+exact_content_dedupe+query_rank+rrf",
                 "corrective_retrieval": True,
                 "claim_support": "model_entailment+host_exact_quote",
                 "corrective_round_limit": max_rounds,
@@ -452,6 +475,7 @@ def _quality_research_document_domain(
                 "correction_history": history,
                 "rejected_claim_count": rejected_total,
                 "fixed_point_reason": fixed_point,
+                "active_gap_count": len(summary.get("gaps") or ()),
                 "donor_selection_performed": False,
                 "runtime_rebinding": False,
             },
@@ -475,9 +499,7 @@ def _quality_research_document_domain(
             note["failure_reasons"] = reasons
         else:
             note["sufficient"] = True
-            note["fixed_point"] = bool(
-                fixed_point and fixed_point != "verified_claims_sufficient"
-            )
+            note["fixed_point"] = False
             agentic_module._validate_sufficient_research(
                 note,
                 allowed_refs=frozenset(page_refs),
