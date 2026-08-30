@@ -4,8 +4,8 @@ import re
 from collections.abc import Iterable
 
 _REDACTED = "<redacted>"
-_VALUE_DELIMITERS = frozenset(" \t\r\n,;")
-_LINE_VALUE_DELIMITERS = frozenset("\r\n")
+_VALUE_DELIMITERS = frozenset(" \t\r\n,;\"'")
+_LINE_VALUE_DELIMITERS = frozenset("\r\n\"'")
 _SENSITIVE_KEYS = (
     "authorization",
     "api_key",
