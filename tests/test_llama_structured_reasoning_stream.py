@@ -73,7 +73,7 @@ def test_qwen35_json_request_keeps_schema_host_side() -> None:
     assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "parallel_tool_calls" not in payload
     assert payload["max_tokens"] == 8192
