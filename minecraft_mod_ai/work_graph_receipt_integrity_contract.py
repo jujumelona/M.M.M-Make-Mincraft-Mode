@@ -14,6 +14,7 @@ import json
 import sqlite3
 import time
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 _INSTALLED = False
@@ -152,6 +153,7 @@ def install(work_graph_module: Any) -> None:
     canonical_json = work_graph_module.canonical_json
     original_initialize = ledger_cls._initialize
     original_resume_run = ledger_cls.resume_run
+    original_export_receipts = ledger_cls.export_receipts
 
     @wraps(original_initialize)
     def initialize(self: Any) -> None:
@@ -314,12 +316,80 @@ def install(work_graph_module: Any) -> None:
         _audit_integrity(self, work_graph_module)
         return self.summary() if result is not None else result
 
+    @wraps(original_export_receipts)
+    def export_receipts(self: Any, path: str | Path) -> Path:
+        """Export portable receipts with the independent receipt integrity hash."""
+
+        _audit_integrity(self, work_graph_module)
+        target = Path(path).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.tmp")
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(
+                canonical_json({"record_type": "summary", "value": self.summary()})
+                + "\n"
+            )
+            with self._connect() as connection:
+                for row in connection.execute(
+                    """
+                    SELECT node_id, stage, input_hash, state, attempt,
+                           output_hash, receipt_json, receipt_hash, error, updated_at
+                    FROM tasks ORDER BY node_id
+                    """
+                ):
+                    stream.write(
+                        canonical_json(
+                            {
+                                "record_type": "task",
+                                "node_id": row[0],
+                                "stage": row[1],
+                                "input_hash": row[2],
+                                "state": row[3],
+                                "attempt": row[4],
+                                "output_hash": row[5],
+                                "receipt": json.loads(row[6]) if row[6] else None,
+                                "receipt_hash": row[7],
+                                "error": row[8],
+                                "updated_at": row[9],
+                            }
+                        )
+                        + "\n"
+                    )
+                for row in connection.execute(
+                    """
+                    SELECT checkpoint_id, stage, input_hash, state, attempt,
+                           output_hash, receipt_json, receipt_hash, error, updated_at
+                    FROM checkpoints ORDER BY checkpoint_id
+                    """
+                ):
+                    stream.write(
+                        canonical_json(
+                            {
+                                "record_type": "checkpoint",
+                                "checkpoint_id": row[0],
+                                "stage": row[1],
+                                "input_hash": row[2],
+                                "state": row[3],
+                                "attempt": row[4],
+                                "output_hash": row[5],
+                                "receipt": json.loads(row[6]) if row[6] else None,
+                                "receipt_hash": row[7],
+                                "error": row[8],
+                                "updated_at": row[9],
+                            }
+                        )
+                        + "\n"
+                    )
+        temporary.replace(target)
+        return target
+
     ledger_cls._initialize = initialize
     ledger_cls.succeed = succeed
     ledger_cls.succeed_checkpoint = succeed_checkpoint
     ledger_cls.cached_receipt = cached_receipt
     ledger_cls.cached_checkpoint = cached_checkpoint
     ledger_cls.resume_run = resume_run
+    ledger_cls.export_receipts = export_receipts
     _INSTALLED = True
 
 
