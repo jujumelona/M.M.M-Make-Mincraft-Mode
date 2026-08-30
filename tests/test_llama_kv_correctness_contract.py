@@ -18,14 +18,17 @@ def test_precision_reference_order_uses_highest_precision_first() -> None:
     )
 
 
-def test_install_reorders_probe_reference_without_changing_candidate_policy() -> None:
+def test_install_reorders_probe_and_invalidates_old_fingerprint() -> None:
     calls: list[tuple[str, ...]] = []
 
     def probe(_autotune, _binary, _model_path, _config, _request, candidates):
         calls.append(tuple(candidates))
         return "q8_0", []
 
-    fake = SimpleNamespace(_probe_kv_types=probe)
+    fake = SimpleNamespace(
+        _probe_kv_types=probe,
+        _kv_fingerprint=lambda *_args, **_kwargs: "legacy-fingerprint",
+    )
     contract.install(fake)
     result = fake._probe_kv_types(
         object(),
@@ -38,11 +41,18 @@ def test_install_reorders_probe_reference_without_changing_candidate_policy() ->
 
     assert result == ("q8_0", [])
     assert calls == [("f16", "q8_0", "q4_0")]
+    assert fake._kv_fingerprint() != "legacy-fingerprint"
+    assert fake._kv_fingerprint() == fake._kv_fingerprint()
 
 
-def test_runtime_installs_precision_reference_on_kv_probe() -> None:
+def test_runtime_installs_precision_reference_on_kv_probe_and_cache_fingerprint() -> None:
     assert getattr(
         llama_decode_speed_contract._probe_kv_types,
         "_mmm_kv_precision_reference_v1",
+        False,
+    )
+    assert getattr(
+        llama_decode_speed_contract._kv_fingerprint,
+        "_mmm_kv_precision_reference_fingerprint_v1",
         False,
     )
