@@ -1,9 +1,11 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+from .minecraft_domain_correctness_contract import install as install_minecraft_domain_correctness
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
 initialize_runtime()
+install_minecraft_domain_correctness()
 finalize_runtime()
 
 from .api import (
