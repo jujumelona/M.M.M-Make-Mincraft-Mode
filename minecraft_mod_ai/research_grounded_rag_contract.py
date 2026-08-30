@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Research-grounded retrieval for pre-design planning.
 
-The pre-design path owns local/reference retrieval and may opt into public donor/source
-retrieval only when the research domain explicitly routes to GitHub or Modrinth. Retrieval
-misses are corrected by broadening evidence, never by asking the model to invent data.
+Planning discovery and source-code reuse are deliberately different retrieval jobs.
+Initial planning uses lightweight public project/reference discovery.  Deep GitHub source
+inspection is reserved for a concrete evidence gap (or later reuse work), matching an
+agentic reason -> search -> observe -> refine loop instead of an exhaustive batch crawl.
 """
 
 import hashlib
@@ -31,6 +32,8 @@ _MAX_HTTP_BYTES = 2 * 1024 * 1024
 _MAX_SOURCE_TEXT_CHARS = 128_000
 _MAX_EXTERNAL_PROJECTS = 4
 _MAX_HTTP_CACHE_ITEMS = 256
+_PLANNING_DISCOVERY = "planning_discovery"
+_PLANNING_GAP_SOURCE = "planning_gap_source"
 
 _TOKEN = re.compile(r"[^\W_]+(?:[.$:/_-][^\W_]+)*", flags=re.UNICODE)
 _HTTP_CACHE_LOCK = threading.RLock()
@@ -59,16 +62,16 @@ def _dedupe(values: Sequence[str]) -> list[str]:
 
 
 def _query_variants(query: str) -> tuple[str, ...]:
-    """Deterministic multi-query expansion for recall without another model turn."""
+    """Small deterministic recall expansion for public project discovery."""
+
     original = str(query).strip()
     normalized = re.sub(r"[._:/\\-]+", " ", original)
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    implementation = f"{normalized} minecraft fabric mod source implementation".strip()
-    return tuple(_dedupe((original, normalized, implementation))[:3])
+    return tuple(_dedupe((original, normalized))[:2])
 
 
 def _external_brief_queries(value: Any) -> tuple[str, ...]:
-    """Return queries whose domain explicitly permits public donor/source retrieval."""
+    """Return queries whose domain explicitly permits public retrieval."""
 
     if not isinstance(value, Mapping):
         return ()
@@ -151,7 +154,6 @@ def _index_metadata() -> dict[str, Any]:
 
 
 def _ensure_local_index(agentic_module: Any, router: Any) -> dict[str, Any]:
-    """Guarantee that local project retrieval has an index before forced RAG runs."""
     workspace = _workspace_root(router)
     if workspace is None:
         return {
@@ -444,6 +446,89 @@ def _github_adaptive_search(
     }
 
 
+def _github_targeted_search(
+    query: str,
+    *,
+    seed_repositories: Sequence[Any] = (),
+) -> dict[str, Any]:
+    """Inspect only enough source to resolve one concrete planning gap."""
+
+    repositories: list[tuple[str, str]] = []
+    for value in seed_repositories:
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)) and len(value) >= 2:
+            ref = (str(value[0]).strip(), str(value[1]).strip().removesuffix(".git"))
+            if all(ref) and ref not in repositories:
+                repositories.append(ref)
+    errors: list[str] = []
+    search_requests = 0
+    search_queries: list[str] = []
+    saturation_reason = "seed_repositories"
+    if not repositories:
+        discovery = discover_repositories(
+            query,
+            http_json=lambda url: _http_json(url, github=True),
+        )
+        repositories.extend(discovery.repositories)
+        errors.extend(discovery.errors)
+        search_requests = discovery.search_requests
+        search_queries.extend(discovery.search_queries)
+        saturation_reason = discovery.saturation_reason
+
+    documents: list[dict[str, Any]] = []
+    source_requests = 0
+    source_bytes = 0
+    covered = 0.0
+    request_remaining = 8
+    for owner, repo in repositories[:2]:
+        if request_remaining < 2:
+            break
+        evidence = retrieve_repository_documents(
+            owner,
+            repo,
+            query,
+            http_json=lambda url: _http_json(url, github=True),
+            http_text=_http_text,
+            source_document=_source_document,
+            request_budget=min(4, request_remaining),
+            byte_budget=256 * 1024,
+            coverage_target=0.5,
+        )
+        request_remaining -= evidence.requests_used
+        source_requests += evidence.requests_used
+        source_bytes += evidence.source_bytes
+        covered = max(covered, float(evidence.coverage_score))
+        errors.extend(evidence.errors)
+        documents.extend(dict(item) for item in evidence.documents)
+        saturation_reason = evidence.saturation_reason
+        if documents and covered >= 0.5:
+            break
+
+    error_text = " ".join(errors).casefold()
+    if "rate limit" in error_text or "403" in error_text or "429" in error_text:
+        provider_status = "rate_limited"
+    elif documents:
+        provider_status = "available"
+    elif errors:
+        provider_status = "error"
+    else:
+        provider_status = "ok_zero"
+    return {
+        "status": "available" if documents else "unavailable",
+        "provider_status": provider_status,
+        "query": query,
+        "repositories": repositories[:2],
+        "documents": documents,
+        "errors": errors,
+        "search_queries": search_queries,
+        "search_requests": search_requests,
+        "source_requests": source_requests,
+        "source_bytes": source_bytes,
+        "coverage_score": covered,
+        "saturation_reason": saturation_reason,
+        "actual_source_document_count": len(documents),
+    }
+
+
 def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float:
     terms = set(_tokens(query))
     if not documents:
@@ -457,7 +542,12 @@ def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float
     return round(len(terms & haystack) / max(1, len(terms)), 4)
 
 
-def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
+def _external_retrieval(
+    query: str,
+    versions: Sequence[str],
+    *,
+    mode: str = "source",
+) -> dict[str, Any]:
     variants = _query_variants(query)
     projects_by_id: dict[str, dict[str, Any]] = {}
     documents_by_id: dict[str, dict[str, Any]] = {}
@@ -493,11 +583,31 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
             if repo_ref is not None and repo_ref not in seed_repositories:
                 seed_repositories.append(repo_ref)
 
-    github = _github_adaptive_search(
-        query,
-        seed_repositories=tuple(seed_repositories),
-        search_if_needed=True,
-    )
+    if mode == _PLANNING_DISCOVERY:
+        github = {
+            "provider_status": "deferred_until_specific_gap_or_reuse",
+            "repositories": [],
+            "documents": [],
+            "errors": [],
+            "search_queries": [],
+            "search_requests": 0,
+            "source_requests": 0,
+            "source_bytes": 0,
+            "coverage_score": 0.0,
+            "saturation_reason": "planning_discovery_uses_project_metadata",
+        }
+    elif mode == _PLANNING_GAP_SOURCE:
+        github = _github_targeted_search(
+            query,
+            seed_repositories=tuple(seed_repositories),
+        )
+    else:
+        github = _github_adaptive_search(
+            query,
+            seed_repositories=tuple(seed_repositories),
+            search_if_needed=True,
+        )
+
     errors.extend(str(item) for item in github.get("errors", ()))
     for document in github.get("documents", ()):
         if isinstance(document, Mapping):
@@ -513,18 +623,19 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
     )
     status = (
         "available"
-        if actual_source_count
-        else ("metadata_only" if documents else "unavailable")
+        if documents
+        else "unavailable"
     )
     return {
         "schema_version": "mmm/external-grounded-rag",
         "status": status,
+        "retrieval_mode": mode,
         "query": query,
         "query_variants": list(variants),
         "github_search_queries": list(github.get("search_queries", ())),
         "providers": ["modrinth_public", "github_public_source"],
         "credentials_required": False,
-        "corrective_search_used": bool(github.get("search_queries")),
+        "corrective_search_used": mode == _PLANNING_GAP_SOURCE,
         "project_count": len(projects_by_id),
         "source_repository_count": len(github.get("repositories", ())),
         "document_count": len(documents),
@@ -553,26 +664,28 @@ def _augment_bundle(
     versions: Sequence[str],
     local_index: Mapping[str, Any],
     external_queries: Sequence[str] = (),
+    default_mode: str = "source",
 ) -> dict[str, Any]:
     result = dict(payload)
     raw_domains = result.get("domains", [])
     domains = [dict(item) for item in raw_domains if isinstance(item, Mapping)]
     allowed_external = {str(item).strip().casefold() for item in external_queries if str(item).strip()}
-    jobs: list[tuple[int, int, str]] = []
+    jobs: list[tuple[int, int, str, str]] = []
     for domain_index, domain in enumerate(domains):
         queries = domain.get("queries", [])
         if not isinstance(queries, list):
             continue
         copied_queries = [dict(item) for item in queries if isinstance(item, Mapping)]
         domain["queries"] = copied_queries
+        mode = str(domain.get("retrieval_mode") or default_mode or "source").strip()
         for query_index, item in enumerate(copied_queries):
             query = str(item.get("query", "")).strip()
             if query and query.casefold() in allowed_external:
-                jobs.append((domain_index, query_index, query))
+                jobs.append((domain_index, query_index, query, mode))
 
-    def run(job: tuple[int, int, str]) -> tuple[int, int, dict[str, Any]]:
-        domain_index, query_index, query = job
-        return domain_index, query_index, _external_retrieval(query, versions)
+    def run(job: tuple[int, int, str, str]) -> tuple[int, int, dict[str, Any]]:
+        domain_index, query_index, query, mode = job
+        return domain_index, query_index, _external_retrieval(query, versions, mode=mode)
 
     if jobs:
         with ThreadPoolExecutor(
@@ -609,6 +722,7 @@ def _augment_bundle(
 
 def install(agentic_module: Any) -> None:
     """Bind grounded retrieval once to the pre-design forced-RAG owner."""
+
     global _INSTALLED
     if _INSTALLED:
         return
@@ -627,12 +741,19 @@ def install(agentic_module: Any) -> None:
         versions = tuple(
             str(item) for item in payload.get("versions", []) if str(item).strip()
         )
+        brief_schema = str(research_brief.get("schema_version") or "")
+        default_mode = (
+            _PLANNING_GAP_SOURCE
+            if brief_schema == "mmm/corrective-retrieval-request-v1"
+            else "source"
+        )
         return _augment_bundle(
             agentic_module,
             payload,
             versions=versions,
             local_index=local_index,
             external_queries=_external_brief_queries(research_brief),
+            default_mode=default_mode,
         )
 
     grounded_rag_bundle.__name__ = "_forced_rag_bundle_grounded"
