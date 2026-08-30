@@ -5,6 +5,7 @@ from collections.abc import Iterable
 
 _REDACTED = "<redacted>"
 _VALUE_DELIMITERS = frozenset(" \t\r\n,;")
+_LINE_VALUE_DELIMITERS = frozenset("\r\n")
 _SENSITIVE_KEYS = (
     "authorization",
     "api_key",
@@ -16,24 +17,36 @@ _SENSITIVE_KEYS = (
     "secret",
     "token",
 )
-_KEY_RE = re.compile("|".join(re.escape(key) for key in _SENSITIVE_KEYS), re.IGNORECASE)
+_LINE_VALUE_KEYS = frozenset({"authorization", "cookie"})
+_KEY_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:"
+    + "|".join(re.escape(key) for key in _SENSITIVE_KEYS)
+    + r")(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
 _MAX_KEY_LENGTH = max(map(len, _SENSITIVE_KEYS))
 
 
 class StreamingRedactor:
-    """Incrementally redact audit output without retaining unbounded process text.
+    """Incrementally redact sensitive audit output with bounded memory.
 
-    Memory use is bounded by the caller's chunk size plus the longest configured
-    exact secret. Labelled values such as ``token=...`` are masked with a small
-    state machine, so an arbitrarily long value never has to be buffered.
+    Exact configured secrets and labelled values are redacted across arbitrary
+    chunk boundaries. Label parsing understands quoted mapping keys/values and
+    balanced structured values without buffering the sensitive payload.
     """
 
     __slots__ = (
+        "_active_key",
+        "_escape_next",
         "_exact_pending",
         "_label_pending",
         "_max_secret_length",
         "_secrets",
         "_state",
+        "_structured_escape_next",
+        "_structured_quote",
+        "_structured_stack",
+        "_value_quote",
     )
 
     def __init__(self, secrets: Iterable[str] = ()) -> None:
@@ -50,6 +63,12 @@ class StreamingRedactor:
         self._exact_pending = ""
         self._label_pending = ""
         self._state = "normal"
+        self._active_key: str | None = None
+        self._value_quote: str | None = None
+        self._escape_next = False
+        self._structured_stack: list[str] = []
+        self._structured_quote: str | None = None
+        self._structured_escape_next = False
 
     def feed(self, text: str) -> str:
         if not text:
@@ -68,16 +87,39 @@ class StreamingRedactor:
         position = 0
 
         while position < len(data):
+            if self._state == "mask_quoted":
+                position = self._consume_quoted_value(data, position, output)
+                if self._state == "mask_quoted":
+                    break
+                continue
+
+            if self._state == "mask_structured":
+                position = self._consume_structured_value(data, position)
+                if self._state == "mask_structured":
+                    break
+                continue
+
             if self._state == "mask_value":
-                delimiter = _first_delimiter(data, position)
+                delimiters = (
+                    _LINE_VALUE_DELIMITERS
+                    if self._active_key in _LINE_VALUE_KEYS
+                    else _VALUE_DELIMITERS
+                )
+                delimiter = _first_delimiter(data, position, delimiters)
                 if delimiter is None:
-                    return "".join(output)
+                    position = len(data)
+                    break
                 output.append(data[delimiter])
                 position = delimiter + 1
-                self._state = "normal"
+                self._reset_value_state()
                 continue
 
             if self._state == "after_key":
+                if data[position] in "\"'":
+                    output.append(data[position])
+                    position += 1
+                    if position == len(data):
+                        break
                 whitespace_end = position
                 while whitespace_end < len(data) and data[whitespace_end].isspace():
                     whitespace_end += 1
@@ -85,13 +127,13 @@ class StreamingRedactor:
                     output.append(data[position:whitespace_end])
                     position = whitespace_end
                 if position == len(data):
-                    return "".join(output)
+                    break
                 if data[position] in ":=":
                     output.append(data[position])
                     position += 1
                     self._state = "before_value"
                     continue
-                self._state = "normal"
+                self._reset_value_state()
                 continue
 
             if self._state == "before_value":
@@ -102,20 +144,36 @@ class StreamingRedactor:
                     output.append(data[position:whitespace_end])
                     position = whitespace_end
                 if position == len(data):
-                    return "".join(output)
-                if data[position] in ",;":
+                    break
+                if data[position] in ",;\r\n":
                     output.append(data[position])
                     position += 1
-                    self._state = "normal"
+                    self._reset_value_state()
+                    continue
+                if data[position] in "\"'":
+                    self._value_quote = data[position]
+                    self._escape_next = False
+                    output.append(data[position])
+                    output.append(_REDACTED)
+                    position += 1
+                    self._state = "mask_quoted"
+                    continue
+                if data[position] in "{[":
+                    self._structured_stack = [_matching_bracket(data[position])]
+                    self._structured_quote = None
+                    self._structured_escape_next = False
+                    output.append(_REDACTED)
+                    position += 1
+                    self._state = "mask_structured"
                     continue
                 output.append(_REDACTED)
-                position += 1
                 self._state = "mask_value"
                 continue
 
             match = _KEY_RE.search(data, position)
             if match is not None:
-                output.append(data[position:match.end()])
+                output.append(data[position : match.end()])
+                self._active_key = match.group(0).lower()
                 position = match.end()
                 self._state = "after_key"
                 continue
@@ -125,19 +183,84 @@ class StreamingRedactor:
                 position = len(data)
                 break
 
-            suffix_length = _partial_key_suffix_length(data[position:])
-            if suffix_length:
-                cutoff = len(data) - suffix_length
+            keep = _normal_pending_length(data[position:])
+            cutoff = len(data) - keep
+            if cutoff > position:
                 output.append(data[position:cutoff])
-                self._label_pending = data[cutoff:]
-            else:
-                output.append(data[position:])
+            self._label_pending = data[cutoff:]
             position = len(data)
 
-        if final and self._label_pending:
-            output.append(self._label_pending)
+        if final:
+            if self._state not in {"mask_value", "mask_quoted", "mask_structured"}:
+                output.append(self._label_pending)
             self._label_pending = ""
+            self._reset_value_state()
         return "".join(output)
+
+    def _consume_quoted_value(
+        self,
+        data: str,
+        position: int,
+        output: list[str],
+    ) -> int:
+        quote = self._value_quote
+        while position < len(data):
+            character = data[position]
+            if self._escape_next:
+                self._escape_next = False
+                position += 1
+                continue
+            if character == "\\":
+                self._escape_next = True
+                position += 1
+                continue
+            if character == quote:
+                output.append(character)
+                position += 1
+                self._reset_value_state()
+                break
+            position += 1
+        return position
+
+    def _consume_structured_value(self, data: str, position: int) -> int:
+        while position < len(data):
+            character = data[position]
+            if self._structured_quote is not None:
+                if self._structured_escape_next:
+                    self._structured_escape_next = False
+                elif character == "\\":
+                    self._structured_escape_next = True
+                elif character == self._structured_quote:
+                    self._structured_quote = None
+                position += 1
+                continue
+
+            if character in "\"'":
+                self._structured_quote = character
+                position += 1
+                continue
+            if character in "{[":
+                self._structured_stack.append(_matching_bracket(character))
+                position += 1
+                continue
+            if self._structured_stack and character == self._structured_stack[-1]:
+                self._structured_stack.pop()
+                position += 1
+                if not self._structured_stack:
+                    self._reset_value_state()
+                    break
+                continue
+            position += 1
+        return position
+
+    def _reset_value_state(self) -> None:
+        self._state = "normal"
+        self._active_key = None
+        self._value_quote = None
+        self._escape_next = False
+        self._structured_stack.clear()
+        self._structured_quote = None
+        self._structured_escape_next = False
 
     def _redact_exact(self, text: str, *, final: bool) -> str:
         if not self._secrets:
@@ -176,9 +299,17 @@ class StreamingRedactor:
         return "".join(output)
 
 
-def _first_delimiter(text: str, start: int) -> int | None:
+def _matching_bracket(character: str) -> str:
+    return "}" if character == "{" else "]"
+
+
+def _first_delimiter(
+    text: str,
+    start: int,
+    delimiters: frozenset[str],
+) -> int | None:
     for index in range(start, len(text)):
-        if text[index] in _VALUE_DELIMITERS:
+        if text[index] in delimiters:
             return index
     return None
 
@@ -191,6 +322,17 @@ def _partial_key_suffix_length(text: str) -> int:
         if any(key.startswith(suffix) for key in _SENSITIVE_KEYS):
             return length
     return 0
+
+
+def _normal_pending_length(text: str) -> int:
+    if not text:
+        return 0
+    partial = _partial_key_suffix_length(text)
+    if partial:
+        # Keep one preceding character so a key split across chunks still has
+        # enough context for the identifier-boundary check on the next feed.
+        return min(len(text), partial + 1)
+    return 1
 
 
 def _next_secret(
