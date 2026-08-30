@@ -47,10 +47,21 @@ def test_request_preparation_reads_role_policy_once(monkeypatch) -> None:
     assert '"model_role":"coder"' in context
 
 
-def test_read_only_external_mcp_calls_execute_in_one_parallel_wave() -> None:
+def test_distinct_read_only_external_mcp_calls_execute_in_one_parallel_wave() -> None:
+    # Exact duplicate reads are intentionally collapsed by the single-flight wrapper.
+    # Use distinct provider/tool arguments here so this contract measures the scheduler,
+    # not the independent dedup optimization.
     calls = (
-        ToolCall(id="one", name="external_mcp_call", arguments={"max_access": "read"}),
-        ToolCall(id="two", name="external_mcp_call", arguments={"max_access": "read"}),
+        ToolCall(
+            id="one",
+            name="external_mcp_call",
+            arguments={"server": "alpha", "tool": "inspect_a", "max_access": "read"},
+        ),
+        ToolCall(
+            id="two",
+            name="external_mcp_call",
+            arguments={"server": "beta", "tool": "inspect_b", "max_access": "read"},
+        ),
     )
     entered = threading.Barrier(2)
 
