@@ -1,1 +1,1 @@
-worker12 shared-core hardening
+worker12 shared-core hardening v2
