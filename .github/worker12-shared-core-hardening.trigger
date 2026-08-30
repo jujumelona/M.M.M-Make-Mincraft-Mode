@@ -1,1 +1,1 @@
-worker12 shared-core hardening v3
+worker12 shared-core hardening v4
