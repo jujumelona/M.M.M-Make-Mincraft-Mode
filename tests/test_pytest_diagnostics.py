@@ -213,3 +213,98 @@ def test_zero_durations_omits_pytest_all_durations_mode(tmp_path: Path, monkeypa
         == 0
     )
     assert not any(item.startswith("--durations=") for item in seen_command)
+
+
+def test_junit_summary_redacts_labelled_and_environment_secrets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "junit.xml"
+    exact_secret = "do-not-leak-junit-secret"
+    monkeypatch.setenv("MMM_TEST_SECRET", exact_secret)
+    _write_junit(
+        path,
+        (
+            '<testcase classname="tests.secret" name="one">'
+            f'<failure message="token=label-secret {exact_secret}">trace</failure>'
+            "</testcase>"
+        ),
+        tests=1,
+        failures=1,
+    )
+
+    rendered = render_junit_failure_summary(path)
+    assert "label-secret" not in rendered
+    assert exact_secret not in rendered
+    assert "token=<redacted>" in rendered
+
+
+def test_main_redacts_pytest_log_and_junit_artifacts(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+    exact_secret = "do-not-leak-artifact-secret"
+    monkeypatch.setenv("MMM_TEST_SECRET", exact_secret)
+
+    def fake_run(*args, **kwargs):
+        kwargs["stdout"].write(f"token=raw-secret {exact_secret}\n")
+        _write_junit(
+            junit,
+            (
+                '<testcase classname="tests.secret" name="one">'
+                f'<failure message="token=xml-secret {exact_secret}">trace</failure>'
+                "</testcase>"
+            ),
+            tests=1,
+            failures=1,
+        )
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    result = pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+    )
+
+    assert result == 1
+    console = capsys.readouterr().out
+    log_text = log.read_text(encoding="utf-8")
+    junit_text = junit.read_text(encoding="utf-8")
+    for leaked in ("raw-secret", "xml-secret", exact_secret):
+        assert leaked not in console
+        assert leaked not in log_text
+        assert leaked not in junit_text
+    assert "token=<redacted>" in log_text
+    assert "token=<redacted>" in junit_text
+    assert "<redacted>" in console
+
+
+def test_timeout_returns_124_and_preserves_only_redacted_output(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+
+    def fake_run(command, **kwargs):
+        kwargs["stdout"].write("token=timeout-secret\n")
+        raise subprocess.TimeoutExpired(command, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    result = pytest_diagnostics.main(
+        [
+            "--log",
+            str(log),
+            "--junit",
+            str(junit),
+            "--timeout-seconds",
+            "1",
+            "tests/test_anything.py",
+        ]
+    )
+
+    assert result == 124
+    console = capsys.readouterr().out
+    assert "TimeoutExpired" in console
+    assert "[TRANSIENT]" in console
+    assert "timeout-secret" not in console
+    assert "timeout-secret" not in log.read_text(encoding="utf-8")
+    assert "token=<redacted>" in log.read_text(encoding="utf-8")
