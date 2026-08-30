@@ -4,14 +4,14 @@ import copy
 import hashlib
 import json
 import os
-import shutil
 import threading
-import time
 from collections.abc import Iterable
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .research_validation_fingerprint_performance import content_digest
+from .runner import BuildRunnerError
 from .validation_diagnostic_contract import (
     diagnostic_errors as _diagnostic_errors,
     run_diagnostics as _run_jdt_diagnostics,
@@ -20,7 +20,7 @@ from .validation_diagnostic_contract import (
 _CACHE_LOCK = threading.RLock()
 _SUCCESSFUL_BUILDS: dict[tuple[str, str, bool], Any] = {}
 _RECENT_BUILDS: dict[tuple[str, str, bool], Any] = {}
-_JDT_RESULTS: dict[tuple[str, str, tuple[str, ...]], dict[str, Any]] = {}
+_JDT_RESULTS: dict[tuple[Any, ...], dict[str, Any]] = {}
 _CACHE_LIMIT = 24
 
 _SKIP_TOP_LEVEL = {
@@ -31,20 +31,23 @@ _SKIP_TOP_LEVEL = {
     "node_modules",
     "run",
 }
-_SKIP_PREFIXES = (
-    ".minecraft_ai/logs/",
-    ".minecraft_ai/runtime/",
-    ".minecraft_ai/validation-cache/",
-)
+_SKIP_STATE_DIRECTORIES = {
+    ".minecraft_ai/logs",
+    ".minecraft_ai/runtime",
+    ".minecraft_ai/validation-cache",
+}
+_SKIP_PREFIXES = tuple(f"{value}/" for value in sorted(_SKIP_STATE_DIRECTORIES))
 _SKIP_WRAPPER_PATHS = {
     "gradlew",
     "gradlew.bat",
     "gradle/wrapper/gradle-wrapper.jar",
     "gradle/wrapper/gradle-wrapper.properties",
 }
+_JAVA_CONFIG_FILES = ("build.gradle", "settings.gradle", "gradle.properties")
 
 
 def _bounded_put(mapping: dict[Any, Any], key: Any, value: Any) -> None:
+    mapping.pop(key, None)
     mapping[key] = value
     while len(mapping) > _CACHE_LIMIT:
         mapping.pop(next(iter(mapping)))
@@ -59,24 +62,77 @@ def _is_build_input(relative: str) -> bool:
     return not any(relative.startswith(prefix) for prefix in _SKIP_PREFIXES)
 
 
+def _skip_build_directory(relative: str) -> bool:
+    path = Path(relative)
+    if path.parts and path.parts[0] in _SKIP_TOP_LEVEL:
+        return True
+    return relative in _SKIP_STATE_DIRECTORIES
+
+
+def _iter_build_inputs(root: Path) -> tuple[tuple[str, Path], ...]:
+    """Walk only build-relevant directories in deterministic lexical order."""
+
+    values: list[tuple[str, Path]] = []
+    for current, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        directory = Path(current)
+        kept_directories: list[str] = []
+        for name in sorted(dirnames):
+            child = directory / name
+            if child.is_symlink():
+                continue
+            relative = child.relative_to(root).as_posix()
+            if not _skip_build_directory(relative):
+                kept_directories.append(name)
+        dirnames[:] = kept_directories
+
+        for name in sorted(filenames):
+            path = directory / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative = path.relative_to(root).as_posix()
+            if _is_build_input(relative):
+                values.append((relative, path))
+    return tuple(values)
+
+
 def project_build_fingerprint(project_root: str | Path) -> str:
-    """Hash exact build-relevant project bytes, excluding outputs and evidence logs."""
+    """Hash exact build inputs while pruning outputs, caches, logs, and symlinks."""
 
     root = Path(project_root).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(root)
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-        if not path.is_file() or path.is_symlink():
-            continue
-        relative = path.relative_to(root).as_posix()
-        if not _is_build_input(relative):
-            continue
+    digest.update(b"mmm/build-input-fingerprint-v3\0")
+    for relative, path in _iter_build_inputs(root):
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        digest.update(content_digest(path))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _validated_project_file(root: Path, relative: str) -> Path:
+    raw = Path(relative)
+    if raw.is_absolute() or not raw.parts or any(
+        part in {"", ".", ".."} for part in raw.parts
+    ):
+        raise ValueError("Validation input path must be canonical and project-relative.")
+
+    current = root
+    for part in raw.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Validation input path traversed a symbolic link.")
+    try:
+        resolved = current.resolve(strict=True)
+        resolved.relative_to(root)
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ValueError("Validation input escaped the project root.") from exc
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return resolved
 
 
 def _java_fingerprint(
@@ -84,183 +140,57 @@ def _java_fingerprint(
     relative_files: Iterable[str] | None,
 ) -> tuple[str, tuple[str, ...]]:
     root = Path(project_root).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(root)
+
     if relative_files is None:
-        paths = sorted(
-            path
-            for path in root.rglob("*.java")
-            if path.is_file() and not path.is_symlink()
+        candidates = sorted(
+            (
+                path
+                for path in root.rglob("*.java")
+                if path.is_file() and not path.is_symlink()
+            ),
+            key=lambda path: path.as_posix(),
         )
-        relative = tuple(path.relative_to(root).as_posix() for path in paths)
+        relative = tuple(path.relative_to(root).as_posix() for path in candidates)
+        paths = tuple(_validated_project_file(root, value) for value in relative)
     else:
-        relative = tuple(sorted(set(str(value).replace("\\", "/") for value in relative_files)))
-        paths = [root / value for value in relative]
+        relative = tuple(
+            sorted(set(str(value).replace("\\", "/") for value in relative_files))
+        )
+        paths = tuple(_validated_project_file(root, value) for value in relative)
 
     digest = hashlib.sha256()
-    for config_name in ("build.gradle", "settings.gradle", "gradle.properties"):
+    digest.update(b"mmm/java-validation-fingerprint-v3\0")
+    for config_name in _JAVA_CONFIG_FILES:
         config = root / config_name
         if config.is_file() and not config.is_symlink():
             digest.update(config_name.encode("utf-8"))
-            digest.update(config.read_bytes())
-    for rel, path in zip(relative, paths):
+            digest.update(b"\0")
+            digest.update(content_digest(config))
+            digest.update(b"\0")
+    for rel, path in zip(relative, paths, strict=True):
         digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(content_digest(path))
         digest.update(b"\0")
     return digest.hexdigest(), relative
 
 
-def _gradle_distribution_marker(runner_module: Any, cache_dir: Path) -> Path:
-    return cache_dir / f".mmm-gradle-{runner_module.GRADLE_VERSION}-verified.json"
-
-
-def _install_fast_gradle_distribution(runner_module: Any) -> None:
-    cls = runner_module.GradleRunner
-    original = cls._ensure_gradle
-    if getattr(original, "_mmm_verified_distribution_cache", False):
-        return
-
-    @wraps(original)
-    def cached_ensure_gradle(self: Any) -> Path:
-        distribution_dir = self.cache_dir / f"gradle-{runner_module.GRADLE_VERSION}"
-        executable = distribution_dir / "bin" / (
-            "gradle.bat" if os.name == "nt" else "gradle"
-        )
-        marker = _gradle_distribution_marker(runner_module, self.cache_dir)
-        if executable.is_file() and marker.is_file():
-            try:
-                payload = json.loads(marker.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-            if (
-                payload.get("version") == runner_module.GRADLE_VERSION
-                and payload.get("distribution_sha256") == runner_module.GRADLE_SHA256
-            ):
-                return executable
-
-        executable = original(self)
-        marker.write_text(
-            json.dumps(
-                {
-                    "schema_version": "mmm/verified-gradle-cache-v1",
-                    "version": runner_module.GRADLE_VERSION,
-                    "distribution_sha256": runner_module.GRADLE_SHA256,
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return executable
-
-    cached_ensure_gradle._mmm_verified_distribution_cache = True
-    cls._ensure_gradle = cached_ensure_gradle
-
-
-def _wrapper_template_dir(cache_dir: Path, runner_module: Any) -> Path:
-    return cache_dir / f"wrapper-template-{runner_module.GRADLE_VERSION}"
-
-
-def _wrapper_artifacts(root: Path) -> tuple[Path, ...]:
-    return (
-        root / "gradlew",
-        root / "gradlew.bat",
-        root / "gradle/wrapper/gradle-wrapper.jar",
-        root / "gradle/wrapper/gradle-wrapper.properties",
-    )
-
-
-def _valid_wrapper_template(root: Path, runner_module: Any) -> bool:
-    artifacts = _wrapper_artifacts(root)
-    if not all(path.is_file() and not path.is_symlink() for path in artifacts):
-        return False
-    try:
-        properties = artifacts[-1].read_text(encoding="utf-8")
-    except OSError:
-        return False
-    return (
-        f"gradle-{runner_module.GRADLE_VERSION}-bin.zip" in properties
-        and f"distributionSha256Sum={runner_module.GRADLE_SHA256}" in properties
-    )
-
-
-def _copy_wrapper_template(source: Path, destination: Path) -> None:
-    for source_path in _wrapper_artifacts(source):
-        relative = source_path.relative_to(source)
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target)
-        if target.name == "gradlew" and os.name != "nt":
-            target.chmod(0o755)
-
-
-def _sync_verified_wrapper(
-    self: Any,
-    *,
-    runner_module: Any,
-    gradle: Path,
-    project_root: Path,
-    environment: dict[str, str],
-    logs: Path,
-) -> Any:
-    started = time.monotonic()
-    template = _wrapper_template_dir(self.cache_dir, runner_module)
-    template.mkdir(parents=True, exist_ok=True)
-    log_path = logs / "gradle-wrapper.log"
-
-    if not _valid_wrapper_template(template, runner_module):
-        # Generate the wrapper in a tiny Gradle project. Running `wrapper` inside the
-        # generated Fabric/Loom project needlessly configures and remaps Minecraft.
-        (template / "settings.gradle").write_text(
-            "rootProject.name = 'mmm-wrapper-template'\n",
-            encoding="utf-8",
-        )
-        (template / "build.gradle").write_text("\n", encoding="utf-8")
-        result = self._run(
-            name="wrapper",
-            executable=gradle,
-            arguments=(
-                "--no-daemon",
-                "wrapper",
-                "--gradle-version",
-                runner_module.GRADLE_VERSION,
-                "--gradle-distribution-sha256-sum",
-                runner_module.GRADLE_SHA256,
-                "--stacktrace",
-            ),
-            cwd=template,
-            env=environment,
-            log_path=log_path,
-        )
-        if result.exit_code != 0 or not _valid_wrapper_template(template, runner_module):
-            return result
-        _copy_wrapper_template(template, project_root)
-        return result
-
-    _copy_wrapper_template(template, project_root)
-    duration = round(time.monotonic() - started, 3)
-    log_path.write_text(
-        "Verified cached Gradle wrapper template copied into project.\n",
-        encoding="utf-8",
-    )
-    return runner_module.CommandResult(
-        name="wrapper",
-        command=("mmm:verified-wrapper-cache", runner_module.GRADLE_VERSION),
-        exit_code=0,
-        duration_seconds=duration,
-        log_path=str(log_path),
-        timed_out=False,
-    )
-
-
-def gametest_resource_errors(project_root: str | Path, log_path: str | Path) -> tuple[str, ...]:
+def gametest_resource_errors(
+    project_root: str | Path,
+    log_path: str | Path,
+) -> tuple[str, ...]:
     """Return high-signal generated-namespace resource loading errors."""
 
     root = Path(project_root).expanduser().resolve()
     fabric = root / "src/main/resources/fabric.mod.json"
     try:
-        mod_id = str(json.loads(fabric.read_text(encoding="utf-8"))["id"])
-    except Exception:
+        payload = json.loads(fabric.read_text(encoding="utf-8"))
+        mod_id = str(payload["id"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
         return ()
+
     path = Path(log_path)
     if not path.is_file() or path.is_symlink():
         return ()
@@ -287,169 +217,32 @@ def gametest_resource_errors(project_root: str | Path, log_path: str | Path) -> 
     return tuple(findings)
 
 
-def _install_incremental_build(runner_module: Any) -> None:
-    cls = runner_module.GradleRunner
-    original_build = cls.build
-    if getattr(original_build, "_mmm_incremental_validation", False):
-        return
-
-    def optimized_build_locked(
-        self: Any,
-        project_root: Path,
-        *,
-        run_gametest: bool,
-    ) -> Any:
-        project_root = project_root.resolve()
-        if not (project_root / "build.gradle").is_file():
-            raise runner_module.BuildRunnerError(
-                f"Not a generated Gradle project: {project_root}"
-            )
-        logs = project_root / ".minecraft_ai" / "logs"
-        logs.mkdir(parents=True, exist_ok=True)
-
-        gradle = self._ensure_gradle()
-        commands: list[Any] = []
-        environment = os.environ.copy()
-        environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
-        environment["CI"] = "true"
-
-        wrapper_result = _sync_verified_wrapper(
-            self,
-            runner_module=runner_module,
-            gradle=gradle,
-            project_root=project_root,
-            environment=environment,
-            logs=logs,
-        )
-        commands.append(wrapper_result)
-        if wrapper_result.exit_code != 0:
-            return runner_module.BuildReport(
-                status="FAIL",
-                gradle_version=runner_module.GRADLE_VERSION,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=None,
-                error="Gradle wrapper generation failed.",
-            )
-
-        build_result = self._run(
-            name="build",
-            executable=gradle,
-            arguments=(
-                "--no-daemon",
-                "build",
-                "--build-cache",
-                "--stacktrace",
-            ),
-            cwd=project_root,
-            env=environment,
-            log_path=logs / "gradle-build.log",
-        )
-        commands.append(build_result)
-        if build_result.exit_code != 0:
-            return runner_module.BuildReport(
-                status="FAIL",
-                gradle_version=runner_module.GRADLE_VERSION,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=None,
-                error="Gradle build failed.",
-            )
-
-        if run_gametest:
-            gametest_result = self._run(
-                name="gametest",
-                executable=gradle,
-                arguments=(
-                    "--no-daemon",
-                    "runGameTestServer",
-                    "--build-cache",
-                    "--stacktrace",
-                ),
-                cwd=project_root,
-                env=environment,
-                log_path=logs / "gradle-gametest.log",
-            )
-            commands.append(gametest_result)
-            if gametest_result.exit_code != 0:
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=runner_module.GRADLE_VERSION,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(project_root),
-                    gametest_report=self._gametest_report(project_root),
-                    error="Headless Fabric GameTest failed.",
-                )
-            resource_errors = gametest_resource_errors(
-                project_root,
-                gametest_result.log_path,
-            )
-            if resource_errors:
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=runner_module.GRADLE_VERSION,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(project_root),
-                    gametest_report=self._gametest_report(project_root),
-                    error=(
-                        "Headless Fabric GameTest loaded generated resources with "
-                        "errors: " + " | ".join(resource_errors[:8])
-                    ),
-                )
-
-        jar_path = self._find_release_jar(project_root)
-        if jar_path is None:
-            return runner_module.BuildReport(
-                status="FAIL",
-                gradle_version=runner_module.GRADLE_VERSION,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=self._gametest_report(project_root),
-                error="Gradle reported success but no remapped release JAR was found.",
-            )
-        return runner_module.BuildReport(
-            status="PASS",
-            gradle_version=runner_module.GRADLE_VERSION,
-            commands=tuple(commands),
-            jar_path=jar_path,
-            gametest_report=self._gametest_report(project_root),
-            error=None,
-        )
-
-    cls._build_locked = optimized_build_locked
-
-    @wraps(original_build)
-    def cached_build(self: Any, project_root: Path, *, run_gametest: bool = True) -> Any:
-        root = Path(project_root).expanduser().resolve()
-        fingerprint = project_build_fingerprint(root)
-        key = (str(root), fingerprint, bool(run_gametest))
-        with _CACHE_LOCK:
-            cached = _SUCCESSFUL_BUILDS.get(key)
-            if cached is not None:
-                return copy.deepcopy(cached)
-
-        report = original_build(self, root, run_gametest=run_gametest)
-        with _CACHE_LOCK:
-            _bounded_put(_RECENT_BUILDS, key, copy.deepcopy(report))
-            if report.passed:
-                _bounded_put(_SUCCESSFUL_BUILDS, key, copy.deepcopy(report))
-        return report
-
-    cached_build._mmm_incremental_validation = True
-    cached_build._mmm_exact_input_cache = True
-    cls.build = cached_build
-
-
 def _consume_recent_build(
     project_root: Path,
     *,
     run_gametest: bool,
 ) -> Any | None:
-    fingerprint = project_build_fingerprint(project_root)
-    key = (str(project_root.resolve()), fingerprint, bool(run_gametest))
+    root = Path(project_root).expanduser().resolve()
+    fingerprint = project_build_fingerprint(root)
+    key = (str(root), fingerprint, bool(run_gametest))
     with _CACHE_LOCK:
         value = _RECENT_BUILDS.pop(key, None)
     return copy.deepcopy(value) if value is not None else None
+
+
+def _jdt_cache_profile(self: Any, *, timeout_seconds: int) -> tuple[Any, ...]:
+    """Capture every service/runtime setting that can change a JDT receipt."""
+
+    return (
+        tuple(str(value) for value in getattr(self, "command", ())),
+        int(getattr(self, "diagnostic_page_max_files", 0)),
+        int(getattr(self, "diagnostic_page_max_source_bytes", 0)),
+        float(getattr(self, "diagnostic_quiet_seconds", 0.0)),
+        int(timeout_seconds),
+        os.environ.get("JAVA_HOME", ""),
+        os.environ.get("JDK_HOME", ""),
+        os.environ.get("PATH", ""),
+    )
 
 
 def _install_jdt_cache(java_lsp_module: Any) -> None:
@@ -467,23 +260,57 @@ def _install_jdt_cache(java_lsp_module: Any) -> None:
         timeout_seconds: int = 60,
     ) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
-        fingerprint, normalized = _java_fingerprint(root, relative_files)
-        key = (str(root), fingerprint, normalized)
+        full_scope = relative_files is None
+
+        # Canonicalize and authorize paths before fingerprinting. This prevents an
+        # unsafe relative path from being read merely to construct a cache key and
+        # lets fingerprinting/JDT share one discovered full-project file list.
+        files = tuple(java_lsp_module._java_files(root, relative_files))
+        normalized = tuple(path.relative_to(root).as_posix() for path in files)
+        fingerprint, fingerprint_files = _java_fingerprint(root, normalized)
+        if fingerprint_files != normalized:
+            raise java_lsp_module.JDTLanguageServerError(
+                "JDT validation file identity changed during cache preparation."
+            )
+
+        profile = _jdt_cache_profile(self, timeout_seconds=timeout_seconds)
+        key = (str(root), fingerprint, normalized, profile)
         with _CACHE_LOCK:
             cached = _JDT_RESULTS.get(key)
             if cached is not None:
                 return copy.deepcopy(cached)
+
         result = original(
             self,
             root,
-            relative_files=(normalized if relative_files is not None else None),
+            relative_files=normalized,
             timeout_seconds=timeout_seconds,
         )
+
+        if full_scope:
+            final_files = tuple(java_lsp_module._java_files(root, None))
+            final_normalized = tuple(
+                path.relative_to(root).as_posix() for path in final_files
+            )
+            if final_normalized != normalized:
+                raise java_lsp_module.JDTLanguageServerError(
+                    "Java source set changed during JDT validation; result is not "
+                    "certifiable."
+                )
+
+        final_fingerprint, final_files = _java_fingerprint(root, normalized)
+        if final_files != normalized or final_fingerprint != fingerprint:
+            raise java_lsp_module.JDTLanguageServerError(
+                "Java/config inputs changed during JDT validation; result is not "
+                "certifiable."
+            )
+
         with _CACHE_LOCK:
             _bounded_put(_JDT_RESULTS, key, copy.deepcopy(result))
         return result
 
     cached_diagnostics._mmm_exact_java_cache = True
+    cached_diagnostics._mmm_snapshot_stable_java_cache = True
     cls.diagnostics = cached_diagnostics
 
 
@@ -493,7 +320,11 @@ def _install_progressive_repair(repair_module: Any) -> None:
     if not getattr(original_request_patch, "_mmm_tracks_repair_scope", False):
 
         @wraps(original_request_patch)
-        def scoped_request_patch(self: Any, evidence: dict[str, Any], context: dict[str, Any]):
+        def scoped_request_patch(
+            self: Any,
+            evidence: dict[str, Any],
+            context: dict[str, Any],
+        ) -> Any:
             operations = original_request_patch(self, evidence, context)
             self._mmm_last_java_paths = tuple(
                 sorted(
@@ -511,7 +342,12 @@ def _install_progressive_repair(repair_module: Any) -> None:
     if getattr(original_evidence, "_mmm_progressive_evidence", False):
         return
 
-    def progressive_evidence(self: Any, root: Path, *, run_gametest: bool) -> dict[str, Any]:
+    def progressive_evidence(
+        self: Any,
+        root: Path,
+        *,
+        run_gametest: bool,
+    ) -> dict[str, Any]:
         relative_files = getattr(self, "_mmm_last_java_paths", ()) or None
         diagnostics = _run_jdt_diagnostics(
             self.diagnostics_factory,
@@ -541,7 +377,7 @@ def _install_progressive_repair(repair_module: Any) -> None:
                     root,
                     run_gametest=run_gametest,
                 ).to_dict()
-            except Exception as exc:
+            except (BuildRunnerError, OSError, TimeoutError) as exc:
                 build = {
                     "status": "FAIL",
                     "error": f"{type(exc).__name__}: {exc}",
@@ -562,9 +398,13 @@ def install(
     java_lsp_module: Any,
     repair_module: Any,
 ) -> None:
-    """Install a fail-fast, exact-input-aware verification execution contract."""
+    """Install exact-input JDT caching and progressive validation evidence.
 
-    _install_fast_gradle_distribution(runner_module)
-    _install_incremental_build(runner_module)
+    Target-aware Gradle distribution/build caching is owned exclusively by
+    ``runner_parallel_validation_contract``. Keeping it out of this contract avoids
+    legacy wrapper stacking and stale Gradle API assumptions.
+    """
+
+    del runner_module
     _install_jdt_cache(java_lsp_module)
     _install_progressive_repair(repair_module)
