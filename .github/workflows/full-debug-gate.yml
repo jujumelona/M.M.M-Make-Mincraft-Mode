@@ -44,9 +44,9 @@ jobs:
       - name: Collect the entire pytest suite
         run: python -m pytest --collect-only -q
 
-      - name: Run exhaustive project Debug audit
+      - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
-        run: python tools/full_project_audit.py
+        run: python tools/root_cause_audit_wrapper.py
 
       - name: Upload Debug report even on failure
         if: ${{ always() }}
@@ -58,4 +58,5 @@ jobs:
           path: |
             audit/FULL_PROJECT_AUDIT.json
             audit/FULL_PROJECT_AUDIT.log
+            audit/FULL_PROJECT_AUDIT.runner.log
             audit/dist/*
