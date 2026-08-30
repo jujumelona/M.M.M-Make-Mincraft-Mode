@@ -1,0 +1,37 @@
+name: Worker6 deep reuse hardening
+
+on:
+  push:
+    paths:
+      - '.github/workflows/worker6-deep-audit.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deep hardening
+        run: python scripts/worker6_deep_audit_once.py
+
+      - name: Syntax verification
+        run: python -m compileall -q minecraft_mod_ai tests/test_worker6_reuse_hardening.py
+
+      - name: Targeted Worker 6 tests
+        run: python -m pytest -q tests/test_worker6_reuse_fail_closed.py tests/test_worker6_reuse_hardening.py
+
+      - name: Commit hardening to main
+        shell: bash
+        run: |
+          git config user.name "jujumelona"
+          git config user.email "qasdaa025@gmail.com"
+          git add minecraft_mod_ai/source_transplant.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/dependency_resolver.py tests/test_worker6_reuse_hardening.py
+          git commit -m "fix(worker6): close deep reuse proof gaps"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
