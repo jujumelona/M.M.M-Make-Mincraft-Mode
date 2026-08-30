@@ -38,6 +38,7 @@ def _project(root: Path, mod_id: str = "example_mod") -> Path:
 def test_validation_runtime_contracts_are_installed() -> None:
     assert getattr(GradleRunner.build, "_mmm_project_parallel_validation", False)
     assert getattr(GradleRunner.build, "_mmm_exact_input_cache", False)
+    assert getattr(GradleRunner.build, "_mmm_output_bound_validation_cache", False)
     assert getattr(GradleRunner._ensure_gradle, "_mmm_target_parallel_distribution", False)
     assert getattr(JavaLanguageService.diagnostics, "_mmm_exact_java_cache", False)
     assert getattr(JavaLanguageService.diagnostics, "_mmm_snapshot_stable_java_cache", False)
@@ -108,16 +109,20 @@ def test_build_fingerprint_prunes_excluded_trees_before_descent(
 
 def test_exact_input_successful_build_is_reused_in_process(tmp_path: Path) -> None:
     root = _project(tmp_path / "project")
+    validation._SUCCESSFUL_BUILDS.clear()
     runner = GradleRunner(tmp_path / "cache")
     calls = {"count": 0}
 
     def fake_build_locked(self, project_root: Path, *, run_gametest: bool):
         calls["count"] += 1
+        jar = project_root / "build/libs/example.jar"
+        jar.parent.mkdir(parents=True, exist_ok=True)
+        jar.write_bytes(f"jar-{calls['count']}".encode("ascii"))
         return BuildReport(
             status="PASS",
             gradle_version="test",
             commands=(),
-            jar_path=str(project_root / "build/libs/example.jar"),
+            jar_path=str(jar),
             gametest_report=None,
             error=None,
         )
