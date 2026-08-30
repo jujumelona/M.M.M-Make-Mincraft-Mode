@@ -1,0 +1,28 @@
+name: Worker 04 Validation
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  worker04:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run Agent MCP routing regressions
+        run: >-
+          python -m pytest -vv --tb=short
+          tests/test_agent_tool_calling.py::test_required_rag_exhaustion_fails_before_hard_round_budget
+          tests/test_agent_required_rag_semantic_choice.py
+          tests/test_agent_capability_manifest_degradation.py
+          tests/test_agent_capability_context.py
