@@ -37,7 +37,6 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
             scalable_validator,
             scale_policy,
             validator,
-            validator_boss_contract,
         )
 
         common.extend(
@@ -45,7 +44,6 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
                 scalable_validator,
                 validator,
                 scale_policy,
-                validator_boss_contract,
                 platform_validation_contract,
             )
         )
