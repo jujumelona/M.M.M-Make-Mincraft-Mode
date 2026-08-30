@@ -30,7 +30,6 @@ from .rag_index import ProjectRAGIndex
 
 _HTTP_TIMEOUT_SECONDS = 12.0
 _MAX_HTTP_BYTES = 2 * 1024 * 1024
-_MAX_SOURCE_TEXT_CHARS = 128_000
 _MAX_EXTERNAL_PROJECTS = 4
 _MAX_HTTP_CACHE_ITEMS = 256
 _PLANNING_DISCOVERY = "planning_discovery"
@@ -121,7 +120,10 @@ def _external_brief_queries(value: Any) -> tuple[str, ...]:
         return ()
 
     found: list[str] = []
-    corrective = str(value.get("schema_version") or "") == "mmm/corrective-retrieval-request-v1"
+    corrective = (
+        str(value.get("schema_version") or "")
+        == "mmm/corrective-retrieval-request-v1"
+    )
     for raw_domain in raw_domains:
         if not isinstance(raw_domain, Mapping):
             continue
@@ -131,7 +133,9 @@ def _external_brief_queries(value: Any) -> tuple[str, ...]:
             for item in (
                 raw_domain.get(key, ())
                 if isinstance(raw_domain.get(key, ()), Sequence)
-                and not isinstance(raw_domain.get(key, ()), (str, bytes, bytearray))
+                and not isinstance(
+                    raw_domain.get(key, ()), (str, bytes, bytearray)
+                )
                 else ()
             )
             if str(item).strip()
@@ -141,7 +145,11 @@ def _external_brief_queries(value: Any) -> tuple[str, ...]:
         queries = _domain_queries(raw_domain)
         domain_id = str(raw_domain.get("domain_id") or "")
         mode = str(raw_domain.get("retrieval_mode") or "")
-        if domain_id == "request" and not corrective and mode in {"", _PLANNING_DISCOVERY}:
+        if (
+            domain_id == "request"
+            and not corrective
+            and mode in {"", _PLANNING_DISCOVERY}
+        ):
             queries = _spread(queries, _planning_query_budget())
         found.extend(queries)
     return tuple(_dedupe(found))
@@ -320,14 +328,25 @@ def _content_sha256(text: str) -> str:
 
 
 def _source_document(
-    *, source_id: str, title: str, url: str, content: str, source_type: str,
+    *,
+    source_id: str,
+    title: str,
+    url: str,
+    content: str,
+    source_type: str,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    raw_text = str(content)
-    text = raw_text[:_MAX_SOURCE_TEXT_CHARS]
+    """Materialize a complete body already bounded by the HTTP/retrieval layer."""
+
+    text = str(content)
     source_metadata = dict(metadata or {})
-    source_metadata["content_truncated"] = len(text) < len(raw_text)
-    source_metadata["original_content_chars"] = len(raw_text)
+    source_metadata.update(
+        {
+            "body_retrieved": True,
+            "content_truncated": False,
+            "original_content_chars": len(text),
+        }
+    )
     return {
         "source_id": source_id,
         "title": title,
@@ -339,31 +358,32 @@ def _source_document(
     }
 
 
-def _github_repo_documents(owner: str, repo: str, query: str) -> tuple[list[dict[str, Any]], list[str]]:
-    evidence = retrieve_repository_documents(
-        owner, repo, query,
-        http_json=lambda url: _http_json(url, github=True),
-        http_text=_http_text,
-        source_document=_source_document,
-    )
-    return [dict(item) for item in evidence.documents], list(evidence.errors)
+def _modrinth_search(
+    query: str,
+    versions: Sequence[str],
+    *,
+    include_details: bool = True,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Search project candidates; fetch detail bodies only when source evidence is needed."""
 
-
-def _modrinth_search(query: str, versions: Sequence[str]) -> tuple[list[dict[str, Any]], list[str]]:
     errors: list[str] = []
     facets: list[list[str]] = [["project_type:mod"]]
     concrete_versions = [
-        str(version).strip() for version in versions
-        if str(version).strip() and str(version).strip() not in {"*", "target-neutral", "unknown"}
+        str(version).strip()
+        for version in versions
+        if str(version).strip()
+        and str(version).strip() not in {"*", "target-neutral", "unknown"}
     ]
     if concrete_versions:
         facets.append([f"versions:{version}" for version in concrete_versions[:3]])
-    params = urlencode({
-        "query": query,
-        "limit": _MAX_EXTERNAL_PROJECTS,
-        "index": "relevance",
-        "facets": json.dumps(facets, separators=(",", ":")),
-    })
+    params = urlencode(
+        {
+            "query": query,
+            "limit": _MAX_EXTERNAL_PROJECTS,
+            "index": "relevance",
+            "facets": json.dumps(facets, separators=(",", ":")),
+        }
+    )
     try:
         payload = _http_json(f"https://api.modrinth.com/v2/search?{params}")
     except Exception as exc:  # noqa: BLE001
@@ -376,34 +396,46 @@ def _modrinth_search(query: str, versions: Sequence[str]) -> tuple[list[dict[str
         project_id = str(hit.get("project_id", "")).strip()
         if not project_id:
             continue
-        try:
-            detail = _http_json(f"https://api.modrinth.com/v2/project/{quote(project_id)}")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"modrinth_project:{project_id}:{type(exc).__name__}: {exc}")
-            detail = {}
-        projects.append({
-            "project_id": project_id,
-            "slug": hit.get("slug"),
-            "title": hit.get("title"),
-            "description": hit.get("description"),
-            "author": hit.get("author"),
-            "versions": list(hit.get("versions", [])),
-            "downloads": hit.get("downloads"),
-            "license": hit.get("license"),
-            "project_url": f"https://modrinth.com/mod/{hit.get('slug') or project_id}",
-            "source_url": detail.get("source_url") if isinstance(detail, Mapping) else None,
-            "issues_url": detail.get("issues_url") if isinstance(detail, Mapping) else None,
-            "body": detail.get("body") if isinstance(detail, Mapping) else None,
-        })
+        detail: Mapping[str, Any] = {}
+        if include_details:
+            try:
+                value = _http_json(
+                    f"https://api.modrinth.com/v2/project/{quote(project_id)}"
+                )
+                if isinstance(value, Mapping):
+                    detail = value
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    f"modrinth_project:{project_id}:{type(exc).__name__}: {exc}"
+                )
+        projects.append(
+            {
+                "project_id": project_id,
+                "slug": hit.get("slug"),
+                "title": hit.get("title"),
+                "description": hit.get("description"),
+                "author": hit.get("author"),
+                "versions": list(hit.get("versions", [])),
+                "downloads": hit.get("downloads"),
+                "license": hit.get("license"),
+                "project_url": (
+                    f"https://modrinth.com/mod/{hit.get('slug') or project_id}"
+                ),
+                "source_url": detail.get("source_url"),
+                "issues_url": detail.get("issues_url"),
+                "body": detail.get("body"),
+                "detail_retrieved": include_details and bool(detail),
+            }
+        )
     return projects, errors
 
 
-def _github_repository_search(query: str) -> tuple[list[tuple[str, str]], list[str]]:
-    discovery = discover_repositories(query, http_json=lambda url: _http_json(url, github=True))
-    return list(discovery.repositories), list(discovery.errors)
-
-
-def _github_adaptive_search(query: str, *, seed_repositories: Sequence[Any] = (), search_if_needed: bool = True) -> dict[str, Any]:
+def _github_adaptive_search(
+    query: str,
+    *,
+    seed_repositories: Sequence[Any] = (),
+    search_if_needed: bool = True,
+) -> dict[str, Any]:
     evidence = adaptive_github_evidence(
         query,
         http_json=lambda url: _http_json(url, github=True),
@@ -413,9 +445,17 @@ def _github_adaptive_search(query: str, *, seed_repositories: Sequence[Any] = ()
         search_if_needed=search_if_needed,
     )
     documents = [dict(item) for item in evidence.documents]
-    actual = sum(1 for item in documents if str(item.get("source_type") or "").startswith("github_"))
+    actual = sum(
+        1
+        for item in documents
+        if str(item.get("source_type") or "").startswith("github_")
+    )
     error_text = " ".join(str(item) for item in evidence.errors).casefold()
-    if "rate limit" in error_text or "http error 403" in error_text or "429" in error_text:
+    if (
+        "rate limit" in error_text
+        or "http error 403" in error_text
+        or "429" in error_text
+    ):
         provider_status = "rate_limited"
     elif "422" in error_text or "search limit" in error_text:
         provider_status = "provider_limited"
@@ -442,13 +482,22 @@ def _github_adaptive_search(query: str, *, seed_repositories: Sequence[Any] = ()
     }
 
 
-def _github_targeted_search(query: str, *, seed_repositories: Sequence[Any] = ()) -> dict[str, Any]:
+def _github_targeted_search(
+    query: str, *, seed_repositories: Sequence[Any] = ()
+) -> dict[str, Any]:
     """Inspect only enough source to resolve one concrete planning gap."""
 
     repositories: list[tuple[str, str]] = []
     for value in seed_repositories:
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)) and len(value) >= 2:
-            ref = (str(value[0]).strip(), str(value[1]).strip().removesuffix(".git"))
+        if (
+            isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes, bytearray))
+            and len(value) >= 2
+        ):
+            ref = (
+                str(value[0]).strip(),
+                str(value[1]).strip().removesuffix(".git"),
+            )
             if all(ref) and ref not in repositories:
                 repositories.append(ref)
     errors: list[str] = []
@@ -456,7 +505,9 @@ def _github_targeted_search(query: str, *, seed_repositories: Sequence[Any] = ()
     search_queries: list[str] = []
     saturation_reason = "seed_repositories"
     if not repositories:
-        discovery = discover_repositories(query, http_json=lambda url: _http_json(url, github=True))
+        discovery = discover_repositories(
+            query, http_json=lambda url: _http_json(url, github=True)
+        )
         repositories.extend(discovery.repositories)
         errors.extend(discovery.errors)
         search_requests = discovery.search_requests
@@ -472,7 +523,9 @@ def _github_targeted_search(query: str, *, seed_repositories: Sequence[Any] = ()
         if request_remaining < 2:
             break
         evidence = retrieve_repository_documents(
-            owner, repo, query,
+            owner,
+            repo,
+            query,
             http_json=lambda url: _http_json(url, github=True),
             http_text=_http_text,
             source_document=_source_document,
@@ -516,7 +569,9 @@ def _github_targeted_search(query: str, *, seed_repositories: Sequence[Any] = ()
     }
 
 
-def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float:
+def _coverage_score(
+    query: str, documents: Sequence[Mapping[str, Any]]
+) -> float:
     terms = set(_tokens(query))
     if not documents:
         return 0.0
@@ -529,28 +584,35 @@ def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float
     return round(len(terms & haystack) / max(1, len(terms)), 4)
 
 
-def _external_retrieval(query: str, versions: Sequence[str], *, mode: str = "source") -> dict[str, Any]:
+def _external_retrieval(
+    query: str, versions: Sequence[str], *, mode: str = "source"
+) -> dict[str, Any]:
     variants = _query_variants(query)
     projects_by_id: dict[str, dict[str, Any]] = {}
     documents_by_id: dict[str, dict[str, Any]] = {}
     seed_repositories: list[tuple[str, str]] = []
     errors: list[str] = []
+    include_details = mode != _PLANNING_DISCOVERY
 
     for variant in variants:
-        projects, variant_errors = _modrinth_search(variant, versions)
+        projects, variant_errors = _modrinth_search(
+            variant,
+            versions,
+            include_details=include_details,
+        )
         errors.extend(variant_errors)
         for project in projects:
             project_id = str(project.get("project_id", ""))
             if project_id:
                 projects_by_id.setdefault(project_id, project)
-            body = str(project.get("body") or project.get("description") or "")
+            body = str(project.get("body") or "")
             if body and project_id:
                 document = _source_document(
                     source_id=f"modrinth:{project_id}",
                     title=str(project.get("title") or project_id),
                     url=str(project.get("project_url") or ""),
                     content=body,
-                    source_type="modrinth_project",
+                    source_type="modrinth_project_body",
                     metadata={
                         "project_id": project_id,
                         "author": project.get("author"),
@@ -568,15 +630,26 @@ def _external_retrieval(query: str, versions: Sequence[str], *, mode: str = "sou
     if mode == _PLANNING_DISCOVERY:
         github = {
             "provider_status": "deferred_until_specific_gap_or_reuse",
-            "repositories": [], "documents": [], "errors": [], "search_queries": [],
-            "search_requests": 0, "source_requests": 0, "source_bytes": 0,
+            "repositories": [],
+            "documents": [],
+            "errors": [],
+            "search_queries": [],
+            "search_requests": 0,
+            "source_requests": 0,
+            "source_bytes": 0,
             "coverage_score": 0.0,
             "saturation_reason": "planning_discovery_uses_project_metadata",
         }
     elif mode == _PLANNING_GAP_SOURCE:
-        github = _github_targeted_search(query, seed_repositories=tuple(seed_repositories))
+        github = _github_targeted_search(
+            query, seed_repositories=tuple(seed_repositories)
+        )
     else:
-        github = _github_adaptive_search(query, seed_repositories=tuple(seed_repositories), search_if_needed=True)
+        github = _github_adaptive_search(
+            query,
+            seed_repositories=tuple(seed_repositories),
+            search_if_needed=True,
+        )
 
     errors.extend(str(item) for item in github.get("errors", ()))
     for document in github.get("documents", ()):
@@ -585,13 +658,21 @@ def _external_retrieval(query: str, versions: Sequence[str], *, mode: str = "sou
             if source_id:
                 documents_by_id.setdefault(source_id, dict(document))
     documents = list(documents_by_id.values())
-    actual_source_count = sum(
-        1 for document in documents
+    github_source_count = sum(
+        1
+        for document in documents
         if str(document.get("source_type") or "").startswith("github_")
     )
+    status = (
+        "available"
+        if documents
+        else "metadata_only"
+        if projects_by_id
+        else "unavailable"
+    )
     return {
-        "schema_version": "mmm/external-grounded-rag",
-        "status": "available" if documents else "unavailable",
+        "schema_version": "mmm/external-grounded-rag-v2",
+        "status": status,
         "retrieval_mode": mode,
         "query": query,
         "query_variants": list(variants),
@@ -600,10 +681,17 @@ def _external_retrieval(query: str, versions: Sequence[str], *, mode: str = "sou
         "credentials_required": False,
         "corrective_search_used": mode == _PLANNING_GAP_SOURCE,
         "project_count": len(projects_by_id),
+        "metadata_only_project_count": (
+            len(projects_by_id) if not include_details else 0
+        ),
         "source_repository_count": len(github.get("repositories", ())),
         "document_count": len(documents),
-        "actual_source_document_count": actual_source_count,
-        "coverage_score": max(_coverage_score(query, documents), float(github.get("coverage_score") or 0.0)),
+        "actual_source_document_count": len(documents),
+        "github_source_document_count": github_source_count,
+        "coverage_score": max(
+            _coverage_score(query, documents),
+            float(github.get("coverage_score") or 0.0),
+        ),
         "projects": list(projects_by_id.values()),
         "documents": documents,
         "errors": errors,
@@ -629,28 +717,39 @@ def _augment_bundle(
     result = dict(payload)
     raw_domains = result.get("domains", [])
     domains = [dict(item) for item in raw_domains if isinstance(item, Mapping)]
-    allowed_external = {str(item).strip().casefold() for item in external_queries if str(item).strip()}
+    allowed_external = {
+        str(item).strip().casefold()
+        for item in external_queries
+        if str(item).strip()
+    }
     jobs: list[tuple[int, int, str, str]] = []
     for domain_index, domain in enumerate(domains):
         queries = domain.get("queries", [])
         if not isinstance(queries, list):
             continue
-        copied_queries = [dict(item) for item in queries if isinstance(item, Mapping)]
+        copied_queries = [
+            dict(item) for item in queries if isinstance(item, Mapping)
+        ]
         domain["queries"] = copied_queries
-        mode = str(domain.get("retrieval_mode") or default_mode or "source").strip()
-        if (
-            str(domain.get("domain_id") or "") == "request"
-            and mode == "source"
-        ):
+        mode = str(
+            domain.get("retrieval_mode") or default_mode or "source"
+        ).strip()
+        if str(domain.get("domain_id") or "") == "request" and mode == "source":
             mode = _PLANNING_DISCOVERY
         for query_index, item in enumerate(copied_queries):
             query = str(item.get("query", "")).strip()
             if query and query.casefold() in allowed_external:
                 jobs.append((domain_index, query_index, query, mode))
 
-    def run(job: tuple[int, int, str, str]) -> tuple[int, int, dict[str, Any]]:
+    def run(
+        job: tuple[int, int, str, str]
+    ) -> tuple[int, int, dict[str, Any]]:
         domain_index, query_index, query, mode = job
-        return domain_index, query_index, _external_retrieval(query, versions, mode=mode)
+        return (
+            domain_index,
+            query_index,
+            _external_retrieval(query, versions, mode=mode),
+        )
 
     if jobs:
         with ThreadPoolExecutor(
@@ -658,7 +757,9 @@ def _augment_bundle(
             thread_name_prefix="mmm_grounded_rag",
         ) as pool:
             for domain_index, query_index, external in pool.map(run, jobs):
-                domains[domain_index]["queries"][query_index]["external_rag"] = external
+                domains[domain_index]["queries"][query_index][
+                    "external_rag"
+                ] = external
 
     result["domains"] = domains
     result["schema_version"] = "mmm/forced-pre-design-rag"
@@ -670,10 +771,16 @@ def _augment_bundle(
         query.get("external_rag")
         for domain in domains
         for query in domain.get("queries", [])
-        if isinstance(query, Mapping) and isinstance(query.get("external_rag"), Mapping)
+        if isinstance(query, Mapping)
+        and isinstance(query.get("external_rag"), Mapping)
     ]
-    result["external_source_count"] = sum(int(item.get("actual_source_document_count", 0)) for item in external_payloads)
-    result["external_document_count"] = sum(int(item.get("document_count", 0)) for item in external_payloads)
+    result["external_source_count"] = sum(
+        int(item.get("actual_source_document_count", 0))
+        for item in external_payloads
+    )
+    result["external_document_count"] = sum(
+        int(item.get("document_count", 0)) for item in external_payloads
+    )
     result["external_query_count"] = len(external_payloads)
     result["research_sha256"] = agentic_module._sha256(
         {key: value for key, value in result.items() if key != "research_sha256"}
@@ -690,12 +797,20 @@ def install(agentic_module: Any) -> None:
         _INSTALLED = True
         return
 
-    def grounded_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[str, Any]:
+    def grounded_rag_bundle(
+        router: Any, research_brief: Mapping[str, Any]
+    ) -> dict[str, Any]:
         local_index = _ensure_local_index(agentic_module, router)
         payload = original(router, research_brief)
-        versions = tuple(str(item) for item in payload.get("versions", []) if str(item).strip())
+        versions = tuple(
+            str(item) for item in payload.get("versions", []) if str(item).strip()
+        )
         brief_schema = str(research_brief.get("schema_version") or "")
-        default_mode = _PLANNING_GAP_SOURCE if brief_schema == "mmm/corrective-retrieval-request-v1" else "source"
+        default_mode = (
+            _PLANNING_GAP_SOURCE
+            if brief_schema == "mmm/corrective-retrieval-request-v1"
+            else "source"
+        )
         return _augment_bundle(
             agentic_module,
             payload,
