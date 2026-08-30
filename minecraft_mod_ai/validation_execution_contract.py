@@ -52,6 +52,24 @@ def _bounded_put(mapping: dict[Any, Any], key: Any, value: Any) -> None:
         mapping.pop(next(iter(mapping)))
 
 
+def _canonical_project_root(project_root: str | Path) -> Path:
+    """Resolve one existing project directory without traversing symlink aliases."""
+
+    lexical = Path(os.path.abspath(os.fspath(Path(project_root).expanduser())))
+    current = Path(lexical.anchor)
+    for part in lexical.parts[1:]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Validation project root may not traverse symbolic links.")
+    try:
+        root = lexical.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise FileNotFoundError(lexical) from exc
+    if not root.is_dir():
+        raise FileNotFoundError(root)
+    return root
+
+
 def _is_build_input(relative: str) -> bool:
     path = Path(relative)
     if path.parts and path.parts[0] in _SKIP_TOP_LEVEL:
@@ -69,7 +87,7 @@ def _skip_build_directory(relative: str) -> bool:
 
 
 def _iter_build_inputs(root: Path) -> tuple[tuple[str, Path], ...]:
-    """Walk only build-relevant directories in deterministic lexical order."""
+    """Walk build inputs deterministically and reject relevant symlink aliases."""
 
     values: list[tuple[str, Path]] = []
     for current, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
@@ -77,18 +95,28 @@ def _iter_build_inputs(root: Path) -> tuple[tuple[str, Path], ...]:
         kept_directories: list[str] = []
         for name in sorted(dirnames):
             child = directory / name
-            if child.is_symlink():
-                continue
             relative = child.relative_to(root).as_posix()
+            if child.is_symlink():
+                if not _skip_build_directory(relative):
+                    raise ValueError(
+                        f"Build input directory traverses a symbolic link: {relative}"
+                    )
+                continue
             if not _skip_build_directory(relative):
                 kept_directories.append(name)
         dirnames[:] = kept_directories
 
         for name in sorted(filenames):
             path = directory / name
-            if path.is_symlink() or not path.is_file():
-                continue
             relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                if _is_build_input(relative):
+                    raise ValueError(
+                        f"Build input file is a symbolic link: {relative}"
+                    )
+                continue
+            if not path.is_file():
+                continue
             if _is_build_input(relative):
                 values.append((relative, path))
     return tuple(values)
@@ -97,11 +125,9 @@ def _iter_build_inputs(root: Path) -> tuple[tuple[str, Path], ...]:
 def project_build_fingerprint(project_root: str | Path) -> str:
     """Hash exact build inputs while pruning outputs, caches, logs, and symlinks."""
 
-    root = Path(project_root).expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(root)
+    root = _canonical_project_root(project_root)
     digest = hashlib.sha256()
-    digest.update(b"mmm/build-input-fingerprint-v3\0")
+    digest.update(b"mmm/build-input-fingerprint-v4\0")
     for relative, path in _iter_build_inputs(root):
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
@@ -138,9 +164,7 @@ def _java_fingerprint(
     project_root: str | Path,
     relative_files: Iterable[str] | None,
 ) -> tuple[str, tuple[str, ...]]:
-    root = Path(project_root).expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(root)
+    root = _canonical_project_root(project_root)
 
     if relative_files is None:
         candidates = sorted(
@@ -160,14 +184,16 @@ def _java_fingerprint(
         paths = tuple(_validated_project_file(root, value) for value in relative)
 
     digest = hashlib.sha256()
-    digest.update(b"mmm/java-validation-fingerprint-v3\0")
+    digest.update(b"mmm/java-validation-fingerprint-v4\0")
     for config_name in _JAVA_CONFIG_FILES:
         config = root / config_name
-        if config.is_file() and not config.is_symlink():
-            digest.update(config_name.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(content_digest(config))
-            digest.update(b"\0")
+        if not config.exists() and not config.is_symlink():
+            continue
+        config = _validated_project_file(root, config_name)
+        digest.update(config_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content_digest(config))
+        digest.update(b"\0")
     for rel, path in zip(relative, paths, strict=True):
         digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
@@ -176,16 +202,29 @@ def _java_fingerprint(
     return digest.hexdigest(), relative
 
 
+def _validated_log_file(root: Path, log_path: str | Path) -> Path:
+    lexical = Path(os.path.abspath(os.fspath(Path(log_path).expanduser())))
+    try:
+        relative = lexical.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ValueError("GameTest log escaped the project root.") from exc
+    return _validated_project_file(root, relative)
+
+
 def gametest_resource_errors(
     project_root: str | Path,
     log_path: str | Path,
 ) -> tuple[str, ...]:
     """Return resource errors, failing closed when GameTest evidence is unavailable."""
 
-    root = Path(project_root).expanduser().resolve()
-    fabric = root / "src/main/resources/fabric.mod.json"
-    if fabric.is_symlink() or not fabric.is_file():
-        return ("GameTest resource validation unavailable: fabric.mod.json is missing or unsafe.",)
+    try:
+        root = _canonical_project_root(project_root)
+        fabric = _validated_project_file(root, "src/main/resources/fabric.mod.json")
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return (
+            "GameTest resource validation unavailable: fabric.mod.json or project root "
+            f"is missing or unsafe ({type(exc).__name__}: {exc}).",
+        )
     try:
         payload = json.loads(fabric.read_text(encoding="utf-8"))
         raw_mod_id = payload["id"]
@@ -199,13 +238,13 @@ def gametest_resource_errors(
     ):
         return ("GameTest resource validation unavailable: fabric.mod.json has an invalid mod id.",)
 
-    path = Path(log_path).expanduser()
-    if path.is_symlink() or not path.is_file():
-        return ("GameTest resource validation unavailable: GameTest log is missing or unsafe.",)
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:
-        return (f"GameTest resource validation unavailable: {type(exc).__name__}: {exc}",)
+        path = _validated_log_file(root, log_path)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return (
+            "GameTest resource validation unavailable: GameTest log is missing or unsafe "
+            f"({type(exc).__name__}: {exc}).",
+        )
 
     namespace = f"{raw_mod_id}:"
     markers = (
@@ -219,13 +258,17 @@ def gametest_resource_errors(
         "unknown registry",
     )
     findings: list[str] = []
-    for raw in lines:
-        lowered = raw.lower()
-        if namespace not in raw or not any(marker in lowered for marker in markers):
-            continue
-        compact = raw.strip()
-        if compact and compact not in findings:
-            findings.append(compact[:2000])
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                lowered = raw.lower()
+                if namespace not in raw or not any(marker in lowered for marker in markers):
+                    continue
+                compact = raw.strip()
+                if compact and compact not in findings:
+                    findings.append(compact[:2000])
+    except OSError as exc:
+        return (f"GameTest resource validation unavailable: {type(exc).__name__}: {exc}",)
     return tuple(findings)
 
 
@@ -258,7 +301,12 @@ def _install_jdt_cache(java_lsp_module: Any) -> None:
         relative_files: Iterable[str] | None = None,
         timeout_seconds: int = 60,
     ) -> dict[str, Any]:
-        root = Path(project_root).expanduser().resolve()
+        try:
+            root = _canonical_project_root(project_root)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise java_lsp_module.JDTLanguageServerError(
+                f"JDT validation project root is missing or unsafe: {exc}"
+            ) from exc
         full_scope = relative_files is None
 
         files = tuple(java_lsp_module._java_files(root, relative_files))
