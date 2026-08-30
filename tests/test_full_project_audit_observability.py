@@ -55,7 +55,7 @@ def test_logged_process_streams_full_output_but_keeps_bounded_tail(
     log = audit.LOG_PATH.read_text(encoding="utf-8")
     assert "row-00000" in log
     assert "row-04999" in log
-    assert log.count("row-") == line_count
+    assert sum(line.startswith("row-") for line in log.splitlines()) == line_count
 
 
 def test_streamed_process_log_redacts_environment_secrets(
