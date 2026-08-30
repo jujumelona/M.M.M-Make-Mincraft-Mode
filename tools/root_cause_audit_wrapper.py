@@ -20,6 +20,7 @@ AUDIT_DIR = ROOT / "audit"
 REPORT_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.json"
 RUNNER_LOG_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.runner.log"
 _VALID_CHECK_STATUSES = frozenset({"PASS", "WARN", "FAIL", "SKIP"})
+_INTERNAL_CHECK_CATEGORY = "audit-internal"
 
 
 def normalize_report_semantics(report: dict[str, Any]) -> dict[str, Any]:
@@ -132,12 +133,17 @@ def failure_groups_from_report(report: dict[str, Any]):
     for check in checks:
         if not isinstance(check, dict) or str(check.get("status", "")).upper() != "FAIL":
             continue
+        category = (
+            FailureCategory.INTERNAL
+            if str(check.get("category") or "") == _INTERNAL_CHECK_CATEGORY
+            else FailureCategory.VALIDATION
+        )
         collector.record(
             FailureEvent(
                 stage=f"full-debug:{str(check.get('category') or 'unknown')}",
                 operation=str(check.get("name") or "unknown-check"),
-                category=FailureCategory.VALIDATION,
-                cause_type="AuditCheckFailure",
+                category=category,
+                cause_type="AuditInternalFailure" if category is FailureCategory.INTERNAL else "AuditCheckFailure",
                 cause=str(check.get("detail") or "check failed"),
                 retryable=False,
                 final_status=FailureStatus.FAILED,
@@ -231,11 +237,21 @@ def _atomic_write_report(report: dict[str, Any]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def _remove_stale_audit_artifacts() -> bool:
+    for path, operation in (
+        (RUNNER_LOG_PATH, "remove stale audit runner log"),
+        (REPORT_PATH, "remove stale audit report"),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(_render_internal_report_error(exc, operation))
+            return False
+    return True
+
+
 def _run_audit() -> int | None:
-    try:
-        REPORT_PATH.unlink(missing_ok=True)
-    except OSError as exc:
-        print(_render_internal_report_error(exc, "remove stale audit report"))
+    if not _remove_stale_audit_artifacts():
         return None
 
     try:
