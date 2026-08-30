@@ -12,6 +12,24 @@ _MIN_QUOTE_CHARS = 8
 
 
 def _support_schema(count: int) -> dict[str, Any]:
+    """Keep structured generation permissive; the host performs the strict validation."""
+
+    verdict_item = {
+        "type": "object",
+        "properties": {
+            "claim_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": max(0, count - 1),
+            },
+            "supported": {"type": "boolean"},
+            "support_quote": {"type": "string"},
+            "quote": {"type": "string"},
+            "support": {"type": "string"},
+        },
+        "required": ["claim_index"],
+        "additionalProperties": True,
+    }
     return {
         "type": "object",
         "properties": {
@@ -19,24 +37,19 @@ def _support_schema(count: int) -> dict[str, Any]:
                 "type": "array",
                 "minItems": count,
                 "maxItems": count,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "claim_index": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": max(0, count - 1),
-                        },
-                        "supported": {"type": "boolean"},
-                        "support_quote": {"type": "string"},
-                    },
-                    "required": ["claim_index", "supported", "support_quote"],
-                    "additionalProperties": False,
-                },
-            }
+                "items": verdict_item,
+            },
+            "claims": {
+                "type": "array",
+                "minItems": count,
+                "maxItems": count,
+                "items": verdict_item,
+            },
+            "sufficient": {"type": "boolean"},
+            "gaps": {},
+            "research_note": {},
         },
-        "required": ["verdicts"],
-        "additionalProperties": False,
+        "additionalProperties": True,
     }
 
 
@@ -52,6 +65,22 @@ def _claim_candidates(notes: Sequence[Mapping[str, Any]]) -> list[str]:
     return result
 
 
+def _normalize_verdicts(value: Any, count: int) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Mapping):
+        return []
+    raw = value.get("verdicts")
+    if not isinstance(raw, list):
+        raw = value.get("claims")
+    if not isinstance(raw, list) or len(raw) != count:
+        return []
+    result: list[Mapping[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return []
+        result.append(item)
+    return result
+
+
 def _verify_page_claims(
     agentic_module: Any,
     project_rag: Any,
@@ -62,7 +91,7 @@ def _verify_page_claims(
     claims: Sequence[str],
     progress_label: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Keep a claim only when the page entails it and provides an exact quote."""
+    """Keep a claim only when the page entails it and provides an exact host quote."""
 
     if not claims:
         return [], []
@@ -73,10 +102,11 @@ def _verify_page_claims(
             "role": "system",
             "content": (
                 "Judge each claim only against the supplied host-owned evidence page. "
-                "External knowledge is forbidden. Mark supported only when the page "
-                "entails the material proposition. For a supported claim copy the "
-                "shortest exact contiguous supporting quote; otherwise return false "
-                "and an empty quote."
+                "External knowledge is forbidden. Return one decision for every supplied "
+                "claim_index. Mark supported only when the page entails the material "
+                "proposition. For a supported claim copy the shortest exact contiguous "
+                "supporting quote from the page; otherwise return false and an empty quote. "
+                "Preferred shape is {verdicts:[{claim_index,supported,support_quote}]}."
             ),
         },
         {
@@ -104,17 +134,13 @@ def _verify_page_claims(
             raise agentic_module.SpecValidationError(
                 f"claim support verifier returned invalid JSON: {exc}"
             ) from exc
-        verdicts = value.get("verdicts") if isinstance(value, Mapping) else None
-        if not isinstance(verdicts, list) or len(verdicts) != len(claims):
+        verdicts = _normalize_verdicts(value, len(claims))
+        if not verdicts:
             raise agentic_module.SpecValidationError(
-                "claim support verifier must return one verdict per claim"
+                "claim support verifier must return one decision per claim"
             )
         indexed: dict[int, Mapping[str, Any]] = {}
         for verdict in verdicts:
-            if not isinstance(verdict, Mapping):
-                raise agentic_module.SpecValidationError(
-                    "claim support verdict must be an object"
-                )
             index = verdict.get("claim_index")
             if (
                 type(index) is not int
@@ -135,11 +161,17 @@ def _verify_page_claims(
         for index, claim in enumerate(claims):
             verdict = indexed[index]
             supported = verdict.get("supported")
-            quote = str(verdict.get("support_quote") or "")
+            quote = str(
+                verdict.get("support_quote")
+                or verdict.get("quote")
+                or verdict.get("support")
+                or ""
+            )
             if type(supported) is not bool:
-                raise agentic_module.SpecValidationError(
-                    "claim support flag must be boolean"
-                )
+                # Some local models omit the boolean but provide/omit an exact support
+                # quote.  Treat that only as a formatting alias; host exact-quote
+                # validation below remains the authority.
+                supported = bool(quote.strip())
             if not supported:
                 rejected.append(claim)
                 continue
@@ -148,9 +180,8 @@ def _verify_page_claims(
                 or quote not in content
                 or len("".join(quote.split())) < _MIN_QUOTE_CHARS
             ):
-                raise agentic_module.SpecValidationError(
-                    "supported claim must include a material exact quote from the page"
-                )
+                rejected.append(claim)
+                continue
             accepted.append(
                 {
                     "claim": claim,
