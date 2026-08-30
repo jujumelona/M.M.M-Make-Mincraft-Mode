@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Shared external retrieval runtime.
 
-Pre-design RAG has one owner: ``research_grounded_rag_contract``.  This module provides
-only process-wide retrieval/cache reuse and donor reuse.  It does not rewrite the
-pre-design callable and it never uses mapping keys as the single-query API.
+Pre-design RAG has one owner: ``research_grounded_rag_contract``. This module provides
+process-wide retrieval/cache reuse and donor reuse, and mirrors the owner's explicit
+provider gate when it must install the owner in isolation for tests or partial runtimes.
 """
 
 import os
@@ -14,7 +14,6 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any
 
 from . import research_grounded_rag_contract as _grounded
-
 
 _BASE_EXTERNAL_RETRIEVAL = _grounded._external_retrieval
 
@@ -45,30 +44,9 @@ def _dedupe_text(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def _external_brief_queries(value: Any) -> tuple[str, ...]:
-    """Return every explicit planned research query, independent of provider labels."""
+    """Delegate public donor/source scheduling to the grounded-RAG phase owner."""
 
-    found: list[str] = []
-    if not isinstance(value, Mapping):
-        return ()
-    domains = value.get("domains", ())
-    if not isinstance(domains, Sequence) or isinstance(domains, (str, bytes, bytearray)):
-        return ()
-    for domain in domains:
-        if not isinstance(domain, Mapping):
-            continue
-        queries = domain.get("queries", ())
-        if not isinstance(queries, Sequence) or isinstance(
-            queries, (str, bytes, bytearray)
-        ):
-            continue
-        for raw in queries:
-            if isinstance(raw, Mapping):
-                text = _normalize_query(raw.get("query"))
-            else:
-                text = _normalize_query(raw)
-            if text:
-                found.append(text)
-    return _dedupe_text(found)
+    return tuple(_grounded._external_brief_queries(value))
 
 
 def _brief_versions(value: Any) -> tuple[str, ...]:
@@ -212,7 +190,7 @@ class GroundedRAGCoordinator:
                 raise TypeError(
                     f"external retriever returned {type(payload).__name__}, expected mapping"
                 )
-        except Exception as exc:  # noqa: BLE001 - provider boundary is captured as evidence
+        except Exception as exc:  # noqa: BLE001
             payload = _provider_failure_payload(canonical, exc)
         return self._record_payload(canonical, key[1], payload)
 
@@ -297,6 +275,25 @@ _COORDINATOR = GroundedRAGCoordinator()
 _INSTALLED = False
 
 
+def _augment(
+    agentic_module: Any,
+    payload: Mapping[str, Any],
+    research_brief: Mapping[str, Any],
+    *,
+    versions: Sequence[str],
+    local_index: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply the owner's provider-gated public augmentation to an already-built base bundle."""
+
+    return _grounded._augment_bundle(
+        agentic_module,
+        payload,
+        versions=versions,
+        local_index=local_index,
+        external_queries=_external_brief_queries(research_brief),
+    )
+
+
 def _install_pre_design_owner_if_missing(agentic_module: Any) -> None:
     current = agentic_module._forced_rag_bundle
     if getattr(current, "__mmm_grounded_rag__", False):
@@ -310,9 +307,10 @@ def _install_pre_design_owner_if_missing(agentic_module: Any) -> None:
         versions = tuple(
             str(item) for item in payload.get("versions", ()) if str(item).strip()
         ) or _brief_versions(research_brief)
-        return _grounded._augment_bundle(
+        return _augment(
             agentic_module,
             payload,
+            research_brief,
             versions=versions,
             local_index=local_index,
         )

@@ -81,9 +81,6 @@ def _qwen_agent_request(request: Any) -> bool:
         return False
     tools = getattr(request, "tools", ()) or ()
     if tools:
-        # Model-visible tools define an action/materialization page. Planning and
-        # private reasoning stay on no-tool pages so the action turn contains only
-        # the executable envelope the host will run and observe.
         return False
     return _assistant_has_agent_history(_request_messages(request))
 
@@ -93,8 +90,6 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
 
     tools = getattr(request, "tools", ()) or ()
     if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        # Named/required actions use one required transport schema and the transport
-        # owns their deterministic sampling policy.
         return None
     if tools:
         return "non_thinking"
@@ -121,9 +116,9 @@ def _apply_family_payload_policy(
 
     mode = _qwen_sampling_mode(role, request)
     agent_request = _qwen_agent_request(request)
-    action_page = bool(getattr(request, "tools", ()) or ()) or (
-        getattr(request, "response_format", None) == "json"
-    )
+    tools = getattr(request, "tools", ()) or ()
+    json_page = getattr(request, "response_format", None) == "json" and not tools
+    action_page = bool(tools) or json_page
     if not action_page and not _agent_thinking_enabled(config):
         return payload
     if mode is None and not agent_request and not action_page:
@@ -131,7 +126,10 @@ def _apply_family_payload_policy(
 
     extra = _config_extra(config)
     if action_page:
-        payload.pop("reasoning_effort", None)
+        if json_page:
+            payload["reasoning_effort"] = "none"
+        else:
+            payload.pop("reasoning_effort", None)
         payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
     else:
         payload.pop("reasoning_effort", None)
@@ -158,8 +156,6 @@ def _apply_family_payload_policy(
 
 
 def _strip_reasoning_history(request: GenerationRequest) -> GenerationRequest:
-    """Remove private traces before a non-thinking action/materialization page."""
-
     changed = False
     messages: list[Mapping[str, Any]] = []
     for raw in _request_messages(request):
@@ -244,8 +240,6 @@ def _trace_store(adapter: Any) -> OrderedDict[str, str]:
 
 
 def _inject_reasoning_history(adapter: Any, request: GenerationRequest) -> GenerationRequest:
-    """Restore only traces whose exact assistant exchange is present in history."""
-
     messages = _request_messages(request)
     signed_messages = tuple((message, _message_signature(message)) for message in messages)
     signatures = [signature for _, signature in signed_messages if signature]
@@ -327,14 +321,7 @@ def _tool_safe_variant(autotune: Any, receipt: Mapping[str, Any]) -> Any:
 
 
 def _ensure_tool_safe_runtime(config: Any, request: GenerationRequest) -> None:
-    """Suspend speculative decoding for the complete contiguous Qwen tool phase.
-
-    llama.cpp's Qwen required-tool path can legally consume the full generation budget
-    under draft-MTP before entering the mandatory call. The same pinned runtime was
-    verified to close required calls reliably with ``spec-type none``. Keep the
-    autotuned speculative server for normal text, but switch once on entry to a tool
-    phase and keep that non-spec server for consecutive action/observation rounds.
-    """
+    """Suspend speculative decoding for the complete contiguous Qwen tool phase."""
 
     global _TOOL_SAFE_RUNTIME_ACTIVE, _TOOL_SAFE_RUNTIME_KEY
 
@@ -353,8 +340,6 @@ def _ensure_tool_safe_runtime(config: Any, request: GenerationRequest) -> None:
             if not _managed_runtime_alive(autotune):
                 autotune.ensure_tuned_server(config, request)
             if not _managed_runtime_alive(autotune):
-                # An explicitly external server is not owned by MMM and cannot be
-                # restarted safely here. Its operator owns speculation policy.
                 return
 
             receipt = _runtime_receipt(autotune)
@@ -484,8 +469,6 @@ def install() -> None:
             if qwen_agent:
                 _remember_reasoning(self, response)
 
-            # A tool-capable turn may finalize directly without another host-disabled
-            # tools=() page. Restore MTP immediately when that semantic tool phase ends.
             if capabilities is not None and tool_page and not response.tool_calls:
                 restore_request = replace(
                     prepared,

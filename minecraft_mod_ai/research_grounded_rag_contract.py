@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Research-grounded retrieval for pre-design planning.
 
-The pre-design path must own retrieval end-to-end: build the local project index when it is
-missing, search public mod metadata without credentials, follow source repositories, fetch
-actual source files, and preserve provenance in the evidence ledger. Retrieval misses are
-corrected by broadening providers; they are never repaired by asking the model to invent data.
+The pre-design path owns local/reference retrieval and may opt into public donor/source
+retrieval only when the research domain explicitly routes to GitHub or Modrinth. Retrieval
+misses are corrected by broadening evidence, never by asking the model to invent data.
 """
 
 import hashlib
@@ -32,7 +31,6 @@ _MAX_HTTP_BYTES = 2 * 1024 * 1024
 _MAX_SOURCE_TEXT_CHARS = 128_000
 _MAX_EXTERNAL_PROJECTS = 4
 _MAX_HTTP_CACHE_ITEMS = 256
-
 
 _TOKEN = re.compile(r"[^\W_]+(?:[.$:/_-][^\W_]+)*", flags=re.UNICODE)
 _HTTP_CACHE_LOCK = threading.RLock()
@@ -69,6 +67,50 @@ def _query_variants(query: str) -> tuple[str, ...]:
     return tuple(_dedupe((original, normalized, implementation))[:3])
 
 
+def _external_brief_queries(value: Any) -> tuple[str, ...]:
+    """Return queries whose domain explicitly permits public donor/source retrieval."""
+
+    if not isinstance(value, Mapping):
+        return ()
+    raw_domains = value.get("domains", ())
+    if not isinstance(raw_domains, Sequence) or isinstance(
+        raw_domains, (str, bytes, bytearray)
+    ):
+        return ()
+
+    found: list[str] = []
+    for raw_domain in raw_domains:
+        if not isinstance(raw_domain, Mapping):
+            continue
+        routes = {
+            str(item).strip().casefold()
+            for key in ("providers", "required_providers")
+            for item in (
+                raw_domain.get(key, ())
+                if isinstance(raw_domain.get(key, ()), Sequence)
+                and not isinstance(raw_domain.get(key, ()), (str, bytes, bytearray))
+                else ()
+            )
+            if str(item).strip()
+        }
+        if not routes.intersection({"github", "modrinth"}):
+            continue
+        raw_queries = raw_domain.get("queries", ())
+        if not isinstance(raw_queries, Sequence) or isinstance(
+            raw_queries, (str, bytes, bytearray)
+        ):
+            continue
+        for raw in raw_queries:
+            query = (
+                str(raw.get("query") or "").strip()
+                if isinstance(raw, Mapping)
+                else str(raw).strip()
+            )
+            if query:
+                found.append(query)
+    return tuple(_dedupe(found))
+
+
 def _workspace_root(router: Any | None = None) -> Path | None:
     attached = str(getattr(router, "_mmm_workspace_root", "") or "").strip()
     if attached:
@@ -76,8 +118,6 @@ def _workspace_root(router: Any | None = None) -> Path | None:
     configured = os.environ.get("MMM_WORKSPACE", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    # CWD is commonly the MMM engine checkout in Colab, not the mod being generated.
-    # Indexing it silently turns internal policies and skills into fake project evidence.
     return None
 
 
@@ -86,9 +126,6 @@ def _index_path(workspace: Path, router: Any | None = None) -> Path:
     if attached:
         return Path(attached).expanduser().resolve()
     configured = os.environ.get("MMM_PROJECT_RAG_INDEX", "").strip()
-    # An attached session workspace is authoritative. A process-global index path may
-    # belong to an earlier run, so only honor that legacy override when no session scope
-    # was attached.
     if configured and not str(
         getattr(router, "_mmm_workspace_root", "") or ""
     ).strip():
@@ -164,7 +201,7 @@ def _ensure_local_index(agentic_module: Any, router: Any) -> dict[str, Any]:
             semantic=False,
             max_files=max_files,
         )
-    except Exception as exc:  # noqa: BLE001 - fail-closed index build boundary
+    except Exception as exc:  # noqa: BLE001
         return {
             "status": "build_failed",
             "built": False,
@@ -274,15 +311,11 @@ def _source_document(
     }
 
 
-
-
 def _github_repo_documents(
     owner: str,
     repo: str,
     query: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Query-specific source inspection with evidence/resource driven stopping."""
-
     evidence = retrieve_repository_documents(
         owner,
         repo,
@@ -292,6 +325,7 @@ def _github_repo_documents(
         source_document=_source_document,
     )
     return [dict(item) for item in evidence.documents], list(evidence.errors)
+
 
 def _modrinth_search(
     query: str,
@@ -317,7 +351,7 @@ def _modrinth_search(
     )
     try:
         payload = _http_json(f"https://api.modrinth.com/v2/search?{params}")
-    except Exception as exc:  # noqa: BLE001 - public provider boundary
+    except Exception as exc:  # noqa: BLE001
         return [], [f"modrinth_search:{type(exc).__name__}: {exc}"]
 
     projects: list[dict[str, Any]] = []
@@ -331,7 +365,7 @@ def _modrinth_search(
             detail = _http_json(
                 f"https://api.modrinth.com/v2/project/{quote(project_id)}"
             )
-        except Exception as exc:  # noqa: BLE001 - per-project provider boundary
+        except Exception as exc:  # noqa: BLE001
             errors.append(f"modrinth_project:{project_id}:{type(exc).__name__}: {exc}")
             detail = {}
         projects.append(
@@ -354,8 +388,6 @@ def _modrinth_search(
 
 
 def _github_repository_search(query: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """High-recall repository candidate discovery; source inspection is separate."""
-
     discovery = discover_repositories(
         query,
         http_json=lambda url: _http_json(url, github=True),
@@ -410,6 +442,7 @@ def _github_adaptive_search(
         "saturation_reason": terminal,
         "actual_source_document_count": actual,
     }
+
 
 def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float:
     terms = set(_tokens(query))
@@ -512,16 +545,19 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         },
     }
 
+
 def _augment_bundle(
     agentic_module: Any,
     payload: Mapping[str, Any],
     *,
     versions: Sequence[str],
     local_index: Mapping[str, Any],
+    external_queries: Sequence[str] = (),
 ) -> dict[str, Any]:
     result = dict(payload)
     raw_domains = result.get("domains", [])
     domains = [dict(item) for item in raw_domains if isinstance(item, Mapping)]
+    allowed_external = {str(item).strip().casefold() for item in external_queries if str(item).strip()}
     jobs: list[tuple[int, int, str]] = []
     for domain_index, domain in enumerate(domains):
         queries = domain.get("queries", [])
@@ -531,7 +567,7 @@ def _augment_bundle(
         domain["queries"] = copied_queries
         for query_index, item in enumerate(copied_queries):
             query = str(item.get("query", "")).strip()
-            if query:
+            if query and query.casefold() in allowed_external:
                 jobs.append((domain_index, query_index, query))
 
     def run(job: tuple[int, int, str]) -> tuple[int, int, dict[str, Any]]:
@@ -559,8 +595,7 @@ def _augment_bundle(
         if isinstance(query, Mapping) and isinstance(query.get("external_rag"), Mapping)
     ]
     result["external_source_count"] = sum(
-        int(item.get("actual_source_document_count", 0))
-        for item in external_payloads
+        int(item.get("actual_source_document_count", 0)) for item in external_payloads
     )
     result["external_document_count"] = sum(
         int(item.get("document_count", 0)) for item in external_payloads
@@ -597,6 +632,7 @@ def install(agentic_module: Any) -> None:
             payload,
             versions=versions,
             local_index=local_index,
+            external_queries=_external_brief_queries(research_brief),
         )
 
     grounded_rag_bundle.__name__ = "_forced_rag_bundle_grounded"

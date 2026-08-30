@@ -56,7 +56,7 @@ def _is_english_retrieval_query(value: str) -> bool:
 def _semantic_interpretation_messages(
     clauses: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, str]]:
-    """Interpret noisy/multilingual authored text into atomic gameplay semantics."""
+    """Legacy helper retained for compatibility; semantic authority owns live prompts."""
 
     system = (
         "Interpret the supplied authored Minecraft-mod request semantically, even when it "
@@ -354,6 +354,52 @@ def _enrich_catalog_with_retrieval_plan(
     return enriched
 
 
+def _rewrite_pre_design_candidate(prompt: str, candidate: Any) -> Any:
+    """Use approved English query plans without replacing the owning pre-design phase."""
+
+    if not isinstance(candidate, Mapping):
+        return candidate
+    catalog = _active_catalog(prompt)
+    if catalog is None:
+        return dict(candidate)
+    requirements = catalog.get("requirements")
+    if not isinstance(requirements, list):
+        return dict(candidate)
+
+    queries: list[str] = []
+    seen: set[str] = set()
+    for raw in requirements:
+        if not isinstance(raw, Mapping):
+            continue
+        planned = raw.get("search_queries")
+        if not isinstance(planned, list):
+            continue
+        for value in planned:
+            query = _query_text(value)
+            key = query.casefold()
+            if _is_english_retrieval_query(query) and key not in seen:
+                seen.add(key)
+                queries.append(query)
+    if not queries:
+        return dict(candidate)
+
+    rewritten = deepcopy(dict(candidate))
+    raw_domains = rewritten.get("domains")
+    if not isinstance(raw_domains, list):
+        return rewritten
+    domains: list[Any] = []
+    for raw in raw_domains:
+        if not isinstance(raw, Mapping):
+            domains.append(raw)
+            continue
+        domain = dict(raw)
+        if str(domain.get("domain_id") or "") == "request":
+            domain["queries"] = list(queries)
+        domains.append(domain)
+    rewritten["domains"] = domains
+    return rewritten
+
+
 def _approved_research_normalize(
     obligation_module: Any,
     previous_normalize: Any,
@@ -369,7 +415,11 @@ def _approved_research_normalize(
         and set(game_design) == {"title"}
         and game_design.get("title") == "pre-design research"
     ):
-        return previous_normalize(prompt, game_design, candidate)
+        return previous_normalize(
+            prompt,
+            game_design,
+            _rewrite_pre_design_candidate(prompt, candidate),
+        )
 
     catalog = obligation_module._catalog_for(prompt)
     if catalog is None:
@@ -466,7 +516,7 @@ def _compile_knowledge_plan_with_active_catalog(
 
 
 def _approved_pre_design_brief(prompt: str) -> dict[str, Any]:
-    """Build one retrieval domain per approved requirement; never search the raw prompt."""
+    """Legacy helper retained for compatibility; the pipeline owns the live phase."""
 
     from . import minecraft_knowledge_contract as knowledge
     from . import pre_design_research_pipeline as pipeline
@@ -474,70 +524,10 @@ def _approved_pre_design_brief(prompt: str) -> dict[str, Any]:
     plan = knowledge.compile_minecraft_knowledge_plan(prompt)
     routes = plan.get("authored_capability_routes")
     if not isinstance(routes, list) or not routes:
-        raise pipeline.PreDesignResearchFailure(
-            "Approved authored requirements have no retrieval query plan."
-        )
+        return pipeline._pre_design_brief(prompt)
 
-    id_to_domain: dict[str, str] = {}
-    for index, raw in enumerate(routes, start=1):
-        rid = str(raw.get("requirement_id") or "")
-        capability = re.sub(
-            r"[^a-z0-9_]+",
-            "_",
-            str(raw.get("capability") or "").casefold(),
-        ).strip("_")[:40]
-        id_to_domain[rid] = f"req_{index}_{capability or 'capability'}"[:63]
-
-    domains: list[dict[str, Any]] = []
-    for raw in routes:
-        if not isinstance(raw, Mapping):
-            continue
-        rid = str(raw.get("requirement_id") or "")
-        queries = [
-            _query_text(query)
-            for query in raw.get("research_queries", [])
-            if _query_text(query) and _is_english_retrieval_query(_query_text(query))
-        ]
-        queries = list(dict.fromkeys(queries))
-        if not queries:
-            raise pipeline.PreDesignResearchFailure(
-                f"Requirement {rid!r} has no English retrieval queries."
-            )
-        dependencies = [
-            id_to_domain[dep]
-            for dep in raw.get("depends_on", [])
-            if str(dep) in id_to_domain
-        ]
-        domains.append(
-            {
-                "domain_id": id_to_domain[rid],
-                "objective": str(raw.get("semantic_statement") or raw.get("capability") or rid),
-                "requirements": [rid],
-                "evidence_kinds": [
-                    "gameplay_reference",
-                    "minecraft_api",
-                    "source_code",
-                    "runtime_behavior",
-                ],
-                "queries": queries[:5],
-                "providers": ["project_rag", "modrinth", "github", "official_docs"],
-                "depends_on": dependencies,
-            }
-        )
-
-    candidate = {
-        "summary": (
-            "Requirement-scoped target-neutral retrieval from rewritten English queries. "
-            "Raw authored text is provenance only."
-        ),
-        "domains": domains,
-        "unresolved_questions": [],
-    }
-    return pipeline.normalize_research_brief(
-        prompt,
-        {"title": "pre-design research"},
-        candidate,
-    )
+    candidate = pipeline._pre_design_brief(prompt)
+    return _rewrite_pre_design_candidate(prompt, candidate)
 
 
 def install() -> None:
@@ -554,8 +544,6 @@ def install() -> None:
     from . import minecraft_knowledge_contract as knowledge
     from . import pre_design_research_pipeline as pipeline
     from . import semantic_requirement_authority as semantic
-
-    semantic._model_messages = _semantic_interpretation_messages
 
     current_builder = guard.build_authoritative_request_catalog
     if not getattr(current_builder, _RETRIEVAL_MARKER, False):
@@ -614,7 +602,6 @@ def install() -> None:
         knowledge.compile_minecraft_knowledge_plan = compile_plan
         pipeline.compile_minecraft_knowledge_plan = compile_plan
 
-    pipeline._pre_design_brief = _approved_pre_design_brief
     _INSTALLED = True
 
 
@@ -624,6 +611,6 @@ __all__ = [
     "_approved_research_normalize",
     "_compile_knowledge_plan_with_active_catalog",
     "_enrich_catalog_with_retrieval_plan",
-    "_semantic_interpretation_messages",
+    "_rewrite_pre_design_candidate",
     "install",
 ]
