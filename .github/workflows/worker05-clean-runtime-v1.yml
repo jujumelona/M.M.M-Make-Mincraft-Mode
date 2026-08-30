@@ -34,7 +34,7 @@ jobs:
           python .github/scripts/worker05_runtime_fixes_v1.py
       - name: Static and worker05 verification
         run: |
-          # V1.6: idempotent canonical cleanup + atomic tool protocol closure + liveness/context continuity.
+          # V1.7: idempotent loop cleanup + canonical safety + atomic tool protocol closure.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/model_router.py minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/llama_context_safety_contract.py minecraft_mod_ai/llama_completion_liveness_contract.py tests/test_agent_tool_round_policy.py tests/test_llama_context_safety_contract.py tests/test_agent_context_window_contract.py tests/test_llama_forced_tool_capability_contract.py tests/test_llama_sse_error_contract.py tests/test_llama_kv_correctness_contract.py
