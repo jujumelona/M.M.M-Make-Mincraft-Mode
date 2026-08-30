@@ -157,7 +157,7 @@ def select_module_research_context(
     )
     facts: list[dict[str, Any]] = []
     corpus_hashes: set[str] = set()
-    expected_total = 0
+    declared_fact_counts: set[int] = set()
     declared_shard_counts: set[int] = set()
     seen_shard_indices: list[int] = []
     shard_receipts: list[dict[str, Any]] = []
@@ -182,7 +182,7 @@ def select_module_research_context(
         declared_total = receipt.get("fact_count")
         if type(declared_total) is not int or declared_total < 0:
             raise ResearchLedgerError("Research shard fact_count is invalid.")
-        expected_total = max(expected_total, declared_total)
+        declared_fact_counts.add(declared_total)
         shard_hash = receipt.get("shard_sha256")
         if shard_hash != _sha256_json(page):
             raise ResearchLedgerError("Research shard facts do not match their receipt.")
@@ -204,6 +204,11 @@ def select_module_research_context(
             raise ResearchLedgerError("Research ledger shard_count is incomplete.")
         if seen_shard_indices != list(range(len(modules))):
             raise ResearchLedgerError("Research ledger shard indices are incomplete.")
+        if len(declared_fact_counts) != 1:
+            raise ResearchLedgerError("Research shard fact_count receipts disagree.")
+        expected_total = next(iter(declared_fact_counts))
+    else:
+        expected_total = 0
 
     fact_by_id: dict[str, dict[str, Any]] = {}
     for fact in facts:
@@ -214,12 +219,12 @@ def select_module_research_context(
             raise ResearchLedgerError("Research ledger contains a conflicting fact_id.")
         fact_by_id[fact_id] = fact
     ordered_facts = list(fact_by_id.values())
-    if expected_total and len(ordered_facts) != expected_total:
+    if len(ordered_facts) != expected_total:
         raise ResearchLedgerError(
             "Research ledger is incomplete: approved fact_count does not match pages."
         )
     corpus_sha256 = next(iter(corpus_hashes), "")
-    if ordered_facts and _sha256_json(ordered_facts) != corpus_sha256:
+    if modules and _sha256_json(ordered_facts) != corpus_sha256:
         raise ResearchLedgerError(
             "Research ledger facts do not match the approved corpus receipt."
         )
