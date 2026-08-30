@@ -17,7 +17,16 @@ def install(module: Any) -> None:
 
     @wraps(original_validate)
     def validate(self: Any, root: Path, spec: Any):
-        root = root.expanduser().resolve()
+        raw_root = root.expanduser()
+        if raw_root.is_symlink():
+            return _project_root_failure(module, raw_root)
+        try:
+            root = raw_root.resolve(strict=True)
+        except (FileNotFoundError, OSError, RuntimeError):
+            return _project_root_failure(module, raw_root)
+        if not root.is_dir():
+            return _project_root_failure(module, raw_root)
+
         try:
             expected = adapter_for_lock_values(spec.platform)
         except Exception as exc:
@@ -42,9 +51,6 @@ def install(module: Any) -> None:
                     "PLATFORM_LOCK_INVALID",
                     f"Project target is missing, mixed or unsupported: {exc}",
                 )
-            # An approved source import may enter repair with incomplete exact
-            # Gradle/Yarn/Fabric metadata, but the marker is not compatibility or
-            # release evidence. Preserve every ordinary source/security check.
             if expected.source_api_family == "fabric_live_ai":
                 report = _validate_live_project(
                     self,
@@ -107,7 +113,23 @@ def install(module: Any) -> None:
         )
 
     validate._mmm_dynamic_platform_validation = True
+    validate._mmm_fail_closed_project_root = True
     validator.validate = validate
+
+
+def _project_root_failure(module: Any, root: Path):
+    return module.ValidationReport(
+        status="FAIL",
+        checks_run=1,
+        findings=(
+            module.Finding(
+                "PROJECT_ROOT_INVALID",
+                "error",
+                str(root),
+                "Project root must be an existing regular directory and not a symbolic link.",
+            ),
+        ),
+    )
 
 
 def _platform_failure(module: Any, code: str, message: str):
