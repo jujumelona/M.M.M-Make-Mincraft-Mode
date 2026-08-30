@@ -355,7 +355,7 @@ def _enrich_catalog_with_retrieval_plan(
 
 
 def _rewrite_pre_design_candidate(prompt: str, candidate: Any) -> Any:
-    """Use approved English query plans without replacing the owning pre-design phase."""
+    """Route approved English queries to explicit public evidence retrievers."""
 
     if not isinstance(candidate, Mapping):
         return candidate
@@ -395,6 +395,16 @@ def _rewrite_pre_design_candidate(prompt: str, candidate: Any) -> Any:
         domain = dict(raw)
         if str(domain.get("domain_id") or "") == "request":
             domain["queries"] = list(queries)
+            raw_providers = domain.get("providers")
+            providers = (
+                [str(item).strip() for item in raw_providers if str(item).strip()]
+                if isinstance(raw_providers, Sequence)
+                and not isinstance(raw_providers, (str, bytes, bytearray))
+                else []
+            )
+            domain["providers"] = list(
+                dict.fromkeys([*providers, "github", "modrinth"])
+            )
         domains.append(domain)
     rewritten["domains"] = domains
     return rewritten
