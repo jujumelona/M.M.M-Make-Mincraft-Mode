@@ -77,9 +77,14 @@ def _install_core_contracts() -> None:
 def _install_model_runtime_contracts() -> None:
     from . import (
         complete_orchestrator_services,
+        forced_tool_execution_contract,
+        llama_completion_liveness_contract,
+        llama_decode_speed_contract,
         llama_server_autotune,
         llama_server_hardware_policy,
         llama_server_runtime_tuning,
+        llama_stream_efficiency_contract,
+        model_context_budget,
         model_registry,
         model_router,
     )
@@ -87,13 +92,21 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .forced_tool_execution_contract import install as install_forced_tool_execution
     from .gpu_resource_contract import install as install_gpu_resource
+    from .llama_completion_liveness_contract import install as install_completion_liveness
+    from .llama_context_safety_contract import install as install_context_safety
+    from .llama_forced_tool_capability_contract import (
+        install as install_forced_tool_capability,
+    )
     from .llama_generation_budget import install as install_llama_generation_budget
+    from .llama_kv_correctness_contract import install as install_kv_correctness
     from .llama_prefill_telemetry_contract import (
         install as install_llama_prefill_telemetry,
     )
+    from .llama_sse_error_contract import install as install_sse_errors
     from .llama_stream_efficiency_contract import (
         install as install_llama_stream_efficiency,
     )
+    from .llama_tool_round_safety_contract import install as install_tool_round_safety
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -111,6 +124,15 @@ def _install_model_runtime_contracts() -> None:
     )
     install_llama_generation_budget(llama_server_hardware_policy)
     install_llama_stream_efficiency(llama_server_hardware_policy)
+    install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
+    install_sse_errors(
+        llama_completion_liveness_contract,
+        llama_stream_efficiency_contract,
+    )
+    install_kv_correctness(llama_decode_speed_contract)
+    install_context_safety(model_context_budget)
+    install_tool_round_safety(model_router)
+    install_forced_tool_capability(forced_tool_execution_contract)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
     install_forced_tool_execution(
         openai_compatible_module=openai_compatible,
@@ -127,13 +149,9 @@ def _install_validation_contracts() -> None:
     from .research_validation_fingerprint_performance import (
         harden as harden_validation_fingerprints,
     )
-    from .validation_diagnostic_contract import (
-        install as install_validation_diagnostics,
-    )
     from .validation_execution_contract import install as install_validation_execution
 
     install_validation_execution(runner, java_lsp, repair_engine)
-    install_validation_diagnostics(validation_execution_contract)
     install_java_lsp_process_safety(java_lsp)
     harden_validation_fingerprints(validation_execution_contract)
 
@@ -193,6 +211,9 @@ def _install_platform_contracts() -> None:
         technology_radar,
         validator,
     )
+    from .minecraft_domain_correctness_contract import (
+        install as install_minecraft_domain_correctness,
+    )
     from .mod_scope_contract import install as install_mod_scope
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
@@ -239,6 +260,7 @@ def _install_platform_contracts() -> None:
     install_source_patch_preconditions(custom_module_generator)
     install_platform_repair(repair_engine)
     install_live_execution(complete_orchestrator)
+    install_minecraft_domain_correctness()
     install_specialized_generator_guards(
         system_module=system_pack_generator,
         geckolib_module=geckolib_generator,
@@ -290,7 +312,6 @@ def _install_architecture_contracts() -> None:
     from .custom_generation_search_contract import (
         install as install_custom_generation_search,
     )
-    from .orchestrator_jdt_gate_contract import install as install_orchestrator_jdt_gate
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
     from .required_gate_compatibility_contract import (
@@ -316,8 +337,7 @@ def _install_architecture_contracts() -> None:
         quality_evidence,
         complete_orchestrator,
     )
-    install_repair_diagnostics(repair_engine, validation_execution_contract)
-    install_orchestrator_jdt_gate(complete_orchestrator)
+    install_repair_diagnostics(repair_engine)
     install_clean_room(
         complete_orchestrator,
         quality_evidence,

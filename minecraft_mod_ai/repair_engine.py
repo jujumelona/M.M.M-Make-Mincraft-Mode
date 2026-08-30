@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .java_lsp import JavaLanguageService
+from .validation_diagnostic_contract import (
+    diagnostic_errors as _diagnostic_errors,
+    diagnostic_items as _diagnostic_items,
+    run_diagnostics as _run_jdt_diagnostics,
+)
 from .model_router import ModelRouter
 from .project_index import ProjectIndex
 from .runner import GradleRunner
@@ -185,14 +190,11 @@ class RepairEngine:
             _ACTIVE_REPAIR_PROJECT_INDEX.reset(index_token)
 
     def _evidence(self, root: Path, *, run_gametest: bool) -> dict[str, Any]:
-        try:
-            diagnostics = self.diagnostics_factory().diagnostics(root, timeout_seconds=90)
-        except Exception as exc:
-            diagnostics = {
-                "status": "UNAVAILABLE",
-                "error": f"{type(exc).__name__}: {exc}",
-                "diagnostics": [],
-            }
+        diagnostics = _run_jdt_diagnostics(
+            self.diagnostics_factory,
+            root,
+            timeout_seconds=90,
+        )
         try:
             build = self.runner_factory(self.gradle_cache).build(
                 root, run_gametest=run_gametest
@@ -203,11 +205,7 @@ class RepairEngine:
                 "error": f"{type(exc).__name__}: {exc}",
                 "commands": [],
             }
-        diagnostic_errors = [
-            item
-            for item in diagnostics.get("diagnostics", [])
-            if isinstance(item, dict) and int(item.get("severity", 1)) <= 2
-        ]
+        diagnostic_errors = _diagnostic_errors(diagnostics)
         return {
             "passed": build.get("status") == "PASS" and not diagnostic_errors,
             "diagnostics": diagnostics,
@@ -217,7 +215,7 @@ class RepairEngine:
     @staticmethod
     def _signature(evidence: dict[str, Any]) -> str:
         diagnostics = []
-        for item in evidence.get("diagnostics", {}).get("diagnostics", []):
+        for item in _diagnostic_items(evidence.get("diagnostics")):
             if not isinstance(item, dict):
                 continue
             diagnostics.append(
@@ -242,7 +240,7 @@ class RepairEngine:
     def _context(self, root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
         diagnostic_paths: list[str] = []
         query_parts: list[str] = []
-        for item in evidence.get("diagnostics", {}).get("diagnostics", []):
+        for item in _diagnostic_items(evidence.get("diagnostics")):
             if not isinstance(item, dict):
                 continue
             path = item.get("path") or item.get("uri")

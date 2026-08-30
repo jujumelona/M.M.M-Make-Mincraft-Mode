@@ -25,7 +25,7 @@ from .remote_skill_store_consent import (
     require_remote_write_consent,
     sanitize_remote_payload,
 )
-from .trajectory_memory import remote_cache_path
+from .trajectory_memory import memory_path, remote_cache_path
 from .trajectory_record_integrity import record_remote_eligible
 from .trajectory_verification import REMOTE_FORMAT_VERSION, TRAJECTORY_SCHEMA_VERSION
 
@@ -49,7 +49,7 @@ _TASK_CLASSES = (
 
 
 def _outbox(base: str | Path) -> Path:
-    return Path(base).expanduser().resolve() / ".minecraft_ai" / "trajectory-memory" / "remote-outbox.jsonl"
+    return memory_path(base).parent / "remote-outbox.jsonl"
 
 
 def _backend() -> str:

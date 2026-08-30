@@ -111,7 +111,20 @@ def _tokens(value: str) -> set[str]:
 
 def _memory_dir(base: str | Path) -> Path:
     root = Path(base).expanduser().resolve()
-    return root / ".minecraft_ai" / "trajectory-memory"
+    current = root
+    for part in (".minecraft_ai", "trajectory-memory"):
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError("Trajectory memory state must not traverse symbolic links.")
+        if current.exists() and not current.is_dir():
+            raise RuntimeError("Trajectory memory state parent is not a directory.")
+        try:
+            current.resolve(strict=False).relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                "Trajectory memory state escaped the configured project root."
+            ) from exc
+    return current
 
 
 def memory_path(base: str | Path) -> Path:

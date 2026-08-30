@@ -82,14 +82,6 @@ def install(
 ) -> None:
     """Install platform-stage deterministic generation safety and bounded reuse."""
 
-    from .minecraft_domain_correctness_contract import (
-        install as install_minecraft_domain_correctness,
-    )
-
-    # Legacy item/block/scaffold generators and specialized generators share the same
-    # authoritative platform stage. Install the legacy boundary here so package import
-    # does not create a second, untracked runtime patch chain after bootstrap integrity.
-    install_minecraft_domain_correctness()
     _install_incremental_system_records(system_module)
 
     current_system = system_module.generate_system_pack

@@ -1,43 +1,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-
-def flatten_diagnostics(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    """Normalize JDT-LS URI->diagnostics and legacy list receipts to one list."""
-
-    if not isinstance(receipt, Mapping):
-        return []
-    raw = receipt.get("diagnostics", {})
-    if isinstance(raw, Mapping):
-        return [
-            dict(item)
-            for group in raw.values()
-            if isinstance(group, list)
-            for item in group
-            if isinstance(item, Mapping)
-        ]
-    if isinstance(raw, list):
-        return [dict(item) for item in raw if isinstance(item, Mapping)]
-    return []
+from .validation_diagnostic_contract import diagnostic_items
 
 
-def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    """Only LSP severity=1 is a blocking compile error."""
-
-    return [
-        item for item in flatten_diagnostics(receipt)
-        if int(item.get("severity", 1)) == 1
-    ]
-
-
-def install(repair_module: Any, validation_module: Any) -> None:
-    # One canonical diagnostic reader is shared by progressive validation and repair.
-    validation_module._diagnostic_errors = diagnostic_errors
-    diagnostic_errors._mmm_flattened_jdt_mapping = True
+def install(repair_module: Any) -> None:
+    """Install repair context/index optimizations without redefining JDT semantics."""
 
     cls = repair_module.RepairEngine
 
@@ -49,7 +20,7 @@ def install(repair_module: Any, validation_module: Any) -> None:
                 "code": item.get("code"),
                 "severity": item.get("severity"),
             }
-            for item in flatten_diagnostics(evidence.get("diagnostics"))
+            for item in diagnostic_items(evidence.get("diagnostics"))
         ]
         build = evidence.get("build", {})
         return json.dumps(
@@ -65,7 +36,7 @@ def install(repair_module: Any, validation_module: Any) -> None:
     def context(self: Any, root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
         diagnostic_paths: list[str] = []
         query_parts: list[str] = []
-        for item in flatten_diagnostics(evidence.get("diagnostics")):
+        for item in diagnostic_items(evidence.get("diagnostics")):
             path = item.get("path") or item.get("uri")
             if isinstance(path, str):
                 diagnostic_paths.append(path)
@@ -82,9 +53,6 @@ def install(repair_module: Any, validation_module: Any) -> None:
                     query_parts.append(
                         log.read_text(encoding="utf-8", errors="replace")[-32_000:]
                     )
-        # RepairEngine owns one ContextVar-isolated ProjectIndex per repair call.
-        # Reuse it here instead of rescanning the complete source tree on every
-        # diagnostic attempt; successfully committed patch paths update it in place.
         index = repair_module.active_repair_project_index(root, self.policy)
         return {
             "manifest": index.manifest_receipt(),

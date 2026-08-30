@@ -12,6 +12,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .validation_diagnostic_contract import (
+    diagnostic_errors as _diagnostic_errors,
+    run_diagnostics as _run_jdt_diagnostics,
+)
+
 _CACHE_LOCK = threading.RLock()
 _SUCCESSFUL_BUILDS: dict[tuple[str, str, bool], Any] = {}
 _RECENT_BUILDS: dict[tuple[str, str, bool], Any] = {}
@@ -482,14 +487,6 @@ def _install_jdt_cache(java_lsp_module: Any) -> None:
     cls.diagnostics = cached_diagnostics
 
 
-def _diagnostic_errors(diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in diagnostics.get("diagnostics", [])
-        if isinstance(item, dict) and int(item.get("severity", 1)) <= 2
-    ]
-
-
 def _install_progressive_repair(repair_module: Any) -> None:
     cls = repair_module.RepairEngine
     original_request_patch = cls._request_patch
@@ -516,25 +513,12 @@ def _install_progressive_repair(repair_module: Any) -> None:
 
     def progressive_evidence(self: Any, root: Path, *, run_gametest: bool) -> dict[str, Any]:
         relative_files = getattr(self, "_mmm_last_java_paths", ()) or None
-        try:
-            diagnostics = self.diagnostics_factory().diagnostics(
-                root,
-                relative_files=relative_files,
-                timeout_seconds=90,
-            )
-        except TypeError:
-            # Test doubles and legacy diagnostics factories may not expose the
-            # relative_files keyword. Preserve their contract.
-            diagnostics = self.diagnostics_factory().diagnostics(
-                root,
-                timeout_seconds=90,
-            )
-        except Exception as exc:
-            diagnostics = {
-                "status": "UNAVAILABLE",
-                "error": f"{type(exc).__name__}: {exc}",
-                "diagnostics": [],
-            }
+        diagnostics = _run_jdt_diagnostics(
+            self.diagnostics_factory,
+            root,
+            relative_files=relative_files,
+            timeout_seconds=90,
+        )
 
         errors = _diagnostic_errors(diagnostics)
         if errors:

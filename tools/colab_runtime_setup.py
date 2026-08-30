@@ -18,6 +18,28 @@ SETUP_API_VERSION = "mmm/colab-runtime-setup-v4-max-native"
 RECEIPT_SCHEMA_VERSION = "mmm/colab-setup-receipt-v2"
 REMOTE_PROFILE = "remote_quality"
 REMOTE_TEXT_ROLES = ("PLANNER", "RESEARCH", "CODER", "CODER_SAFE", "VISION")
+_REMOTE_PROFILE_ENV_NAMES = tuple(
+    name
+    for role in REMOTE_TEXT_ROLES
+    for name in (
+        f"MMM_{role}_BASE_URL",
+        f"MMM_{role}_MODEL",
+        f"MMM_{role}_API_KEY",
+    )
+) + (
+    "MMM_IMAGE_BASE_URL",
+    "MMM_IMAGE_MODEL",
+    "MMM_IMAGE_API_KEY",
+    "MMM_SPEECH_BASE_URL",
+    "MMM_SPEECH_MODEL",
+    "MMM_SPEECH_API_KEY",
+)
+_LOCAL_PROFILE_ENV_NAMES = (
+    "LLAMA_SERVER_URL",
+    "MMM_LLAMA_SERVER_BIN",
+    "MMM_LLAMA_SERVER_DISTRIBUTION",
+    "MMM_LLAMA_SERVER_SOURCE_DIR",
+)
 REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio,training]"
 LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio,training]"
 
@@ -33,6 +55,14 @@ _NATIVE_VERIFY_CACHE_LIMIT = 16
 
 def _is_local_profile(profile: object) -> bool:
     return str(profile or "").strip() != REMOTE_PROFILE
+
+
+def _clear_inactive_profile_environment(*, local_profile: bool) -> None:
+    """Remove state owned by the profile that is no longer active."""
+
+    stale_names = _REMOTE_PROFILE_ENV_NAMES if local_profile else _LOCAL_PROFILE_ENV_NAMES
+    for name in stale_names:
+        os.environ.pop(name, None)
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -835,6 +865,7 @@ def setup_colab_runtime(
     os.chdir(checkout)
 
     local_profile = _is_local_profile(profile)
+    _clear_inactive_profile_environment(local_profile=local_profile)
     torch = None
     llama_server_binary = ""
     if local_profile:

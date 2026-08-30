@@ -41,6 +41,10 @@ from .final_artifact import (
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
 from .java_lsp import JavaLanguageService
+from .validation_diagnostic_contract import (
+    diagnostic_errors as jdt_diagnostic_errors,
+    run_diagnostics as run_jdt_diagnostics,
+)
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
 )
@@ -294,15 +298,16 @@ class CompleteProductionOrchestrator:
         if options.run_jdt and (not options.source_only):
 
             def run_jdt() -> dict[str, Any]:
-                try:
-                    return JavaLanguageService().diagnostics(project_root, timeout_seconds=90)
-                except Exception as exc:
-                    return {'status': 'UNAVAILABLE', 'error': f'{type(exc).__name__}: {exc}'}
+                return run_jdt_diagnostics(
+                    JavaLanguageService,
+                    project_root,
+                    timeout_seconds=90,
+                )
             jdt_receipt = run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
             module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})
             if jdt_receipt.get('status') == 'UNAVAILABLE':
                 raise CompleteProductionError('JDT Language Server is required for a fully verified build: ' + str(jdt_receipt.get('error', 'unavailable')))
-            errors = [item for item in jdt_receipt.get('diagnostics', []) if isinstance(item, dict) and int(item.get('severity', 1)) <= 2]
+            errors = jdt_diagnostic_errors(jdt_receipt)
             if errors and (not options.auto_repair):
                 raise CompleteProductionError('JDT reported errors and automatic repair is disabled.')
         if options.source_only:
