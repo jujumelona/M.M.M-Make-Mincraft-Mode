@@ -3,6 +3,7 @@ from __future__ import annotations
 """Pure multi-query/provider fusion primitives for pre-design retrieval."""
 
 import hashlib
+import os
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -10,6 +11,46 @@ from typing import Any
 _RRF_K = 60.0
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
+_GENERIC_QUERY_TERMS = {
+    "minecraft",
+    "mod",
+    "mods",
+    "source",
+    "implementation",
+    "mechanic",
+    "system",
+    "feature",
+}
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)).strip())
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _evidence_byte_budget() -> int:
+    # This is a prompt/evidence budget, not a source-count cutoff.  The fusion layer
+    # keeps cross-query coverage first, then spends remaining bytes on the highest
+    # scoring evidence.  It prevents retrieval breadth from becoming hundreds of LLM
+    # page reads.
+    return _env_int(
+        "MMM_PREDESIGN_EVIDENCE_BYTE_BUDGET",
+        48 * 1024,
+        minimum=12 * 1024,
+        maximum=512 * 1024,
+    )
+
+
+def _excerpt_char_budget() -> int:
+    return _env_int(
+        "MMM_PREDESIGN_EVIDENCE_EXCERPT_CHARS",
+        3_200,
+        minimum=800,
+        maximum=12_000,
+    )
 
 
 def _sha256_text(value: str) -> str:
@@ -105,11 +146,98 @@ def _relevance(query: str, record: Mapping[str, Any]) -> float:
     return len(wanted & _tokens(searchable)) / max(1, len(wanted))
 
 
+def _evidence_excerpt(content: str, queries: list[str]) -> str:
+    """Keep a contiguous source excerpt around the strongest query-bearing term."""
+
+    text = str(content or "").strip()
+    limit = _excerpt_char_budget()
+    if len(text) <= limit:
+        return text
+    folded = text.casefold()
+    terms: list[str] = []
+    for query in queries:
+        for token in _TOKEN.findall(query):
+            term = token.casefold()
+            if len(term) >= 4 and term not in _GENERIC_QUERY_TERMS and term not in terms:
+                terms.append(term)
+    terms.sort(key=len, reverse=True)
+    positions = [folded.find(term) for term in terms]
+    positions = [position for position in positions if position >= 0]
+    center = min(positions) if positions else 0
+    half = limit // 2
+    start = max(0, center - half)
+    end = min(len(text), start + limit)
+    start = max(0, end - limit)
+    excerpt = text[start:end]
+    if start:
+        excerpt = "…" + excerpt
+    if end < len(text):
+        excerpt += "…"
+    return excerpt
+
+
+def _bounded_records(records: list[dict[str, Any]], source_queries: list[str]) -> tuple[list[dict[str, Any]], int]:
+    budget = _evidence_byte_budget()
+    prepared: list[dict[str, Any]] = []
+    for raw in records:
+        record = dict(raw)
+        fusion = dict(record.get("retrieval_fusion") or {})
+        matched = [str(item) for item in fusion.get("matched_queries", ()) if str(item)]
+        original = _record_content(record)
+        excerpt = _evidence_excerpt(original, matched or source_queries)
+        if "content" in record:
+            record["content"] = excerpt
+        else:
+            record["excerpt"] = excerpt
+        fusion["original_content_chars"] = len(original)
+        fusion["selected_content_chars"] = len(excerpt)
+        fusion["evidence_projection"] = "query_centered_contiguous_excerpt"
+        record["retrieval_fusion"] = fusion
+        prepared.append(record)
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[str] = set()
+    covered_queries: set[str] = set()
+    used = 0
+
+    def try_add(record: dict[str, Any]) -> bool:
+        nonlocal used
+        key = _record_key(record)
+        if key in selected_keys:
+            return False
+        size = len(_record_content(record).encode("utf-8", errors="replace"))
+        if selected and used + size > budget:
+            return False
+        selected.append(record)
+        selected_keys.add(key)
+        used += size
+        covered_queries.update(
+            str(item)
+            for item in record["retrieval_fusion"].get("matched_queries", ())
+            if str(item)
+        )
+        return True
+
+    # First preserve breadth: one strongest relevant record for each research question.
+    for query in source_queries:
+        if query in covered_queries:
+            continue
+        for record in prepared:
+            if query in record["retrieval_fusion"].get("matched_queries", ()) and try_add(record):
+                break
+
+    # Then spend remaining bytes by global fusion score.
+    for record in prepared:
+        try_add(record)
+
+    return selected, used
+
+
 def fuse_grounded_domain_evidence(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Exact-content dedupe, query-local lexical rank, then RRF-style fusion."""
+    """Dedupe/rank evidence, preserve query coverage, then recompose under a byte budget."""
 
     del domain
     rows = [row for row in grounded.get("queries", ()) if isinstance(row, Mapping)]
@@ -173,7 +301,7 @@ def fuse_grounded_domain_evidence(
                 item["queries"].append(query)
             item["providers"].add(_provider_family(record))
 
-    records: list[dict[str, Any]] = []
+    ranked_records: list[dict[str, Any]] = []
     for key, item in merged.items():
         record = dict(item["record"])
         providers = sorted(str(value) for value in item["providers"])
@@ -193,8 +321,8 @@ def fuse_grounded_domain_evidence(
             "provider_families": providers,
             "combined_score": round(score, 8),
         }
-        records.append(record)
-    records.sort(
+        ranked_records.append(record)
+    ranked_records.sort(
         key=lambda record: (
             -float(record["retrieval_fusion"]["combined_score"]),
             _record_key(record),
@@ -206,6 +334,7 @@ def fuse_grounded_domain_evidence(
         for row in rows
         if str(row.get("query") or "").strip()
     ]
+    records, selected_bytes = _bounded_records(ranked_records, source_queries)
     result = dict(grounded)
     result["queries"] = [
         {
@@ -237,8 +366,8 @@ def fuse_grounded_domain_evidence(
     ]
     result["retrieval_trace"] = trace
     result["fusion"] = {
-        "schema_version": "mmm/pre-design-evidence-fusion-v1",
-        "algorithm": "exact_content_dedupe+query_local_lexical_rank+rrf",
+        "schema_version": "mmm/pre-design-evidence-fusion-v2",
+        "algorithm": "exact_dedupe+query_rank+rrf+coverage_first_byte_budget",
         "query_count": len(rows),
         "queries_with_content": sum(1 for row in trace if row["unique_record_count"]),
         "query_coverage_ratio": (
@@ -249,7 +378,11 @@ def fuse_grounded_domain_evidence(
             if trace
             else 0.0
         ),
-        "unique_record_count": len(records),
+        "unique_record_count": len(ranked_records),
+        "selected_record_count": len(records),
+        "dropped_record_count": max(0, len(ranked_records) - len(records)),
+        "selected_content_bytes": selected_bytes,
+        "evidence_byte_budget": _evidence_byte_budget(),
         "duplicate_record_count": duplicates,
         "provider_families": sorted(
             {
@@ -258,7 +391,7 @@ def fuse_grounded_domain_evidence(
                 for family in record["retrieval_fusion"]["provider_families"]
             }
         ),
-        "all_unique_records_preserved": True,
+        "all_unique_records_preserved": len(records) == len(ranked_records),
     }
     return result
 
