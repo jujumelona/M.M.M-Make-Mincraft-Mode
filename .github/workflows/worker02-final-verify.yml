@@ -14,6 +14,8 @@ on:
       - "minecraft_mod_ai/pre_design_domain_research.py"
       - "minecraft_mod_ai/research_grounded_rag_contract.py"
       - "minecraft_mod_ai/github_adaptive_retrieval.py"
+      - "tests/test_research_grounded_rag_contract.py"
+      - "tests/test_pre_design_rag_quality_contract.py"
       - "tests/test_worker02_rag_source_evidence_contract.py"
       - "tests/test_worker02_rag_clean_code_regressions.py"
       - "tests/test_pre_design_requirement_evidence_sufficiency.py"
@@ -51,6 +53,8 @@ jobs:
             minecraft_mod_ai/pre_design_domain_research.py \
             minecraft_mod_ai/research_grounded_rag_contract.py \
             minecraft_mod_ai/github_adaptive_retrieval.py \
+            tests/test_research_grounded_rag_contract.py \
+            tests/test_pre_design_rag_quality_contract.py \
             tests/test_worker02_rag_source_evidence_contract.py \
             tests/test_worker02_rag_clean_code_regressions.py \
             tests/test_pre_design_requirement_evidence_sufficiency.py
@@ -66,6 +70,8 @@ jobs:
           minecraft_mod_ai/pre_design_domain_research.py
           minecraft_mod_ai/research_grounded_rag_contract.py
           minecraft_mod_ai/github_adaptive_retrieval.py
+          tests/test_research_grounded_rag_contract.py
+          tests/test_pre_design_rag_quality_contract.py
           tests/test_worker02_rag_source_evidence_contract.py
           tests/test_worker02_rag_clean_code_regressions.py
           tests/test_pre_design_requirement_evidence_sufficiency.py
@@ -74,6 +80,8 @@ jobs:
       - name: Run Worker 02 regressions
         run: >
           python -m pytest -q
+          tests/test_research_grounded_rag_contract.py
+          tests/test_pre_design_rag_quality_contract.py
           tests/test_worker02_rag_source_evidence_contract.py
           tests/test_worker02_rag_clean_code_regressions.py
           tests/test_pre_design_requirement_evidence_sufficiency.py
