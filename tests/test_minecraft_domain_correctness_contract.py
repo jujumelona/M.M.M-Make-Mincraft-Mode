@@ -237,3 +237,26 @@ def test_project_generator_guard_allows_reviewed_target_and_empty_inner_skeleton
     assert _Generator().generate(_spec("item"), root) == "generated"
     assert _Generator().generate(_spec(), root) == "generated"
     assert calls == [root, root]
+
+
+def test_runtime_install_covers_all_legacy_public_entrypoints_idempotently() -> None:
+    from minecraft_mod_ai import deterministic_minecraft_content_contract
+    from minecraft_mod_ai.generator import FabricProjectGenerator
+    from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
+
+    execute = deterministic_minecraft_content_contract._execute
+    base_generate = FabricProjectGenerator.generate
+    scalable_generate = ScalableFabricProjectGenerator.generate
+
+    assert getattr(execute, contract._MARKER, False)
+    assert getattr(base_generate, contract._MARKER, False)
+    assert getattr(scalable_generate, contract._MARKER, False)
+    assert hasattr(execute, "__wrapped__")
+    assert hasattr(base_generate, "__wrapped__")
+    assert hasattr(scalable_generate, "__wrapped__")
+
+    contract.install()
+
+    assert deterministic_minecraft_content_contract._execute is execute
+    assert FabricProjectGenerator.generate is base_generate
+    assert ScalableFabricProjectGenerator.generate is scalable_generate
