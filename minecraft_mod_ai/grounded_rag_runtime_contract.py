@@ -275,6 +275,42 @@ _COORDINATOR = GroundedRAGCoordinator()
 _INSTALLED = False
 
 
+def _coordinator_retrieve_one(
+    query: str,
+    versions: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Bridge either coordinator API shape to the one-query grounded hook."""
+
+    canonical = _normalize_query(query)
+    direct = getattr(_COORDINATOR, "retrieve_one", None)
+    if callable(direct):
+        payload = direct(canonical, versions)
+        if isinstance(payload, Mapping):
+            return dict(payload)
+        return _provider_failure_payload(
+            canonical,
+            TypeError(
+                f"coordinator retrieve_one returned {type(payload).__name__}, expected mapping"
+            ),
+        )
+
+    many = getattr(_COORDINATOR, "retrieve_many", None)
+    if not callable(many):
+        return _provider_failure_payload(
+            canonical,
+            RuntimeError("grounded RAG coordinator exposes neither retrieve_one nor retrieve_many"),
+        )
+    try:
+        payloads = many((canonical,), versions)
+        if isinstance(payloads, Mapping):
+            payload = payloads.get(canonical)
+            if isinstance(payload, Mapping):
+                return dict(payload)
+        raise RuntimeError("grounded RAG coordinator returned no payload for the requested query")
+    except Exception as exc:  # noqa: BLE001 - coordinator boundary becomes explicit evidence
+        return _provider_failure_payload(canonical, exc)
+
+
 def _augment(
     agentic_module: Any,
     payload: Mapping[str, Any],
@@ -333,6 +369,7 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
 
     original_discovery = reuse_module._parallel_donor_repository_discovery
     if not getattr(original_discovery, "__mmm_grounded_donors__", False):
+
         def donor_discovery(
             capabilities: Sequence[str],
             client: Any,
@@ -363,7 +400,11 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
         donor_discovery.__mmm_grounded_donors__ = True
         reuse_module._parallel_donor_repository_discovery = donor_discovery
 
-    _grounded._external_retrieval = _COORDINATOR.retrieve_one
+    _grounded._external_retrieval = _coordinator_retrieve_one
+
+    from .pre_design_research_routing_contract import install as install_pre_design_routing
+
+    install_pre_design_routing()
     _INSTALLED = True
 
 

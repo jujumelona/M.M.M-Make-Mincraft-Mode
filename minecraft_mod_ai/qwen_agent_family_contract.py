@@ -126,10 +126,7 @@ def _apply_family_payload_policy(
 
     extra = _config_extra(config)
     if action_page:
-        if json_page:
-            payload["reasoning_effort"] = "none"
-        else:
-            payload.pop("reasoning_effort", None)
+        payload.pop("reasoning_effort", None)
         payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
     else:
         payload.pop("reasoning_effort", None)
