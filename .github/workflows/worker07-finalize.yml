@@ -39,13 +39,29 @@ jobs:
           from pathlib import Path
           path = Path('tests/test_unified_host_execution_loop.py')
           text = path.read_text(encoding='utf-8')
-          anchor = '    config.max_context = 16384\n'
-          replacement = anchor + '    config.max_input_tokens = 0\n'
+
+          context_anchor = '    config.max_context = 16384\n'
+          context_replacement = context_anchor + '    config.max_input_tokens = 0\n'
           if 'config.max_input_tokens = 0' not in text:
-              if anchor not in text:
+              if context_anchor not in text:
                   raise SystemExit('Worker07: unified-loop config anchor missing')
-              text = text.replace(anchor, replacement)
-              path.write_text(text, encoding='utf-8')
+              text = text.replace(context_anchor, context_replacement)
+
+          module_import = 'import minecraft_mod_ai.progress_aware_tool_loop as tool_loop\n'
+          if module_import not in text:
+              import_anchor = 'import pytest\n\n'
+              if import_anchor not in text:
+                  raise SystemExit('Worker07: pytest import anchor missing')
+              text = text.replace(import_anchor, import_anchor + module_import + '\n', 1)
+
+          fixture = '''\n\n@pytest.fixture(autouse=True)\ndef _isolate_unified_loop_from_skill_catalog(monkeypatch: pytest.MonkeyPatch) -> None:\n    """Keep coder-loop unit tests independent of separately tested skill routing."""\n\n    monkeypatch.setattr(tool_loop, "skills_for_tool", lambda *_args, **_kwargs: ())\n'''
+          fixture_anchor = '\n\ndef _tool_schema(name: str) -> dict[str, object]:\n'
+          if '_isolate_unified_loop_from_skill_catalog' not in text:
+              if fixture_anchor not in text:
+                  raise SystemExit('Worker07: tool-schema fixture anchor missing')
+              text = text.replace(fixture_anchor, fixture + fixture_anchor, 1)
+
+          path.write_text(text, encoding='utf-8')
           PY
       - name: Worker 07 focused verification
         run: |
