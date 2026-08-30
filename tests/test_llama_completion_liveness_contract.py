@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from minecraft_mod_ai import llama_completion_liveness_contract as contract
+
+
+def test_current_slot_shape_reads_next_token_decode_progress() -> None:
+    snapshot = contract._slot_progress_from_payload(
+        [
+            {
+                "is_processing": True,
+                "n_prompt_tokens": 8192,
+                "n_prompt_tokens_processed": 6144,
+                "next_token": {"n_decoded": 17},
+            }
+        ]
+    )
+
+    assert snapshot == {
+        "processing_slots": 1,
+        "decoded": 17,
+        "prompt_processed": 6144,
+    }
+
+
+def test_legacy_slot_shape_remains_observable() -> None:
+    snapshot = contract._slot_progress_from_payload(
+        [
+            {
+                "is_processing": True,
+                "n_prompt_tokens": 2048,
+                "n_decoded": 9,
+            }
+        ]
+    )
+
+    assert snapshot == {
+        "processing_slots": 1,
+        "decoded": 9,
+        "prompt_processed": 2048,
+    }
+
+
+def test_progress_payload_requests_prompt_events_and_bounded_ping() -> None:
+    stream_module = SimpleNamespace(
+        _tool_idle_timeout_seconds=lambda: 120.0,
+        _stream_idle_timeout_seconds=lambda: 120.0,
+    )
+    original = {"model": "local", "messages": [], "tools": [{"type": "function"}]}
+
+    result = contract._progress_aware_payload(stream_module, original)
+
+    assert result is not original
+    assert "return_progress" not in original
+    assert result["return_progress"] is True
+    assert result["sse_ping_interval"] == 30
+
+
+def test_install_wraps_nonstream_chat_completion_without_changing_timeout() -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def post(self, url: str, **kwargs):
+            calls.append((url, kwargs))
+            return "ok"
+
+    stream_module = SimpleNamespace(
+        _StreamingCompletionClient=FakeClient,
+        _tool_idle_timeout_seconds=lambda: 12.0,
+        _stream_idle_timeout_seconds=lambda: 120.0,
+        _slot_progress_from_payload=lambda payload: None,
+    )
+
+    contract.install(stream_module)
+    client = FakeClient()
+    timeout = object()
+    result = client.post(
+        "http://127.0.0.1:8080/v1/chat/completions",
+        json={"messages": [], "tools": [{"type": "function"}]},
+        timeout=timeout,
+    )
+
+    assert result == "ok"
+    assert calls[0][1]["timeout"] is timeout
+    assert calls[0][1]["json"]["return_progress"] is True
+    assert calls[0][1]["json"]["sse_ping_interval"] == 4
+    assert stream_module._slot_progress_from_payload is contract._slot_progress_from_payload
