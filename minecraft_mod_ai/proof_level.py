@@ -7,6 +7,7 @@ minimum receipt fields needed to justify that exact transition.  A non-empty
 mapping is never sufficient by itself to manufacture a verified state.
 """
 
+import re
 from collections.abc import Mapping
 from enum import Enum
 from typing import Any
@@ -146,6 +147,10 @@ def _nonempty_text(receipt: Mapping[str, Any], key: str) -> bool:
     return bool(str(receipt.get(key) or "").strip())
 
 
+def _immutable_commit_sha(receipt: Mapping[str, Any], key: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{40,64}", str(receipt.get(key) or "").strip()))
+
+
 def _positive_int(receipt: Mapping[str, Any], key: str) -> bool:
     value = receipt.get(key)
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
@@ -184,8 +189,8 @@ def _validate_receipt(dst: ProofLevel, receipt: Any) -> tuple[bool, str]:
         data.get("license")
     ):
         return False, "INVALID_RECEIPT: LICENSE_VERIFIED requires a reusable source license"
-    if dst == ProofLevel.PINNED and not _nonempty_text(data, "commit_sha"):
-        return False, "INVALID_RECEIPT: PINNED requires a non-empty commit_sha"
+    if dst == ProofLevel.PINNED and not _immutable_commit_sha(data, "commit_sha"):
+        return False, "INVALID_RECEIPT: PINNED requires an immutable 40-64 hex commit_sha"
     if dst == ProofLevel.CLOSURE_COMPLETE and data.get("closure_complete") is not True:
         return False, "INVALID_RECEIPT: CLOSURE_COMPLETE requires closure_complete=true"
     if dst == ProofLevel.MATERIALIZED and not _positive_int(data, "files"):
