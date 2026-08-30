@@ -87,6 +87,7 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = 16384
+    config.max_input_tokens = 0
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
@@ -165,6 +166,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = 16384
+    config.max_input_tokens = 0
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
@@ -332,6 +334,7 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = 16384
+    config.max_input_tokens = 0
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
@@ -483,6 +486,7 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = 16384
+    config.max_input_tokens = 0
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 

@@ -197,13 +197,12 @@ def test_execute_uses_host_discovered_project_identity(
 def test_role_policy_exposes_both_small_model_host_tools() -> None:
     class _Capability:
         @staticmethod
-        def _policy_model_role(stage, model_role):
-            return model_role
-
-        @staticmethod
-        def skills_for_model_role(model_role):
+        def _role_policy_snapshot(stage, model_role):
+            assert stage == "generation"
             assert model_role == "coder"
-            return frozenset({"generate-datagen", "patch-existing-project"})
+            return SimpleNamespace(
+                skills=frozenset({"generate-datagen", "patch-existing-project"})
+            )
 
     assert contract._role_dynamic_tools(_Capability, "generation", "coder") == {
         "apply_minecraft_content_spec": "generate-datagen",

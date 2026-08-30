@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from minecraft_mod_ai import implementation_kind_boundary_contract as boundary
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 
 
@@ -90,7 +89,7 @@ def test_incidental_initial_source_cannot_replace_reserved_fresh_target() -> Non
 def test_fresh_task_with_reuse_refs_fails_closed_to_localization() -> None:
     payload = _fresh_request(task_reuse_refs=("component:existing_trade_engine",))
 
-    assert boundary._fresh_target_has_reuse_evidence(payload) is True
+    assert tool_loop._fresh_target_has_reuse_evidence(payload) is True
     context = tool_loop._extract_mutation_context_from_payload(payload)
 
     assert context is not None
@@ -202,3 +201,17 @@ def test_same_target_incremental_localization_still_accumulates() -> None:
     assert merged.source_body == body_context.source_body
     assert merged.is_new_file is False
     assert merged.localization_stage == tool_loop.LocalizationStage.READY
+
+
+
+def test_target_hardening_has_no_late_monkey_patch_owner() -> None:
+    assert not getattr(
+        tool_loop.TargetMutationContext.merge,
+        "_mmm_target_identity_merge_guard",
+        False,
+    )
+    assert not getattr(
+        tool_loop._extract_mutation_context_from_payload,
+        "_mmm_fresh_owned_target_grounding",
+        False,
+    )

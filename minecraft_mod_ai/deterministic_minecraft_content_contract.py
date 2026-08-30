@@ -323,8 +323,8 @@ def _install_runtime(runtime_module: Any, extended_module: Any) -> None:
 def _role_dynamic_tools(capability_module: Any, stage: str, model_role: str) -> dict[str, str]:
     if str(stage).strip().lower() != "generation":
         return {}
-    policy_role = capability_module._policy_model_role(stage, model_role)
-    assigned = capability_module.skills_for_model_role(policy_role)
+    policy = capability_module._role_policy_snapshot(stage, model_role)
+    assigned = policy.skills
     if not assigned:
         return dict(_DYNAMIC_SKILLS)
     return {

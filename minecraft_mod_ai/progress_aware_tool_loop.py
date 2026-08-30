@@ -210,6 +210,31 @@ def evidence_fingerprint(value: Any) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+
+_EXISTING_TARGET_EVIDENCE_PREFIXES = (
+    "search_code_rag",
+    "sources_",
+    "java_workspace_symbols",
+    "observation_page_",
+    "files_",
+)
+
+
+def _normalized_target_path(value: Any) -> str:
+    return str(value or "").strip().replace("\\", "/")
+
+
+def _proves_existing_target(context: Any) -> bool:
+    if bool(getattr(context, "is_new_file", False)):
+        return False
+    if not _normalized_target_path(getattr(context, "target_path", None)):
+        return False
+    if getattr(context, "source_body", None):
+        return True
+    source = str(getattr(context, "evidence_source", "") or "")
+    return source.startswith(_EXISTING_TARGET_EVIDENCE_PREFIXES)
+
+
 class LocalizationStage(str, Enum):
     NEED_FILE = "NEED_FILE"
     NEED_SYMBOL = "NEED_SYMBOL"
@@ -257,8 +282,14 @@ class TargetMutationContext:
         return LocalizationStage.READY
 
     def merge(self, other: TargetMutationContext) -> TargetMutationContext:
-        """Cumulatively accumulate localization discoveries across multiple retrieval turns."""
-        return TargetMutationContext(
+        """Merge localization evidence without crossing target-file identity."""
+
+        self_path = _normalized_target_path(self.target_path)
+        other_path = _normalized_target_path(other.target_path)
+        if self_path and other_path and self_path != other_path:
+            return other
+
+        merged = TargetMutationContext(
             target_path=other.target_path or self.target_path,
             target_symbol=other.target_symbol or self.target_symbol,
             source_body=other.source_body or self.source_body,
@@ -268,6 +299,11 @@ class TargetMutationContext:
             evidence_source=other.evidence_source or self.evidence_source,
             base_revision_sha=other.base_revision_sha or self.base_revision_sha,
         )
+        if other.is_new_file:
+            return merged
+        if merged.is_new_file and _proves_existing_target(other):
+            return replace(merged, is_new_file=False)
+        return merged
 
 
 @dataclass(frozen=True)
@@ -569,14 +605,58 @@ def _is_new_file_creation(payload: Any) -> bool:
     return False
 
 
-def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
-    """Resolve an evidence planner's host-reserved fresh source target.
+def _sequence_has_values(value: Any) -> bool:
+    return bool(
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and value
+    )
 
-    Fresh work is creation, not localization of an existing file. The evidence plan is
-    the authoritative source of that target; incidental project observations must never
-    override it. Adapt/reuse work deliberately stays on the normal file->symbol->body
-    localization path.
-    """
+
+def _fresh_target_has_reuse_evidence(payload: Any) -> bool:
+    """Fail closed when a nominally fresh binding also carries reuse evidence."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    module = payload.get("module")
+    if not isinstance(module, Mapping):
+        return False
+    config = module.get("config")
+    if not isinstance(config, Mapping):
+        return False
+    task = config.get("evidence_task")
+    if not isinstance(task, Mapping):
+        return False
+    bindings = task.get("production_bindings")
+    if not isinstance(bindings, Sequence) or isinstance(
+        bindings, (str, bytes, bytearray)
+    ):
+        return False
+    production_bindings = tuple(
+        item for item in bindings if isinstance(item, Mapping)
+    )
+    actions = {
+        str(item.get("reuse_action") or "").strip().casefold()
+        for item in production_bindings
+        if str(item.get("reuse_action") or "").strip()
+    }
+    if actions != {"fresh"}:
+        return False
+
+    if any(
+        _sequence_has_values(task.get(key))
+        for key in ("reuse_refs", "component_refs", "source_refs")
+    ):
+        return True
+    return any(
+        _sequence_has_values(binding.get(key))
+        for binding in production_bindings
+        for key in ("reuse_refs", "component_refs", "source_refs")
+    )
+
+
+def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
+    """Resolve a host-reserved fresh target without guessing a repository file."""
 
     if not isinstance(payload, Mapping):
         return None
@@ -590,10 +670,14 @@ def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
     if not isinstance(task, Mapping):
         return None
     bindings = task.get("production_bindings")
-    if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes, bytearray)):
+    if not isinstance(bindings, Sequence) or isinstance(
+        bindings, (str, bytes, bytearray)
+    ):
         return None
 
-    production_bindings = tuple(item for item in bindings if isinstance(item, Mapping))
+    production_bindings = tuple(
+        item for item in bindings if isinstance(item, Mapping)
+    )
     if not production_bindings:
         return None
     actions = {
@@ -606,12 +690,17 @@ def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
 
     for binding in production_bindings:
         anchors = binding.get("owned_anchors")
-        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
+        if not isinstance(anchors, Sequence) or isinstance(
+            anchors, (str, bytes, bytearray)
+        ):
             continue
         for anchor in anchors:
-            if not isinstance(anchor, Mapping) or str(anchor.get("kind") or "") != "symbol":
+            if (
+                not isinstance(anchor, Mapping)
+                or str(anchor.get("kind") or "") != "symbol"
+            ):
                 continue
-            locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
+            locator = _normalized_target_path(anchor.get("locator"))
             target_path, separator, target_symbol = locator.partition("#")
             target_path = target_path.strip()
             if (
@@ -623,10 +712,89 @@ def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
                 continue
             return TargetMutationContext(
                 target_path=target_path,
-                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
+                target_symbol=(
+                    target_symbol.strip()
+                    if separator and target_symbol.strip()
+                    else None
+                ),
                 is_new_file=True,
                 evidence_source="evidence_fresh_owned_anchor",
             )
+    return None
+
+
+def _initial_exact_target_context(
+    payload: Any,
+    *,
+    prospective: TargetMutationContext,
+) -> TargetMutationContext | None:
+    """Reuse bounded initial source only when it proves the reserved target path."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    initial = payload.get("initial_exact_source_context")
+    if not isinstance(initial, (Mapping, list, tuple)):
+        return None
+    target_path = _normalized_target_path(prospective.target_path)
+    if not target_path:
+        return None
+
+    candidates: list[Any] = []
+    if isinstance(initial, Mapping):
+        for key in (
+            "global_anchors",
+            "records",
+            "excerpts",
+            "files",
+            "sources",
+            "hits",
+            "results",
+        ):
+            value = initial.get(key)
+            if isinstance(value, Mapping):
+                candidates.extend(
+                    {"path": str(path), "content": content}
+                    for path, content in value.items()
+                )
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                candidates.extend(value)
+        candidates.append(initial)
+    else:
+        candidates.extend(initial)
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_path = _normalized_target_path(
+            candidate.get("source_path")
+            or candidate.get("path")
+            or candidate.get("file")
+            or candidate.get("uri")
+        )
+        candidate_path = candidate_path.removeprefix("file:///").removeprefix(
+            "file://"
+        )
+        if candidate_path != target_path:
+            continue
+        existing = _extract_mutation_context_from_payload({"hits": [candidate]})
+        if (
+            existing is None
+            or _normalized_target_path(existing.target_path) != target_path
+        ):
+            existing = TargetMutationContext(
+                target_path=target_path,
+                target_symbol=prospective.target_symbol,
+                is_new_file=False,
+                evidence_source="initial_exact_target_path",
+            )
+        elif prospective.target_symbol and not existing.target_symbol:
+            existing = replace(
+                existing,
+                target_symbol=prospective.target_symbol,
+            )
+        return replace(existing, is_new_file=False)
     return None
 
 
@@ -647,9 +815,15 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     return ctx
         return None
 
+    if _fresh_target_has_reuse_evidence(payload):
+        return TargetMutationContext(
+            evidence_source="reuse_evidence_requires_localization"
+        )
+
     fresh = _fresh_owned_symbol_context(payload)
     if fresh is not None:
-        return fresh
+        existing = _initial_exact_target_context(payload, prospective=fresh)
+        return existing or fresh
 
     for wrapper_key in ("structured_content", "result", "data", "body", "_mmm_observation", "raw_result", "structured", "observation"):
         wrapped = payload.get(wrapper_key)
