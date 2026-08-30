@@ -67,6 +67,9 @@ def _generate_gap_queries(
     raw_prompt: str,
     progress_label: str,
 ) -> list[str]:
+    # Queries are the executable contract.  Small diagnostic fields such as
+    # ``sufficient``/``gaps`` are harmless model annotations and must not discard an
+    # otherwise valid corrective search plan before the parser can extract it.
     schema = {
         "type": "object",
         "properties": {
@@ -79,7 +82,7 @@ def _generate_gap_queries(
             }
         },
         "required": ["queries"],
-        "additionalProperties": False,
+        "additionalProperties": True,
     }
     messages = [
         {
