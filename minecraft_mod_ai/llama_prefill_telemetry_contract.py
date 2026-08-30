@@ -12,8 +12,9 @@ def install(hardware_policy_module: Any) -> None:
     from . import llama_decode_speed_contract, llama_stream_efficiency_contract
     from .llama_completion_liveness_contract import install as install_completion_liveness
     from .llama_kv_correctness_contract import install as install_kv_correctness
+    from .model_adapters import llama_cpp_adapter
 
-    install_completion_liveness(llama_stream_efficiency_contract)
+    install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
     install_kv_correctness(llama_decode_speed_contract)
 
     current = hardware_policy_module._commit_metrics_delta
