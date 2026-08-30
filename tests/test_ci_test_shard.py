@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tools.ci_test_shard import select_shard, shard_index
@@ -59,3 +61,10 @@ def test_invalid_shard_parameters_fail_closed() -> None:
         select_shard(["tests/test_a.py"], shard_number=0, shard_count=3)
     with pytest.raises(ValueError, match="shard_number"):
         select_shard(["tests/test_a.py"], shard_number=4, shard_count=3)
+
+
+def test_ci_workflow_uses_stable_shard_helper() -> None:
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "from tools.ci_test_shard import select_shard" in workflow
+    assert "select_shard(" in workflow
+    assert "enumerate(all_tests)" not in workflow
