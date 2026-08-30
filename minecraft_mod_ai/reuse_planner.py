@@ -1574,7 +1574,11 @@ def _plan_target(
             )
             if best_donor is not None:
                 donor = best_donor
-                winning_receipt = next((r for r in receipts if r.candidate_id.startswith(donor.repository)), receipts[-1] if receipts else None)
+                donor_identity = f"{donor.repository}@{donor.commit_sha}"
+                winning_receipt = next(
+                    (r for r in receipts if r.candidate_id == donor_identity),
+                    None,
+                )
                 proof_lvl = winning_receipt.proof_level if winning_receipt else "UNVERIFIED"
 
                 closure_scale = max(1.0, len(donor.files) / 3.0)

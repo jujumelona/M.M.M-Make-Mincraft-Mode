@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,11 +34,7 @@ from .artifact_dependency_graph import (
 from .capability_implementation_locator import CapabilityImplementationLocator
 from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
-
-_PERMISSIVE = frozenset({
-    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
-    "Unlicense", "CC0-1.0",
-})
+from .reuse_license import is_reusable_source_license
 _TYPE_DECL = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _METHOD_DECL = re.compile(
     r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
@@ -387,7 +384,7 @@ def _repository_tree_entries(
 
     budget = _tree_request_budget()
     requests = 0
-    queue: list[tuple[str, str]] = [(root_sha, "")]
+    queue: deque[tuple[str, str]] = deque([(root_sha, "")])
     seen_trees: set[str] = set()
     resolved: list[Mapping[str, Any]] = []
     while queue:
@@ -395,7 +392,7 @@ def _repository_tree_entries(
             raise SourceTransplantError(
                 "Complete donor tree traversal exhausted the configured request budget."
             )
-        tree_sha, prefix = queue.pop(0)
+        tree_sha, prefix = queue.popleft()
         if tree_sha in seen_trees:
             continue
         seen_trees.add(tree_sha)
@@ -460,7 +457,7 @@ def inspect_repository_slice(
     commit_sha = str(snapshot.get("commit_sha") or "")
     blobs = snapshot.get("blobs")
     if (
-        license_id not in _PERMISSIVE
+        not is_reusable_source_license(license_id)
         or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha)
         or not isinstance(blobs, Mapping)
     ):
@@ -782,7 +779,7 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
             return None
         commit_sha = str(evidence.get("commit_sha") or "")
         license_id = str(evidence.get("license_id") or "")
-        if license_id not in _PERMISSIVE or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
+        if not is_reusable_source_license(license_id) or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
             return None
         token = str(getattr(discovery_client, "github_token", "") or "").strip()
         client = _github_client(token)
@@ -805,11 +802,14 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
             "blobs": blobs,
         }
         return snapshot
-    except Exception:
+    except SourceTransplantError:
         return None
     finally:
         with _SNAPSHOT_LOCK:
-            _SNAPSHOT_CACHE[repository] = snapshot
+            if snapshot is not None:
+                _SNAPSHOT_CACHE[repository] = snapshot
+            else:
+                _SNAPSHOT_CACHE.pop(repository, None)
             pending = _SNAPSHOT_INFLIGHT.pop(repository, None)
             if pending is not None:
                 pending.set()
@@ -823,14 +823,22 @@ def _github_client(token: str) -> httpx.Client:
 
 
 def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | None = None) -> Any:
-    response = client.get(url, params=params)
-    response.raise_for_status()
+    try:
+        response = client.get(url, params=params)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise SourceTransplantError(f"GitHub donor request failed: {url}") from exc
     limit = _response_byte_budget()
     if len(response.content) > limit:
         raise SourceTransplantError(
             f"GitHub response exceeded configured source-transplant response budget ({limit} bytes)."
         )
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise SourceTransplantError(
+            f"GitHub donor response was not valid JSON: {url}"
+        ) from exc
 
 
 def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> bytes:

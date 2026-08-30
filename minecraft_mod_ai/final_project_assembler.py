@@ -313,9 +313,15 @@ class FinalProjectAssembler:
             repository = str(_receipt_value(dependency, "repository", ""))
             if repository:
                 build_model.add_repository(repository)
+            gradle_configuration = str(
+                _receipt_value(dependency, "gradle_configuration", "")
+            ).strip()
+            if not gradle_configuration:
+                errors.append("RESOLVED_BUILD_DEPENDENCY_CONFIGURATION_MISSING")
+                return
             build_model.add_dependency(
                 str(resolved_coordinate),
-                "modImplementation" if self.target_loader == "fabric" else "implementation",
+                gradle_configuration,
                 sha256=str(_receipt_value(dependency, "artifact_hash", "")),
                 requirement_ids=requirement_ids,
             )

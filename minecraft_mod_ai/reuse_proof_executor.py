@@ -23,6 +23,10 @@ from .reuse_license import is_reusable_source_license
 from .source_transplant import DonorSlice, SourceTransplantError
 
 
+class ReuseTargetWorkspaceError(RuntimeError):
+    """Target workspace could not be copied into the isolated proof sandbox."""
+
+
 @dataclass(frozen=True)
 class ResidualWorkOrder:
     capability: str
@@ -432,7 +436,7 @@ def execute_reuse_proof(
         if not in_memory_files:
             materialization_failed = True
 
-    if materialization_failed and not callable(compile_checker):
+    if materialization_failed:
         return ReuseProofReceipt(
             candidate_id=candidate_id,
             capability=donor_slice.capability,
@@ -450,9 +454,6 @@ def execute_reuse_proof(
             residual_capabilities=(donor_slice.capability,),
         )
 
-    if not in_memory_files and callable(compile_checker):
-        for donor_file in donor_slice.files:
-            in_memory_files[donor_file.path] = f"// Test Mock {donor_file.path}\n"
 
     adapted_files, adapter_receipts = apply_deterministic_adapters(
         in_memory_files,
@@ -539,8 +540,10 @@ def execute_reuse_proof(
                     ignore=ignore_patterns,
                     dirs_exist_ok=True,
                 )
-            except (OSError, shutil.Error):
-                pass
+            except (OSError, shutil.Error) as exc:
+                raise ReuseTargetWorkspaceError(
+                    "Failed to copy target workspace into reuse proof sandbox."
+                ) from exc
 
         scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
 
@@ -580,32 +583,20 @@ def execute_reuse_proof(
         individual_results: Mapping[str, bool] = {}
 
         if callable(compile_checker):
-            try:
-                check_result = compile_checker(adapted_files, target_context)
-                if isinstance(check_result, Mapping):
-                    compile_passed = bool(check_result.get("compile_passed"))
-                    tests_passed = bool(check_result.get("tests_passed"))
-                    tests_executed = int(check_result.get("tests_executed", 0))
-                    tests_passed_count = int(
-                        check_result.get("tests_passed_count", 0)
-                    )
-                    executed_test_ids = tuple(
-                        check_result.get("executed_test_ids") or ()
-                    )
-                    individual_results = dict(
-                        check_result.get("individual_test_results") or {}
-                    )
-                    unresolved_symbols.extend(
-                        check_result.get("unresolved_symbols") or []
-                    )
-                    missing_resources.extend(
-                        check_result.get("missing_resources") or []
-                    )
-                else:
-                    compile_passed = bool(check_result)
-                    tests_passed = False
-            except Exception:
-                compile_passed = False
+            check_result = compile_checker(adapted_files, target_context)
+            if isinstance(check_result, Mapping):
+                compile_passed = bool(check_result.get("compile_passed"))
+                tests_passed = bool(check_result.get("tests_passed"))
+                tests_executed = int(check_result.get("tests_executed", 0))
+                tests_passed_count = int(check_result.get("tests_passed_count", 0))
+                executed_test_ids = tuple(check_result.get("executed_test_ids") or ())
+                individual_results = dict(
+                    check_result.get("individual_test_results") or {}
+                )
+                unresolved_symbols.extend(check_result.get("unresolved_symbols") or [])
+                missing_resources.extend(check_result.get("missing_resources") or [])
+            else:
+                compile_passed = bool(check_result)
                 tests_passed = False
         else:
             from .reuse_build_verifier import verify_scratch_workspace_build
@@ -720,14 +711,11 @@ def execute_reuse_proof(
             comp_files = {path: adapted_files[path] for path in component}
             comp_passed = False
             if callable(compile_checker):
-                try:
-                    comp_result = compile_checker(comp_files, target_context)
-                    if isinstance(comp_result, Mapping):
-                        comp_passed = bool(comp_result.get("compile_passed"))
-                    else:
-                        comp_passed = bool(comp_result)
-                except Exception:
-                    comp_passed = False
+                comp_result = compile_checker(comp_files, target_context)
+                if isinstance(comp_result, Mapping):
+                    comp_passed = bool(comp_result.get("compile_passed"))
+                else:
+                    comp_passed = bool(comp_result)
             else:
                 try:
                     with tempfile.TemporaryDirectory(
@@ -1026,7 +1014,7 @@ def execute_candidate_fallback_loop(
     """Try donor candidates until full proof or the best partial proof is found."""
 
     receipts: list[ReuseProofReceipt] = []
-    partial_candidate: DonorSlice | None = None
+    best_partial: tuple[tuple[int, int, int, int, int], DonorSlice] | None = None
 
     for candidate in candidates:
         receipt = execute_reuse_proof(
@@ -1040,13 +1028,18 @@ def execute_candidate_fallback_loop(
         receipt_level = ProofLevel.from_value(receipt.proof_level)
         if receipt.compile_passed and receipt_level.is_verified():
             return candidate, tuple(receipts)
-        if (
-            receipt_level == ProofLevel.PARTIAL_REUSE
-            and partial_candidate is None
-        ):
-            partial_candidate = candidate
+        if receipt_level == ProofLevel.PARTIAL_REUSE:
+            partial_score = (
+                len(receipt.verified_artifacts),
+                len(receipt.verified_symbols),
+                -len(receipt.residual_artifacts),
+                -len(receipt.unresolved_symbols),
+                -len(receipt.missing_resources),
+            )
+            if best_partial is None or partial_score > best_partial[0]:
+                best_partial = (partial_score, candidate)
 
-    if partial_candidate is not None:
-        return partial_candidate, tuple(receipts)
+    if best_partial is not None:
+        return best_partial[1], tuple(receipts)
 
     return None, tuple(receipts)
