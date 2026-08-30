@@ -96,8 +96,7 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                 "requirements": [prompt],
                 "evidence_kinds": [
                     "minecraft_api",
-                    "compatibility",
-                    "runtime_behavior",
+                            "runtime_behavior",
                     "local_project",
                     "testing",
                 ],
@@ -354,16 +353,22 @@ def _validate_domain_provider_grounding(
             f"Pre-design retrieval gap for domain {domain_id!r}: retrieval returned only "
             "catalog/TOC/metadata or empty hits; no claim-bearing source content was retrieved."
         )
-    providers = {
+    # ``providers`` lists eligible retrieval routes (OR semantics). A route may
+    # legitimately return zero hits when another route already supplied claim-bearing
+    # evidence. Only ``required_providers`` is fail-closed per provider.
+    required_providers = {
         str(item).casefold()
-        for item in domain.get("providers", [])
+        for item in domain.get("required_providers", [])
         if str(item).strip()
     }
-    if "github" in providers and not any(_is_github_record(record) for record in records):
+    if "github" in required_providers and not any(
+        _is_github_record(record) for record in records
+    ):
         raise PreDesignResearchFailure(
-            f"Pre-design retrieval gap for domain {domain_id!r}: required provider 'github' "
-            "returned no content-bearing source document."
+            f"Pre-design retrieval gap for domain {domain_id!r}: explicitly required "
+            "provider 'github' returned no content-bearing source document."
         )
+
 
 
 def _domain_document_evidence(

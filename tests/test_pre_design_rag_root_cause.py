@@ -78,24 +78,62 @@ def test_grounded_domain_evidence_drops_toc_metadata_and_keeps_source_content():
     assert all(record.get("title") != "Blockbench Documentation" for record in records)
 
 
-def test_required_github_gap_fails_before_model_extraction():
+def test_provider_routes_are_alternatives_when_claim_bearing_content_exists():
+    subject._validate_domain_provider_grounding(
+        {
+            "domain_id": "resource",
+            "providers": ["project_rag", "github"],
+        },
+        {
+            "queries": [
+                {
+                    "query": "resource gathering",
+                    "evidence_records": [
+                        {
+                            "source_id": "project:src/main/java/Harvest.java",
+                            "content": "A sufficiently long local implementation explaining resource gathering behavior.",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+
+def test_explicit_required_github_gap_still_fails_closed():
     with pytest.raises(subject.PreDesignResearchFailure, match="github"):
         subject._validate_domain_provider_grounding(
-            {"domain_id": "resource", "providers": ["github"]},
+            {
+                "domain_id": "resource",
+                "providers": ["project_rag", "github"],
+                "required_providers": ["github"],
+            },
             {
                 "queries": [
                     {
                         "query": "resource gathering",
                         "evidence_records": [
                             {
-                                "source_id": "official:resource-doc",
-                                "content": "A sufficiently long official resource gathering explanation for the test.",
+                                "source_id": "project:src/main/java/Harvest.java",
+                                "content": "A sufficiently long local implementation explaining resource gathering behavior.",
                             }
                         ],
                     }
                 ]
             },
         )
+
+
+def test_pre_design_brief_defers_target_specific_obligations_until_freeze():
+    brief = subject._pre_design_brief("resource gathering and progression")
+    domains = brief["domains"]
+    assert [domain["domain_id"] for domain in domains] == ["request"]
+    domain = domains[0]
+    assert "github" not in domain.get("providers", [])
+    assert "compatibility" not in domain.get("evidence_kinds", [])
+    assert "dependency" not in domain.get("evidence_kinds", [])
+    assert "license" not in domain.get("evidence_kinds", [])
+
 
 
 def test_live_collect_design_research_uses_unified_grounded_owner(monkeypatch):
