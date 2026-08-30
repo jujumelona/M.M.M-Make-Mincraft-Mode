@@ -1,0 +1,210 @@
+name: Apply grounded RAG runtime integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-grounded-rag-runtime.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Wire grounded RAG coordinator into live owners
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          finalization = Path('minecraft_mod_ai/runtime_finalization.py')
+          text = finalization.read_text(encoding='utf-8')
+          if '            reuse_planner,\n' not in text:
+              anchor = '            research_rag_performance,\n'
+              if anchor not in text:
+                  raise SystemExit('runtime_finalization reuse import anchor drifted')
+              text = text.replace(anchor, anchor + '            reuse_planner,\n', 1)
+          if 'from .grounded_rag_runtime_contract import install as install_grounded_rag_runtime' not in text:
+              anchor = '        from .generation_concurrency_safety import install as install_generation_safety\n'
+              if anchor not in text:
+                  raise SystemExit('runtime_finalization grounded install import anchor drifted')
+              text = text.replace(
+                  anchor,
+                  anchor + '        from .grounded_rag_runtime_contract import install as install_grounded_rag_runtime\n',
+                  1,
+              )
+          call = '        install_research_grounded_rag(agentic_pre_design_rag)\n'
+          grounded_call = '        install_grounded_rag_runtime(agentic_pre_design_rag, reuse_planner)\n'
+          if grounded_call not in text:
+              if call not in text:
+                  raise SystemExit('runtime_finalization research RAG call anchor drifted')
+              text = text.replace(call, call + grounded_call, 1)
+          finalization.write_text(text, encoding='utf-8')
+
+          rag = Path('minecraft_mod_ai/research_grounded_rag_contract.py')
+          text = rag.read_text(encoding='utf-8')
+          text = text.replace('mmm/external-grounded-rag-v1', 'mmm/external-grounded-rag')
+          text = text.replace('mmm/forced-pre-design-rag-v3', 'mmm/forced-pre-design-rag')
+          rag.write_text(text, encoding='utf-8')
+
+          for path in Path('minecraft_mod_ai').glob('*.py'):
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace('mmm/local-project-rag-index-v1', 'mmm/local-project-rag-index')
+              updated = updated.replace('local-project-rag-index-v1', 'local-project-rag-index')
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+
+          repair = Path('minecraft_mod_ai/repair_engine.py')
+          text = repair.read_text(encoding='utf-8')
+          old = '''                project_index.update_files(tuple(str(item["path"]) for item in patch))\n                receipts.append(receipt)\n'''
+          new = '''                project_index.update_files(tuple(str(item["path"]) for item in patch))\n                # The next repair/coding task must never search a stale RAG snapshot.\n                # Refresh immediately after the committed edit, using the new project manifest.\n                try:\n                    from .production_tools import ProjectRAGIndex\n                    rag_index = ProjectRAGIndex(root / ".minecraft_ai" / "rag_index")\n                    rag_index.build(\n                        [root],\n                        metadata=_repair_rag_metadata(root, project_index.manifest_receipt()),\n                        router=None,\n                        semantic=False,\n                    )\n                except Exception as exc:\n                    print(\n                        f"  [!] Project RAG refresh after repair edit failed: {type(exc).__name__}: {exc}",\n                        flush=True,\n                    )\n                receipts.append(receipt)\n'''
+          if new not in text:
+              if old not in text:
+                  raise SystemExit('repair post-edit index anchor drifted')
+              text = text.replace(old, new, 1)
+          text = text.replace('                semantic=True,\n                rerank=True,\n', '                semantic=False,\n                rerank=False,\n', 1)
+          repair.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_grounded_rag_runtime_contract.py')
+          test_path.write_text(r'''from __future__ import annotations
+
+import threading
+from types import SimpleNamespace
+
+from minecraft_mod_ai import grounded_rag_runtime_contract as runtime
+from minecraft_mod_ai import research_grounded_rag_contract as grounded
+
+
+def test_provider_work_overlaps_without_sleep(monkeypatch):
+    coordinator = runtime.GroundedRAGCoordinator()
+    barrier = threading.Barrier(2)
+    entered = []
+    lock = threading.Lock()
+
+    def modrinth(query, versions):
+        del versions
+        with lock:
+            entered.append(("modrinth", query))
+        barrier.wait(timeout=5)
+        return [], []
+
+    def github(query):
+        with lock:
+            entered.append(("github", query))
+        barrier.wait(timeout=5)
+        return [], []
+
+    monkeypatch.setattr(grounded, "_modrinth_search", modrinth)
+    monkeypatch.setattr(grounded, "_github_repository_search", github)
+    result = coordinator.retrieve_many(("combat progression",), ("1.21.8",))
+
+    assert result["combat progression"]["work_graph"]["nested_executor"] is False
+    assert {provider for provider, _ in entered} == {"modrinth", "github"}
+    assert 2 <= coordinator.max_workers <= 16
+    coordinator.executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_donor_repository_candidates_are_requirement_reusable():
+    coordinator = runtime.GroundedRAGCoordinator()
+    with coordinator._lock:
+        coordinator._donors_by_query["combat progression"] = [
+            {
+                "source_id": "github:owner/repo:src/main/java/Combat.java",
+                "content": "class Combat {}",
+                "content_sha256": "sha256:test",
+                "metadata": {"repository": "owner/repo", "path": "src/main/java/Combat.java"},
+            }
+        ]
+    repositories = coordinator.repositories_for_capabilities(
+        ("combat.progression",),
+        {
+            "search_terms": [
+                {"capability": "combat.progression", "terms": ["combat progression implementation"]}
+            ]
+        },
+    )
+    assert repositories["combat.progression"] == ("https://github.com/owner/repo",)
+    coordinator.executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_grounded_install_merges_rag_donors_before_public_discovery(monkeypatch):
+    coordinator = runtime.coordinator()
+    with coordinator._lock:
+        coordinator._donors_by_query["quest progression"] = [
+            {
+                "source_id": "github:grounded/donor:Quest.java",
+                "content": "class Quest {}",
+                "content_sha256": "sha256:quest",
+                "metadata": {"repository": "grounded/donor", "path": "Quest.java"},
+            }
+        ]
+
+    class Agentic:
+        @staticmethod
+        def _forced_rag_bundle(router, brief):
+            del router, brief
+            return {"versions": [], "domains": []}
+
+    def public(capabilities, client, *, capability_graph=None):
+        del client, capability_graph
+        return {cap: ("https://github.com/public/donor",) for cap in capabilities}
+
+    reuse = SimpleNamespace(_parallel_donor_repository_discovery=public)
+    monkeypatch.setattr(runtime, "_INSTALLED", False)
+    runtime.install(Agentic, reuse)
+    found = reuse._parallel_donor_repository_discovery(
+        ("quest.progression",),
+        object(),
+        capability_graph={
+            "search_terms": [
+                {"capability": "quest.progression", "terms": ["quest progression"]}
+            ]
+        },
+    )
+    assert found["quest.progression"][0] == "https://github.com/grounded/donor"
+    assert found["quest.progression"][1] == "https://github.com/public/donor"
+
+
+def test_runtime_labels_are_stable_nonversioned():
+    payload = {
+        "schema_version": "mmm/forced-pre-design-rag",
+        "external": "mmm/external-grounded-rag",
+        "local": "mmm/local-project-rag-index",
+    }
+    assert all(not value.endswith(("-v1", "-v2", "-v3")) for value in payload.values())
+''', encoding='utf-8')
+
+          Path('.github/workflows/apply-grounded-rag-runtime.yml').unlink(missing_ok=True)
+          PY
+      - name: Validate integrated RAG and coding/repair contracts
+        run: |
+          python -m compileall -q minecraft_mod_ai
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python -m pytest -q \
+            tests/test_grounded_rag_runtime_contract.py \
+            tests/test_reuse_authoritative_search.py \
+            tests/test_reuse_source_read_tool.py \
+            tests/test_reuse_research_hardening_contract.py \
+            tests/test_semantic_requirement_authority_single_pass.py
+      - name: Verify removed RAG version labels
+        run: |
+          ! grep -R --line-number -E 'external-grounded-rag-v1|forced-pre-design-rag-v3|local-project-rag-index-v1' minecraft_mod_ai
+      - name: Commit integration directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: connect grounded RAG to reuse and repair runtime"
+          git push origin HEAD:main
