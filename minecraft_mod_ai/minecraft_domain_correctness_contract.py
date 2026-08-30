@@ -51,6 +51,14 @@ def _supported_kinds(extended_module: Any) -> frozenset[str]:
     )
 
 
+def _legacy_project_kinds() -> frozenset[str]:
+    """Kinds whose reviewed templates can authorize the legacy project scaffold."""
+
+    from .spec import ContentKind
+
+    return frozenset(_normalize_kind(kind.value) for kind in ContentKind) | {"boss"}
+
+
 def _advertised_kinds(adapter: Any, extended_module: Any) -> frozenset[str]:
     return _supported_kinds(extended_module).intersection(_raw_advertised_kinds(adapter))
 
@@ -112,7 +120,7 @@ def _guard_generation_spec(spec: Any, *, error_type: type[Exception]) -> None:
     """Reject legacy scaffold/project generation before its first filesystem mutation."""
 
     adapter = _adapter_for_spec(spec)
-    allowed = _raw_advertised_kinds(adapter)
+    allowed = _raw_advertised_kinds(adapter).intersection(_legacy_project_kinds())
     requested = _requested_spec_kinds(spec)
     reason = _unsupported_reason(
         allowed=allowed,
@@ -266,6 +274,7 @@ __all__ = [
     "_guard_generation_spec",
     "_install_extended_content_guard",
     "_install_generate_guard",
+    "_legacy_project_kinds",
     "_raw_advertised_kinds",
     "_requested_module_kinds",
     "_requested_spec_kinds",
