@@ -7,6 +7,14 @@ _MARKER = "_mmm_prompt_prefill_telemetry_v1"
 
 
 def install(hardware_policy_module: Any) -> None:
+    # llama_stream_efficiency is installed immediately before this contract. Keep
+    # completion liveness as a worker-5 runtime concern without adding another shared
+    # runtime-bootstrap owner.
+    from . import llama_stream_efficiency_contract
+    from .llama_completion_liveness_contract import install as install_completion_liveness
+
+    install_completion_liveness(llama_stream_efficiency_contract)
+
     current = hardware_policy_module._commit_metrics_delta
     if getattr(current, _MARKER, False):
         return
