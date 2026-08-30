@@ -120,54 +120,18 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, value))
 
 
-def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
-    raw = os.environ.get(name, str(default)).strip()
-    try:
-        value = float(raw)
-    except ValueError:
-        value = default
-    return max(minimum, min(maximum, value))
 
 
-def _search_request_budget() -> int:
-    # A network-work budget, not a result-count cutoff.
-    return _env_int("MMM_GITHUB_SEARCH_REQUEST_BUDGET", 10, minimum=1, maximum=200)
 
 
-def _search_page_size() -> int:
-    return _env_int("MMM_GITHUB_SEARCH_PAGE_SIZE", 50, minimum=10, maximum=100)
 
 
-def _source_request_budget() -> int:
-    # Covers repository metadata/tree requests and raw-source reads for one query.
-    return _env_int("MMM_GITHUB_SOURCE_REQUEST_BUDGET", 96, minimum=4, maximum=4096)
 
 
-def _source_byte_budget() -> int:
-    return _env_int(
-        "MMM_GITHUB_SOURCE_BYTE_BUDGET",
-        4 * 1024 * 1024,
-        minimum=64 * 1024,
-        maximum=256 * 1024 * 1024,
-    )
 
 
-def _output_byte_budget() -> int:
-    return _env_int(
-        "MMM_GITHUB_EVIDENCE_OUTPUT_BYTE_BUDGET",
-        512 * 1024,
-        minimum=32 * 1024,
-        maximum=32 * 1024 * 1024,
-    )
 
 
-def _coverage_target() -> float:
-    return _env_float(
-        "MMM_GITHUB_EVIDENCE_COVERAGE_TARGET",
-        0.75,
-        minimum=0.0,
-        maximum=1.0,
-    )
 
 
 def _dedupe_text(values: Iterable[str]) -> tuple[str, ...]:
@@ -261,14 +225,16 @@ def _github_search_url(query: str, *, page: int, per_page: int) -> str:
 
 
 def _repo_tuple(value: Any) -> tuple[str, str] | None:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        if len(value) >= 2:
-            owner, repo = str(value[0]).strip(), str(value[1]).strip().removesuffix(".git")
-            if owner and repo:
-                return owner, repo
+    if (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and len(value) >= 2
+    ):
+        owner, repo = str(value[0]).strip(), str(value[1]).strip().removesuffix(".git")
+        if owner and repo:
+            return owner, repo
     text = str(value or "").strip()
-    if text.startswith("https://github.com/"):
-        text = text[len("https://github.com/") :]
+    text = text.removeprefix("https://github.com/")
     parts = [part for part in text.split("/") if part]
     if len(parts) >= 2:
         owner, repo = parts[0], parts[1].removesuffix(".git")
@@ -286,71 +252,6 @@ class RepositoryDiscovery:
     saturation_reason: str
 
 
-def discover_repositories(query: str, *, http_json: HttpJSON) -> RepositoryDiscovery:
-    """Discover repositories by broadening until search saturation or request budget."""
-
-    ladder = repository_query_ladder(query)
-    budget = _search_request_budget()
-    page_size = _search_page_size()
-    repositories: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    errors: list[str] = []
-    executed: list[str] = []
-    requests = 0
-
-    # Breadth first: page 1 of broader semantic variants is more useful for recall
-    # than page 2..N of one over-specific phrase.  Additional pages are explored only
-    # after every reachable variant has had a first chance.
-    active: list[tuple[str, int]] = [(variant, 1) for variant in ladder]
-    reason = "search_ladder_exhausted"
-    while active and requests < budget:
-        next_pages: list[tuple[str, int]] = []
-        for variant, page in active:
-            if requests >= budget:
-                reason = "search_request_budget_exhausted"
-                break
-            requests += 1
-            executed.append(variant if page == 1 else f"{variant} [page {page}]")
-            try:
-                payload = http_json(_github_search_url(variant, page=page, per_page=page_size))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"github_repository_search:{variant}:p{page}:{type(exc).__name__}: {exc}")
-                continue
-            items = payload.get("items", []) if isinstance(payload, Mapping) else []
-            if not isinstance(items, list):
-                errors.append(f"github_repository_search:{variant}:p{page}:invalid_items")
-                continue
-            new_on_page = 0
-            for item in items:
-                if not isinstance(item, Mapping):
-                    continue
-                full_name = str(item.get("full_name") or "").strip()
-                ref = _repo_tuple(full_name)
-                if ref is None or ref in seen:
-                    continue
-                seen.add(ref)
-                repositories.append(ref)
-                new_on_page += 1
-            # Search saturation is evidence based: a short page or a page that adds
-            # no new repository ends pagination for that semantic variant.
-            if len(items) >= page_size and new_on_page:
-                next_pages.append((variant, page + 1))
-        else:
-            active = next_pages
-            continue
-        break
-
-    if requests >= budget and active:
-        reason = "search_request_budget_exhausted"
-    elif not repositories and not errors:
-        reason = "search_saturated_without_candidates"
-    return RepositoryDiscovery(
-        repositories=tuple(repositories),
-        errors=tuple(errors),
-        search_queries=tuple(executed),
-        search_requests=requests,
-        saturation_reason=reason,
-    )
 
 
 def _path_role(path: str) -> str:
@@ -409,189 +310,6 @@ class RepositoryEvidence:
     saturation_reason: str
 
 
-def retrieve_repository_documents(
-    owner: str,
-    repo: str,
-    query: str,
-    *,
-    http_json: HttpJSON,
-    http_text: HttpText,
-    source_document: SourceDocument,
-    request_budget: int | None = None,
-    byte_budget: int | None = None,
-    coverage_target: float | None = None,
-) -> RepositoryEvidence:
-    """Inspect a repository adaptively with no fixed file-count truncation."""
-
-    request_limit = _source_request_budget() if request_budget is None else max(0, request_budget)
-    byte_limit = _source_byte_budget() if byte_budget is None else max(0, byte_budget)
-    target = _coverage_target() if coverage_target is None else max(0.0, min(1.0, coverage_target))
-    errors: list[str] = []
-    requests = 0
-    source_bytes = 0
-    query_features = _feature_set(query)
-    covered: set[str] = set()
-    fetched: list[tuple[int, dict[str, Any]]] = []
-    repo_api = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
-
-    if request_limit < 2:
-        return RepositoryEvidence(
-            repository=(owner, repo),
-            documents=(),
-            errors=("github_repository_budget:insufficient_for_metadata_and_tree",),
-            requests_used=0,
-            source_bytes=0,
-            covered_features=frozenset(),
-            coverage_score=0.0,
-            tree_truncated=False,
-            saturation_reason="source_request_budget_exhausted",
-        )
-
-    try:
-        requests += 1
-        meta = http_json(repo_api)
-    except Exception as exc:  # noqa: BLE001
-        return RepositoryEvidence(
-            repository=(owner, repo),
-            documents=(),
-            errors=(f"github_repo:{owner}/{repo}:{type(exc).__name__}: {exc}",),
-            requests_used=requests,
-            source_bytes=0,
-            covered_features=frozenset(),
-            coverage_score=0.0,
-            tree_truncated=False,
-            saturation_reason="repository_metadata_failed",
-        )
-
-    branch = str(meta.get("default_branch", "main") or "main") if isinstance(meta, Mapping) else "main"
-    html_url = (
-        str(meta.get("html_url") or f"https://github.com/{owner}/{repo}")
-        if isinstance(meta, Mapping)
-        else f"https://github.com/{owner}/{repo}"
-    )
-    license_value = None
-    if isinstance(meta, Mapping) and isinstance(meta.get("license"), Mapping):
-        license_value = meta["license"].get("spdx_id")
-
-    try:
-        requests += 1
-        tree = http_json(f"{repo_api}/git/trees/{quote(branch, safe='')}?recursive=1")
-    except Exception as exc:  # noqa: BLE001
-        return RepositoryEvidence(
-            repository=(owner, repo),
-            documents=(),
-            errors=(f"github_tree:{owner}/{repo}:{type(exc).__name__}: {exc}",),
-            requests_used=requests,
-            source_bytes=0,
-            covered_features=frozenset(),
-            coverage_score=0.0,
-            tree_truncated=False,
-            saturation_reason="repository_tree_failed",
-        )
-
-    tree_truncated = bool(tree.get("truncated")) if isinstance(tree, Mapping) else False
-    if tree_truncated:
-        errors.append(f"github_tree:{owner}/{repo}:recursive_tree_truncated")
-
-    candidates: list[tuple[str, int | None]] = []
-    raw_tree = tree.get("tree", []) if isinstance(tree, Mapping) else []
-    for item in raw_tree if isinstance(raw_tree, list) else []:
-        if not isinstance(item, Mapping) or item.get("type") != "blob":
-            continue
-        path = str(item.get("path") or "").strip()
-        if not path.casefold().endswith(_SOURCE_SUFFIXES):
-            continue
-        raw_size = item.get("size")
-        size = int(raw_size) if isinstance(raw_size, int) and raw_size >= 0 else None
-        candidates.append((path, size))
-    candidates.sort(key=lambda item: _path_score(item[0], query_features))
-
-    reason = "repository_source_exhausted"
-    for path, advertised_size in candidates:
-        if requests >= request_limit:
-            reason = "source_request_budget_exhausted"
-            break
-        if advertised_size is not None and source_bytes + advertised_size > byte_limit:
-            # The byte budget is global work control; skip oversized candidates and
-            # continue looking for smaller evidence instead of treating this as a hit cap.
-            continue
-        raw_url = (
-            f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/"
-            f"{quote(branch, safe='')}/{quote(path, safe='/')}"
-        )
-        try:
-            requests += 1
-            content = http_text(raw_url)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"github_raw:{owner}/{repo}/{path}:{type(exc).__name__}: {exc}")
-            continue
-        content_bytes = len(content.encode("utf-8", errors="replace"))
-        if source_bytes + content_bytes > byte_limit:
-            reason = "source_byte_budget_exhausted"
-            break
-        source_bytes += content_bytes
-        score, newly_covered = _content_score(path, content, query_features)
-        covered.update(newly_covered)
-        role = _path_role(path)
-        document = source_document(
-            source_id=f"github:{owner}/{repo}:{path}",
-            title=f"{owner}/{repo}:{path}",
-            url=f"{html_url}/blob/{quote(branch, safe='')}/{quote(path, safe='/')}",
-            content=content,
-            source_type=("github_source" if role == "code" else "github_source_closure"),
-            metadata={
-                "repository": f"{owner}/{repo}",
-                "branch": branch,
-                "path": path,
-                "license": license_value,
-                "closure_role": role,
-                "query_evidence_score": score,
-            },
-        )
-        fetched.append((score, document))
-
-        # Stop on actual evidence sufficiency, never because a file ordinal was reached.
-        if role == "code" and _coverage(query_features, covered) >= target:
-            reason = "evidence_coverage_satisfied"
-            break
-
-    # Keep the highest-value evidence under a payload-byte budget.  This bounds prompt
-    # pressure without throwing away a relevant file merely because it was the 5th/20th
-    # file inspected.
-    output_limit = _output_byte_budget()
-    output_bytes = 0
-    selected: list[dict[str, Any]] = []
-    for _score, document in sorted(
-        fetched,
-        key=lambda item: (
-            -item[0],
-            0 if str(item[1].get("source_type")) == "github_source" else 1,
-            str(item[1].get("source_id") or ""),
-        ),
-    ):
-        size = len(str(document.get("content") or "").encode("utf-8", errors="replace"))
-        if selected and output_bytes + size > output_limit:
-            continue
-        if not selected and size > output_limit:
-            # The caller's source_document helper already applies its own single-source
-            # cap.  Preserve the best document rather than returning metadata only.
-            selected.append(document)
-            output_bytes += size
-            continue
-        selected.append(document)
-        output_bytes += size
-
-    return RepositoryEvidence(
-        repository=(owner, repo),
-        documents=tuple(selected),
-        errors=tuple(errors),
-        requests_used=requests,
-        source_bytes=source_bytes,
-        covered_features=frozenset(covered),
-        coverage_score=round(_coverage(query_features, covered), 4),
-        tree_truncated=tree_truncated,
-        saturation_reason=reason,
-    )
 
 
 @dataclass(frozen=True)
@@ -607,110 +325,6 @@ class AdaptiveGitHubEvidence:
     saturation_reason: str
 
 
-def adaptive_github_evidence(
-    query: str,
-    *,
-    http_json: HttpJSON,
-    http_text: HttpText,
-    source_document: SourceDocument,
-    seed_repositories: Sequence[Any] = (),
-    search_if_needed: bool = True,
-) -> AdaptiveGitHubEvidence:
-    """Resolve one query from GitHub under coverage/saturation/resource contracts."""
-
-    query_features = _feature_set(query)
-    target = _coverage_target()
-    request_remaining = _source_request_budget()
-    bytes_remaining = _source_byte_budget()
-    documents: dict[str, dict[str, Any]] = {}
-    errors: list[str] = []
-    covered: set[str] = set()
-    inspected: list[tuple[str, str]] = []
-    seen_repos: set[tuple[str, str]] = set()
-    source_requests = 0
-    source_bytes = 0
-
-    seeds: list[tuple[str, str]] = []
-    for value in seed_repositories:
-        ref = _repo_tuple(value)
-        if ref is not None and ref not in seen_repos:
-            seen_repos.add(ref)
-            seeds.append(ref)
-
-    discovery: RepositoryDiscovery | None = None
-    candidate_queue = list(seeds)
-    candidate_index = 0
-    reason = "candidate_exhausted"
-
-    while True:
-        if candidate_index >= len(candidate_queue):
-            current_coverage = _coverage(query_features, covered)
-            if current_coverage >= target and documents:
-                reason = "evidence_coverage_satisfied"
-                break
-            if discovery is None:
-                if not search_if_needed:
-                    reason = "seed_repositories_exhausted"
-                    break
-                discovery = discover_repositories(query, http_json=http_json)
-                errors.extend(discovery.errors)
-                for ref in discovery.repositories:
-                    if ref not in seen_repos:
-                        seen_repos.add(ref)
-                        candidate_queue.append(ref)
-                if candidate_index < len(candidate_queue):
-                    continue
-                reason = discovery.saturation_reason
-            break
-
-        if request_remaining < 2:
-            reason = "source_request_budget_exhausted"
-            break
-        if bytes_remaining <= 0:
-            reason = "source_byte_budget_exhausted"
-            break
-
-        owner, repo = candidate_queue[candidate_index]
-        candidate_index += 1
-        evidence = retrieve_repository_documents(
-            owner,
-            repo,
-            query,
-            http_json=http_json,
-            http_text=http_text,
-            source_document=source_document,
-            request_budget=request_remaining,
-            byte_budget=bytes_remaining,
-            coverage_target=target,
-        )
-        inspected.append((owner, repo))
-        request_remaining = max(0, request_remaining - evidence.requests_used)
-        bytes_remaining = max(0, bytes_remaining - evidence.source_bytes)
-        source_requests += evidence.requests_used
-        source_bytes += evidence.source_bytes
-        errors.extend(evidence.errors)
-        covered.update(evidence.covered_features)
-        for document in evidence.documents:
-            source_id = str(document.get("source_id") or "")
-            if source_id:
-                documents.setdefault(source_id, dict(document))
-        if _coverage(query_features, covered) >= target and documents:
-            reason = "evidence_coverage_satisfied"
-            break
-
-    if discovery is None:
-        discovery = RepositoryDiscovery((), (), (), 0, "search_not_needed")
-    return AdaptiveGitHubEvidence(
-        repositories=tuple(inspected),
-        documents=tuple(documents.values()),
-        errors=tuple(errors),
-        search_queries=discovery.search_queries,
-        search_requests=discovery.search_requests,
-        source_requests=source_requests,
-        source_bytes=source_bytes,
-        coverage_score=round(_coverage(query_features, covered), 4),
-        saturation_reason=reason,
-    )
 
 
 __all__ = [
@@ -723,3 +337,364 @@ __all__ = [
     "retrieve_repository_documents",
     "semantic_terms",
 ]
+
+# === MMM EXHAUSTIVE RETRIEVAL OVERRIDES ===
+# Discovery completeness is controlled by reachable-frontier exhaustion, never by
+# a local result/page/request/byte count or a coverage threshold.  Concurrency and
+# transport timeouts may still be bounded because they do not change which frontier
+# nodes are eventually visited.
+
+
+def _retrieval_failure_kind(exc: BaseException) -> str:
+    text = f"{type(exc).__name__}: {exc}".casefold()
+    if "rate limit" in text or "secondary rate" in text or "429" in text:
+        return "rate_limited"
+    if "403" in text:
+        return "rate_limited"
+    if "422" in text or "1000" in text or "search limit" in text:
+        return "provider_limit"
+    return "error"
+
+
+def discover_repositories(query: str, *, http_json: HttpJSON) -> RepositoryDiscovery:
+    """Exhaust every reachable GitHub repository-search page for every query variant."""
+
+    ladder = repository_query_ladder(query)
+    repositories: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    errors: list[str] = []
+    executed: list[str] = []
+    requests = 0
+    active: list[tuple[str, int]] = [(variant, 1) for variant in ladder]
+    terminal = "frontier_exhausted"
+
+    while active:
+        next_pages: list[tuple[str, int]] = []
+        provider_blocked = False
+        for variant, page in active:
+            requests += 1
+            executed.append(variant if page == 1 else f"{variant} [page {page}]")
+            try:
+                # per_page is a transport page size, not a retrieval/result cutoff.
+                payload = http_json(_github_search_url(variant, page=page, per_page=100))
+            except Exception as exc:  # noqa: BLE001
+                kind = _retrieval_failure_kind(exc)
+                errors.append(
+                    f"github_repository_search:{variant}:p{page}:{kind}:"
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if kind in {"rate_limited", "provider_limit"}:
+                    terminal = kind
+                    provider_blocked = True
+                    break
+                continue
+
+            if not isinstance(payload, Mapping):
+                errors.append(f"github_repository_search:{variant}:p{page}:error:invalid_payload")
+                continue
+            if bool(payload.get("incomplete_results")):
+                terminal = "provider_limit"
+
+            items = payload.get("items", [])
+            if not isinstance(items, list):
+                errors.append(f"github_repository_search:{variant}:p{page}:error:invalid_items")
+                continue
+            if not items:
+                continue
+
+            for item in items:
+                if not isinstance(item, Mapping):
+                    continue
+                ref = _repo_tuple(str(item.get("full_name") or ""))
+                if ref is None or ref in seen:
+                    continue
+                seen.add(ref)
+                repositories.append(ref)
+
+            # Do not stop merely because this page was duplicate-only.  A later page
+            # can still contain a new repository.  Only an empty page exhausts this
+            # query variant's reachable frontier.
+            next_pages.append((variant, page + 1))
+
+        if provider_blocked:
+            break
+        active = next_pages
+
+    if not repositories and not errors and terminal == "frontier_exhausted":
+        terminal = "ok_zero"
+    return RepositoryDiscovery(
+        repositories=tuple(repositories),
+        errors=tuple(errors),
+        search_queries=tuple(executed),
+        search_requests=requests,
+        saturation_reason=terminal,
+    )
+
+
+def _walk_complete_tree(
+    repo_api: str,
+    branch: str,
+    *,
+    http_json: HttpJSON,
+) -> tuple[list[tuple[str, int | None]], list[str], int, str]:
+    """Traverse Git trees to exhaustion; recursive-tree truncation triggers subtree walk."""
+
+    errors: list[str] = []
+    requests = 0
+    try:
+        requests += 1
+        first = http_json(f"{repo_api}/git/trees/{quote(branch, safe='')}?recursive=1")
+    except Exception as exc:  # noqa: BLE001
+        kind = _retrieval_failure_kind(exc)
+        return [], [f"github_tree:{kind}:{type(exc).__name__}: {exc}"], requests, kind
+
+    if isinstance(first, Mapping) and not bool(first.get("truncated")):
+        out: list[tuple[str, int | None]] = []
+        raw = first.get("tree", [])
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, Mapping) or item.get("type") != "blob":
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path.casefold().endswith(_SOURCE_SUFFIXES):
+                continue
+            raw_size = item.get("size")
+            size = int(raw_size) if isinstance(raw_size, int) and raw_size >= 0 else None
+            out.append((path, size))
+        return out, errors, requests, "frontier_exhausted"
+
+    # GitHub's recursive tree response can be truncated.  Fall back to an unbounded
+    # breadth-first subtree traversal using tree SHAs.  The visited set prevents cycles;
+    # there is deliberately no depth or node-count stop.
+    try:
+        requests += 1
+        root = http_json(f"{repo_api}/git/trees/{quote(branch, safe='')}")
+    except Exception as exc:  # noqa: BLE001
+        kind = _retrieval_failure_kind(exc)
+        return [], [f"github_tree_root:{kind}:{type(exc).__name__}: {exc}"], requests, kind
+
+    queue: list[tuple[str, str]] = [("", str(root.get("sha") or branch))]
+    # If the root response already contains entries, process it without refetching.
+    prefetched: dict[str, Any] = {str(root.get("sha") or branch): root}
+    visited: set[str] = set()
+    blobs: list[tuple[str, int | None]] = []
+    terminal = "frontier_exhausted"
+
+    while queue:
+        prefix, tree_ref = queue.pop(0)
+        if tree_ref in visited:
+            continue
+        visited.add(tree_ref)
+        payload = prefetched.pop(tree_ref, None)
+        if payload is None:
+            try:
+                requests += 1
+                payload = http_json(f"{repo_api}/git/trees/{quote(tree_ref, safe='')}")
+            except Exception as exc:  # noqa: BLE001
+                kind = _retrieval_failure_kind(exc)
+                errors.append(f"github_subtree:{tree_ref}:{kind}:{type(exc).__name__}: {exc}")
+                if kind in {"rate_limited", "provider_limit"}:
+                    terminal = kind
+                    break
+                continue
+        raw = payload.get("tree", []) if isinstance(payload, Mapping) else []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("path") or "").strip()
+            path = f"{prefix}/{name}".strip("/")
+            item_type = str(item.get("type") or "")
+            sha = str(item.get("sha") or "").strip()
+            if item_type == "tree" and sha:
+                queue.append((path, sha))
+            elif item_type == "blob" and path.casefold().endswith(_SOURCE_SUFFIXES):
+                raw_size = item.get("size")
+                size = int(raw_size) if isinstance(raw_size, int) and raw_size >= 0 else None
+                blobs.append((path, size))
+    return blobs, errors, requests, terminal
+
+
+def retrieve_repository_documents(
+    owner: str,
+    repo: str,
+    query: str,
+    *,
+    http_json: HttpJSON,
+    http_text: HttpText,
+    source_document: SourceDocument,
+    request_budget: int | None = None,
+    byte_budget: int | None = None,
+    coverage_target: float | None = None,
+) -> RepositoryEvidence:
+    """Fetch the complete relevant source/test/resource/build closure of one repository."""
+
+    # Legacy budget arguments are intentionally ignored.  They remain in the signature
+    # for API compatibility only and cannot terminate discovery.
+    del request_budget, byte_budget, coverage_target
+    errors: list[str] = []
+    requests = 0
+    source_bytes = 0
+    query_features = _feature_set(query)
+    covered: set[str] = set()
+    documents: list[tuple[int, dict[str, Any]]] = []
+    repo_api = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
+
+    try:
+        requests += 1
+        meta = http_json(repo_api)
+    except Exception as exc:  # noqa: BLE001
+        kind = _retrieval_failure_kind(exc)
+        return RepositoryEvidence(
+            (owner, repo), (), (f"github_repo:{kind}:{type(exc).__name__}: {exc}",),
+            requests, 0, frozenset(), 0.0, False, kind,
+        )
+
+    branch = str(meta.get("default_branch") or "main") if isinstance(meta, Mapping) else "main"
+    html_url = str(meta.get("html_url") or f"https://github.com/{owner}/{repo}") if isinstance(meta, Mapping) else f"https://github.com/{owner}/{repo}"
+    license_value = None
+    if isinstance(meta, Mapping) and isinstance(meta.get("license"), Mapping):
+        license_value = meta["license"].get("spdx_id")
+
+    candidates, tree_errors, tree_requests, terminal = _walk_complete_tree(
+        repo_api, branch, http_json=http_json
+    )
+    requests += tree_requests
+    errors.extend(tree_errors)
+    if terminal in {"rate_limited", "provider_limit"}:
+        return RepositoryEvidence(
+            (owner, repo), (), tuple(errors), requests, 0, frozenset(), 0.0, True, terminal,
+        )
+
+    # Ranking changes read order only.  Every candidate is fetched eventually.
+    candidates.sort(key=lambda item: _path_score(item[0], query_features))
+    for path, _advertised_size in candidates:
+        raw_url = (
+            f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/"
+            f"{quote(branch, safe='')}/{quote(path, safe='/')}"
+        )
+        try:
+            requests += 1
+            content = http_text(raw_url)
+        except Exception as exc:  # noqa: BLE001
+            kind = _retrieval_failure_kind(exc)
+            errors.append(f"github_raw:{owner}/{repo}/{path}:{kind}:{type(exc).__name__}: {exc}")
+            if kind in {"rate_limited", "provider_limit"}:
+                terminal = kind
+                break
+            continue
+        source_bytes += len(content.encode("utf-8", errors="replace"))
+        score, newly_covered = _content_score(path, content, query_features)
+        covered.update(newly_covered)
+        role = _path_role(path)
+        documents.append(
+            (
+                score,
+                source_document(
+                    source_id=f"github:{owner}/{repo}:{path}",
+                    title=f"{owner}/{repo}:{path}",
+                    url=f"{html_url}/blob/{quote(branch, safe='')}/{quote(path, safe='/')}",
+                    content=content,
+                    source_type=("github_source" if role == "code" else "github_source_closure"),
+                    metadata={
+                        "repository": f"{owner}/{repo}",
+                        "branch": branch,
+                        "path": path,
+                        "license": license_value,
+                        "closure_role": role,
+                        "query_evidence_score": score,
+                    },
+                ),
+            )
+        )
+
+    ordered = tuple(
+        document
+        for _score, document in sorted(
+            documents,
+            key=lambda item: (-item[0], str(item[1].get("source_id") or "")),
+        )
+    )
+    return RepositoryEvidence(
+        repository=(owner, repo),
+        documents=ordered,
+        errors=tuple(errors),
+        requests_used=requests,
+        source_bytes=source_bytes,
+        covered_features=frozenset(covered),
+        coverage_score=round(_coverage(query_features, covered), 4),
+        tree_truncated=False,
+        saturation_reason=terminal,
+    )
+
+
+def adaptive_github_evidence(
+    query: str,
+    *,
+    http_json: HttpJSON,
+    http_text: HttpText,
+    source_document: SourceDocument,
+    seed_repositories: Sequence[Any] = (),
+    search_if_needed: bool = True,
+) -> AdaptiveGitHubEvidence:
+    """Exhaust seed and discovered repository frontiers; coverage is diagnostic only."""
+
+    query_features = _feature_set(query)
+    documents: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    covered: set[str] = set()
+    inspected: list[tuple[str, str]] = []
+    seen_repos: set[tuple[str, str]] = set()
+    source_requests = 0
+    source_bytes = 0
+
+    queue: list[tuple[str, str]] = []
+    for value in seed_repositories:
+        ref = _repo_tuple(value)
+        if ref is not None and ref not in seen_repos:
+            seen_repos.add(ref)
+            queue.append(ref)
+
+    discovery = RepositoryDiscovery((), (), (), 0, "search_not_needed")
+    if search_if_needed:
+        discovery = discover_repositories(query, http_json=http_json)
+        errors.extend(discovery.errors)
+        for ref in discovery.repositories:
+            if ref not in seen_repos:
+                seen_repos.add(ref)
+                queue.append(ref)
+
+    terminal = discovery.saturation_reason if search_if_needed else "frontier_exhausted"
+    for owner, repo in queue:
+        evidence = retrieve_repository_documents(
+            owner,
+            repo,
+            query,
+            http_json=http_json,
+            http_text=http_text,
+            source_document=source_document,
+        )
+        inspected.append((owner, repo))
+        source_requests += evidence.requests_used
+        source_bytes += evidence.source_bytes
+        errors.extend(evidence.errors)
+        covered.update(evidence.covered_features)
+        for document in evidence.documents:
+            source_id = str(document.get("source_id") or "")
+            if source_id:
+                documents.setdefault(source_id, dict(document))
+        if evidence.saturation_reason in {"rate_limited", "provider_limit"}:
+            terminal = evidence.saturation_reason
+            break
+
+    if terminal == "frontier_exhausted" and not inspected and not documents and not errors:
+        terminal = "ok_zero"
+    return AdaptiveGitHubEvidence(
+        repositories=tuple(inspected),
+        documents=tuple(documents.values()),
+        errors=tuple(errors),
+        search_queries=discovery.search_queries,
+        search_requests=discovery.search_requests,
+        source_requests=source_requests,
+        source_bytes=source_bytes,
+        coverage_score=round(_coverage(query_features, covered), 4),
+        saturation_reason=terminal,
+    )

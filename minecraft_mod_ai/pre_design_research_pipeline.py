@@ -174,7 +174,7 @@ def _target_neutral_official_evidence(
                     key=lambda item: (-item[0], str(item[1].get("document_id", ""))),
                 )
                 if score > 0
-            ][:4]
+            ]
             domains.append(
                 {
                     "domain_id": str(domain.get("domain_id", "")),
@@ -767,7 +767,7 @@ def collect_design_research(
                 stage="technology_radar",
                 result=deterministic["technology_radar"],
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - diagnostic boundary must capture provider failures
             diagnostic = _exception_payload(exc)
             _emit_research_diagnostic(
                 "deterministic_stage_failure",

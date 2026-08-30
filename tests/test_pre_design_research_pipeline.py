@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -16,14 +15,43 @@ from minecraft_mod_ai.pre_design_research_pipeline import (
 )
 
 
-def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar(
-    monkeypatch,
-) -> None:
+def _grounded_bundle(domain_id: str, query: str) -> dict:
+    return {
+        "schema_version": "mmm/forced-pre-design-rag",
+        "research_sha256": "sha256:grounded-fixture",
+        "domains": [
+            {
+                "domain_id": domain_id,
+                "queries": [
+                    {
+                        "query": query,
+                        "query_sha256": "sha256:query-fixture",
+                        "code_rag": {
+                            "documents": [
+                                {
+                                    "source_id": f"project:src/main/java/{domain_id}.java",
+                                    "url": f"file:///workspace/src/main/java/{domain_id}.java",
+                                    "content": (
+                                        "Claim-bearing local source implementation evidence "
+                                        "for target-neutral pre-design research."
+                                    ),
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_pre_design_uses_single_grounded_owner_and_defers_target_radar(monkeypatch) -> None:
     brief = {
         "domains": [
             {
                 "domain_id": "fabric_api",
                 "queries": ["Fabric API target-neutral behavior"],
+                "providers": ["official_docs", "project_rag"],
             }
         ]
     }
@@ -42,95 +70,50 @@ def test_pre_design_parallelizes_target_neutral_evidence_and_defers_target_radar
         lambda *_args, **_kwargs: {"status": "PASS", "blocking_requirement_refs": []},
     )
 
-    barrier = threading.Barrier(2)
+    owner_calls = []
 
-    def official(_brief):
-        barrier.wait(timeout=2)
-        return {
-            "status": "available",
-            "domains": [
-                {
-                    "domain_id": "fabric_api",
-                    "documents": [
-                        {
-                            "document_id": "fixture-official",
-                            "content": "target-neutral Fabric official evidence",
-                        }
-                    ],
-                }
-            ],
-        }
-
-    def local_project(_brief):
-        barrier.wait(timeout=2)
-        return {
-            "schema_version": "mmm/pre-design-local-project-evidence-v1",
-            "status": "not_indexed",
-            "code_index_status": "not_indexed",
-            "code_index_path": "",
-            "domain_count": 1,
-            "query_count": 1,
-            "domains": [
-                {
-                    "domain_id": "fabric_api",
-                    "queries": [{"query": "Fabric API target-neutral behavior"}],
-                }
-            ],
-        }
+    def forced(router, research_brief):
+        owner_calls.append((router, research_brief))
+        return _grounded_bundle("fabric_api", "Fabric API target-neutral behavior")
 
     def radar_must_not_run(*_args, **_kwargs):
         raise AssertionError("target-specific technology radar ran before target freeze")
 
-    monkeypatch.setattr(pipeline, "_target_neutral_official_evidence", official)
+    monkeypatch.setattr(project_rag, "_forced_rag_bundle", forced)
     monkeypatch.setattr(pipeline, "collect_technology_radar", radar_must_not_run)
-    monkeypatch.setattr(pipeline, "collect_local_project_evidence", local_project)
-
-    seen_source_keys: list[set[str]] = []
-
-    def domain_worker(
-        _agentic,
-        _project_rag,
-        _router,
-        *,
-        prompt,
-        domain,
-        document,
-        trace_metadata,
-    ):
-        del prompt, trace_metadata
-        seen_source_keys.append(set(document["source_keys"]))
-        pages = project_rag._read_evidence_pages(document)
-        assert pages
-        return {
-            "domain_id": domain["domain_id"],
-            "claims": [
-                {
-                    "claim": "Target-neutral Fabric research can proceed before target freeze.",
-                    "evidence_refs": [pages[0]["page_ref"]],
-                }
-            ],
+    monkeypatch.setattr(
+        project_rag,
+        "_materialize_domain_evidence_document",
+        lambda domain_id, evidence: {"domain_id": domain_id, "evidence": evidence},
+    )
+    monkeypatch.setattr(pipeline, "_validate_document_grounding", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        pipeline,
+        "research_document_domain",
+        lambda *_args, **_kwargs: {
+            "domain_id": "fabric_api",
+            "claims": [],
             "gaps": [],
             "next_queries": [],
             "procedures": [],
             "sufficient": True,
+            "fixed_point": True,
             "checkpoint": {"status": "complete"},
-        }
-
-    monkeypatch.setattr(pipeline, "research_document_domain", domain_worker)
+        },
+    )
     monkeypatch.setattr(pipeline, "attach_procedural_skillbank", lambda _r, _p, value: value)
     monkeypatch.setattr(pipeline, "compose_research_skillbank", lambda _r, _p, value: value)
 
     payload = collect_design_research(object(), "build a Fabric mechanic")
 
-    expected = {"official_rag", "technology_radar", "forced_project_rag"}
-    assert set(payload["deterministic"]) == expected
+    assert len(owner_calls) == 1
+    assert set(payload["deterministic"]) == {"grounded_rag", "technology_radar"}
     assert payload["deterministic"]["technology_radar"]["status"] == "deferred_until_target_freeze"
-    assert "ecosystem_discovery" not in payload["deterministic"]
-    assert seen_source_keys == [expected]
+    assert "official_rag" not in payload["deterministic"]
+    assert "forced_project_rag" not in payload["deterministic"]
     assert payload["domain_notes"][0]["domain_id"] == "fabric_api"
-    assert payload["domain_notes"][0]["claims"][0]["evidence_refs"][0].startswith("sha256:")
-    assert "#page=" in payload["domain_notes"][0]["claims"][0]["evidence_refs"][0]
-    assert "deferred" in payload["method"]["planning_search"]
+    assert "grounded" in payload["method"]["planning_search"]
+
 
 
 def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
@@ -140,14 +123,20 @@ def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
     monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
     monkeypatch.setattr(
         pipeline,
-        "_target_neutral_official_evidence",
-        lambda _brief: {"status": "available", "domains": []},
+        "compile_minecraft_knowledge_plan",
+        lambda _prompt: {"plan_sha256": "sha256:plan", "policy": {"target_frozen": False}},
     )
     monkeypatch.setattr(
-        pipeline,
-        "collect_local_project_evidence",
-        lambda *_args, **_kwargs: {"status": "not_indexed", "domains": []},
+        project_rag,
+        "_forced_rag_bundle",
+        lambda *_args, **_kwargs: _grounded_bundle("request", "request evidence"),
     )
+    monkeypatch.setattr(
+        project_rag,
+        "_materialize_domain_evidence_document",
+        lambda domain_id, evidence: {"domain_id": domain_id, "evidence": evidence},
+    )
+    monkeypatch.setattr(pipeline, "_validate_document_grounding", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         pipeline,
         "research_document_domain",
@@ -187,19 +176,26 @@ def test_terminal_gap_prints_full_failure_and_stops_before_post_research_work(
     assert "EXACT_SYNTHESIS_GAP" in logged
 
 
+
 def test_domain_exception_prints_full_traceback_and_escapes(monkeypatch, capsys) -> None:
     brief = {"domains": [{"domain_id": "request", "queries": ["request evidence"]}]}
     monkeypatch.setattr(pipeline, "_pre_design_brief", lambda _prompt: brief)
     monkeypatch.setattr(
         pipeline,
-        "_target_neutral_official_evidence",
-        lambda _brief: {"status": "available", "domains": []},
+        "compile_minecraft_knowledge_plan",
+        lambda _prompt: {"plan_sha256": "sha256:plan", "policy": {"target_frozen": False}},
     )
     monkeypatch.setattr(
-        pipeline,
-        "collect_local_project_evidence",
-        lambda *_args, **_kwargs: {"status": "not_indexed", "domains": []},
+        project_rag,
+        "_forced_rag_bundle",
+        lambda *_args, **_kwargs: _grounded_bundle("request", "request evidence"),
     )
+    monkeypatch.setattr(
+        project_rag,
+        "_materialize_domain_evidence_document",
+        lambda domain_id, evidence: {"domain_id": domain_id, "evidence": evidence},
+    )
+    monkeypatch.setattr(pipeline, "_validate_document_grounding", lambda *args, **kwargs: None)
 
     def explode(*_args, **_kwargs):
         raise ValueError("EXACT_DOMAIN_EXCEPTION")
@@ -214,6 +210,7 @@ def test_domain_exception_prints_full_traceback_and_escapes(monkeypatch, capsys)
     assert "EXACT_DOMAIN_EXCEPTION" in logged
     assert "ValueError" in logged
     assert "Traceback (most recent call last)" in logged
+
 
 
 class _Registry:
