@@ -3,7 +3,6 @@ from __future__ import annotations
 """Bounded requirement/provider RAG coordinator shared by planning and reuse."""
 
 import hashlib
-import json
 import os
 import threading
 from collections.abc import Mapping, Sequence
@@ -144,6 +143,7 @@ class GroundedRAGCoordinator:
                 ):
                     closure.append(path)
             for path in closure[:10]:
+                folded = path.casefold()
                 source_id = f"github:{owner}/{repo}:{path}"
                 if any(str(item.get("source_id")) == source_id for item in documents):
                     continue

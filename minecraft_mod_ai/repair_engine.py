@@ -165,6 +165,21 @@ class RepairEngine:
                 # The patch contract already rejects duplicate/unsafe paths, so this is
                 # the exact minimal touched set needed for the next repair attempt.
                 project_index.update_files(tuple(str(item["path"]) for item in patch))
+                # Keep durable retrieval synchronized with the committed source edit.
+                try:
+                    from .production_tools import ProjectRAGIndex
+                    rag_index = ProjectRAGIndex(root / ".minecraft_ai" / "rag_index")
+                    rag_index.build(
+                        [root],
+                        metadata=_repair_rag_metadata(root, project_index.manifest_receipt()),
+                        router=None,
+                        semantic=False,
+                    )
+                except Exception as exc:
+                    print(
+                        f"  [!] Project RAG refresh after repair edit failed: {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
                 receipts.append(receipt)
         finally:
             _ACTIVE_REPAIR_PROJECT_INDEX.reset(index_token)
@@ -252,8 +267,8 @@ class RepairEngine:
                 query,
                 limit=4,
                 router=self.router,
-                semantic=True,
-                rerank=True,
+                semantic=False,
+                rerank=False,
                 required_metadata=_repair_rag_metadata(root, manifest),
             )
             rag_hits = [

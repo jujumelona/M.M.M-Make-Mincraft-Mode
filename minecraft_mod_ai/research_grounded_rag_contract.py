@@ -524,7 +524,7 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         else ("metadata_only" if documents else "unavailable")
     )
     return {
-        "schema_version": "mmm/external-grounded-rag-v1",
+        "schema_version": "mmm/external-grounded-rag",
         "status": status,
         "query": query,
         "query_variants": list(variants),
@@ -577,7 +577,7 @@ def _augment_bundle(
                 domains[domain_index]["queries"][query_index]["external_rag"] = external
 
     result["domains"] = domains
-    result["schema_version"] = "mmm/forced-pre-design-rag-v3"
+    result["schema_version"] = "mmm/forced-pre-design-rag"
     result["local_index"] = dict(local_index)
     if local_index.get("status") == "available":
         result["code_index_status"] = "available"

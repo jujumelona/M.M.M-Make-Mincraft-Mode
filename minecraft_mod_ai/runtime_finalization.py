@@ -58,6 +58,7 @@ def finalize_runtime() -> None:
             quality_evidence,
             repository_grounding,
             research_rag_performance,
+            reuse_planner,
             small_model_max_agent_contract,
             work_graph,
         )
@@ -92,6 +93,7 @@ def finalize_runtime() -> None:
             install as install_external_mcp_binding,
         )
         from .generation_concurrency_safety import install as install_generation_safety
+        from .grounded_rag_runtime_contract import install as install_grounded_rag_runtime
         from .implementation_kind_boundary_contract import (
             install as install_implementation_kind_boundary,
         )
@@ -177,6 +179,7 @@ def finalize_runtime() -> None:
         install_retrieval_residency(model_router_module=model_router)
         install_retrieval_cpu_budget(repository_grounding, agentic_pre_design_rag)
         install_research_grounded_rag(agentic_pre_design_rag)
+        install_grounded_rag_runtime(agentic_pre_design_rag, reuse_planner)
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_tool_validation_surface()
