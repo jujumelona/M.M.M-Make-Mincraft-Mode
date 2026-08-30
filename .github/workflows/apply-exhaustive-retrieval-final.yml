@@ -36,12 +36,13 @@ jobs:
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests
       - name: Ruff clean
-        run: python -m ruff check \
-          minecraft_mod_ai/github_adaptive_retrieval.py \
-          minecraft_mod_ai/research_grounded_rag_contract.py \
-          minecraft_mod_ai/pre_design_research_pipeline.py \
-          tests/test_exhaustive_retrieval_contract.py \
-          tests/test_pre_design_research_pipeline.py
+        run: |
+          python -m ruff check \
+            minecraft_mod_ai/github_adaptive_retrieval.py \
+            minecraft_mod_ai/research_grounded_rag_contract.py \
+            minecraft_mod_ai/pre_design_research_pipeline.py \
+            tests/test_exhaustive_retrieval_contract.py \
+            tests/test_pre_design_research_pipeline.py
       - name: Retrieval and pre-design contract tests
         run: |
           python -m pytest -q \
