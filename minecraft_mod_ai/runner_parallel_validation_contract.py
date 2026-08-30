@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 import time
+import xml.etree.ElementTree as ET
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,18 @@ _BUILD_POLICY_ENV = (
 )
 
 
+def _canonical_project_root(path: str | Path) -> Path | None:
+    raw = Path(path).expanduser()
+    if raw.is_symlink():
+        return None
+    try:
+        root = raw.resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    return root if root.is_dir() else None
+
+
 def _path_lock(path: Path) -> threading.RLock:
-    """Return the exact single-writer lock for one canonical project root."""
     key = str(path.expanduser().resolve())
     with _PROJECT_BUILD_LOCKS_GUARD:
         lock = _PROJECT_BUILD_LOCKS.get(key)
@@ -34,8 +45,6 @@ def _path_lock(path: Path) -> threading.RLock:
 
 
 def _safe_regular_file(root: Path, path_value: str | Path | None) -> Path | None:
-    """Resolve a regular file while rejecting root escape and every symlink hop."""
-
     if path_value is None:
         return None
     root = Path(root).expanduser().resolve()
@@ -56,7 +65,7 @@ def _safe_regular_file(root: Path, path_value: str | Path | None) -> Path | None
     try:
         resolved = current.resolve(strict=True)
         resolved.relative_to(root)
-    except (FileNotFoundError, OSError, ValueError):
+    except (FileNotFoundError, OSError, RuntimeError, ValueError):
         return None
     return resolved if resolved.is_file() else None
 
@@ -67,12 +76,57 @@ def _file_digest(root: Path, path_value: str | Path | None) -> str | None:
         return None
     digest = hashlib.sha256()
     try:
+        before = path.stat()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
+        after = path.stat()
     except OSError:
         return None
-    return digest.hexdigest()
+    stable_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    stable_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    )
+    return digest.hexdigest() if stable_before == stable_after else None
+
+
+def _passing_gametest_xml(root: Path, path_value: str | Path | None) -> bool:
+    path = _safe_regular_file(root, path_value)
+    if path is None:
+        return False
+    test_count = 0
+    suite_count = 0
+    failed = False
+    try:
+        for _event, element in ET.iterparse(path, events=("end",)):
+            tag = element.tag.rsplit("}", 1)[-1]
+            if tag in {"testsuite", "testsuites"}:
+                suite_count += int(tag == "testsuite")
+                for field in ("failures", "errors", "skipped"):
+                    raw = element.attrib.get(field, "0")
+                    try:
+                        failed = failed or int(raw) != 0
+                    except ValueError:
+                        return False
+            elif tag == "testcase":
+                test_count += 1
+                if any(
+                    child.tag.rsplit("}", 1)[-1] in {"failure", "error", "skipped"}
+                    for child in element
+                ):
+                    failed = True
+            element.clear()
+    except (ET.ParseError, OSError):
+        return False
+    return not failed and test_count > 0 and suite_count > 0
 
 
 def _build_cache_profile(self: Any) -> tuple[Any, ...]:
@@ -92,7 +146,10 @@ def _cache_entry(root: Path, report: Any, *, run_gametest: bool) -> dict[str, An
         return None
     gametest_digest: str | None = None
     if run_gametest:
-        gametest_digest = _file_digest(root, getattr(report, "gametest_report", None))
+        report_path = getattr(report, "gametest_report", None)
+        if not _passing_gametest_xml(root, report_path):
+            return None
+        gametest_digest = _file_digest(root, report_path)
         if gametest_digest is None:
             return None
     return {
@@ -119,10 +176,13 @@ def _cached_report(
     ) != jar_digest:
         return None
     if run_gametest:
+        report_path = getattr(report, "gametest_report", None)
         gametest_digest = cached.get("gametest_sha256")
-        if not isinstance(gametest_digest, str) or _file_digest(
-            root, getattr(report, "gametest_report", None)
-        ) != gametest_digest:
+        if (
+            not _passing_gametest_xml(root, report_path)
+            or not isinstance(gametest_digest, str)
+            or _file_digest(root, report_path) != gametest_digest
+        ):
             return None
     return copy.deepcopy(report)
 
@@ -345,8 +405,13 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         *,
         run_gametest: bool,
     ) -> Any:
-        root = Path(project_root).expanduser().resolve()
-        if not (root / "build.gradle").is_file():
+        root = _canonical_project_root(project_root)
+        if root is None:
+            raise runner_module.BuildRunnerError(
+                "Validation project root is missing, not a directory, or a symbolic link."
+            )
+        build_script = _safe_regular_file(root, root / "build.gradle")
+        if build_script is None:
             raise runner_module.BuildRunnerError(
                 f"Not a generated Gradle project: {root}"
             )
@@ -395,9 +460,15 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             )
 
         build_result = self._run(
-            name="build",
+            name="clean_build",
             executable=gradle,
-            arguments=("--no-daemon", "build", "--build-cache", "--stacktrace"),
+            arguments=(
+                "--no-daemon",
+                "clean",
+                "build",
+                "--build-cache",
+                "--stacktrace",
+            ),
             cwd=root,
             env=environment,
             log_path=logs / "gradle-build.log",
@@ -410,7 +481,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=None,
-                error="Gradle build failed.",
+                error="Gradle clean build failed.",
             )
 
         if run_gametest:
@@ -467,17 +538,29 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                         "evidence was produced."
                     ),
                 )
+            if not _passing_gametest_xml(root, safe_report):
+                return runner_module.BuildReport(
+                    status="FAIL",
+                    gradle_version=version,
+                    commands=tuple(commands),
+                    jar_path=self._find_release_jar(root),
+                    gametest_report=str(safe_report),
+                    error=(
+                        "GameTest report is malformed, empty, skipped, or contains "
+                        "failing/error test evidence."
+                    ),
+                )
             gametest_report = str(safe_report)
 
         jar_path = self._find_release_jar(root)
-        if jar_path is None:
+        if jar_path is None or _safe_regular_file(root, jar_path) is None:
             return runner_module.BuildReport(
                 status="FAIL",
                 gradle_version=version,
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=gametest_report,
-                error="Gradle reported success but no remapped release JAR was found.",
+                error="Gradle reported success but no safe remapped release JAR was found.",
             )
         return runner_module.BuildReport(
             status="PASS",
@@ -502,7 +585,11 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         *,
         run_gametest: bool = True,
     ) -> Any:
-        root = Path(project_root).expanduser().resolve()
+        root = _canonical_project_root(project_root)
+        if root is None:
+            raise runner_module.BuildRunnerError(
+                "Validation project root is missing, not a directory, or a symbolic link."
+            )
         with _path_lock(root):
             fingerprint = validation_module.project_build_fingerprint(root)
             profile = _build_cache_profile(self)
@@ -544,6 +631,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
     parallel_cached_build._mmm_project_parallel_validation = True
     parallel_cached_build._mmm_exact_input_cache = True
     parallel_cached_build._mmm_output_bound_validation_cache = True
+    parallel_cached_build._mmm_clean_build_evidence = True
     cls.build = parallel_cached_build
 
 
