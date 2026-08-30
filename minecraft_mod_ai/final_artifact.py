@@ -151,6 +151,22 @@ def normalize_sha256(value: Any) -> str:
     return "sha256:" + match.group(1).casefold()
 
 
+def _require_artifact_sha(
+    receipt: Mapping[str, Any],
+    *,
+    label: str,
+    expected_sha256: str,
+) -> None:
+    try:
+        observed = normalize_sha256(receipt.get("artifact_sha256"))
+    except FinalArtifactError as exc:
+        raise FinalArtifactError(
+            f"{label} receipt is missing its artifact SHA-256."
+        ) from exc
+    if observed != expected_sha256:
+        raise FinalArtifactError(f"{label} receipt does not bind to the final artifact.")
+
+
 def select_production_jar(project_root: str | Path) -> Path:
     root = _project_root(project_root)
     libs = _safe_existing_directory(root / "build" / "libs")
@@ -371,11 +387,27 @@ def write_downloadable_bundle(
         raise FinalArtifactError("Download bundle requires a passing final build receipt.")
     if requirement_coverage.get("status") != "PASS":
         raise FinalArtifactError("Download bundle requires complete requirement coverage.")
+    _require_artifact_sha(
+        build_receipt,
+        label="Build",
+        expected_sha256=expected_sha256,
+    )
+    _require_artifact_sha(
+        requirement_coverage,
+        label="Requirement coverage",
+        expected_sha256=expected_sha256,
+    )
     runtime_status = str(runtime_receipt.get("status") or "")
     if runtime_status not in {"PASS", "NOT_REQUIRED"}:
         raise FinalArtifactError("Download bundle requires a terminal runtime receipt.")
     if runtime_status == "PASS":
         verify_runtime_artifact_binding(runtime_receipt, expected_sha256)
+    else:
+        _require_artifact_sha(
+            runtime_receipt,
+            label="Runtime",
+            expected_sha256=expected_sha256,
+        )
 
     target = _safe_new_directory_target(bundle_dir)
     target.mkdir()
@@ -490,11 +522,17 @@ def append_github_outputs(path: str | Path, bundle: Mapping[str, Any]) -> None:
     artifact_path = _safe_existing_file(bundle_path / artifact_name)
     if artifact_path is None:
         raise FinalArtifactError("Download bundle artifact is missing or unsafe.")
+    expected_sha256 = normalize_sha256(bundle.get("artifact_sha256"))
+    if sha256_file(artifact_path) != expected_sha256:
+        raise FinalArtifactError("Download bundle artifact SHA-256 does not match its receipt.")
+    receipt_path = _safe_existing_file(bundle_path / "artifact-receipt.json")
+    if receipt_path is None:
+        raise FinalArtifactError("Download bundle artifact receipt is missing or unsafe.")
     values = {
         "artifact_path": str(artifact_path),
-        "artifact_sha256": normalize_sha256(bundle.get("artifact_sha256")),
+        "artifact_sha256": expected_sha256,
         "bundle_path": str(bundle_path),
-        "receipt_path": str(bundle_path / "artifact-receipt.json"),
+        "receipt_path": str(receipt_path),
     }
     with target.open("a", encoding="utf-8", newline="\n") as handle:
         for key, value in values.items():
