@@ -23,17 +23,53 @@ def test_validation_resume_reuses_only_stable_exact_results() -> None:
     )
 
 
-def test_jdt_resume_never_reuses_unavailable_result() -> None:
+def _complete_jdt_receipt() -> dict[str, object]:
+    return {
+        "schema_version": "mmm/java-diagnostics-v2",
+        "files_opened": 2,
+        "page_count": 1,
+        "pages": [
+            {
+                "page_index": 0,
+                "file_count": 2,
+                "diagnostic_uri_count": 2,
+                "error_count": 1,
+                "warning_count": 0,
+            }
+        ],
+        "error_count": 1,
+        "warning_count": 0,
+        "diagnostics": {
+            "file:///A.java": [],
+            "file:///B.java": [{"severity": 1, "message": "cannot find symbol"}],
+        },
+    }
+
+
+def test_jdt_resume_never_reuses_unavailable_or_partial_result() -> None:
     assert not validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-jdt",
         {"status": "UNAVAILABLE", "error": "jdtls missing"},
     )
+
+    complete = _complete_jdt_receipt()
     assert validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-jdt",
-        {
-            "schema_version": "mmm/java-diagnostics-v2",
-            "diagnostics": {},
-        },
+        complete,
+    )
+
+    partial = _complete_jdt_receipt()
+    partial["diagnostics"] = {"file:///A.java": []}
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jdt",
+        partial,
+    )
+
+    inconsistent_counts = _complete_jdt_receipt()
+    inconsistent_counts["error_count"] = 0
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jdt",
+        inconsistent_counts,
     )
 
 
