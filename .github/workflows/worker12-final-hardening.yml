@@ -27,7 +27,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply exact worker 12 final patch
-        run: python .github/scripts/worker12_final_hardening.py
+        run: |
+          python .github/scripts/worker12_final_hardening.py
+          python .github/scripts/worker12_final_fixture_fix.py
       - name: Static and architecture gates
         run: |
           git diff --check
