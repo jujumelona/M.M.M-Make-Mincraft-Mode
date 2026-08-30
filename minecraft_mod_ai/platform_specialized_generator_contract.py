@@ -30,13 +30,34 @@ def _require_deterministic_capability(
     )
 
 
-_SYSTEM_PACK_KINDS = {
-    "quest-system": frozenset({"quest"}),
-    "class-skill-system": frozenset({"class", "skill"}),
-    "economy-shop": frozenset({"economy", "shop"}),
-    "gui-networking": frozenset({"gui", "networking"}),
-    "party-guild": frozenset({"party", "guild"}),
-}
+def _system_pack_capabilities(pack_id: str) -> frozenset[str]:
+    semantic_kinds = {
+        "quest-system": frozenset({"quest"}),
+        "class-skill-system": frozenset({"class", "skill"}),
+        "economy-shop": frozenset({"economy", "shop"}),
+        "gui-networking": frozenset({"gui", "networking"}),
+        "party-guild": frozenset({"party", "guild"}),
+    }.get(pack_id)
+    if semantic_kinds is None:
+        return frozenset()
+    # A semantic module capability does not prove that the larger built-in system
+    # template (persistence, commands, networking, resource layout, etc.) was reviewed.
+    return frozenset((*semantic_kinds, f"system-pack:{pack_id}"))
+
+
+def _geckolib_capabilities(version: str) -> frozenset[str]:
+    normalized = str(version or "").strip()
+    if not normalized:
+        return frozenset()
+    # Base entity support is insufficient evidence for GeckoLib.  The generated code
+    # also depends on GeckoLib's API and artifact coordinate for the requested version.
+    return frozenset(
+        {
+            "entity",
+            "geckolib:entity",
+            f"geckolib:version:{normalized}",
+        }
+    )
 
 
 def _install_incremental_system_records(system_module: Any) -> None:
@@ -102,7 +123,7 @@ def install(
                 config = args[4]
             if project_root is None:
                 raise ValueError("project_root is required for system-pack generation.")
-            required_kinds = _SYSTEM_PACK_KINDS.get(str(pack_id), frozenset())
+            required_kinds = _system_pack_capabilities(str(pack_id))
             _require_deterministic_capability(
                 project_root, required_kinds=required_kinds, feature="Built-in system-pack"
             )
@@ -151,12 +172,15 @@ def install(
         @wraps(current_gecko)
         def generate_geckolib_entity_assets(*args: Any, **kwargs: Any):
             project_root = kwargs.get("project_root")
+            geckolib_version = kwargs.get("geckolib_version", "4.8.2")
             if project_root is None and args:
                 project_root = args[0]
             if project_root is None:
                 raise ValueError("project_root is required for GeckoLib generation.")
             _require_deterministic_capability(
-                project_root, required_kinds=frozenset({"entity"}), feature="Built-in GeckoLib entity"
+                project_root,
+                required_kinds=_geckolib_capabilities(str(geckolib_version)),
+                feature="Built-in GeckoLib entity",
             )
             return current_gecko(*args, **kwargs)
 
