@@ -1,6 +1,6 @@
 name: Worker6 final proof authority
 
-# Temporary Worker 6 finalization gate; one final hardening run before read-only conversion.
+# Temporary Worker 6 finalization gate; execute exactly once, then remove after product hardening lands.
 on:
   push:
     paths:
