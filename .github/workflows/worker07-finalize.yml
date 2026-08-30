@@ -35,10 +35,22 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${PATCH_BLOB}" --jq .content | tr -d '\n' | base64 -d > /tmp/worker07_finalize.py
           python /tmp/worker07_finalize.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_unified_host_execution_loop.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '    config.max_context = 16384\n'
+          replacement = anchor + '    config.max_input_tokens = 0\n'
+          if 'config.max_input_tokens = 0' not in text:
+              if anchor not in text:
+                  raise SystemExit('Worker07: unified-loop config anchor missing')
+              text = text.replace(anchor, replacement)
+              path.write_text(text, encoding='utf-8')
+          PY
       - name: Worker 07 focused verification
         run: |
-          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py
-          python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py --select F,E7,E9
+          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py
+          python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py --select F,E7,E9
           python -m pytest -q tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py tests/test_implementation_kind_boundary_contract.py tests/test_runtime_bootstrap_clean.py tests/test_runtime_wrapper_signature_integrity.py
           python .github/scripts/debug_repo_audit.py
           python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-mutations.json
