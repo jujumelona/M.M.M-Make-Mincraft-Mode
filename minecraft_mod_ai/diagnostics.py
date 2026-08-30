@@ -6,6 +6,10 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterable
 
+_DEFAULT_MAX_RENDERED_GROUPS = 20
+_DEFAULT_TEXT_LIMIT = 1600
+_MAX_RENDERED_FALLBACKS = 8
+
 
 class FailureCategory(str, Enum):
     """Stable operator-facing failure classes.
@@ -41,16 +45,24 @@ class FailureEvent:
     fallback: str | None = None
     affected_artifact: str | None = None
     debug_traceback: str | None = None
+    deduplication_key: str | None = None
 
     @property
     def fingerprint(self) -> str:
+        """Return a stable causal fingerprint without guessing from message text.
+
+        By default the full cause participates in the fingerprint. Boundaries that
+        know repeated attempts can produce varying human-readable messages may pass
+        an explicit ``deduplication_key`` instead.
+        """
+
         payload = "\x1f".join(
             (
                 self.stage,
                 self.operation,
                 self.category.value,
                 self.cause_type,
-                self.cause,
+                self.deduplication_key if self.deduplication_key is not None else self.cause,
                 self.affected_artifact or "",
             )
         )
@@ -63,6 +75,8 @@ class FailureEvent:
         value["fingerprint"] = self.fingerprint
         if not include_debug:
             value.pop("debug_traceback", None)
+        if self.deduplication_key is None:
+            value.pop("deduplication_key", None)
         return value
 
 
@@ -82,18 +96,20 @@ class FailureGroup:
         self.attempts += 1
         if event.fallback and event.fallback not in self.fallbacks:
             self.fallbacks.append(event.fallback)
-        # Keep the most recent terminal state while preserving the first root cause.
+        # Preserve the first causal description, but make terminal/retry state reflect
+        # the latest attempt. Keep the latest traceback when one is available.
         self.event = FailureEvent(
             stage=self.event.stage,
             operation=self.event.operation,
             category=self.event.category,
             cause_type=self.event.cause_type,
             cause=self.event.cause,
-            retryable=self.event.retryable or event.retryable,
+            retryable=event.retryable,
             final_status=event.final_status,
             fallback=event.fallback or self.event.fallback,
             affected_artifact=self.event.affected_artifact,
-            debug_traceback=self.event.debug_traceback or event.debug_traceback,
+            debug_traceback=event.debug_traceback or self.event.debug_traceback,
+            deduplication_key=self.event.deduplication_key,
         )
 
     def to_dict(self, *, include_debug: bool = False) -> dict[str, Any]:
@@ -138,6 +154,7 @@ class DiagnosticCollector:
         affected_artifact: str | None = None,
         include_debug_traceback: bool | None = None,
         sanitize: Callable[[str], str] | None = None,
+        deduplication_key: str | None = None,
     ) -> FailureGroup:
         clean = sanitize or (lambda value: value)
         cause = clean(str(exc))
@@ -161,6 +178,9 @@ class DiagnosticCollector:
                 fallback=fallback,
                 affected_artifact=affected_artifact,
                 debug_traceback=debug,
+                deduplication_key=(
+                    clean(deduplication_key) if deduplication_key is not None else None
+                ),
             )
         )
 
@@ -171,29 +191,87 @@ class DiagnosticCollector:
         return [group.to_dict(include_debug=include_debug) for group in self.groups()]
 
 
-def render_failure_summary(groups: Iterable[FailureGroup]) -> str:
-    """Render one compact root-cause summary without dumping tracebacks."""
+def _compact_text(value: object, *, limit: int) -> str:
+    text = " ".join(str(value).split())
+    if not text:
+        return "none"
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return text[: limit - 1] + "…"
+
+
+def _render_fallbacks(fallbacks: list[str], *, text_limit: int) -> str:
+    if not fallbacks:
+        return "none"
+    shown = [
+        _compact_text(item, limit=min(text_limit, 400))
+        for item in fallbacks[:_MAX_RENDERED_FALLBACKS]
+    ]
+    omitted = len(fallbacks) - len(shown)
+    if omitted:
+        shown.append(f"+{omitted} more")
+    return ", ".join(shown)
+
+
+def render_failure_summary(
+    groups: Iterable[FailureGroup],
+    *,
+    max_groups: int = _DEFAULT_MAX_RENDERED_GROUPS,
+    text_limit: int = _DEFAULT_TEXT_LIMIT,
+) -> str:
+    """Render bounded root-cause diagnostics without dumping tracebacks.
+
+    Full diagnostic evidence remains available through ``FailureGroup.to_dict``.
+    The compact representation intentionally caps distinct roots and line lengths so
+    one pathological exception cannot recreate CI/user-facing log floods.
+    """
+
+    if max_groups < 1:
+        raise ValueError("max_groups must be at least 1")
+    if text_limit < 32:
+        raise ValueError("text_limit must be at least 32")
 
     items = tuple(groups)
     if not items:
         return "FINAL STATUS\nPASS"
+
     lines: list[str] = []
-    for index, group in enumerate(items, start=1):
+    shown_items = items[:max_groups]
+    for index, group in enumerate(shown_items, start=1):
         event = group.event
         if index > 1:
             lines.append("")
         lines.extend(
             (
                 f"ROOT FAILURE {index}",
-                f"{event.stage} / {event.operation} [{event.category.value}]",
+                (
+                    f"{_compact_text(event.stage, limit=240)} / "
+                    f"{_compact_text(event.operation, limit=400)} "
+                    f"[{event.category.value}]"
+                ),
                 "CAUSE",
-                f"{event.cause_type}: {event.cause}",
+                (
+                    f"{_compact_text(event.cause_type, limit=160)}: "
+                    f"{_compact_text(event.cause, limit=text_limit)}"
+                ),
                 "ATTEMPTS",
                 str(group.attempts),
                 "FALLBACK",
-                ", ".join(group.fallbacks) if group.fallbacks else "none",
+                _render_fallbacks(group.fallbacks, text_limit=text_limit),
                 "FINAL STATUS",
                 event.final_status.value,
+            )
+        )
+
+    omitted = len(items) - len(shown_items)
+    if omitted:
+        lines.extend(
+            (
+                "",
+                "ROOT FAILURES OMITTED",
+                f"{omitted} additional distinct root failures are retained in debug evidence",
             )
         )
     return "\n".join(lines)
