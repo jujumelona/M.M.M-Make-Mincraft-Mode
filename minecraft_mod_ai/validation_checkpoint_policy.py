@@ -53,7 +53,9 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
         from . import (
             java_lsp,
             java_lsp_process_safety_contract,
+            research_validation_fingerprint_performance,
             validation_diagnostic_contract,
+            validation_execution_contract,
         )
 
         common.extend(
@@ -61,6 +63,8 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
                 java_lsp,
                 java_lsp_process_safety_contract,
                 validation_diagnostic_contract,
+                validation_execution_contract,
+                research_validation_fingerprint_performance,
             )
         )
     return tuple(common)
