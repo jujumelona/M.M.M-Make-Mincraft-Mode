@@ -216,17 +216,34 @@ def _has(chain: Sequence[Mapping[str, Any]], kinds: set[str], status: str = "PAS
 
 def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str, Any] | None, error: str = "") -> dict[str, Any]:
     chain = _collect_chain(receipt or {})
-    static_pass = _has(chain, {"static"})
-    build_pass = _has(chain, {"build"})
-    test_pass = _has(chain, {"test", "gametest"})
-    runtime_pass = _has(chain, {"runtime"})
-    acceptance_pass = _has(chain, {"acceptance"})
-    explicit_reproduction = _has(chain, {"reproduction"})
-    independent_replay = static_pass and _has(chain, {"synthetic_counterexample"})
+    failed_kinds = {
+        str(item.get("kind"))
+        for item in chain
+        if str(item.get("status")) == "FAIL"
+    }
+    static_pass = _has(chain, {"static"}) and "static" not in failed_kinds
+    build_pass = _has(chain, {"build"}) and "build" not in failed_kinds
+    test_pass = _has(chain, {"test", "gametest"}) and not bool(
+        failed_kinds & {"test", "gametest"}
+    )
+    runtime_pass = _has(chain, {"runtime"}) and "runtime" not in failed_kinds
+    acceptance_pass = (
+        _has(chain, {"acceptance"}) and "acceptance" not in failed_kinds
+    )
+    explicit_reproduction = (
+        _has(chain, {"reproduction"}) and "reproduction" not in failed_kinds
+    )
+    independent_replay = (
+        static_pass
+        and _has(chain, {"synthetic_counterexample"})
+        and "synthetic_counterexample" not in failed_kinds
+    )
     reproduced = explicit_reproduction or independent_replay
 
-    failed_kinds = [str(item.get("kind")) for item in chain if str(item.get("status")) == "FAIL" and str(item.get("kind")) in _FAILURE_LEVEL]
-    failure_level = max((_FAILURE_LEVEL[kind] for kind in failed_kinds), default=0)
+    failure_level = max(
+        (_FAILURE_LEVEL[kind] for kind in failed_kinds if kind in _FAILURE_LEVEL),
+        default=0,
+    )
     successful = str(outcome).upper() == "SUCCESS"
     verified_failure = (not successful) and failure_level > 0
 
@@ -246,8 +263,15 @@ def classify_verification(*, task_class: str, outcome: str, receipt: Mapping[str
     strong_skill_eligible = successful and level >= 3
     remote_eligible = (successful and level >= 3) or verified_failure
 
-    pass_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "PASS"})
-    fail_diversity = len({str(item.get("kind")) for item in chain if item.get("status") == "FAIL"})
+    pass_diversity = len(
+        {
+            str(item.get("kind"))
+            for item in chain
+            if item.get("status") == "PASS"
+            and str(item.get("kind")) not in failed_kinds
+        }
+    )
+    fail_diversity = len(failed_kinds)
     confidence = min(1.0, 0.12 * level + 0.05 * min(pass_diversity, 5) + (0.12 if reproduced else 0.0))
     if verified_failure:
         confidence = max(confidence, min(0.98, 0.20 + 0.12 * failure_level + 0.05 * min(fail_diversity, 4)))
