@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Prevent stale validation receipts from triggering an unrelated execution replay."""
 
-import json
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -44,7 +43,7 @@ def install(feedback_module: Any) -> None:
         with ledger._connect() as connection:
             row = connection.execute(
                 """
-                SELECT checkpoint_id, receipt_json, state, updated_at
+                SELECT checkpoint_id, input_hash, state, updated_at
                 FROM checkpoints
                 WHERE checkpoint_id = ? AND receipt_json IS NOT NULL
                 LIMIT 1
@@ -53,11 +52,11 @@ def install(feedback_module: Any) -> None:
             ).fetchone()
         if row is None:
             return None
-        raw_id, receipt_json, state, updated_at = row
-        try:
-            receipt = json.loads(receipt_json)
-        except (TypeError, json.JSONDecodeError):
-            return None
+        raw_id, input_hash, state, updated_at = row
+        receipt = ledger.cached_checkpoint(
+            str(raw_id),
+            input_hash=str(input_hash),
+        )
         if not isinstance(receipt, Mapping):
             return None
         if not feedback_module._validation_failed(str(raw_id), receipt):
