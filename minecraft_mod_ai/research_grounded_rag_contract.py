@@ -29,6 +29,8 @@ from .rag_index import ProjectRAGIndex
 
 _HTTP_TIMEOUT_SECONDS = 12.0
 _MAX_HTTP_BYTES = 2 * 1024 * 1024
+_MAX_SOURCE_TEXT_CHARS = 128_000
+_MAX_EXTERNAL_PROJECTS = 4
 _MAX_HTTP_CACHE_ITEMS = 256
 
 
@@ -58,18 +60,38 @@ def _dedupe(values: Sequence[str]) -> list[str]:
     return result
 
 
+def _query_variants(query: str) -> tuple[str, ...]:
+    """Deterministic multi-query expansion for recall without another model turn."""
+    original = str(query).strip()
+    normalized = re.sub(r"[._:/\\-]+", " ", original)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    implementation = f"{normalized} minecraft fabric mod source implementation".strip()
+    return tuple(_dedupe((original, normalized, implementation))[:3])
 
 
-def _workspace_root() -> Path:
+def _workspace_root(router: Any | None = None) -> Path | None:
+    attached = str(getattr(router, "_mmm_workspace_root", "") or "").strip()
+    if attached:
+        return Path(attached).expanduser().resolve()
     configured = os.environ.get("MMM_WORKSPACE", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path.cwd().resolve()
+    # CWD is commonly the MMM engine checkout in Colab, not the mod being generated.
+    # Indexing it silently turns internal policies and skills into fake project evidence.
+    return None
 
 
-def _index_path(workspace: Path) -> Path:
+def _index_path(workspace: Path, router: Any | None = None) -> Path:
+    attached = str(getattr(router, "_mmm_project_rag_index", "") or "").strip()
+    if attached:
+        return Path(attached).expanduser().resolve()
     configured = os.environ.get("MMM_PROJECT_RAG_INDEX", "").strip()
-    if configured:
+    # An attached session workspace is authoritative. A process-global index path may
+    # belong to an earlier run, so only honor that legacy override when no session scope
+    # was attached.
+    if configured and not str(
+        getattr(router, "_mmm_workspace_root", "") or ""
+    ).strip():
         return Path(configured).expanduser().resolve()
     return (workspace / ".minecraft_ai" / "project-index.db").resolve()
 
@@ -93,16 +115,14 @@ def _index_metadata() -> dict[str, Any]:
 
 def _ensure_local_index(agentic_module: Any, router: Any) -> dict[str, Any]:
     """Guarantee that local project retrieval has an index before forced RAG runs."""
-    del router
-    existing = agentic_module._existing_code_index()
-    if existing is not None:
+    workspace = _workspace_root(router)
+    if workspace is None:
         return {
-            "status": "available",
+            "status": "workspace_unconfigured",
             "built": False,
-            "index_path": str(existing),
+            "index_path": "",
+            "reason": "local project root was not explicitly attached or configured",
         }
-
-    workspace = _workspace_root()
     if not workspace.exists() or not workspace.is_dir():
         return {
             "status": "workspace_missing",
@@ -111,7 +131,27 @@ def _ensure_local_index(agentic_module: Any, router: Any) -> dict[str, Any]:
             "workspace": str(workspace),
         }
 
-    index_path = _index_path(workspace)
+    existing = agentic_module._existing_code_index()
+    if existing is not None:
+        existing_path = Path(existing).expanduser().resolve()
+        legacy_configured = os.environ.get("MMM_PROJECT_RAG_INDEX", "").strip()
+        attached_scope = bool(
+            str(getattr(router, "_mmm_workspace_root", "") or "").strip()
+        )
+        try:
+            existing_path.relative_to(workspace)
+        except ValueError:
+            if attached_scope or not legacy_configured:
+                existing_path = None
+        if existing_path is not None:
+            return {
+                "status": "available",
+                "built": False,
+                "index_path": str(existing_path),
+                "workspace": str(workspace),
+            }
+
+    index_path = _index_path(workspace, router)
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index = ProjectRAGIndex(index_path)
     max_files_raw = os.environ.get("MMM_RAG_MAX_FILES", "").strip()
@@ -134,6 +174,8 @@ def _ensure_local_index(agentic_module: Any, router: Any) -> dict[str, Any]:
         }
 
     os.environ["MMM_PROJECT_RAG_INDEX"] = str(index_path)
+    if router is not None:
+        router._mmm_project_rag_index = str(index_path)
     return {
         "status": "available",
         "built": True,
@@ -158,6 +200,27 @@ def _request_headers(*, github: bool = False) -> dict[str, str]:
     return headers
 
 
+def _http_bytes(url: str, *, github: bool = False) -> bytes:
+    cache_key = (url, github)
+    with _HTTP_CACHE_LOCK:
+        cached = _HTTP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    request = Request(url, headers=_request_headers(github=github))
+    with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+        length = response.headers.get("Content-Length")
+        if length and int(length) > _MAX_HTTP_BYTES:
+            raise ValueError(f"remote document too large: {length} bytes")
+        payload = response.read(_MAX_HTTP_BYTES + 1)
+    if len(payload) > _MAX_HTTP_BYTES:
+        raise ValueError("remote document exceeded the retrieval byte limit")
+
+    with _HTTP_CACHE_LOCK:
+        if len(_HTTP_CACHE) >= _MAX_HTTP_CACHE_ITEMS:
+            _HTTP_CACHE.pop(next(iter(_HTTP_CACHE)))
+        _HTTP_CACHE[cache_key] = payload
+    return payload
 
 
 def _http_json(url: str, *, github: bool = False) -> Any:
@@ -186,6 +249,29 @@ def _content_sha256(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _source_document(
+    *,
+    source_id: str,
+    title: str,
+    url: str,
+    content: str,
+    source_type: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    raw_text = str(content)
+    text = raw_text[:_MAX_SOURCE_TEXT_CHARS]
+    source_metadata = dict(metadata or {})
+    source_metadata["content_truncated"] = len(text) < len(raw_text)
+    source_metadata["original_content_chars"] = len(raw_text)
+    return {
+        "source_id": source_id,
+        "title": title,
+        "url": url,
+        "source_type": source_type,
+        "content": text,
+        "content_sha256": _content_sha256(text),
+        "metadata": source_metadata,
+    }
 
 
 
@@ -207,6 +293,64 @@ def _github_repo_documents(
     )
     return [dict(item) for item in evidence.documents], list(evidence.errors)
 
+def _modrinth_search(
+    query: str,
+    versions: Sequence[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    errors: list[str] = []
+    facets: list[list[str]] = [["project_type:mod"]]
+    concrete_versions = [
+        str(version).strip()
+        for version in versions
+        if str(version).strip()
+        and str(version).strip() not in {"*", "target-neutral", "unknown"}
+    ]
+    if concrete_versions:
+        facets.append([f"versions:{version}" for version in concrete_versions[:3]])
+    params = urlencode(
+        {
+            "query": query,
+            "limit": _MAX_EXTERNAL_PROJECTS,
+            "index": "relevance",
+            "facets": json.dumps(facets, separators=(",", ":")),
+        }
+    )
+    try:
+        payload = _http_json(f"https://api.modrinth.com/v2/search?{params}")
+    except Exception as exc:  # noqa: BLE001 - public provider boundary
+        return [], [f"modrinth_search:{type(exc).__name__}: {exc}"]
+
+    projects: list[dict[str, Any]] = []
+    for hit in payload.get("hits", []) if isinstance(payload, Mapping) else []:
+        if not isinstance(hit, Mapping):
+            continue
+        project_id = str(hit.get("project_id", "")).strip()
+        if not project_id:
+            continue
+        try:
+            detail = _http_json(
+                f"https://api.modrinth.com/v2/project/{quote(project_id)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - per-project provider boundary
+            errors.append(f"modrinth_project:{project_id}:{type(exc).__name__}: {exc}")
+            detail = {}
+        projects.append(
+            {
+                "project_id": project_id,
+                "slug": hit.get("slug"),
+                "title": hit.get("title"),
+                "description": hit.get("description"),
+                "author": hit.get("author"),
+                "versions": list(hit.get("versions", [])),
+                "downloads": hit.get("downloads"),
+                "license": hit.get("license"),
+                "project_url": f"https://modrinth.com/mod/{hit.get('slug') or project_id}",
+                "source_url": detail.get("source_url") if isinstance(detail, Mapping) else None,
+                "issues_url": detail.get("issues_url") if isinstance(detail, Mapping) else None,
+                "body": detail.get("body") if isinstance(detail, Mapping) else None,
+            }
+        )
+    return projects, errors
 
 
 def _github_repository_search(query: str) -> tuple[list[tuple[str, str]], list[str]]:
@@ -219,6 +363,53 @@ def _github_repository_search(query: str) -> tuple[list[tuple[str, str]], list[s
     return list(discovery.repositories), list(discovery.errors)
 
 
+def _github_adaptive_search(
+    query: str,
+    *,
+    seed_repositories: Sequence[Any] = (),
+    search_if_needed: bool = True,
+) -> dict[str, Any]:
+    evidence = adaptive_github_evidence(
+        query,
+        http_json=lambda url: _http_json(url, github=True),
+        http_text=_http_text,
+        source_document=_source_document,
+        seed_repositories=seed_repositories,
+        search_if_needed=search_if_needed,
+    )
+    documents = [dict(item) for item in evidence.documents]
+    actual = sum(
+        1
+        for item in documents
+        if str(item.get("source_type") or "").startswith("github_")
+    )
+    terminal = str(evidence.saturation_reason or "")
+    error_text = " ".join(str(item) for item in evidence.errors).casefold()
+    if "rate limit" in error_text or "http error 403" in error_text or "429" in error_text:
+        provider_status = "rate_limited"
+    elif "422" in error_text or "search limit" in error_text:
+        provider_status = "provider_limited"
+    elif actual:
+        provider_status = "available"
+    elif evidence.errors:
+        provider_status = "error"
+    else:
+        provider_status = "ok_zero"
+    return {
+        "status": "available" if actual else "unavailable",
+        "provider_status": provider_status,
+        "query": query,
+        "repositories": list(evidence.repositories),
+        "documents": documents,
+        "errors": list(evidence.errors),
+        "search_queries": list(evidence.search_queries),
+        "search_requests": evidence.search_requests,
+        "source_requests": evidence.source_requests,
+        "source_bytes": evidence.source_bytes,
+        "coverage_score": evidence.coverage_score,
+        "saturation_reason": terminal,
+        "actual_source_document_count": actual,
+    }
 
 def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float:
     terms = set(_tokens(query))
@@ -313,6 +504,7 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         "documents": documents,
         "errors": errors,
         "github_retrieval": {
+            "provider_status": str(github.get("provider_status") or "unknown"),
             "search_requests": int(github.get("search_requests") or 0),
             "source_requests": int(github.get("source_requests") or 0),
             "source_bytes": int(github.get("source_bytes") or 0),
@@ -416,172 +608,3 @@ def install(agentic_module: Any) -> None:
 
 
 __all__ = ["install"]
-
-# === MMM EXHAUSTIVE PUBLIC PROVIDER OVERRIDES ===
-# These late-bound definitions intentionally replace the earlier transport helpers.
-# They remove local cardinality/byte truncation from discovery and source ingestion.
-
-
-def _query_variants(query: str) -> tuple[str, ...]:
-    original = str(query).strip()
-    normalized = re.sub(r"[._:/\\-]+", " ", original)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    implementation = f"{normalized} minecraft fabric mod source implementation".strip()
-    return tuple(_dedupe((original, normalized, implementation)))
-
-
-def _http_bytes(url: str, *, github: bool = False) -> bytes:
-    cache_key = (url, github)
-    with _HTTP_CACHE_LOCK:
-        cached = _HTTP_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    request = Request(url, headers=_request_headers(github=github))
-    with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
-        payload = response.read()
-    with _HTTP_CACHE_LOCK:
-        # Cache eviction affects only refetch cost; it never truncates retrieval.
-        if len(_HTTP_CACHE) >= _MAX_HTTP_CACHE_ITEMS:
-            _HTTP_CACHE.pop(next(iter(_HTTP_CACHE)))
-        _HTTP_CACHE[cache_key] = payload
-    return payload
-
-
-def _source_document(
-    *,
-    source_id: str,
-    title: str,
-    url: str,
-    content: str,
-    source_type: str,
-    metadata: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    text = str(content)
-    return {
-        "source_id": source_id,
-        "title": title,
-        "url": url,
-        "source_type": source_type,
-        "content": text,
-        "content_sha256": _content_sha256(text),
-        "metadata": dict(metadata or {}),
-    }
-
-
-def _modrinth_search(
-    query: str,
-    versions: Sequence[str],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Paginate Modrinth until its reported result frontier is exhausted."""
-
-    errors: list[str] = []
-    facets: list[list[str]] = [["project_type:mod"]]
-    concrete_versions = [
-        str(version).strip()
-        for version in versions
-        if str(version).strip()
-        and str(version).strip() not in {"*", "target-neutral", "unknown"}
-    ]
-    if concrete_versions:
-        facets.append([f"versions:{version}" for version in concrete_versions])
-
-    projects: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    offset = 0
-    while True:
-        params = urlencode(
-            {
-                "query": query,
-                "offset": offset,
-                # This is only transport page width; it is not a total-result cap.
-                "limit": 100,
-                "index": "relevance",
-                "facets": json.dumps(facets, separators=(",", ":")),
-            }
-        )
-        try:
-            payload = _http_json(f"https://api.modrinth.com/v2/search?{params}")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"modrinth_search:error:{type(exc).__name__}: {exc}")
-            break
-        hits = payload.get("hits", []) if isinstance(payload, Mapping) else []
-        if not isinstance(hits, list) or not hits:
-            break
-        for hit in hits:
-            if not isinstance(hit, Mapping):
-                continue
-            project_id = str(hit.get("project_id", "")).strip()
-            if not project_id or project_id in seen:
-                continue
-            seen.add(project_id)
-            try:
-                detail = _http_json(f"https://api.modrinth.com/v2/project/{quote(project_id)}")
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"modrinth_project:{project_id}:error:{type(exc).__name__}: {exc}")
-                detail = {}
-            projects.append(
-                {
-                    "project_id": project_id,
-                    "slug": hit.get("slug"),
-                    "title": hit.get("title"),
-                    "description": hit.get("description"),
-                    "author": hit.get("author"),
-                    "versions": list(hit.get("versions", [])),
-                    "downloads": hit.get("downloads"),
-                    "license": hit.get("license"),
-                    "project_url": f"https://modrinth.com/mod/{hit.get('slug') or project_id}",
-                    "source_url": detail.get("source_url") if isinstance(detail, Mapping) else None,
-                    "issues_url": detail.get("issues_url") if isinstance(detail, Mapping) else None,
-                    "body": detail.get("body") if isinstance(detail, Mapping) else None,
-                }
-            )
-        offset += len(hits)
-        total_hits = payload.get("total_hits") if isinstance(payload, Mapping) else None
-        if isinstance(total_hits, int) and offset >= total_hits:
-            break
-    return projects, errors
-
-
-def _github_adaptive_search(
-    query: str,
-    *,
-    seed_repositories: Sequence[Any] = (),
-    search_if_needed: bool = True,
-) -> dict[str, Any]:
-    evidence = adaptive_github_evidence(
-        query,
-        http_json=lambda url: _http_json(url, github=True),
-        http_text=_http_text,
-        source_document=_source_document,
-        seed_repositories=seed_repositories,
-        search_if_needed=search_if_needed,
-    )
-    documents = [dict(item) for item in evidence.documents]
-    actual = sum(
-        1 for item in documents
-        if str(item.get("source_type") or "").startswith("github_")
-    )
-    terminal = str(evidence.saturation_reason or "")
-    if terminal in {"rate_limited", "provider_limit"}:
-        provider_status = terminal
-    elif terminal == "ok_zero" and not actual:
-        provider_status = "ok_zero"
-    elif evidence.errors and not actual:
-        provider_status = "error"
-    else:
-        provider_status = "exhausted"
-    return {
-        "status": "available" if actual else "unavailable",
-        "provider_status": provider_status,
-        "query": query,
-        "repositories": list(evidence.repositories),
-        "documents": documents,
-        "errors": list(evidence.errors),
-        "search_queries": list(evidence.search_queries),
-        "search_requests": evidence.search_requests,
-        "source_requests": evidence.source_requests,
-        "source_bytes": evidence.source_bytes,
-        "coverage_score": evidence.coverage_score,
-        "saturation_reason": terminal,
-        "actual_source_document_count": actual,
-    }

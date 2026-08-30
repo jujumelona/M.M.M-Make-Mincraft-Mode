@@ -44,6 +44,9 @@ _OBLIGATIONS: tuple[dict[str, Any], ...] = (
         "kind": "reusable_implementation",
         "evidence_kind": "local_project",
         "providers": ("project_rag", "github"),
+        # A reusable donor claim is not grounded until actual public source was read.
+        # Local project evidence remains useful context but is not an OR substitute.
+        "required_providers": ("github",),
         "query": "{capability} reusable implementation source code {statement}",
         "depends_on": (),
         "retrieval_required": True,
@@ -288,12 +291,26 @@ def build_evidence_obligation_brief(
             _QUERY_META[query] = dict(meta)
 
     _central._validate_domain_graph(tuple(domains))
+    domain_payloads: list[dict[str, Any]] = []
+    for domain in domains:
+        item = domain.to_dict()
+        meta = bindings.get(domain.domain_id, {})
+        spec = next(
+            candidate
+            for candidate in active_obligations
+            if candidate["kind"] == meta.get("kind")
+        )
+        required_providers = tuple(spec.get("required_providers", ()))
+        if required_providers:
+            item["required_providers"] = list(required_providers)
+        domain_payloads.append(item)
+
     payload: dict[str, Any] = {
         "schema_version": "mmm/central-research-brief-v2",
         "summary": "Atomic evidence obligations for the approved requirement graph.",
         "origin": "approved_requirement_graph",
         "approved_requirement_catalog_sha256": catalog.get("catalog_sha256", ""),
-        "domains": [domain.to_dict() for domain in domains],
+        "domains": domain_payloads,
         "unresolved_questions": [],
         "evidence_obligation_dag": {
             "schema_version": "mmm/evidence-obligation-dag-v1",

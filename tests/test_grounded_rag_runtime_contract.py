@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from types import SimpleNamespace
 
 from minecraft_mod_ai import custom_generation_research as generation_research
@@ -8,44 +7,88 @@ from minecraft_mod_ai import grounded_rag_runtime_contract as runtime
 from minecraft_mod_ai import research_grounded_rag_contract as grounded
 
 
-def test_provider_work_overlaps_without_sleep(monkeypatch):
+def test_modrinth_source_seed_is_resolved_before_github_search(monkeypatch):
     coordinator = runtime.GroundedRAGCoordinator()
-    barrier = threading.Barrier(2)
     entered = []
-    lock = threading.Lock()
 
     def modrinth(query, versions):
         del versions
-        with lock:
-            entered.append(("modrinth", query))
-        barrier.wait(timeout=5)
-        return [], []
+        entered.append(("modrinth", query))
+        return [
+            {
+                "project_id": "seed",
+                "source_url": "https://github.com/owner/seed-repo",
+            }
+        ], []
 
     def github(query, **kwargs):
-        del kwargs
-        with lock:
-            entered.append(("github", query))
-        barrier.wait(timeout=5)
+        entered.append(("github", query))
+        assert kwargs["seed_repositories"] == (("owner", "seed-repo"),)
+        assert kwargs["search_if_needed"] is True
         return {
-            "repositories": [],
-            "documents": [],
+            "repositories": [("owner", "seed-repo")],
+            "documents": [
+                {
+                    "source_id": "github:owner/seed-repo:Space.java",
+                    "source_type": "github_source",
+                    "content": "class Space {}",
+                    "content_sha256": "sha256:space",
+                    "metadata": {"repository": "owner/seed-repo", "path": "Space.java"},
+                }
+            ],
             "errors": [],
             "search_queries": [],
             "search_requests": 0,
             "source_requests": 0,
             "source_bytes": 0,
-            "coverage_score": 0.0,
-            "saturation_reason": "test",
+            "coverage_score": 1.0,
+            "saturation_reason": "evidence_coverage_satisfied",
+            "provider_status": "available",
         }
 
     monkeypatch.setattr(grounded, "_modrinth_search", modrinth)
     monkeypatch.setattr(grounded, "_github_adaptive_search", github)
+    monkeypatch.setattr(grounded, "_query_variants", lambda query: (query,))
     result = coordinator.retrieve_many(("combat progression",), ("1.21.8",))
 
     assert result["combat progression"]["work_graph"]["nested_executor"] is False
-    assert {provider for provider, _ in entered} == {"modrinth", "github"}
+    assert entered == [
+        ("modrinth", "combat progression"),
+        ("github", "combat progression"),
+    ]
     assert 2 <= coordinator.max_workers <= 16
     coordinator.executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_pre_design_routes_schedule_no_public_donor_queries():
+    brief = {
+        "domains": [
+            {
+                "domain_id": "request",
+                "providers": ["official_docs", "project_rag", "external_mcp"],
+                "queries": ["space mode", "Minecraft architecture"],
+            }
+        ]
+    }
+
+    assert runtime._external_brief_queries(brief) == ()
+
+
+def test_required_github_route_is_scheduled_after_design():
+    brief = {
+        "domains": [
+            {
+                "domain_id": "reusable-space-mode",
+                "providers": ["project_rag", "github"],
+                "required_providers": ["github"],
+                "queries": ["space mode reusable implementation source"],
+            }
+        ]
+    }
+
+    assert runtime._external_brief_queries(brief) == (
+        "space mode reusable implementation source",
+    )
 
 
 def test_donor_repository_candidates_are_requirement_reusable():

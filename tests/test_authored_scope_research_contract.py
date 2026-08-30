@@ -1,8 +1,11 @@
 from types import SimpleNamespace
 
-from minecraft_mod_ai import authored_scope_research_contract as scope
-from minecraft_mod_ai import evidence_obligation_contract as obligations
-
+from minecraft_mod_ai import (
+    authored_scope_research_contract as scope,
+)
+from minecraft_mod_ai import (
+    evidence_obligation_contract as obligations,
+)
 
 PROMPT = "메이플 스토리 모드 만들어줘 잡몹부터 보스까지 템들 레벨도 점점 성장 강화시스템등 모두 구현해야해"
 
@@ -95,7 +98,14 @@ def test_maple_prompt_atomic_requirements_become_independent_research_obligation
         "progression.level",
         "item.upgrade",
     } <= capabilities
-    assert len(brief["domains"]) > len(requirement_ids)
+    # Before the exact platform target is frozen, only donor-source obligations run;
+    # target/API/dependency/license/test leaves are deferred to the frozen phase.
+    assert len(brief["domains"]) == len(requirement_ids)
+    assert brief["target_frozen"] is False
+    assert all(
+        domain["required_providers"] == ["github"]
+        for domain in brief["domains"]
+    )
     assert all(
         domain["requirements"] != [PROMPT]
         for domain in brief["domains"]

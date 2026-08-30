@@ -20,6 +20,15 @@ def _catalog():
     }
 
 
+def _frozen_design():
+    return {
+        "_platform_selection": {
+            "target_frozen": True,
+            "target": {"minecraft_version": "1.21.8", "loader": "fabric"},
+        }
+    }
+
+
 def _receipt(query: str, *, document_id: str, title: str, excerpt: str, quality="strong"):
     hit = RetrievalHit(
         evidence_id="sha256:" + "2" * 64,
@@ -52,7 +61,9 @@ def _receipt(query: str, *, document_id: str, title: str, excerpt: str, quality=
 
 
 def test_requirement_expands_to_independent_evidence_obligations():
-    brief = obligation.build_evidence_obligation_brief("trade request", _catalog())
+    brief = obligation.build_evidence_obligation_brief(
+        "trade request", _catalog(), _frozen_design()
+    )
     dag = brief["evidence_obligation_dag"]
     nodes = dag["nodes"]
 
@@ -72,7 +83,9 @@ def test_requirement_expands_to_independent_evidence_obligations():
 
 
 def test_atomic_domains_use_exactly_one_query_and_never_legacy_mixed_suffix():
-    brief = obligation.build_evidence_obligation_brief("trade request", _catalog())
+    brief = obligation.build_evidence_obligation_brief(
+        "trade request", _catalog(), _frozen_design()
+    )
 
     assert len(brief["domains"]) == 6
     for domain in brief["domains"]:
@@ -85,7 +98,9 @@ def test_atomic_domains_use_exactly_one_query_and_never_legacy_mixed_suffix():
 
 
 def test_obligation_dependencies_form_external_dag():
-    brief = obligation.build_evidence_obligation_brief("trade request", _catalog())
+    brief = obligation.build_evidence_obligation_brief(
+        "trade request", _catalog(), _frozen_design()
+    )
     nodes = {item["kind"]: item for item in brief["evidence_obligation_dag"]["nodes"]}
 
     assert nodes["implementation_api"]["depends_on"] == [
@@ -97,6 +112,19 @@ def test_obligation_dependencies_form_external_dag():
     assert nodes["validation_mechanism"]["depends_on"] == [
         nodes["implementation_api"]["obligation_id"]
     ]
+
+
+def test_reusable_implementation_requires_content_bearing_github_source():
+    brief = obligation.build_evidence_obligation_brief(
+        "trade request", _catalog(), _frozen_design()
+    )
+    reusable = next(
+        domain
+        for domain in brief["domains"]
+        if "reusable_implementation" in domain["objective"]
+    )
+
+    assert reusable["required_providers"] == ["github"]
 
 
 def test_generic_unrelated_hit_cannot_satisfy_implementation_api_obligation():

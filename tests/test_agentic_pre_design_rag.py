@@ -44,7 +44,7 @@ def _fake_external(query: str, versions) -> dict[str, object]:
     }
 
 
-def test_forced_rag_builds_missing_index_and_searches_every_research_query(
+def test_forced_rag_builds_missing_index_without_unrouted_public_search(
     monkeypatch, tmp_path
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -61,13 +61,14 @@ def test_forced_rag_builds_missing_index_and_searches_every_research_query(
     assert bundle["code_index_status"] == "available"
     assert bundle["local_index"]["status"] == "available"
     assert bundle["local_index"]["built"] is True
-    assert bundle["external_query_count"] == 3
-    assert bundle["external_source_count"] == 3
+    assert bundle["external_query_count"] == 0
+    assert bundle["external_source_count"] == 0
     queries = [item for domain in bundle["domains"] for item in domain["queries"]]
     assert len(queries) == 3
     assert all(item["project_rag"]["sources"] for item in queries)
-    assert all(item["code_rag"]["status"] == "available" for item in queries)
-    assert all(item["external_rag"]["status"] == "available" for item in queries)
+    assert all(item["code_rag"]["status"] == "searched" for item in queries)
+    assert all(item["code_rag"]["hits"] == [] for item in queries)
+    assert all("external_rag" not in item for item in queries)
 
 
 def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> None:
@@ -85,7 +86,7 @@ def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> N
             sources = query["project_rag"]["sources"]
             assert sources
             assert all(source["matched_version"] == "1.21.1" for source in sources)
-            assert query["external_rag"]["status"] == "available"
+            assert "external_rag" not in query
 
 
 def test_legacy_pre_design_collector_is_not_runtime_owner() -> None:

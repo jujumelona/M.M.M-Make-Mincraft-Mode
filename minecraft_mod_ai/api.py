@@ -474,6 +474,9 @@ class CompleteModAISession:
         os.environ["MMM_KV_CACHE_QUANT"] = kv_cache_quant
         self.existing_input = Path(existing_input) if existing_input is not None else None
         self.router = ModelRouter(profile=model_profile)
+        # Retrieval must index the generated/existing mod workspace, never whichever
+        # directory happened to launch the MMM engine process.
+        self.router._mmm_workspace_root = str(self.workspace_root.resolve())
         _attach_target_constraints(
             self.router,
             minecraft_version=version,

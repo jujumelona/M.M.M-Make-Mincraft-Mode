@@ -39,7 +39,18 @@ def _approved_research_normalize(
     game_design: dict[str, Any],
     candidate: Any | None = None,
 ) -> dict[str, Any]:
-    """Prefer the approved obligation DAG even when legacy pre-design supplies a candidate."""
+    """Preserve the pre-design phase; expand the approved graph only after design."""
+
+    # The owning pre-design pipeline supplies this exact internal seed and a single
+    # request candidate. Replacing it with one GitHub obligation per authored
+    # requirement launches donor search before there is a frozen design to search for.
+    if (
+        candidate is not None
+        and isinstance(game_design, Mapping)
+        and set(game_design) == {"title"}
+        and game_design.get("title") == "pre-design research"
+    ):
+        return previous_normalize(prompt, game_design, candidate)
 
     catalog = obligation_module._catalog_for(prompt)
     if catalog is None:

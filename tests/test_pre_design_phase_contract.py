@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import minecraft_mod_ai.agentic_research_game_design as agentic
+import minecraft_mod_ai.authored_scope_research_contract as authored_scope
+import minecraft_mod_ai.grounded_rag_runtime_contract as grounded_runtime
 import minecraft_mod_ai.pre_design_research_pipeline as pipeline
 
 
@@ -32,11 +34,33 @@ def test_pre_design_donor_search_is_deferred_by_the_owning_pipeline() -> None:
 
     assert "modrinth" not in providers
     assert "github" not in providers
-    assert set(pipeline._DETERMINISTIC_STAGES) == {
-        "official_rag",
-        "technology_radar",
-        "forced_project_rag",
-    }
+    assert grounded_runtime._external_brief_queries(brief) == ()
+
+
+def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None:
+    candidate = pipeline._pre_design_brief("catalog-free baseline")
+    calls = []
+
+    class Obligations:
+        @staticmethod
+        def _catalog_for(_prompt):
+            return {"catalog_sha256": "sha256:approved"}
+
+        @staticmethod
+        def build_evidence_obligation_brief(*_args):
+            calls.append("expanded")
+            return {"domains": [{"domain_id": "wrong"}]}
+
+    normalized = authored_scope._approved_research_normalize(
+        Obligations,
+        lambda _prompt, _design, value: value,
+        "우주선 모드를 설계해줘",
+        {"title": "pre-design research"},
+        candidate,
+    )
+
+    assert [domain["domain_id"] for domain in normalized["domains"]] == ["request"]
+    assert calls == []
 
 
 def test_research_transport_schema_matches_host_normalization_surface() -> None:

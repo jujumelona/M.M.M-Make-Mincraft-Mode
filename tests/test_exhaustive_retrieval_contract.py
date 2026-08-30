@@ -10,85 +10,102 @@ def _doc(**kwargs):
     return dict(kwargs)
 
 
-def test_repository_discovery_follows_duplicate_only_page_until_empty():
-    calls = []
+def test_repository_discovery_stops_at_explicit_work_budget(monkeypatch):
+    calls: list[str] = []
 
     def fake_json(url: str):
         calls.append(url)
-        page = int(parse_qs(urlparse(url).query)["page"][0])
-        # Every query-variant has a duplicate-only middle page and a new later page.
-        if page == 1:
-            return {"items": [{"full_name": "a/one"}], "incomplete_results": False}
-        if page == 2:
-            return {"items": [{"full_name": "a/one"}], "incomplete_results": False}
-        if page == 3:
-            return {"items": [{"full_name": "b/two"}], "incomplete_results": False}
-        return {"items": [], "incomplete_results": False}
+        return {
+            "items": [
+                {"full_name": f"owner/repo-{index}"}
+                for index in range(50)
+            ],
+            "incomplete_results": False,
+        }
 
+    monkeypatch.setenv("MMM_GITHUB_SEARCH_REQUEST_BUDGET", "2")
     result = gh.discover_repositories("space travel", http_json=fake_json)
-    assert ("b", "two") in result.repositories
-    assert result.saturation_reason == "frontier_exhausted"
-    assert any("page=4" in url for url in calls)
+
+    assert result.search_requests == 2
+    assert len(calls) == 2
+    assert result.repositories
+    assert result.saturation_reason == "search_request_budget_exhausted"
 
 
-def test_repository_discovery_distinguishes_provider_limit_from_exhaustion():
+def test_repository_discovery_stops_immediately_on_provider_limit(monkeypatch):
+    calls = 0
+
     def fake_json(_url: str):
+        nonlocal calls
+        calls += 1
         raise RuntimeError("HTTP Error 422: search limit reached")
 
+    monkeypatch.setenv("MMM_GITHUB_SEARCH_REQUEST_BUDGET", "8")
     result = gh.discover_repositories("space travel", http_json=fake_json)
-    assert result.saturation_reason == "provider_limit"
+
+    assert calls == 1
+    assert result.saturation_reason == "provider_limited"
     assert result.errors
 
 
-def test_repository_document_retrieval_ignores_legacy_cardinality_budgets():
-    tree = {
-        "truncated": False,
-        "tree": [
-            {"type": "blob", "path": "src/main/java/A.java", "size": 999999},
-            {"type": "blob", "path": "src/test/java/ATest.java", "size": 999999},
-            {"type": "blob", "path": "src/main/resources/x.json", "size": 999999},
-        ],
-    }
-
-    def fake_json(url: str):
-        if "/git/trees/" in url:
-            return tree
-        return {"default_branch": "main", "html_url": "https://github.com/a/b", "license": {"spdx_id": "MIT"}}
-
+def test_repository_document_retrieval_honors_work_budgets():
     result = gh.retrieve_repository_documents(
-        "a", "b", "space travel", http_json=fake_json,
+        "a",
+        "b",
+        "space travel",
+        http_json=lambda _url: {},
         http_text=lambda url: url,
         source_document=_doc,
         request_budget=0,
         byte_budget=0,
         coverage_target=0.0,
     )
-    assert len(result.documents) == len(tree["tree"])
-    assert result.saturation_reason == "frontier_exhausted"
+
+    assert result.documents == ()
+    assert result.requests_used == 0
+    assert result.saturation_reason == "source_request_budget_exhausted"
 
 
-def test_recursive_tree_truncation_falls_back_to_subtree_frontier():
+def test_recursive_tree_truncation_uses_bounded_subtree_walk():
     root_sha = "rootsha"
     child_sha = "childsha"
 
     def fake_json(url: str):
+        if url.endswith("/repos/a/b"):
+            return {"default_branch": "main", "html_url": "https://github.com/a/b"}
         if "?recursive=1" in url:
             return {"truncated": True, "tree": []}
         if url.endswith("/git/trees/main"):
-            return {"sha": root_sha, "tree": [{"type": "tree", "path": "src", "sha": child_sha}]}
+            return {
+                "sha": root_sha,
+                "tree": [{"type": "tree", "path": "src", "sha": child_sha}],
+            }
         if url.endswith(f"/git/trees/{child_sha}"):
-            return {"sha": child_sha, "tree": [{"type": "blob", "path": "A.java", "size": 1}]}
-        return {"default_branch": "main", "html_url": "https://github.com/a/b"}
+            return {
+                "sha": child_sha,
+                "tree": [{"type": "blob", "path": "Space.java", "size": 16}],
+            }
+        raise AssertionError(url)
 
     result = gh.retrieve_repository_documents(
-        "a", "b", "space", http_json=fake_json,
-        http_text=lambda _url: "class A {}", source_document=_doc,
+        "a",
+        "b",
+        "space",
+        http_json=fake_json,
+        http_text=lambda _url: "class Space {}",
+        source_document=_doc,
+        request_budget=8,
     )
-    assert any(str(item.get("source_id", "")).endswith("src/A.java") for item in result.documents)
-    assert result.saturation_reason == "frontier_exhausted"
+
+    assert any(
+        str(item.get("source_id", "")).endswith("src/Space.java")
+        for item in result.documents
+    )
+    assert result.requests_used <= 8
+    assert result.tree_truncated is True
 
 
-def test_source_document_keeps_complete_content():
+def test_source_document_keeps_complete_content_within_source_limit():
     text = "complete source body whose terminal marker must remain: TAIL_MARKER"
     doc = rg._source_document(
         source_id="x",
@@ -97,32 +114,41 @@ def test_source_document_keeps_complete_content():
         content=text,
         source_type="test",
     )
+
     assert doc["content"] == text
     assert doc["content"].endswith("TAIL_MARKER")
 
 
-
-def test_modrinth_paginates_to_reported_total(monkeypatch):
-    offsets = []
+def test_modrinth_fetches_one_relevance_page_not_the_entire_catalog(monkeypatch):
+    search_offsets: list[int] = []
 
     def fake_json(url: str, *, github: bool = False):
         del github
         if "/v2/project/" in url:
             return {}
         qs = parse_qs(urlparse(url).query)
-        offset = int(qs.get("offset", ["0"])[0])
-        offsets.append(offset)
-        if offset == 0:
-            return {"hits": [{"project_id": "p1", "slug": "p1"}], "total_hits": 2}
-        return {"hits": [{"project_id": "p2", "slug": "p2"}], "total_hits": 2}
+        search_offsets.append(int(qs.get("offset", ["0"])[0]))
+        return {
+            "hits": [
+                {"project_id": f"p{index}", "slug": f"p{index}"}
+                for index in range(4)
+            ],
+            "total_hits": 10_000,
+        }
 
     monkeypatch.setattr(rg, "_http_json", fake_json)
     projects, errors = rg._modrinth_search("space", ())
+
     assert not errors
-    assert [p["project_id"] for p in projects] == ["p1", "p2"]
-    assert len(offsets) == len(projects)
+    assert len(projects) == 4
+    assert search_offsets == [0]
 
 
-def test_query_variants_are_not_top_n_sliced():
+def test_query_variants_are_deterministic_and_bounded():
     variants = rg._query_variants("space.travel")
-    assert variants == ("space.travel", "space travel", "space travel minecraft fabric mod source implementation")
+
+    assert variants == (
+        "space.travel",
+        "space travel",
+        "space travel minecraft fabric mod source implementation",
+    )

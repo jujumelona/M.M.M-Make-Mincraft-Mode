@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import Any, Callable
+from typing import Any
 
 from . import research_grounded_rag_contract as _grounded
 
@@ -60,6 +60,39 @@ def _brief_queries(value: Any) -> tuple[str, ...]:
     return _dedupe_text(found)[:24]
 
 
+def _external_brief_queries(value: Any) -> tuple[str, ...]:
+    """Return only queries whose owning domain explicitly enables public donors."""
+
+    found: list[str] = []
+    if not isinstance(value, Mapping):
+        return ()
+    domains = value.get("domains", ())
+    for domain in domains if isinstance(domains, Sequence) else ():
+        if not isinstance(domain, Mapping):
+            continue
+        routes = {
+            str(item).casefold()
+            for key in ("providers", "required_providers")
+            for item in (
+                domain.get(key, ())
+                if isinstance(domain.get(key, ()), Sequence)
+                and not isinstance(domain.get(key, ()), (str, bytes, bytearray))
+                else ()
+            )
+        }
+        if not routes.intersection({"github", "modrinth"}):
+            continue
+        queries = domain.get("queries", ())
+        for raw in queries if isinstance(queries, Sequence) else ():
+            if isinstance(raw, Mapping):
+                text = str(raw.get("query") or "").strip()
+            else:
+                text = str(raw or "").strip()
+            if text:
+                found.append(text)
+    return _dedupe_text(found)
+
+
 def _brief_versions(value: Any) -> tuple[str, ...]:
     found: list[str] = []
 
@@ -72,9 +105,12 @@ def _brief_versions(value: Any) -> tuple[str, ...]:
             for child in node:
                 walk(child, key)
             return
-        if key in {"version", "versions", "minecraft_version"} and isinstance(node, str):
-            if node.strip():
-                found.append(node.strip())
+        if (
+            key in {"version", "versions", "minecraft_version"}
+            and isinstance(node, str)
+            and node.strip()
+        ):
+            found.append(node.strip())
 
     walk(value)
     return _dedupe_text(found)[:4]
@@ -142,9 +178,6 @@ class GroundedRAGCoordinator:
                 work[self.submit(_grounded._modrinth_search, variant, versions_key)] = (
                     query, "modrinth", variant
                 )
-            work[self.submit(_grounded._github_adaptive_search, query)] = (
-                query, "github", query
-            )
 
         projects: dict[str, dict[str, dict[str, Any]]] = {q: {} for q in pending_queries}
         repositories_by_query: dict[str, list[tuple[str, str]]] = {
@@ -204,39 +237,38 @@ class GroundedRAGCoordinator:
                 if isinstance(document, Mapping):
                     register_document(query, document)
 
-        # Modrinth source URLs are high-confidence GitHub seeds discovered in parallel.
-        # Inspect every new seed for this query; never share a file selection chosen for
-        # another requirement just because the repository identity is the same.
+        # Resolve Modrinth first. Its source URLs are high-confidence GitHub seeds.
+        # Inspect those seeds before spending the much smaller GitHub search quota;
+        # adaptive retrieval searches only when seed evidence is still insufficient.
         for query in pending_queries:
             seeds: list[tuple[str, str]] = []
-            known = set(repositories_by_query[query])
             for project in projects[query].values():
                 repo_ref = _grounded._github_repo_from_url(str(project.get("source_url") or ""))
-                if repo_ref is not None and repo_ref not in known and repo_ref not in seeds:
+                if repo_ref is not None and repo_ref not in seeds:
                     seeds.append(repo_ref)
-            if seeds:
-                try:
-                    seeded = _grounded._github_adaptive_search(
-                        query,
-                        seed_repositories=tuple(seeds),
-                        search_if_needed=False,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    errors_by_query[query].append(f"github_seed:{type(exc).__name__}: {exc}")
-                else:
-                    errors_by_query[query].extend(str(item) for item in seeded.get("errors", ()))
-                    for raw_ref in seeded.get("repositories", ()):
-                        if (
-                            isinstance(raw_ref, Sequence)
-                            and not isinstance(raw_ref, (str, bytes, bytearray))
-                            and len(raw_ref) >= 2
-                        ):
-                            ref = (str(raw_ref[0]), str(raw_ref[1]))
-                            if ref not in repositories_by_query[query]:
-                                repositories_by_query[query].append(ref)
-                    for document in seeded.get("documents", ()):
-                        if isinstance(document, Mapping):
-                            register_document(query, document)
+            try:
+                github = _grounded._github_adaptive_search(
+                    query,
+                    seed_repositories=tuple(seeds),
+                    search_if_needed=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors_by_query[query].append(f"github:{type(exc).__name__}: {exc}")
+                continue
+            github_stats[query] = dict(github)
+            errors_by_query[query].extend(str(item) for item in github.get("errors", ()))
+            for raw_ref in github.get("repositories", ()):
+                if (
+                    isinstance(raw_ref, Sequence)
+                    and not isinstance(raw_ref, (str, bytes, bytearray))
+                    and len(raw_ref) >= 2
+                ):
+                    ref = (str(raw_ref[0]), str(raw_ref[1]))
+                    if ref not in repositories_by_query[query]:
+                        repositories_by_query[query].append(ref)
+            for document in github.get("documents", ()):
+                if isinstance(document, Mapping):
+                    register_document(query, document)
 
         for query in pending_queries:
             for project_id, project in projects[query].items():
@@ -283,6 +315,7 @@ class GroundedRAGCoordinator:
                 "documents": documents,
                 "errors": errors_by_query[query],
                 "github_retrieval": {
+                    "provider_status": str(stats.get("provider_status") or "unknown"),
                     "search_requests": int(stats.get("search_requests") or 0),
                     "source_requests": int(stats.get("source_requests") or 0),
                     "source_bytes": int(stats.get("source_bytes") or 0),
@@ -419,7 +452,7 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
     base = getattr(current, "__wrapped__", current)
 
     def forced_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[str, Any]:
-        pre_queries = _brief_queries(research_brief)
+        pre_queries = _external_brief_queries(research_brief)
         pre_versions = _brief_versions(research_brief)
         local_future = _COORDINATOR.submit(_grounded._ensure_local_index, agentic_module, router)
         pre_external = _COORDINATOR.retrieve_many(pre_queries, pre_versions) if pre_queries else {}
@@ -432,7 +465,12 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
             for domain in payload.get("domains", ()) if isinstance(domain, Mapping)
             for item in domain.get("queries", ()) if isinstance(item, Mapping)
         ))
-        missing = tuple(query for query in payload_queries if query not in pre_external)
+        allowed_external = set(pre_queries)
+        missing = tuple(
+            query
+            for query in payload_queries
+            if query in allowed_external and query not in pre_external
+        )
         external = dict(pre_external)
         if missing:
             external.update(_COORDINATOR.retrieve_many(missing, versions))

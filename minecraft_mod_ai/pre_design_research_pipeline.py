@@ -283,6 +283,10 @@ def _grounded_domain_evidence(
             if not isinstance(item, Mapping):
                 continue
             records = _query_content_records(item)
+            external = item.get("external_rag")
+            external = external if isinstance(external, Mapping) else {}
+            github = external.get("github_retrieval")
+            github = github if isinstance(github, Mapping) else {}
             queries.append(
                 {
                     "query": str(item.get("query", "")),
@@ -292,6 +296,17 @@ def _grounded_domain_evidence(
                     "github_record_count": sum(
                         1 for record in records if _is_github_record(record)
                     ),
+                    "github_provider_status": str(
+                        github.get("provider_status") or "not_requested"
+                    ),
+                    "github_saturation_reason": str(
+                        github.get("saturation_reason") or ""
+                    ),
+                    "retrieval_errors": [
+                        str(error) for error in external.get("errors", ())[:3]
+                    ]
+                    if isinstance(external.get("errors"), list)
+                    else [],
                 }
             )
     return {
@@ -313,6 +328,10 @@ def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(item, Mapping):
                 continue
             records = _query_content_records(item)
+            external = item.get("external_rag")
+            external = external if isinstance(external, Mapping) else {}
+            github = external.get("github_retrieval")
+            github = github if isinstance(github, Mapping) else {}
             queries.append(
                 {
                     "query": str(item.get("query", "")),
@@ -321,6 +340,19 @@ def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
                     "github_record_count": sum(
                         1 for record in records if _is_github_record(record)
                     ),
+                    "github_provider_status": str(
+                        github.get("provider_status") or "not_requested"
+                    ),
+                    "github_saturation_reason": str(
+                        github.get("saturation_reason") or ""
+                    ),
+                    "github_search_requests": int(github.get("search_requests") or 0),
+                    "github_source_requests": int(github.get("source_requests") or 0),
+                    "retrieval_errors": [
+                        str(error) for error in external.get("errors", ())[:3]
+                    ]
+                    if isinstance(external.get("errors"), list)
+                    else [],
                 }
             )
         domains.append(
@@ -364,9 +396,20 @@ def _validate_domain_provider_grounding(
     if "github" in required_providers and not any(
         _is_github_record(record) for record in records
     ):
+        diagnostics = [
+            {
+                "query": str(query.get("query") or ""),
+                "provider_status": str(query.get("github_provider_status") or "unknown"),
+                "saturation_reason": str(query.get("github_saturation_reason") or ""),
+                "errors": list(query.get("retrieval_errors") or ()),
+            }
+            for query in grounded.get("queries", [])
+            if isinstance(query, Mapping)
+        ]
         raise PreDesignResearchFailure(
             f"Pre-design retrieval gap for domain {domain_id!r}: explicitly required "
-            "provider 'github' returned no content-bearing source document."
+            "provider 'github' returned no content-bearing source document; "
+            f"provider diagnostics={diagnostics!r}."
         )
 
 
