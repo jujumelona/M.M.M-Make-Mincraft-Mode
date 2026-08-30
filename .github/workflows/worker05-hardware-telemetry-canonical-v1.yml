@@ -33,7 +33,7 @@ jobs:
           python .github/scripts/worker05_hardware_lint_fix_v1.py
       - name: Verify hardware telemetry owner
         run: |
-          # V1.1: canonical prefill owner, zero default auxiliary HTTP probes, clean owner boundaries.
+          # V1.2: revalidated on canonical liveness owner; zero default auxiliary HTTP probes.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/runtime_bootstrap.py tests/test_llama_prefill_telemetry_contract.py tests/test_llama_server_hardware_policy.py
