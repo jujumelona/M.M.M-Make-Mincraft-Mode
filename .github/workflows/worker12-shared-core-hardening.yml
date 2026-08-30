@@ -24,16 +24,38 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Apply exact worker 12 patch
-        run: python .github/scripts/worker12_shared_core_patch.py
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Capture baseline audit findings
+        run: python .github/scripts/debug_repo_audit.py > /tmp/worker12-baseline-audit.txt 2>&1 || true
+      - name: Apply exact worker 12 patch
+        run: |
+          python .github/scripts/worker12_shared_core_patch.py
+          python .github/scripts/worker12_shared_core_followup.py
       - name: Static and architecture gates
         run: |
           python -m compileall -q minecraft_mod_ai tests tools download_resources.py
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
-          python .github/scripts/debug_repo_audit.py
+          python .github/scripts/debug_repo_audit.py > /tmp/worker12-post-audit.txt 2>&1 || true
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          pattern = re.compile(r'^[A-Z][A-Z0-9_]+ ')
+          def findings(path: str) -> set[str]:
+              return {
+                  line
+                  for line in Path(path).read_text(encoding='utf-8').splitlines()
+                  if pattern.match(line)
+              }
+          baseline = findings('/tmp/worker12-baseline-audit.txt')
+          post = findings('/tmp/worker12-post-audit.txt')
+          introduced = sorted(post - baseline)
+          if introduced:
+              raise SystemExit('worker12 introduced static-audit findings:\n' + '\n'.join(introduced))
+          print(f'static audit: no new findings (baseline={len(baseline)}, post={len(post)})')
+          PY
           python .github/scripts/audit_runtime_mutations.py --output /tmp/worker12-runtime-mutations.json
           python tools/validate_colab_notebook.py
       - name: Worker 12 regression suite
