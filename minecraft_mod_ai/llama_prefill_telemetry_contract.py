@@ -7,13 +7,14 @@ _MARKER = "_mmm_prompt_prefill_telemetry_v1"
 
 
 def install(hardware_policy_module: Any) -> None:
-    # llama_stream_efficiency is installed immediately before this contract. Keep
-    # completion liveness as a worker-5 runtime concern without adding another shared
-    # runtime-bootstrap owner.
-    from . import llama_stream_efficiency_contract
+    # These worker-5 runtime policies are installed after the native tuning/stream
+    # pipeline exists, so no shared runtime-bootstrap owner is needed here.
+    from . import llama_decode_speed_contract, llama_stream_efficiency_contract
     from .llama_completion_liveness_contract import install as install_completion_liveness
+    from .llama_kv_correctness_contract import install as install_kv_correctness
 
     install_completion_liveness(llama_stream_efficiency_contract)
+    install_kv_correctness(llama_decode_speed_contract)
 
     current = hardware_policy_module._commit_metrics_delta
     if getattr(current, _MARKER, False):
