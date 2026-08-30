@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tracemalloc
 from pathlib import Path
 
 from tools import full_project_audit as audit
@@ -74,6 +75,89 @@ def test_streamed_process_log_redacts_environment_secrets(
     log = audit.LOG_PATH.read_text(encoding="utf-8")
     assert "do-not-leak-this-value" not in log
     assert "<redacted>" in log
+
+
+def test_streaming_redactor_masks_secrets_across_every_small_chunk_boundary() -> None:
+    exact_secret = "cross-boundary-secret-value"
+    source = (
+        "prefix/"
+        + exact_secret
+        + "/middle token="
+        + ("v" * 257)
+        + "; authorization : Bearer-super-secret /suffix"
+    )
+    expected = (
+        "prefix/<redacted>/middle token=<redacted>; "
+        "authorization : <redacted> /suffix"
+    )
+
+    for width in range(1, 33):
+        redactor = audit.StreamingRedactor((exact_secret,))
+        chunks = (source[index : index + width] for index in range(0, len(source), width))
+        rendered = "".join(redactor.feed(chunk) for chunk in chunks) + redactor.finish()
+        assert rendered == expected, f"chunk width {width} broke streaming redaction"
+        assert exact_secret not in rendered
+        assert "Bearer-super-secret" not in rendered
+        assert "v" * 32 not in rendered
+
+
+def test_single_unbroken_multimegabyte_line_has_bounded_python_memory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _redirect_artifacts(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit, "_OUTPUT_CHUNK_CHARS", 4096)
+    monkeypatch.setattr(audit, "_environment_secret_values", lambda: ())
+
+    raw_path = tmp_path / "single-line.log"
+    payload_size = 8 * 1024 * 1024
+    with raw_path.open("w", encoding="utf-8") as handle:
+        chunk = "x" * 8192
+        for _ in range(payload_size // len(chunk)):
+            handle.write(chunk)
+
+    tracemalloc.start()
+    try:
+        tail = audit._drain_process_output(raw_path)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert len(tail) <= audit._OUTPUT_TAIL_LIMIT
+    assert audit.LOG_PATH.stat().st_size == payload_size
+    assert peak < 2 * 1024 * 1024, f"streaming peak memory regressed: {peak} bytes"
+
+
+def test_no_newline_process_output_masks_cross_chunk_label_and_exact_secret(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _redirect_artifacts(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit, "_OUTPUT_CHUNK_CHARS", 17)
+    exact_secret = "do-not-leak-cross-chunk"
+    monkeypatch.setenv("MMM_TEST_SECRET", exact_secret)
+
+    code = (
+        "import sys; "
+        "sys.stdout.write('A' * 15 + 'do-not-leak-cross-chunk' + "
+        "' tok' + 'en=' + 'z' * 2000000 + ';done')"
+    )
+    result = audit._run_logged_process(
+        [sys.executable, "-c", code],
+        timeout=30,
+        cwd=tmp_path,
+        label="single-line-secret-output",
+    )
+
+    assert result.returncode == 0
+    assert result.error is None
+    assert result.timed_out is False
+    assert exact_secret not in result.output_tail
+    assert "z" * 32 not in result.output_tail
+    assert "done" in result.output_tail
+
+    log = audit.LOG_PATH.read_text(encoding="utf-8")
+    assert exact_secret not in log
+    assert "z" * 32 not in log
+    assert "token=<redacted>;done" in log
 
 
 def test_timeout_preserves_output_tail_without_memory_capture(
