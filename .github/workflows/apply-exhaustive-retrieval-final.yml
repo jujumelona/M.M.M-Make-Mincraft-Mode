@@ -26,11 +26,22 @@ jobs:
           python .github/scripts/patch_exhaustive_retrieval.py
           python .github/scripts/canonicalize_exhaustive_retrieval.py
           python .github/scripts/fix_exhaustive_retrieval_lint.py
-          python -m ruff check --fix minecraft_mod_ai/github_adaptive_retrieval.py minecraft_mod_ai/research_grounded_rag_contract.py minecraft_mod_ai/pre_design_research_pipeline.py tests/test_exhaustive_retrieval_contract.py
+          python .github/scripts/align_exhaustive_retrieval_contract.py
+          python -m ruff check --fix \
+            minecraft_mod_ai/github_adaptive_retrieval.py \
+            minecraft_mod_ai/research_grounded_rag_contract.py \
+            minecraft_mod_ai/pre_design_research_pipeline.py \
+            tests/test_exhaustive_retrieval_contract.py \
+            tests/test_pre_design_research_pipeline.py
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests
       - name: Ruff clean
-        run: python -m ruff check minecraft_mod_ai/github_adaptive_retrieval.py minecraft_mod_ai/research_grounded_rag_contract.py minecraft_mod_ai/pre_design_research_pipeline.py tests/test_exhaustive_retrieval_contract.py
+        run: python -m ruff check \
+          minecraft_mod_ai/github_adaptive_retrieval.py \
+          minecraft_mod_ai/research_grounded_rag_contract.py \
+          minecraft_mod_ai/pre_design_research_pipeline.py \
+          tests/test_exhaustive_retrieval_contract.py \
+          tests/test_pre_design_research_pipeline.py
       - name: Retrieval and pre-design contract tests
         run: |
           python -m pytest -q \
@@ -64,6 +75,13 @@ jobs:
           remaining = [token for token in forbidden_rg if token in rg]
           if remaining:
               raise SystemExit('legacy result/content truncation remains: ' + ', '.join(remaining))
+
+          pd = Path('minecraft_mod_ai/pre_design_research_pipeline.py').read_text()
+          official_start = pd.index('def _target_neutral_official_evidence(')
+          official_end = pd.index('\ndef _builtin_content_record(', official_start)
+          official = pd[official_start:official_end]
+          if '[:4]' in official or '>= 4' in official:
+              raise SystemExit('official pre-design retrieval still has ordinal cutoff')
           PY
       - name: Commit production sources and remove scaffolding
         run: |
@@ -71,11 +89,13 @@ jobs:
             .github/scripts/patch_exhaustive_retrieval.py \
             .github/scripts/canonicalize_exhaustive_retrieval.py \
             .github/scripts/fix_exhaustive_retrieval_lint.py \
+            .github/scripts/align_exhaustive_retrieval_contract.py \
             .github/workflows/apply-exhaustive-retrieval.yml \
             .github/workflows/apply-exhaustive-retrieval-v2.yml \
             .github/workflows/diagnose-exhaustive-retrieval.yml \
             .github/workflows/apply-exhaustive-retrieval-v4.yml \
             .github/workflows/diagnose-exhaustive-retrieval-v2.yml \
+            .github/workflows/diagnose-exhaustive-retrieval-tests.yml \
             .github/workflows/apply-exhaustive-retrieval-final.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
