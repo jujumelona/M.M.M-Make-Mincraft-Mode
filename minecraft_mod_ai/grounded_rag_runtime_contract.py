@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Shared external retrieval runtime.
 
-Pre-design RAG has one owner: ``research_grounded_rag_contract``.  This module only
-provides the process-wide retrieval/cache service and donor reuse.  It must never
-unwrap or replace an already-installed pre-design RAG callable.
+Pre-design RAG has one owner: ``research_grounded_rag_contract``.  This module provides
+only process-wide retrieval/cache reuse and donor reuse.  It does not rewrite the
+pre-design callable and it never uses mapping keys as the single-query API.
 """
 
 import os
@@ -16,9 +16,6 @@ from typing import Any
 from . import research_grounded_rag_contract as _grounded
 
 
-# Capture the concrete retriever before install() redirects the public hook through
-# the coordinator.  This prevents self-recursion while keeping one retrieval
-# implementation for both pre-design and later reuse.
 _BASE_EXTERNAL_RETRIEVAL = _grounded._external_retrieval
 
 
@@ -31,11 +28,15 @@ def _workers() -> int:
     return max(2, min(16, value))
 
 
+def _normalize_query(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
 def _dedupe_text(values: Sequence[str]) -> tuple[str, ...]:
     out: list[str] = []
     seen: set[str] = set()
     for value in values:
-        text = " ".join(str(value or "").split())
+        text = _normalize_query(value)
         key = text.casefold()
         if text and key not in seen:
             seen.add(key)
@@ -44,7 +45,7 @@ def _dedupe_text(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def _external_brief_queries(value: Any) -> tuple[str, ...]:
-    """Return every explicit research query, independent of provider labels."""
+    """Return every explicit planned research query, independent of provider labels."""
 
     found: list[str] = []
     if not isinstance(value, Mapping):
@@ -62,9 +63,9 @@ def _external_brief_queries(value: Any) -> tuple[str, ...]:
             continue
         for raw in queries:
             if isinstance(raw, Mapping):
-                text = str(raw.get("query") or "").strip()
+                text = _normalize_query(raw.get("query"))
             else:
-                text = str(raw or "").strip()
+                text = _normalize_query(raw)
             if text:
                 found.append(text)
     return _dedupe_text(found)
@@ -106,6 +107,31 @@ def _repo_url(repo: str) -> str:
     return f"https://github.com/{repo}" if repo else ""
 
 
+def _provider_failure_payload(query: str, exc: BaseException) -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/external-grounded-rag",
+        "status": "unavailable",
+        "query": query,
+        "providers": ["modrinth_public", "github_public_source"],
+        "credentials_required": False,
+        "project_count": 0,
+        "source_repository_count": 0,
+        "document_count": 0,
+        "actual_source_document_count": 0,
+        "coverage_score": 0.0,
+        "projects": [],
+        "documents": [],
+        "errors": [f"{type(exc).__name__}: {exc}"],
+        "github_retrieval": {
+            "provider_status": "error",
+            "search_requests": 0,
+            "source_requests": 0,
+            "source_bytes": 0,
+            "saturation_reason": "",
+        },
+    }
+
+
 class GroundedRAGCoordinator:
     """One shared cache/executor around the single concrete external retriever."""
 
@@ -129,76 +155,100 @@ class GroundedRAGCoordinator:
     ) -> tuple[list[dict[str, Any]], list[str]]:
         return _grounded._github_repo_documents(owner, repo, query)
 
-    def retrieve_many(
-        self, queries: Sequence[str], versions: Sequence[str]
-    ) -> dict[str, dict[str, Any]]:
-        normalized_queries = _dedupe_text(tuple(queries))
+    def _cache_key(
+        self, query: str, versions: Sequence[str]
+    ) -> tuple[str, tuple[str, ...]]:
+        canonical = _normalize_query(query)
         versions_key = tuple(_dedupe_text(tuple(str(v) for v in versions)))
-        results: dict[str, dict[str, Any]] = {}
-        missing: list[str] = []
+        return canonical.casefold(), versions_key
 
+    def _record_payload(
+        self,
+        query: str,
+        versions: Sequence[str],
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        canonical = _normalize_query(query)
+        item = dict(payload)
+        item["query"] = canonical
+        item["work_graph"] = {
+            "key_space": "canonical_query",
+            "bounded_workers": self.max_workers,
+            "nested_executor": False,
+            "repository_snapshot_dedup": True,
+            "query_specific_source_selection": True,
+            "fixed_file_count_cutoff": False,
+            "single_external_retriever": True,
+        }
+        donors = [
+            dict(document)
+            for document in item.get("documents", ())
+            if isinstance(document, Mapping) and _repository_key(document)
+        ]
         with self._lock:
-            for query in normalized_queries:
-                cached = self._cache.get((query.casefold(), versions_key))
-                if cached is None:
-                    missing.append(query)
-                else:
-                    results[query] = dict(cached)
+            self._cache[self._cache_key(canonical, versions)] = dict(item)
+            self._donors_by_query[canonical.casefold()] = donors
+        return item
 
-        if missing:
+    def retrieve_one(
+        self,
+        query: str,
+        versions: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Retrieve one canonical planned query and return its payload directly."""
+
+        canonical = _normalize_query(query)
+        if not canonical:
+            raise ValueError("external retrieval requires a non-empty planned query")
+        key = self._cache_key(canonical, versions)
+        with self._lock:
+            cached = self._cache.get(key)
+        if cached is not None:
+            return dict(cached)
+
+        try:
+            payload = _BASE_EXTERNAL_RETRIEVAL(canonical, key[1])
+            if not isinstance(payload, Mapping):
+                raise TypeError(
+                    f"external retriever returned {type(payload).__name__}, expected mapping"
+                )
+        except Exception as exc:  # noqa: BLE001 - provider boundary is captured as evidence
+            payload = _provider_failure_payload(canonical, exc)
+        return self._record_payload(canonical, key[1], payload)
+
+    def retrieve_many(
+        self,
+        queries: Sequence[str],
+        versions: Sequence[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Retrieve planned queries concurrently while preserving caller keys."""
+
+        requested: list[tuple[str, str]] = []
+        canonical_to_originals: dict[str, list[str]] = {}
+        for raw in queries:
+            original = str(raw)
+            canonical = _normalize_query(original)
+            if not canonical:
+                continue
+            requested.append((original, canonical))
+            canonical_to_originals.setdefault(canonical, []).append(original)
+
+        unique = tuple(canonical_to_originals)
+        payload_by_canonical: dict[str, dict[str, Any]] = {}
+        if unique:
             work = {
-                self.submit(_BASE_EXTERNAL_RETRIEVAL, query, versions_key): query
-                for query in missing
+                self.submit(self.retrieve_one, query, versions): query
+                for query in unique
             }
             for future in as_completed(work):
                 query = work[future]
-                try:
-                    payload = dict(future.result())
-                except Exception as exc:  # noqa: BLE001 - provider boundary
-                    payload = {
-                        "schema_version": "mmm/external-grounded-rag",
-                        "status": "unavailable",
-                        "query": query,
-                        "providers": ["modrinth_public", "github_public_source"],
-                        "credentials_required": False,
-                        "project_count": 0,
-                        "source_repository_count": 0,
-                        "document_count": 0,
-                        "actual_source_document_count": 0,
-                        "coverage_score": 0.0,
-                        "projects": [],
-                        "documents": [],
-                        "errors": [f"{type(exc).__name__}: {exc}"],
-                        "github_retrieval": {
-                            "provider_status": "error",
-                            "search_requests": 0,
-                            "source_requests": 0,
-                            "source_bytes": 0,
-                            "saturation_reason": "",
-                        },
-                    }
+                payload_by_canonical[query] = dict(future.result())
 
-                payload["work_graph"] = {
-                    "key_space": "query",
-                    "bounded_workers": self.max_workers,
-                    "nested_executor": False,
-                    "repository_snapshot_dedup": True,
-                    "query_specific_source_selection": True,
-                    "fixed_file_count_cutoff": False,
-                    "single_external_retriever": True,
-                }
-
-                donors = [
-                    dict(item)
-                    for item in payload.get("documents", ())
-                    if isinstance(item, Mapping) and _repository_key(item)
-                ]
-                with self._lock:
-                    self._cache[(query.casefold(), versions_key)] = dict(payload)
-                    self._donors_by_query[query.casefold()] = donors
-                results[query] = payload
-
-        return {query: results[query] for query in normalized_queries if query in results}
+        result: dict[str, dict[str, Any]] = {}
+        for original, canonical in requested:
+            if canonical in payload_by_canonical:
+                result[original] = dict(payload_by_canonical[canonical])
+        return result
 
     def repositories_for_capabilities(
         self,
@@ -275,20 +325,16 @@ def _install_pre_design_owner_if_missing(agentic_module: Any) -> None:
 
 
 def install(agentic_module: Any, reuse_module: Any) -> None:
-    """Attach shared retrieval without replacing an installed pre-design RAG owner."""
+    """Attach shared retrieval without replacing the installed pre-design RAG owner."""
 
     global _INSTALLED
     if _INSTALLED:
         return
 
-    # research_grounded_rag_contract is installed immediately before this in the
-    # production runtime.  If install() is used directly, add the same all-query owner
-    # without unwrapping any existing callable.
     _install_pre_design_owner_if_missing(agentic_module)
 
     original_discovery = reuse_module._parallel_donor_repository_discovery
     if not getattr(original_discovery, "__mmm_grounded_donors__", False):
-
         def donor_discovery(
             capabilities: Sequence[str],
             client: Any,
@@ -319,11 +365,7 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
         donor_discovery.__mmm_grounded_donors__ = True
         reuse_module._parallel_donor_repository_discovery = donor_discovery
 
-    # The pre-design owner calls this global at execution time.  Redirect it to the
-    # coordinator so every query uses the same cache and the same concrete retriever.
-    _grounded._external_retrieval = (
-        lambda query, versions: _COORDINATOR.retrieve_many((query,), versions)[query]
-    )
+    _grounded._external_retrieval = _COORDINATOR.retrieve_one
     _INSTALLED = True
 
 
@@ -331,4 +373,8 @@ def coordinator() -> GroundedRAGCoordinator:
     return _COORDINATOR
 
 
-__all__ = ["GroundedRAGCoordinator", "coordinator", "install"]
+__all__ = [
+    "GroundedRAGCoordinator",
+    "coordinator",
+    "install",
+]
