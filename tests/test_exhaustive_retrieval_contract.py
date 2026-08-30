@@ -144,11 +144,8 @@ def test_modrinth_fetches_one_relevance_page_not_the_entire_catalog(monkeypatch)
     assert search_offsets == [0]
 
 
-def test_query_variants_are_deterministic_and_bounded():
+def test_discovery_query_variants_are_deterministic_and_bounded():
     variants = rg._query_variants("space.travel")
 
-    assert variants == (
-        "space.travel",
-        "space travel",
-        "space travel minecraft fabric mod source implementation",
-    )
+    assert variants == ("space.travel", "space travel")
+    assert all("source implementation" not in value for value in variants)

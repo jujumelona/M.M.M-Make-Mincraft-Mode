@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.authored_scope_research_contract as authored_scope
-import minecraft_mod_ai.grounded_rag_runtime_contract as grounded_runtime
 import minecraft_mod_ai.pre_design_research_pipeline as pipeline
+import minecraft_mod_ai.research_grounded_rag_contract as grounded
 
 
 def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
@@ -34,7 +34,7 @@ def test_pre_design_donor_search_is_deferred_by_the_owning_pipeline() -> None:
 
     assert "modrinth" not in providers
     assert "github" not in providers
-    assert grounded_runtime._external_brief_queries(brief) == ()
+    assert grounded._external_brief_queries(brief) == ()
 
 
 def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None:

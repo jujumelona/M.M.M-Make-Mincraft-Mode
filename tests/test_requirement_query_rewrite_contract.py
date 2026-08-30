@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import authored_scope_research_contract as scope
-from minecraft_mod_ai import grounded_rag_runtime_contract as runtime
 
 
 def _requirements():
@@ -82,26 +81,38 @@ def test_raw_non_english_prompt_cannot_be_the_retrieval_plan():
         raise AssertionError("raw authored text leaked into external retrieval queries")
 
 
-def test_batch_retrieval_preserves_caller_key_after_whitespace_canonicalization(monkeypatch):
-    coordinator = runtime.GroundedRAGCoordinator()
-
-    def fake(query, versions):
-        del versions
-        assert query == "spaceship component construction"
-        return {
-            "schema_version": "mmm/external-grounded-rag",
-            "status": "available",
-            "query": query,
-            "providers": ["github_public_source"],
-            "documents": [],
-            "errors": [],
-            "github_retrieval": {},
+def test_approved_queries_replace_raw_request_and_enable_public_research_routes(monkeypatch):
+    prompt = "우주선을 부위마다 만들어서 우주로 나가게 해줘"
+    monkeypatch.setattr(
+        scope,
+        "_active_catalog",
+        lambda value: {
+            "requirements": [
+                {
+                    "requirement_id": "req_build",
+                    "search_queries": [
+                        "minecraft modular spaceship construction mod",
+                        "spaceship component assembly source implementation",
+                    ],
+                }
+            ]
         }
+        if value == prompt
+        else None,
+    )
+    candidate = {
+        "domains": [
+            {
+                "domain_id": "request",
+                "providers": ["official_docs", "project_rag", "external_mcp"],
+                "queries": [prompt],
+            }
+        ]
+    }
 
-    monkeypatch.setattr(runtime, "_BASE_EXTERNAL_RETRIEVAL", fake)
-    original = "spaceship  component   construction"
-    result = coordinator.retrieve_many((original,), ())
+    rewritten = scope._rewrite_pre_design_candidate(prompt, candidate)
+    domain = rewritten["domains"][0]
 
-    assert original in result
-    assert result[original]["query"] == "spaceship component construction"
-    coordinator.executor.shutdown(wait=True, cancel_futures=True)
+    assert prompt not in domain["queries"]
+    assert domain["queries"][0] == "minecraft modular spaceship construction mod"
+    assert {"github", "modrinth"} <= set(domain["providers"])

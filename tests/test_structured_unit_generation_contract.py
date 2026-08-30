@@ -1,187 +1,102 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
 
 import pytest
 
-from minecraft_mod_ai import llama_structured_decode_policy as decode_policy
-from minecraft_mod_ai import structured_unit_generation_contract as units
-from minecraft_mod_ai.spec import SpecValidationError
-from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+from minecraft_mod_ai import agentic_research_game_design as design
+from minecraft_mod_ai.structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 
 
-class _FakeRouter:
-    def __init__(self, outputs: list[str]) -> None:
-        self.outputs = list(outputs)
-        self.calls: list[dict[str, object]] = []
-
-    def generate_text(
-        self,
-        role,
-        messages,
-        *,
-        media_paths=(),
-        response_format=None,
-        response_schema=None,
-        enable_tools=True,
-        **kwargs,
-    ):
-        self.calls.append(
-            {
-                "role": role,
-                "messages": messages,
-                "media_paths": tuple(media_paths),
-                "response_format": response_format,
-                "response_schema": response_schema,
-                "enable_tools": enable_tools,
+def _systems_schema() -> dict:
+    section_id, fields, properties = design._SECTION_SPECS[1]
+    assert section_id == "systems_and_progression"
+    return {
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": "object",
+                "properties": dict(properties),
+                "required": list(fields),
+                "additionalProperties": False,
             }
-        )
-        return self.outputs.pop(0)
-
-
-def test_control_jsonpath_is_rejected_without_regeneration(monkeypatch):
-    monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
-    monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
-
-    router = _FakeRouter(
-        [
-            '{"section":{"status":"$.section.modules[0].status"}}',
-            '{"section":{"status":"ready"}}',
-        ]
-    )
-
-    with pytest.raises(SpecValidationError, match="control metadata/JSONPath"):
-        units._generate_section_units(
-            router,
-            prompt="make the requested mod",
-            section_id="module_status",
-            fields=["status"],
-            properties={"status": {"type": "string", "minLength": 1}},
-            research={},
-            media_paths=(),
-            trace_metadata=None,
-        )
-
-    assert len(router.calls) == 1
-
-
-def test_section_is_generated_one_top_level_field_per_request(monkeypatch):
-    monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
-    monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
-
-    router = _FakeRouter(
-        [
-            '{"section":{"title":"Alien Planet"}}',
-            '{"section":{"progression":["scan","adapt","escape"]}}',
-        ]
-    )
-    result = units._generate_section_units(
-        router,
-        prompt="alien planet interaction mod",
-        section_id="core",
-        fields=["title", "progression"],
-        properties={
-            "title": {"type": "string", "minLength": 1},
-            "progression": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-            },
         },
+        "required": ["section"],
+        "additionalProperties": False,
+    }
+
+
+def test_game_design_section_transport_leaves_recoverable_shape_to_owner() -> None:
+    raw = json.dumps(
+        {
+            "section": {
+                "progression": ["gather", "launch"],
+                "combat": ["alien_combat", "colony_defense"],
+                "mod_context": {},
+            }
+        }
+    )
+
+    validated = validate_structured_output(
+        raw,
+        response_format="json",
+        response_schema=_systems_schema(),
+    )
+
+    assert json.loads(validated)["section"]["combat"] == [
+        "alien_combat",
+        "colony_defense",
+    ]
+
+
+def test_section_owner_normalizes_combat_list_without_second_generator() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, *_args, **_kwargs) -> str:
+            self.calls += 1
+            return json.dumps(
+                {
+                    "section": {
+                        "progression": ["gather", "launch"],
+                        "combat": ["alien_combat", "colony_defense"],
+                        "mod_context": {},
+                    }
+                }
+            )
+
+    router = Router()
+    _section_id, fields, properties = design._SECTION_SPECS[1]
+    result = design._generate_section(
+        router,
+        prompt="우주 모드를 설계해줘",
+        section_id="systems_and_progression",
+        fields=fields,
+        properties=properties,
         research={},
         media_paths=(),
         trace_metadata=None,
     )
 
-    assert result == {
-        "title": "Alien Planet",
-        "progression": ["scan", "adapt", "escape"],
-    }
-    assert len(router.calls) == 2
-    required = [
-        call["response_schema"]["properties"]["section"]["required"]
-        for call in router.calls
-    ]
-    assert required == [["title"], ["progression"]]
-    assert all(call["response_format"] == "json" for call in router.calls)
-    assert all(call["enable_tools"] is False for call in router.calls)
-    assert all(
-        "JSON_SCHEMA=" in call["messages"][0]["content"]
-        for call in router.calls
-    )
+    assert router.calls == 1
+    assert result["combat"] == {"items": ["alien_combat", "colony_defense"]}
 
 
-def test_invalid_field_schema_does_not_launch_second_generation(monkeypatch):
-    monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
-    monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
-
-    router = _FakeRouter(
-        [
-            '{"section":{"status":[]}}',
-            '{"section":{"status":"ready"}}',
-        ]
-    )
-
-    with pytest.raises((SpecValidationError, StructuredOutputValidationError)):
-        units._generate_section_units(
-            router,
-            prompt="make the requested mod",
-            section_id="module_status",
-            fields=["status"],
-            properties={"status": {"type": "string"}},
-            research={},
-            media_paths=(),
-            trace_metadata=None,
-        )
-
-    assert len(router.calls) == 1
-
-
-def test_structured_adapter_validation_does_not_launch_hidden_repair():
-    class Adapter:
-        calls = 0
-
-        def generate(self, request):
-            type(self).calls += 1
-            return '{"section":{"status":[]}}'
-
-    fake_module = SimpleNamespace(LlamaCppAdapter=Adapter)
-    decode_policy._bind_structured_generation_retry(fake_module)
-
-    request = SimpleNamespace(
-        response_format="json",
-        response_schema={
-            "type": "object",
-            "properties": {
-                "section": {
-                    "type": "object",
-                    "properties": {"status": {"type": "string"}},
-                    "required": ["status"],
-                    "additionalProperties": False,
-                }
-            },
-            "required": ["section"],
-            "additionalProperties": False,
-        },
-        tools=(),
-    )
-
-    with pytest.raises(StructuredOutputValidationError):
-        Adapter().generate(request)
-    assert Adapter.calls == 1
-
-
-def test_llama_payload_receives_host_json_schema():
+def test_unrelated_structured_schema_remains_strict() -> None:
     schema = {
         "type": "object",
-        "properties": {"section": {"type": "object"}},
-        "required": ["section"],
+        "properties": {"payload": {"type": "object"}},
+        "required": ["payload"],
+        "additionalProperties": False,
     }
-    request = SimpleNamespace(response_format="json", response_schema=schema)
-    payload: dict[str, object] = {}
 
-    decode_policy._apply_llama_json_schema(payload, request)
-
-    assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == schema
-    assert payload["json_schema"] is not schema
+    with pytest.raises(StructuredOutputValidationError):
+        validate_structured_output(
+            '{"payload":["not","an","object"]}',
+            response_format="json",
+            response_schema=schema,
+        )

@@ -7,12 +7,11 @@ from types import SimpleNamespace
 from minecraft_mod_ai import research_grounded_rag_contract as grounded
 
 
-def test_query_variants_preserve_original_and_add_implementation_context() -> None:
+def test_discovery_query_variants_preserve_original_without_forced_source_suffix() -> None:
     variants = grounded._query_variants("maplestory.mode.spawn.mob")
 
-    assert variants[0] == "maplestory.mode.spawn.mob"
-    assert "maplestory mode spawn mob" in variants
-    assert any("minecraft fabric mod source implementation" in item for item in variants)
+    assert variants == ("maplestory.mode.spawn.mob", "maplestory mode spawn mob")
+    assert all("source implementation" not in item for item in variants)
     assert len(variants) == len(set(variants))
 
 
@@ -178,10 +177,10 @@ def test_router_attached_workspace_has_priority_over_process_cwd(
 
 
 def test_bundle_augmentation_keeps_external_source_content(monkeypatch) -> None:
-    monkeypatch.setattr(
-        grounded,
-        "_external_retrieval",
-        lambda query, versions: {
+    def fake_external(query, versions, *, mode):
+        del versions
+        assert mode == grounded._PLANNING_DISCOVERY
+        return {
             "schema_version": "mmm/external-grounded-rag-v1",
             "status": "available",
             "query": query,
@@ -195,8 +194,9 @@ def test_bundle_augmentation_keeps_external_source_content(monkeypatch) -> None:
                     "content": "class Example {}",
                 }
             ],
-        },
-    )
+        }
+
+    monkeypatch.setattr(grounded, "_external_retrieval", fake_external)
     agentic = SimpleNamespace(_sha256=lambda value: "sha256:test")
     payload = {
         "schema_version": "mmm/forced-pre-design-rag-v2",
