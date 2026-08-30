@@ -187,6 +187,23 @@ def _validate_output_paths(log_path: Path, junit_path: Path) -> bool:
         return log_path.absolute() != junit_path.absolute()
 
 
+def _prepare_output_directories(log_path: Path, junit_path: Path) -> bool:
+    try:
+        for parent in {log_path.parent, junit_path.parent}:
+            parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(
+            _render_internal_failure(
+                operation="prepare diagnostic output directories",
+                cause_type=type(exc).__name__,
+                cause=_compact_message(str(exc)),
+                fallback=f"log={log_path}; junit={junit_path}",
+            )
+        )
+        return False
+    return True
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     args = _parse_args(argv)
     if not _validate_output_paths(args.log, args.junit):
@@ -201,8 +218,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         return 2
 
-    args.log.parent.mkdir(parents=True, exist_ok=True)
-    args.junit.parent.mkdir(parents=True, exist_ok=True)
+    if not _prepare_output_directories(args.log, args.junit):
+        return 1
     try:
         args.junit.unlink(missing_ok=True)
     except OSError as exc:
