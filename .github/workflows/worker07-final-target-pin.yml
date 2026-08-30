@@ -32,7 +32,17 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Apply Worker 07 final hardening
-        run: python .github/scripts/worker07_final_target_pin.py
+        run: |
+          python .github/scripts/worker07_final_target_pin.py
+          python - <<'PY'
+          from pathlib import Path
+          for raw in (
+              "tests/test_worker07_target_context_hardening.py",
+              "docs/parallel_progress/worker-07.md",
+          ):
+              path = Path(raw)
+              path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+          PY
 
       - name: Static verification
         run: |
@@ -46,17 +56,24 @@ jobs:
       - name: Full repository regression
         run: python -m pytest -q
 
-      - name: Rebase onto latest main and reverify
+      - name: Reset onto latest main and reverify
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-            git rebase origin/main
-          fi
+          git reset --hard origin/main
           python .github/scripts/worker07_final_target_pin.py
+          python - <<'PY'
+          from pathlib import Path
+          for raw in (
+              "tests/test_worker07_target_context_hardening.py",
+              "docs/parallel_progress/worker-07.md",
+          ):
+              path = Path(raw)
+              path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+          PY
           git diff --check
           python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py tests/test_worker07_target_context_hardening.py
           python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py tests/test_worker07_target_context_hardening.py --select F,E7,E9
