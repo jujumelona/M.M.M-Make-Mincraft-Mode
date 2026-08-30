@@ -17,7 +17,7 @@ from typing import Any
 _TRAJECTORY_SCHEMA = "mmm/verified-trajectory-v3"
 _VERIFICATION_SCHEMA = "mmm/trajectory-verification-v1"
 _PROCEDURE_SCHEMA = "mmm/procedure-trace-v1"
-_REMOTE_SCHEMA = "mmm/remote-trajectory-v1"
+_REMOTE_SCHEMA = "v3"
 _CODE_TASKS = {"repair", "generation", "build", "runtime", "quality", "release"}
 _TASK_CLASSES = _CODE_TASKS | {"research", "planning", "general"}
 _PROCEDURE_KINDS = {"tool", "action", "operation", "verifier"}
