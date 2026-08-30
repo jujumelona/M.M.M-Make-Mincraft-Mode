@@ -16,24 +16,30 @@ def _fingerprinted_module_names(monkeypatch, checkpoint_id: str) -> set[str]:
     return names
 
 
-def test_source_validation_fingerprint_includes_runtime_installed_validators(
+def test_source_validation_fingerprint_includes_active_validators(
     monkeypatch,
 ) -> None:
     names = _fingerprinted_module_names(monkeypatch, "validate-source")
     assert "minecraft_mod_ai.validation_checkpoint_policy" in names
     assert "minecraft_mod_ai.runtime_bootstrap" in names
+    assert "minecraft_mod_ai.complete_orchestrator" in names
     assert "minecraft_mod_ai.scalable_validator" in names
     assert "minecraft_mod_ai.validator" in names
-    assert "minecraft_mod_ai.validator_boss_contract" in names
+    assert "minecraft_mod_ai.scale_policy" in names
     assert "minecraft_mod_ai.platform_validation_contract" in names
+    assert "minecraft_mod_ai.validator_boss_contract" not in names
 
 
-def test_jdt_validation_fingerprint_includes_runtime_installed_jdt_gates(
+def test_jdt_validation_fingerprint_includes_active_jdt_gates(
     monkeypatch,
 ) -> None:
     names = _fingerprinted_module_names(monkeypatch, "validate-jdt")
     assert "minecraft_mod_ai.validation_checkpoint_policy" in names
     assert "minecraft_mod_ai.runtime_bootstrap" in names
+    assert "minecraft_mod_ai.complete_orchestrator" in names
     assert "minecraft_mod_ai.java_lsp" in names
     assert "minecraft_mod_ai.java_lsp_process_safety_contract" in names
-    assert "minecraft_mod_ai.orchestrator_jdt_gate_contract" in names
+    assert "minecraft_mod_ai.validation_diagnostic_contract" in names
+    assert "minecraft_mod_ai.validation_execution_contract" in names
+    assert "minecraft_mod_ai.research_validation_fingerprint_performance" in names
+    assert "minecraft_mod_ai.orchestrator_jdt_gate_contract" not in names
