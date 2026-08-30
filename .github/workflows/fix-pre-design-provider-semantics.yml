@@ -1,0 +1,196 @@
+name: Fix pre-design provider semantics
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-pre-design-provider-semantics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dev dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+
+      - name: Apply provider semantics fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('minecraft_mod_ai/pre_design_research_pipeline.py')
+          source = source_path.read_text(encoding='utf-8')
+
+          old_provider = '''    providers = {
+              str(item).casefold()
+              for item in domain.get("providers", [])
+              if str(item).strip()
+          }
+          if "github" in providers and not any(_is_github_record(record) for record in records):
+              raise PreDesignResearchFailure(
+                  f"Pre-design retrieval gap for domain {domain_id!r}: required provider 'github' "
+                  "returned no content-bearing source document."
+              )
+          '''
+          new_provider = '''    # ``providers`` describes eligible retrieval routes. It is deliberately OR
+              # semantics: one claim-bearing route is enough to continue pre-design research.
+              # A provider is mandatory only when the caller explicitly places it in
+              # ``required_providers``. This prevents an empty donor/GitHub search from
+              # turning a valid local/official evidence result into a fatal retrieval gap.
+              required_providers = {
+                  str(item).casefold()
+                  for item in domain.get("required_providers", [])
+                  if str(item).strip()
+              }
+              if "github" in required_providers and not any(
+                  _is_github_record(record) for record in records
+              ):
+                  raise PreDesignResearchFailure(
+                      f"Pre-design retrieval gap for domain {domain_id!r}: explicitly required "
+                      "provider 'github' returned no content-bearing source document."
+                  )
+          '''
+          if old_provider not in source:
+              raise SystemExit('provider validation anchor drifted')
+          source = source.replace(old_provider, new_provider, 1)
+
+          old_kinds = '''                "evidence_kinds": [
+                      "minecraft_api",
+                      "compatibility",
+                      "runtime_behavior",
+                      "local_project",
+                      "testing",
+                  ],
+          '''
+          new_kinds = '''                "evidence_kinds": [
+                      "minecraft_api",
+                      "runtime_behavior",
+                      "local_project",
+                      "testing",
+                  ],
+          '''
+          if old_kinds not in source:
+              raise SystemExit('pre-design evidence-kinds anchor drifted')
+          source = source.replace(old_kinds, new_kinds, 1)
+          source_path.write_text(source, encoding='utf-8')
+
+          test_path = Path('tests/test_pre_design_rag_root_cause.py')
+          tests = test_path.read_text(encoding='utf-8')
+          old_test = '''def test_required_github_gap_fails_before_model_extraction():
+              with pytest.raises(subject.PreDesignResearchFailure, match="github"):
+                  subject._validate_domain_provider_grounding(
+                      {"domain_id": "resource", "providers": ["github"]},
+                      {
+                          "queries": [
+                              {
+                                  "query": "resource gathering",
+                                  "evidence_records": [
+                                      {
+                                          "source_id": "official:resource-doc",
+                                          "content": "A sufficiently long official resource gathering explanation for the test.",
+                                      }
+                                  ],
+                              }
+                          ]
+                      },
+                  )
+          '''
+          new_test = '''def test_provider_routes_are_alternatives_when_claim_bearing_content_exists():
+              subject._validate_domain_provider_grounding(
+                  {
+                      "domain_id": "resource",
+                      "providers": ["project_rag", "github"],
+                  },
+                  {
+                      "queries": [
+                          {
+                              "query": "resource gathering",
+                              "evidence_records": [
+                                  {
+                                      "source_id": "project:src/main/java/Harvest.java",
+                                      "content": "A sufficiently long local implementation explaining resource gathering behavior.",
+                                  }
+                              ],
+                          }
+                      ]
+                  },
+              )
+
+
+          def test_explicit_required_github_gap_still_fails_closed():
+              with pytest.raises(subject.PreDesignResearchFailure, match="github"):
+                  subject._validate_domain_provider_grounding(
+                      {
+                          "domain_id": "resource",
+                          "providers": ["project_rag", "github"],
+                          "required_providers": ["github"],
+                      },
+                      {
+                          "queries": [
+                              {
+                                  "query": "resource gathering",
+                                  "evidence_records": [
+                                      {
+                                          "source_id": "project:src/main/java/Harvest.java",
+                                          "content": "A sufficiently long local implementation explaining resource gathering behavior.",
+                                      }
+                                  ],
+                              }
+                          ]
+                      },
+                  )
+
+
+          def test_pre_design_brief_defers_target_specific_obligations_until_freeze():
+              brief = subject._pre_design_brief("resource gathering and progression")
+              domains = brief["domains"]
+              assert [domain["domain_id"] for domain in domains] == ["request"]
+              domain = domains[0]
+              assert "github" not in domain.get("providers", [])
+              assert "compatibility" not in domain.get("evidence_kinds", [])
+              assert "dependency" not in domain.get("evidence_kinds", [])
+              assert "license" not in domain.get("evidence_kinds", [])
+          '''
+          if old_test not in tests:
+              raise SystemExit('provider regression-test anchor drifted')
+          tests = tests.replace(old_test, new_test, 1)
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+      - name: Validate fix
+        run: |
+          python -m compileall -q minecraft_mod_ai
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python -m pytest -q \
+            tests/test_pre_design_rag_root_cause.py \
+            tests/test_grounded_rag_runtime_contract.py
+
+      - name: Verify semantics
+        shell: bash
+        run: |
+          ! grep -R "required provider 'github'" -n minecraft_mod_ai tests
+          grep -n "required_providers" minecraft_mod_ai/pre_design_research_pipeline.py
+          grep -n "test_provider_routes_are_alternatives" tests/test_pre_design_rag_root_cause.py
+          grep -n "test_pre_design_brief_defers_target_specific" tests/test_pre_design_rag_root_cause.py
+
+      - name: Commit fix directly to main
+        shell: bash
+        run: |
+          rm .github/workflows/fix-pre-design-provider-semantics.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/pre_design_research_pipeline.py tests/test_pre_design_rag_root_cause.py .github/workflows/fix-pre-design-provider-semantics.yml
+          git commit -m 'fix: make pre-design evidence providers alternative routes'
+          git push origin HEAD:main
