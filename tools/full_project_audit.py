@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import smtplib
 import socket
 import ssl
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ WARN = "WARN"
 FAIL = "FAIL"
 SKIP = "SKIP"
 STATUSES = {PASS, WARN, FAIL, SKIP}
+_OUTPUT_TAIL_LIMIT = 1200
 
 _SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|cookie)"
@@ -50,26 +52,137 @@ class Check:
 
     @property
     def passed(self) -> bool:
-        return self.status != FAIL
+        return self.status == PASS
+
+    @property
+    def blocking_failure(self) -> bool:
+        return self.status == FAIL
+
+    @property
+    def non_blocking(self) -> bool:
+        return self.status in {WARN, SKIP}
 
     def payload(self) -> dict[str, Any]:
         value = asdict(self)
         value["passed"] = self.passed
+        value["blocking_failure"] = self.blocking_failure
+        value["non_blocking"] = self.non_blocking
         return value
 
 
+@dataclass(frozen=True)
+class LoggedProcessResult:
+    returncode: int | None
+    output_tail: str
+    timed_out: bool = False
+    error: str | None = None
+
+
 CHECKS: list[Check] = []
-LOGS: list[str] = []
 
 
-def redact(value: Any) -> str:
-    text = str(value)
-    text = _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", text)
+def _environment_secret_values() -> tuple[str, ...]:
+    values: list[str] = []
     for name, secret in os.environ.items():
         upper = name.upper()
-        if secret and any(part in upper for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "COOKIE")):
+        if secret and any(
+            part in upper
+            for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "COOKIE")
+        ):
+            values.append(secret)
+    return tuple(dict.fromkeys(values))
+
+
+def redact(value: Any, *, secrets: Iterable[str] | None = None) -> str:
+    text = str(value)
+    text = _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", text)
+    secret_values = _environment_secret_values() if secrets is None else secrets
+    for secret in secret_values:
+        if secret:
             text = text.replace(secret, "<redacted>")
     return text
+
+
+def _append_log(value: str) -> None:
+    with LOG_PATH.open("a", encoding="utf-8", errors="replace") as handle:
+        handle.write(redact(value))
+        if value and not value.endswith("\n"):
+            handle.write("\n")
+
+
+def _drain_process_output(path: Path) -> str:
+    """Redact process output to the persistent log while retaining only a small tail."""
+
+    secrets = _environment_secret_values()
+    tail = ""
+    with path.open("r", encoding="utf-8", errors="replace") as source, LOG_PATH.open(
+        "a", encoding="utf-8", errors="replace"
+    ) as destination:
+        for line in source:
+            safe = redact(line, secrets=secrets)
+            destination.write(safe)
+            tail = (tail + safe)[-_OUTPUT_TAIL_LIMIT:]
+    return " ".join(tail.split())
+
+
+def _run_logged_process(
+    args: list[str],
+    *,
+    timeout: int,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    label: str | None = None,
+) -> LoggedProcessResult:
+    """Run a subprocess without retaining its full output in memory."""
+
+    run_env = {**os.environ, "PYTHONUTF8": "1"}
+    if env:
+        run_env.update(env)
+    _append_log(f"\n[{label or 'command'}] $ {shlex.join(args)}")
+
+    temporary_path: Path | None = None
+    returncode: int | None = None
+    timed_out = False
+    error: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=AUDIT_DIR,
+            prefix=".process-output-",
+            suffix=".log",
+            delete=False,
+        ) as raw_output:
+            temporary_path = Path(raw_output.name)
+            try:
+                process = subprocess.run(
+                    args,
+                    cwd=cwd,
+                    stdout=raw_output,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout,
+                    env=run_env,
+                    check=False,
+                )
+                returncode = process.returncode
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            except OSError as exc:
+                error = f"{type(exc).__name__}: {exc}"
+        tail = _drain_process_output(temporary_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+    if error:
+        _append_log(f"process_error={error}")
+    if timed_out:
+        _append_log(f"process_timeout={timeout}s")
+    return LoggedProcessResult(
+        returncode=returncode,
+        output_tail=tail,
+        timed_out=timed_out,
+        error=error,
+    )
 
 
 def record(
@@ -86,7 +199,7 @@ def record(
     safe_detail = redact(detail)
     check = Check(name, normalized, safe_detail, round(duration, 3), category)
     CHECKS.append(check)
-    LOGS.append(f"[{normalized}] [{category}] {name}: {safe_detail}")
+    _append_log(f"[{normalized}] [{category}] {name}: {safe_detail}")
 
 
 def isolated_probe(
@@ -125,32 +238,14 @@ def command(
     env: dict[str, str] | None = None,
 ) -> None:
     started = time.monotonic()
-    run_env = {**os.environ, "PYTHONUTF8": "1"}
-    if env:
-        run_env.update(env)
     try:
-        process = subprocess.run(
+        result = _run_logged_process(
             args,
             cwd=cwd or ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
             timeout=timeout,
-            env=run_env,
+            env=env,
+            label=name,
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        output = redact(stdout + stderr)
-        LOGS.append(f"\n$ {' '.join(args)}\n{output}\n")
-        record(
-            name,
-            failure_status,
-            f"timeout={timeout}s",
-            time.monotonic() - started,
-            category=category,
-        )
-        return
     except Exception as exc:
         record(
             name,
@@ -161,15 +256,16 @@ def command(
         )
         return
 
-    output = redact(process.stdout.strip())
-    LOGS.append(f"\n$ {' '.join(args)}\n{output}\n")
-    record(
-        name,
-        PASS if process.returncode == 0 else failure_status,
-        f"exit={process.returncode}; output_tail={output[-1200:]}",
-        time.monotonic() - started,
-        category=category,
-    )
+    if result.timed_out:
+        status = failure_status
+        detail = f"timeout={timeout}s; output_tail={result.output_tail}"
+    elif result.error:
+        status = failure_status
+        detail = f"{result.error}; output_tail={result.output_tail}"
+    else:
+        status = PASS if result.returncode == 0 else failure_status
+        detail = f"exit={result.returncode}; output_tail={result.output_tail}"
+    record(name, status, detail, time.monotonic() - started, category=category)
 
 
 def tracked_files() -> list[Path]:
@@ -574,7 +670,7 @@ def audit_wheel_import() -> None:
         target.mkdir()
         run_cwd.mkdir()
         started = time.monotonic()
-        install = subprocess.run(
+        install = _run_logged_process(
             [
                 sys.executable,
                 "-m",
@@ -586,12 +682,11 @@ def audit_wheel_import() -> None:
                 str(wheel),
             ],
             cwd=run_cwd,
-            capture_output=True,
-            text=True,
             timeout=900,
+            label="wheel pip-target install",
         )
-        smoke = None
-        if install.returncode == 0:
+        smoke: LoggedProcessResult | None = None
+        if install.returncode == 0 and not install.timed_out and not install.error:
             smoke_env = {**os.environ, "PYTHONPATH": str(target), "PYTHONUTF8": "1"}
             smoke_code = (
                 "import pathlib, minecraft_mod_ai; "
@@ -601,32 +696,51 @@ def audit_wheel_import() -> None:
                 "assert ModelRegistry().profile_names(); "
                 "print(p)"
             )
-            smoke = subprocess.run(
+            smoke = _run_logged_process(
                 [sys.executable, "-c", smoke_code],
                 cwd=run_cwd,
-                capture_output=True,
-                text=True,
                 timeout=120,
                 env=smoke_env,
+                label="wheel clean import",
             )
-        output = install.stdout + install.stderr
-        if smoke is not None:
-            output += smoke.stdout + smoke.stderr
-        LOGS.append(f"\n[wheel pip-target]\n{redact(output)}\n")
-        passed = install.returncode == 0 and smoke is not None and smoke.returncode == 0
+        passed = (
+            install.returncode == 0
+            and not install.timed_out
+            and not install.error
+            and smoke is not None
+            and smoke.returncode == 0
+            and not smoke.timed_out
+            and not smoke.error
+        )
+        output_tail = smoke.output_tail if smoke is not None else install.output_tail
         record(
             "wheel_clean_environment_import",
             PASS if passed else FAIL,
-            f"wheel={wheel.name}; output_tail={redact(output[-1200:])}",
+            (
+                f"wheel={wheel.name}; install_exit={install.returncode}; "
+                f"smoke_exit={smoke.returncode if smoke is not None else 'not-run'}; "
+                f"output_tail={output_tail}"
+            ),
             time.monotonic() - started,
             category="packaging",
         )
 
 
+def _initialize_artifacts() -> bool:
+    try:
+        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_PATH.write_text("", encoding="utf-8")
+        REPORT_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"[FAIL] [audit-runner] initialize_artifacts: {type(exc).__name__}: {exc}")
+        return False
+    return True
+
+
 def main() -> int:
     CHECKS.clear()
-    LOGS.clear()
-    AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    if not _initialize_artifacts():
+        return 1
 
     try:
         files = tracked_files()
@@ -734,6 +848,12 @@ def main() -> int:
         "failed_checks": failures,
         "warning_checks": warnings,
         "skipped_checks": skipped,
+        "status_semantics": {
+            "PASS": "passed=true; successful check",
+            "WARN": "passed=false; non_blocking=true",
+            "SKIP": "passed=false; non_blocking=true",
+            "FAIL": "passed=false; blocking_failure=true",
+        },
         "limitations": [
             "Debug does not launch Minecraft/Fabric clients or dedicated servers.",
             "Large local model weights are not downloaded merely to prove a hard-coded model identity.",
@@ -746,7 +866,6 @@ def main() -> int:
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    LOG_PATH.write_text("\n".join(LOGS) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 1 if failures else 0
 
