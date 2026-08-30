@@ -61,6 +61,9 @@ def finalize_runtime() -> None:
             small_model_max_agent_contract,
             work_graph,
         )
+        from .active_game_design_readiness_contract import (
+            install as install_active_game_design_readiness,
+        )
         from .agent_observation_determinism import (
             install as install_observation_determinism,
         )
@@ -193,6 +196,7 @@ def finalize_runtime() -> None:
         install_semantic_requirement_authority()
         install_planner_graph_integrity()
         install_planner_design_readiness()
+        install_active_game_design_readiness()
         install_deep_design_execution()
         install_evidence_obligation_contract()
         # The approved graph is now frozen and the obligation DAG owner is installed.
@@ -204,9 +208,9 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        # Game-design section generation is owned directly by
-        # agentic_research_game_design._generate_section. Do not install a second
-        # field/subtree generator over that live path.
+        # Section generation remains owned by agentic_research_game_design, while the
+        # current host-owned GameDesignPlanner path is guarded by the readiness contract.
+        # Neither contract introduces a competing field/subtree generator.
         install_implementation_kind_boundary(
             complete_spec_module=complete_spec,
             support_module=complete_orchestrator_support,
