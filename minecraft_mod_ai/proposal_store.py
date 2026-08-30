@@ -7,8 +7,10 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 import zipfile
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
@@ -29,6 +31,7 @@ COLLECTION_FORMAT = 'mmm/numbered-collection-manifests-v1'
 DEFAULT_PART_SIZE_BYTES = 1024 * 1024
 MIN_PART_SIZE_BYTES = 16 * 1024
 _COLLECTION_MANIFEST_SHARDS = 128
+_MANIFEST_CACHE_MAX_ENTRIES = 4
 _PAGE_CURSOR = re.compile('^p_(\\d+)_(\\d+)_(\\d+)_(\\d+)_(\\d+)_([0-9a-f]{32})$')
 MAX_PAGE_ITEMS = 1000
 DEFAULT_PAGE_SIZE_BYTES = 256 * 1024
@@ -36,6 +39,12 @@ MIN_PAGE_SIZE_BYTES = 8 * 1024
 MAX_PAGE_SIZE_BYTES = 4 * 1024 * 1024
 _PAGE_METADATA_RESERVE_BYTES = 4 * 1024
 _T = TypeVar('_T')
+_MANIFEST_CACHE: OrderedDict[
+    tuple[str, int, int, int, str],
+    tuple[tuple[dict[str, Any], ...], ...],
+] = OrderedDict()
+_MANIFEST_CACHE_LOCK = threading.RLock()
+
 
 def write_sharded_complete_proposal(proposal: CompleteProposal, index_path: str | Path, *, shard_size: int, policy: ScalePolicy | None=None, part_size_bytes: int=DEFAULT_PART_SIZE_BYTES) -> Path:
     """Persist a proposal as bounded, hash-addressed JSON chunks and shards.
@@ -90,10 +99,12 @@ def write_sharded_complete_proposal(proposal: CompleteProposal, index_path: str 
         if temporary_index is not None and temporary_index.exists():
             temporary_index.unlink()
 
+
 def load_sharded_complete_proposal(index_path: str | Path) -> CompleteProposal:
     index = Path(index_path).expanduser().resolve()
     raw = json.loads(index.read_text(encoding='utf-8'))
     return complete_proposal_from_index(raw, lambda relative: _read_file_part(index.parent, relative))
+
 
 def read_sharded_complete_proposal_section(index_path: str | Path, section: str, *, cursor: str='', limit: int=100, max_bytes: int=DEFAULT_PAGE_SIZE_BYTES, cursor_key: bytes | None=None) -> dict[str, Any]:
     """Read one bounded page from an immutable complete-proposal store.
@@ -149,7 +160,10 @@ def read_sharded_complete_proposal_section(index_path: str | Path, section: str,
     if selected in {'game_design', 'base_proposal'}:
         value = _read_json_part(raw[selected], read_part)
         return _read_plain_value_page(value, proposal_hash=proposal_hash, section=selected, cursor=cursor, limit=limit, max_bytes=max_bytes, cursor_key=cursor_key)
+    if selected in {'modules', 'assets', 'acceptance_tests'}:
+        return _read_collection_page(raw[selected], read_part, proposal_hash=proposal_hash, section=selected, cursor=cursor, limit=limit, max_bytes=max_bytes, cursor_key=cursor_key)
     raise SpecValidationError(f'Unknown complete proposal section: {selected!r}')
+
 
 def load_sharded_complete_proposal_from_zip(archive: zipfile.ZipFile, index_name: str) -> CompleteProposal:
     raw = json.loads(archive.read(index_name).decode('utf-8'))
@@ -160,6 +174,7 @@ def load_sharded_complete_proposal_from_zip(archive: zipfile.ZipFile, index_name
         name = (base / normalized).as_posix()
         return archive.read(name)
     return complete_proposal_from_index(raw, read)
+
 
 def complete_proposal_from_index(raw: dict[str, Any], read_part: Callable[[str], bytes]) -> CompleteProposal:
     required = {'schema_version', 'proposal_hash', 'metadata', 'base_proposal', 'game_design', 'modules', 'assets', 'acceptance_tests'}
@@ -184,12 +199,14 @@ def complete_proposal_from_index(raw: dict[str, Any], read_part: Callable[[str],
         raise SpecValidationError('Complete proposal shard root hash is invalid.')
     return proposal
 
+
 def _proposal_collection_counts(raw: dict[str, Any]) -> dict[str, int]:
     return {name: _collection_count(raw[name]) for name in ('modules', 'assets', 'acceptance_tests')}
 
+
 def _available_sections(raw: dict[str, Any]) -> list[str]:
-    sections = ['overview', 'metadata', 'game_design', 'base_proposal', 'modules', 'assets', 'acceptance_tests']
-    return sections
+    return ['overview', 'metadata', 'game_design', 'base_proposal', 'modules', 'assets', 'acceptance_tests']
+
 
 def _collection_count(value: Any) -> int:
     if not isinstance(value, dict):
@@ -198,6 +215,7 @@ def _collection_count(value: Any) -> int:
     if type(count) is not int or count < 0:
         raise SpecValidationError('Collection shard index values are invalid.')
     return count
+
 
 def _read_plain_value_page(value: Any, *, proposal_hash: str, section: str, cursor: str, limit: int, max_bytes: int, cursor_key: bytes | None) -> dict[str, Any]:
     offset, manifest_index, shard_index, item_index, fragment_offset = _decode_page_cursor(cursor, proposal_hash=proposal_hash, section=section, cursor_key=cursor_key)
@@ -237,6 +255,7 @@ def _read_plain_value_page(value: Any, *, proposal_hash: str, section: str, curs
     next_cursor = _encode_page_cursor(proposal_hash=proposal_hash, section=section, offset=offset, manifest_index=0, shard_index=0, item_index=0, fragment_offset=fragment_offset, cursor_key=cursor_key) if offset < len(sequence) else ''
     return _bounded_page_result({'schema_version': 'mmm/complete-plan-section-v1', 'proposal_hash': proposal_hash, 'section': section, 'items': items, 'returned': len(items), 'item_fragment': fragment, 'total_count': len(sequence), 'next_cursor': next_cursor, 'remaining': len(sequence) - offset, 'max_bytes': max_bytes}, max_bytes=max_bytes)
 
+
 def _read_collection_page(value: Any, read_part: Callable[[str], bytes], *, proposal_hash: str, section: str, cursor: str, limit: int, max_bytes: int, cursor_key: bytes | None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SpecValidationError('Collection shard index fields are invalid.')
@@ -246,23 +265,18 @@ def _read_collection_page(value: Any, read_part: Callable[[str], bytes], *, prop
         shards = value['shards']
         if not isinstance(shards, list) or manifest_index != 0:
             raise SpecValidationError('Collection shard index values are invalid.')
-
-        def load_manifest(index: int) -> tuple[list[Any], PurePosixPath]:
-            if index != 0:
-                return ([], PurePosixPath('.'))
-            return (shards, PurePosixPath('.'))
-        manifest_count = 1 if shards else 0
+        manifests = (tuple(shards),) if shards else ()
+        manifest_parent = PurePosixPath('.')
     else:
-        count, manifest_count, manifest_prefix = _validate_v2_collection(value, read_part)
+        count, manifest_prefix, manifests = _validated_v2_collection_manifests(value, read_part)
         manifest_parent = manifest_prefix.parent
-        manifest_name = manifest_prefix.name
+    manifest_count = len(manifests)
 
-        def load_manifest(index: int) -> tuple[list[Any], PurePosixPath]:
-            if not 0 <= index < manifest_count:
-                return ([], manifest_parent)
-            path = (manifest_parent / f'{manifest_name}-{index:08d}.json').as_posix()
-            payload = _read_collection_manifest(path, read_part)
-            return (payload['shards'], manifest_parent)
+    def load_manifest(index: int) -> tuple[tuple[dict[str, Any], ...], PurePosixPath]:
+        if not 0 <= index < manifest_count:
+            return ((), manifest_parent)
+        return (manifests[index], manifest_parent)
+
     if offset > count:
         raise SpecValidationError('Page cursor exceeds the section length.')
     items: list[Any] = []
@@ -334,34 +348,50 @@ def _read_collection_page(value: Any, read_part: Callable[[str], bytes], *, prop
     next_cursor = _encode_page_cursor(proposal_hash=proposal_hash, section=section, offset=offset, manifest_index=manifest_index, shard_index=shard_index, item_index=item_index, fragment_offset=fragment_offset, cursor_key=cursor_key) if offset < count else ''
     return _bounded_page_result({'schema_version': 'mmm/complete-plan-section-v1', 'proposal_hash': proposal_hash, 'section': section, 'items': items, 'returned': len(items), 'item_fragment': fragment, 'total_count': count, 'next_cursor': next_cursor, 'remaining': count - offset, 'max_bytes': max_bytes}, max_bytes=max_bytes)
 
-def _validate_v2_collection(value: dict[str, Any], read_part: Callable[[str], bytes]) -> tuple[int, int, PurePosixPath]:
+
+def _validated_v2_collection_manifests(value: dict[str, Any], read_part: Callable[[str], bytes]) -> tuple[int, PurePosixPath, tuple[tuple[dict[str, Any], ...], ...]]:
     required = {'format', 'count', 'shard_count', 'manifest_count', 'manifest_prefix', 'manifest_sha256'}
     if set(value) != required or value['format'] != COLLECTION_FORMAT:
         raise SpecValidationError('Collection shard index fields are invalid.')
     count = _collection_count(value)
     shard_count = value['shard_count']
     manifest_count = value['manifest_count']
-    if type(shard_count) is not int or shard_count < 0 or type(manifest_count) is not int or (manifest_count < 0) or (manifest_count > shard_count) or (shard_count > count) or ((count == 0) != (shard_count == 0)) or ((shard_count == 0) != (manifest_count == 0)):
+    if type(shard_count) is not int or shard_count < 0 or type(manifest_count) is not int or manifest_count < 0 or manifest_count > shard_count or shard_count > count or ((count == 0) != (shard_count == 0)) or ((shard_count == 0) != (manifest_count == 0)):
         raise SpecValidationError('Collection shard and manifest counts are inconsistent.')
     manifest_prefix = _safe_relative(str(value['manifest_prefix']))
+    expected_hash = str(value['manifest_sha256'])
+    cache_key = (expected_hash, count, shard_count, manifest_count, manifest_prefix.as_posix())
+    with _MANIFEST_CACHE_LOCK:
+        cached = _MANIFEST_CACHE.get(cache_key)
+        if cached is not None:
+            _MANIFEST_CACHE.move_to_end(cache_key)
+            return (count, manifest_prefix, cached)
+
     manifest_parent = manifest_prefix.parent
     manifest_name = manifest_prefix.name
     digest = hashlib.sha256()
     observed_shards = 0
+    manifests: list[tuple[dict[str, Any], ...]] = []
     for index in range(manifest_count):
         path = (manifest_parent / f'{manifest_name}-{index:08d}.json').as_posix()
         data = read_part(path)
         digest.update(data)
         payload = _decode_collection_manifest(path, data)
-        observed_shards += len(payload['shards'])
-    if 'sha256:' + digest.hexdigest() != str(value['manifest_sha256']):
+        descriptors = tuple(payload['shards'])
+        manifests.append(descriptors)
+        observed_shards += len(descriptors)
+    if 'sha256:' + digest.hexdigest() != expected_hash:
         raise SpecValidationError('Collection manifest hash does not match its index.')
     if observed_shards != shard_count:
         raise SpecValidationError('Collection manifest shard count does not match its index.')
-    return (count, manifest_count, manifest_prefix)
+    frozen = tuple(manifests)
+    with _MANIFEST_CACHE_LOCK:
+        _MANIFEST_CACHE[cache_key] = frozen
+        _MANIFEST_CACHE.move_to_end(cache_key)
+        while len(_MANIFEST_CACHE) > _MANIFEST_CACHE_MAX_ENTRIES:
+            _MANIFEST_CACHE.popitem(last=False)
+    return (count, manifest_prefix, frozen)
 
-def _read_collection_manifest(path: str, read_part: Callable[[str], bytes]) -> dict[str, Any]:
-    return _decode_collection_manifest(path, read_part(path))
 
 def _decode_collection_manifest(path: str, data: bytes) -> dict[str, Any]:
     try:
@@ -372,11 +402,13 @@ def _decode_collection_manifest(path: str, data: bytes) -> dict[str, Any]:
         raise SpecValidationError(f'Collection manifest fields are invalid: {path}')
     return payload
 
+
 def _encode_page_cursor(*, proposal_hash: str, section: str, offset: int, manifest_index: int, shard_index: int, item_index: int, fragment_offset: int, cursor_key: bytes | None) -> str:
     payload = f'{proposal_hash}\x00{section}\x00{offset}\x00{manifest_index}\x00{shard_index}\x00{item_index}\x00{fragment_offset}'
     key = cursor_key or hashlib.sha256(f'mmm-local-page-cursor\x00{proposal_hash}'.encode()).digest()
     checksum = hmac.new(key, payload.encode('utf-8'), hashlib.sha256).hexdigest()[:32]
     return f'p_{offset}_{manifest_index}_{shard_index}_{item_index}_{fragment_offset}_{checksum}'
+
 
 def _decode_page_cursor(cursor: str, *, proposal_hash: str, section: str, cursor_key: bytes | None) -> tuple[int, int, int, int, int]:
     if cursor == '':
@@ -395,6 +427,7 @@ def _decode_page_cursor(cursor: str, *, proposal_hash: str, section: str, cursor
         raise SpecValidationError('Page cursor does not match this proposal section.')
     return (offset, manifest_index, shard_index, item_index, fragment_offset)
 
+
 def _item_fragment(encoded: bytes, *, offset: int, payload_budget: int) -> tuple[dict[str, Any], int, bool]:
     if offset < 0 or offset >= len(encoded):
         raise SpecValidationError('Page cursor fragment position is invalid.')
@@ -403,11 +436,13 @@ def _item_fragment(encoded: bytes, *, offset: int, payload_budget: int) -> tuple
     fragment = {'schema_version': 'mmm/canonical-json-item-fragment-v1', 'encoding': 'base64', 'content_type': 'application/json', 'item_sha256': 'sha256:' + hashlib.sha256(encoded).hexdigest(), 'offset_bytes': offset, 'total_bytes': len(encoded), 'data': base64.b64encode(encoded[offset:end]).decode('ascii'), 'complete': end == len(encoded)}
     return (fragment, end, end == len(encoded))
 
+
 def _bounded_page_result(result: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
     encoded = json.dumps(result, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
     if len(encoded) > max_bytes:
         raise SpecValidationError('Complete proposal page exceeded its transport byte budget.')
     return result
+
 
 def _write_collection_v2(root: Path, prefix: str, values: Sequence[Any] | Iterable[Any], shard_size: int, *, part_size_bytes: int) -> dict[str, Any]:
     manifest_page: list[dict[str, Any]] = []
@@ -454,48 +489,17 @@ def _write_collection_v2(root: Path, prefix: str, values: Sequence[Any] | Iterab
     flush_manifest()
     return {'format': COLLECTION_FORMAT, 'count': count, 'shard_count': shard_count, 'manifest_count': manifest_count, 'manifest_prefix': f'{prefix}-manifest', 'manifest_sha256': 'sha256:' + manifest_digest.hexdigest()}
 
+
 def _read_collection(value: Any, read_part: Callable[[str], bytes]) -> list[Any]:
     if not isinstance(value, dict):
         raise SpecValidationError('Collection shard index fields are invalid.')
     if set(value) == {'count', 'shards'}:
         return _read_collection_v1(value, read_part)
-    required_v2 = {'format', 'count', 'shard_count', 'manifest_count', 'manifest_prefix', 'manifest_sha256'}
-    if set(value) != required_v2 or value['format'] != COLLECTION_FORMAT:
-        raise SpecValidationError('Collection shard index fields are invalid.')
-    count = value['count']
-    shard_count = value['shard_count']
-    manifest_count = value['manifest_count']
-    if type(count) is not int or count < 0 or type(shard_count) is not int or (shard_count < 0) or (type(manifest_count) is not int) or (manifest_count < 0):
-        raise SpecValidationError('Collection shard index values are invalid.')
-    if manifest_count > shard_count or shard_count > count or (count == 0) != (shard_count == 0) or ((shard_count == 0) != (manifest_count == 0)):
-        raise SpecValidationError('Collection shard and manifest counts are inconsistent.')
-    manifest_prefix = _safe_relative(str(value['manifest_prefix']))
-    expected_manifest_hash = str(value['manifest_sha256'])
-    manifest_digest = hashlib.sha256()
-    observed_shards = 0
+    count, manifest_prefix, manifests = _validated_v2_collection_manifests(value, read_part)
     manifest_parent = manifest_prefix.parent
-    manifest_name = manifest_prefix.name
-    for index in range(manifest_count):
-        path = (manifest_parent / f'{manifest_name}-{index:08d}.json').as_posix()
-        data = read_part(path)
-        manifest_digest.update(data)
-        try:
-            payload = json.loads(data.decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise SpecValidationError(f'Collection manifest is invalid JSON: {path}') from exc
-        if not isinstance(payload, dict) or set(payload) != {'shards'} or (not isinstance(payload['shards'], list)) or (not payload['shards']) or (len(payload['shards']) > _COLLECTION_MANIFEST_SHARDS):
-            raise SpecValidationError(f'Collection manifest fields are invalid: {path}')
-        observed_shards += len(payload['shards'])
-    actual_manifest_hash = 'sha256:' + manifest_digest.hexdigest()
-    if actual_manifest_hash != expected_manifest_hash:
-        raise SpecValidationError('Collection manifest hash does not match its index.')
-    if observed_shards != shard_count:
-        raise SpecValidationError('Collection manifest shard count does not match its index.')
     result: list[Any] = []
-    for index in range(manifest_count):
-        path = (manifest_parent / f'{manifest_name}-{index:08d}.json').as_posix()
-        payload = json.loads(read_part(path).decode('utf-8'))
-        for descriptor in payload['shards']:
+    for descriptors in manifests:
+        for descriptor in descriptors:
             page_wrapper = _read_json_part(_qualify_descriptor(descriptor, manifest_parent), read_part)
             if not isinstance(page_wrapper, dict) or set(page_wrapper) != {'items'} or (not isinstance(page_wrapper['items'], list)) or (not page_wrapper['items']):
                 raise SpecValidationError('Collection shard must be a non-empty list.')
@@ -503,6 +507,7 @@ def _read_collection(value: Any, read_part: Callable[[str], bytes]) -> list[Any]
     if len(result) != count:
         raise SpecValidationError('Collection shard count does not match its index.')
     return result
+
 
 def _read_collection_v1(value: dict[str, Any], read_part: Callable[[str], bytes]) -> list[Any]:
     count = value['count']
@@ -518,6 +523,7 @@ def _read_collection_v1(value: dict[str, Any], read_part: Callable[[str], bytes]
     if len(result) != count:
         raise SpecValidationError('Collection shard count does not match its index.')
     return result
+
 
 def _write_chunked_json(root: Path, prefix: str, value: Any, *, part_size_bytes: int) -> dict[str, Any]:
     _safe_relative(prefix)
@@ -550,17 +556,13 @@ def _write_chunked_json(root: Path, prefix: str, value: Any, *, part_size_bytes:
         raise SpecValidationError('Proposal JSON value encoded to no chunks.')
     return {'encoding': CHUNKED_JSON_ENCODING, 'path_prefix': prefix, 'chunk_count': chunk_count, 'size_bytes': size_bytes, 'sha256': 'sha256:' + digest.hexdigest()}
 
-def _write_part(root: Path, name: str, value: Any) -> dict[str, str]:
-    rendered = canonical_json(value).encode('utf-8')
-    path = root / name
-    _write_bytes_durable(path, rendered)
-    return {'path': name, 'sha256': 'sha256:' + hashlib.sha256(rendered).hexdigest()}
 
 def _write_bytes_durable(path: Path, value: bytes) -> None:
     with path.open('xb') as stream:
         stream.write(value)
         stream.flush()
         os.fsync(stream.fileno())
+
 
 def _sync_directory(path: Path) -> None:
     """Best-effort directory sync; unsupported on some Windows filesystems."""
@@ -575,6 +577,7 @@ def _sync_directory(path: Path) -> None:
     finally:
         os.close(descriptor)
 
+
 def _read_json_part(descriptor: Any, read_part: Callable[[str], bytes]) -> Any:
     if not isinstance(descriptor, dict):
         raise SpecValidationError('Proposal shard descriptor fields are invalid.')
@@ -585,7 +588,10 @@ def _read_json_part(descriptor: Any, read_part: Callable[[str], bytes]) -> Any:
         actual = 'sha256:' + hashlib.sha256(data).hexdigest()
         if actual != expected:
             raise SpecValidationError(f'Proposal shard hash mismatch: {relative}')
-        return json.loads(data.decode('utf-8'))
+        try:
+            return json.loads(data.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SpecValidationError(f'Proposal shard is invalid JSON: {relative}') from exc
     required = {'encoding', 'path_prefix', 'chunk_count', 'size_bytes', 'sha256'}
     if set(descriptor) != required or descriptor['encoding'] != CHUNKED_JSON_ENCODING:
         raise SpecValidationError('Proposal shard descriptor fields are invalid.')
@@ -599,24 +605,27 @@ def _read_json_part(descriptor: Any, read_part: Callable[[str], bytes]) -> Any:
     prefix_parent = prefix.parent
     prefix_name = prefix.name
     observed_size = 0
-    for index in range(chunk_count):
-        relative = (prefix_parent / f'{prefix_name}.chunk-{index:08d}.jsonpart').as_posix()
-        data = read_part(relative)
-        digest.update(data)
-        observed_size += len(data)
+
+    def chunks() -> Iterable[bytes]:
+        nonlocal observed_size
+        for index in range(chunk_count):
+            relative = (prefix_parent / f'{prefix_name}.chunk-{index:08d}.jsonpart').as_posix()
+            data = read_part(relative)
+            digest.update(data)
+            observed_size += len(data)
+            yield data
+
+    try:
+        parsed = parse_json_byte_chunks(chunks())
+    except StreamingJsonDecodeError as exc:
+        raise SpecValidationError(f'Proposal chunked JSON is invalid: {prefix.as_posix()}') from exc
     if observed_size != size_bytes:
         raise SpecValidationError(f'Proposal chunk size mismatch: {prefix.as_posix()}')
     actual = 'sha256:' + digest.hexdigest()
     if actual != expected:
         raise SpecValidationError(f'Proposal chunk hash mismatch: {prefix.as_posix()}')
+    return parsed
 
-    def chunks() -> Iterable[bytes]:
-        for index in range(chunk_count):
-            yield read_part((prefix_parent / f'{prefix_name}.chunk-{index:08d}.jsonpart').as_posix())
-    try:
-        return parse_json_byte_chunks(chunks())
-    except StreamingJsonDecodeError as exc:
-        raise SpecValidationError(f'Proposal chunked JSON is invalid: {prefix.as_posix()}') from exc
 
 def _read_file_part(root: Path, relative: str) -> bytes:
     normalized = _safe_relative(relative)
@@ -629,11 +638,13 @@ def _read_file_part(root: Path, relative: str) -> bytes:
         raise SpecValidationError(f'Proposal shard is missing or unsafe: {relative}')
     return target.read_bytes()
 
+
 def _safe_relative(value: str) -> PurePosixPath:
     normalized = PurePosixPath(value.replace('\\', '/'))
     if not value or normalized.is_absolute() or any(part in {'', '.', '..'} for part in normalized.parts):
         raise SpecValidationError(f'Unsafe proposal shard path: {value!r}')
     return normalized
+
 
 def _qualify_descriptor(descriptor: Any, parent: PurePosixPath) -> dict[str, Any]:
     if not isinstance(descriptor, dict):
@@ -648,6 +659,7 @@ def _qualify_descriptor(descriptor: Any, parent: PurePosixPath) -> dict[str, Any
         qualified['path_prefix'] = (parent / relative).as_posix()
         return qualified
     raise SpecValidationError('Proposal shard descriptor fields are invalid.')
+
 
 def _prefix_part_paths(value: Any, prefix: str) -> None:
     if isinstance(value, dict):
