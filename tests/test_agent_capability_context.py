@@ -199,7 +199,33 @@ def test_role_filter_removes_unassigned_tools_but_keeps_external_bridge() -> Non
         "external_mcp_call",
     } <= names
 
-    assert filter_tool_schemas_for_role("research", "unknown-role", schemas) == schemas
+
+def test_unknown_role_fails_closed_across_tools_skills_and_external_mcp() -> None:
+    schemas = (
+        _schema("search_code_rag"),
+        _schema("java_diagnostics"),
+        *_external_proxy_schemas(),
+    )
+
+    assert filter_tool_schemas_for_role("research", "unknown-role", schemas) == ()
+    assert skills_for_tool(
+        "research",
+        "search_code_rag",
+        model_role="unknown-role",
+    ) == ()
+
+    context = _decode_context(
+        build_agent_capability_context(
+            "research",
+            schemas,
+            model_role="unknown-role",
+        )
+    )
+    assert context["agent_roles"] == []
+    assert context["reviewed_mcp_servers"] == []
+    assert context["eligible_skills"] == []
+    assert context["external_minecraft_mcp_capabilities"] == {}
+    assert context["external_minecraft_mcp_access"] == {}
 
 
 def test_every_canonical_skill_is_reachable_in_at_least_one_stage_context() -> None:
