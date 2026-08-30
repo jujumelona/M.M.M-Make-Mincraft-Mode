@@ -85,6 +85,32 @@ def test_project_generator_guard_rejects_live_target_before_root_mutation(
     assert not root.exists()
 
 
+def test_unrelated_specialized_capability_does_not_unlock_legacy_scaffold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract, "_adapter_for_spec", lambda _spec: _adapter("quest"))
+    calls: list[Path] = []
+
+    class _GenerationError(RuntimeError):
+        pass
+
+    class _Generator:
+        def generate(self, spec, project_root):
+            calls.append(project_root)
+            return project_root
+
+    contract._install_generate_guard(_Generator, error_type=_GenerationError)
+
+    with pytest.raises(
+        _GenerationError,
+        match="no reviewed deterministic module templates",
+    ):
+        _Generator().generate(_spec(), tmp_path / "project")
+
+    assert calls == []
+
+
 def test_project_generator_guard_requires_every_requested_domain_kind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
