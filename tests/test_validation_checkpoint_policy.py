@@ -106,6 +106,20 @@ def test_jdt_resume_cross_checks_orchestrator_transformed_receipt() -> None:
     )
 
 
+def test_jdt_fingerprint_covers_every_runtime_owner() -> None:
+    names = {
+        module.__name__
+        for module in validation_checkpoint_policy._validation_modules("validate-jdt")
+    }
+    assert {
+        "minecraft_mod_ai.java_lsp",
+        "minecraft_mod_ai.java_lsp_process_safety_contract",
+        "minecraft_mod_ai.validation_diagnostic_contract",
+        "minecraft_mod_ai.validation_execution_contract",
+        "minecraft_mod_ai.research_validation_fingerprint_performance",
+    } <= names
+
+
 def test_validation_checkpoint_scope_changes_with_mmm_runtime_policy(monkeypatch) -> None:
     monkeypatch.setenv("MMM_VALIDATION_CACHE_TEST_SCOPE", "one")
     first = validation_checkpoint_policy.validation_implementation_fingerprint(
