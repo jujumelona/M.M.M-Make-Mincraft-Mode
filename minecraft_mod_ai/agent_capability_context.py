@@ -252,7 +252,9 @@ def build_agent_capability_context(
 
     external_capabilities: dict[str, tuple[str, ...]] = {}
     external_access: dict[str, dict[str, str]] = {}
+    external_manifest_status: dict[str, str] = {"status": "NOT_REQUESTED"}
     if exposed_tools & _EXTERNAL_AGENT_TOOLS:
+        external_manifest_status = {"status": "AVAILABLE"}
         try:
             manifest_max_access = "admin" if selected == "runtime" else "read"
             manifest = _manifest_router().capability_manifest(
@@ -295,9 +297,14 @@ def build_agent_capability_context(
                         or "read"
                         for route in selected_routes
                     }
-        except Exception:
+        except Exception as exc:
             external_capabilities = {}
             external_access = {}
+            external_manifest_status = {
+                "status": "UNAVAILABLE",
+                "error_category": "MANIFEST_BUILD_FAILED",
+                "exception_type": type(exc).__name__,
+            }
 
     payload = {
         "schema_version": "mmm/agent-capability-context-v5",
@@ -309,6 +316,7 @@ def build_agent_capability_context(
         "eligible_skills": skills,
         "external_minecraft_mcp_capabilities": external_capabilities,
         "external_minecraft_mcp_access": external_access,
+        "external_minecraft_mcp_manifest": external_manifest_status,
         "evidence_routing": {
             "vanilla_mechanics": "vanilla_knowledge",
             "minecraft_symbols_and_mappings": "mapping_resolution",
