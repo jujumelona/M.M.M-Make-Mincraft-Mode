@@ -16,121 +16,238 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Install project and validation dependencies
         run: python -m pip install -q -e '.[dev]'
+
       - name: Patch invariants
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
+          # 1) Target-specific obligations are deferred until target freeze.
           p = Path('minecraft_mod_ai/evidence_obligation_contract.py')
-          s = p.read_text()
+          s = p.read_text(encoding='utf-8')
           a = '''\ndef build_evidence_obligation_brief(\n    prompt: str,\n    catalog: Mapping[str, Any],\n    game_design: Mapping[str, Any] | None = None,\n) -> dict[str, Any]:\n'''
-          b = '''\ndef _target_is_frozen(game_design: Mapping[str, Any] | None) -> bool:\n    """Return true only for an explicitly/fully grounded executable target."""\n    design = dict(game_design or {})\n    selection = design.get("_platform_selection")\n    if not isinstance(selection, Mapping):\n        return False\n    explicit = selection.get("target_frozen")\n    if type(explicit) is bool:\n        return explicit\n    target = selection.get("target")\n    target = dict(target) if isinstance(target, Mapping) else {}\n    explicit = target.get("target_frozen")\n    if type(explicit) is bool:\n        return explicit\n    for candidate in (selection, target):\n        grounding = candidate.get("target_grounding")\n        if isinstance(grounding, Mapping):\n            status = str(grounding.get("status") or "").strip().upper()\n            gate = str(candidate.get("hard_gate_status") or "").strip().casefold()\n            if status == "COMPLETE" and gate == "passed":\n                return True\n    return False\n\n\ndef build_evidence_obligation_brief(\n    prompt: str,\n    catalog: Mapping[str, Any],\n    game_design: Mapping[str, Any] | None = None,\n) -> dict[str, Any]:\n'''
-          assert a in s
+          b = '''\ndef _target_is_frozen(game_design: Mapping[str, Any] | None) -> bool:\n    \"\"\"Return true only for an explicitly or fully grounded executable target.\"\"\"\n\n    design = dict(game_design or {})\n    selection = design.get(\"_platform_selection\")\n    if not isinstance(selection, Mapping):\n        return False\n    explicit = selection.get(\"target_frozen\")\n    if type(explicit) is bool:\n        return explicit\n    target = selection.get(\"target\")\n    target = dict(target) if isinstance(target, Mapping) else {}\n    explicit = target.get(\"target_frozen\")\n    if type(explicit) is bool:\n        return explicit\n    for candidate in (selection, target):\n        grounding = candidate.get(\"target_grounding\")\n        if not isinstance(grounding, Mapping):\n            continue\n        status = str(grounding.get(\"status\") or \"\").strip().upper()\n        gate = str(candidate.get(\"hard_gate_status\") or \"\").strip().casefold()\n        if status == \"COMPLETE\" and gate == \"passed\":\n            return True\n    return False\n\n\ndef build_evidence_obligation_brief(\n    prompt: str,\n    catalog: Mapping[str, Any],\n    game_design: Mapping[str, Any] | None = None,\n) -> dict[str, Any]:\n'''
+          assert a in s, 'evidence brief definition anchor missing'
           s = s.replace(a, b, 1)
-          a = '''    nodes: list[dict[str, Any]] = []\n    node_id: dict[tuple[str, str], str] = {}\n'''
-          b = '''    target_frozen = _target_is_frozen(game_design)\n    active_obligations = (\n        _OBLIGATIONS\n        if target_frozen\n        else tuple(spec for spec in _OBLIGATIONS if spec["kind"] == "reusable_implementation")\n    )\n    nodes: list[dict[str, Any]] = []\n    node_id: dict[tuple[str, str], str] = {}\n'''
-          assert a in s
-          s = s.replace(a, b, 1)
-          assert '        for spec in _OBLIGATIONS:\n' in s
-          s = s.replace('        for spec in _OBLIGATIONS:\n', '        for spec in active_obligations:\n', 1)
-          x = 'next(item for item in _OBLIGATIONS if item["kind"] == node["kind"])'
-          assert s.count(x) == 2
-          s = s.replace(x, 'next(item for item in active_obligations if item["kind"] == node["kind"])')
-          a = '    selection = dict(game_design or {}).get("_platform_selection")\n'
-          b = '''    payload["target_frozen"] = target_frozen\n    payload["deferred_obligation_kinds"] = (\n        [] if target_frozen else [\n            str(spec["kind"]) for spec in _OBLIGATIONS\n            if spec["kind"] != "reusable_implementation"\n        ]\n    )\n    selection = dict(game_design or {}).get("_platform_selection")\n'''
-          assert a in s
-          s = s.replace(a, b, 1)
-          p.write_text(s)
 
+          a = '''    nodes: list[dict[str, Any]] = []\n    node_id: dict[tuple[str, str], str] = {}\n'''
+          b = '''    target_frozen = _target_is_frozen(game_design)\n    active_obligations = (\n        _OBLIGATIONS\n        if target_frozen\n        else tuple(\n            spec\n            for spec in _OBLIGATIONS\n            if str(spec.get(\"kind\") or \"\") == \"reusable_implementation\"\n        )\n    )\n    nodes: list[dict[str, Any]] = []\n    node_id: dict[tuple[str, str], str] = {}\n'''
+          assert a in s, 'evidence active-obligation anchor missing'
+          s = s.replace(a, b, 1)
+
+          a = '        for spec in _OBLIGATIONS:\n'
+          assert a in s, 'evidence obligation loop anchor missing'
+          s = s.replace(a, '        for spec in active_obligations:\n', 1)
+
+          a = 'next(item for item in _OBLIGATIONS if item["kind"] == node["kind"])'
+          assert s.count(a) == 2, 'unexpected obligation spec lookup count'
+          s = s.replace(
+              a,
+              'next(item for item in active_obligations if item["kind"] == node["kind"])',
+          )
+
+          a = '    selection = dict(game_design or {}).get("_platform_selection")\n'
+          b = '''    payload[\"target_frozen\"] = target_frozen\n    payload[\"deferred_obligation_kinds\"] = (\n        []\n        if target_frozen\n        else [\n            str(spec[\"kind\"])\n            for spec in _OBLIGATIONS\n            if str(spec[\"kind\"]) != \"reusable_implementation\"\n        ]\n    )\n    selection = dict(game_design or {}).get(\"_platform_selection\")\n'''
+          assert a in s, 'platform selection anchor missing'
+          s = s.replace(a, b, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # 2) Build local RAG before the base forced bundle is allowed to inspect it.
           p = Path('minecraft_mod_ai/grounded_rag_runtime_contract.py')
-          s = p.read_text()
+          s = p.read_text(encoding='utf-8')
           a = '''        original_future = _COORDINATOR.submit(base, router, research_brief)\n        local_future = _COORDINATOR.submit(_grounded._ensure_local_index, agentic_module, router)\n        pre_external = _COORDINATOR.retrieve_many(pre_queries, pre_versions) if pre_queries else {}\n        payload = original_future.result()\n        local_index = local_future.result()\n'''
           b = '''        local_future = _COORDINATOR.submit(_grounded._ensure_local_index, agentic_module, router)\n        pre_external = _COORDINATOR.retrieve_many(pre_queries, pre_versions) if pre_queries else {}\n        local_index = local_future.result()\n        original_future = _COORDINATOR.submit(base, router, research_brief)\n        payload = original_future.result()\n'''
-          assert a in s
+          assert a in s, 'local-index race anchor missing'
           s = s.replace(a, b, 1)
-          a = '            public = original_discovery(capabilities, client, capability_graph=capability_graph)\n'
-          b = '''            public = (\n                {} if client is None\n                else original_discovery(capabilities, client, capability_graph=capability_graph)\n            )\n'''
-          assert a in s
-          s = s.replace(a, b, 1)
-          p.write_text(s)
 
-          p = Path('minecraft_mod_ai/reuse_planner.py')
-          s = p.read_text()
-          a = '''    if evidence_discovery_enabled:\n        try:\n            repository_candidates = _parallel_donor_repository_discovery(\n                queries, client, capability_graph=graph.to_dict()\n            )\n        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence\n            message = (\n                f"donor repository discovery failed: {type(exc).__name__}: {exc}"\n            )\n            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)\n            repository_candidates = {capability: () for capability in queries}\n    else:\n        repository_candidates = {capability: () for capability in queries}\n'''
-          b = '''    donor_discovery = _parallel_donor_repository_discovery\n    grounded_donors_available = bool(getattr(donor_discovery, "__mmm_grounded_donors__", False))\n    if evidence_discovery_enabled or grounded_donors_available:\n        try:\n            repository_candidates = donor_discovery(\n                queries,\n                client if evidence_discovery_enabled else None,\n                capability_graph=graph.to_dict(),\n            )\n        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence\n            message = (\n                f"donor repository discovery failed: {type(exc).__name__}: {exc}"\n            )\n            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)\n            repository_candidates = {capability: () for capability in queries}\n    else:\n        repository_candidates = {capability: () for capability in queries}\n'''
-          assert a in s
+          a = '            public = original_discovery(capabilities, client, capability_graph=capability_graph)\n'
+          b = '''            public = (\n                {}\n                if client is None\n                else original_discovery(\n                    capabilities, client, capability_graph=capability_graph\n                )\n            )\n'''
+          assert a in s, 'grounded donor public-discovery anchor missing'
           s = s.replace(a, b, 1)
-          p.write_text(s)
+          p.write_text(s, encoding='utf-8')
+
+          # 3) Grounded donor candidates are consulted even if public ecosystem discovery is off.
+          p = Path('minecraft_mod_ai/reuse_planner.py')
+          s = p.read_text(encoding='utf-8')
+          a = '''    if evidence_discovery_enabled:\n        try:\n            repository_candidates = _parallel_donor_repository_discovery(\n                queries, client, capability_graph=graph.to_dict()\n            )\n        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence\n            message = (\n                f\"donor repository discovery failed: {type(exc).__name__}: {exc}\"\n            )\n            _emit_discovery_log(f\"discovery {message}; using fresh-only planning\", exc_info=True)\n            repository_candidates = {capability: () for capability in queries}\n    else:\n        repository_candidates = {capability: () for capability in queries}\n'''
+          b = '''    donor_discovery = _parallel_donor_repository_discovery\n    grounded_donors_available = bool(\n        getattr(donor_discovery, \"__mmm_grounded_donors__\", False)\n    )\n    if evidence_discovery_enabled or grounded_donors_available:\n        try:\n            repository_candidates = donor_discovery(\n                queries,\n                client if evidence_discovery_enabled else None,\n                capability_graph=graph.to_dict(),\n            )\n        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence\n            message = (\n                f\"donor repository discovery failed: {type(exc).__name__}: {exc}\"\n            )\n            _emit_discovery_log(\n                f\"discovery {message}; using fresh-only planning\", exc_info=True\n            )\n            repository_candidates = {capability: () for capability in queries}\n    else:\n        repository_candidates = {capability: () for capability in queries}\n'''
+          assert a in s, 'reuse donor gate anchor missing'
+          s = s.replace(a, b, 1)
+          p.write_text(s, encoding='utf-8')
           PY
+
       - name: Add regressions
         shell: bash
         run: |
           cat > tests/test_pipeline_invariants_regression.py <<'PY'
           from __future__ import annotations
+
           import inspect
           from types import SimpleNamespace
+
           from minecraft_mod_ai import evidence_obligation_contract as obligations
           from minecraft_mod_ai import grounded_rag_runtime_contract as grounded
           from minecraft_mod_ai import reuse_planner
 
-          def catalog(n=2):
-              return {"schema_version":"mmm/approved-requirement-graph-v1","catalog_sha256":"sha256:test","requirements":[{"requirement_id":f"req_{i}","capability":f"cap_{i}","semantic_statement":f"implement {i}"} for i in range(n)]}
 
-          def test_pre_freeze_only_target_neutral_reuse():
-              b=obligations.build_evidence_obligation_brief("x",catalog(),{"_platform_selection":{"target_frozen":False}})
-              nodes=b["evidence_obligation_dag"]["nodes"]
-              assert len(nodes)==2 and {x["kind"] for x in nodes}=={"reusable_implementation"}
-              assert b["target_frozen"] is False and "target_compatibility" in b["deferred_obligation_kinds"]
+          def _catalog(count: int = 2) -> dict:
+              return {
+                  "schema_version": "mmm/approved-requirement-graph-v1",
+                  "catalog_sha256": "sha256:test",
+                  "requirements": [
+                      {
+                          "requirement_id": f"req_{index}",
+                          "capability": f"capability_{index}",
+                          "semantic_statement": f"implement capability {index}",
+                      }
+                      for index in range(count)
+                  ],
+              }
 
-          def test_frozen_target_expands_full_dag():
-              b=obligations.build_evidence_obligation_brief("x",catalog(1),{"_platform_selection":{"target_frozen":True}})
-              assert len(b["evidence_obligation_dag"]["nodes"])==len(obligations._OBLIGATIONS)
-              assert b["deferred_obligation_kinds"]==[]
 
-          class Future:
-              def __init__(self,v): self.v=v
-              def result(self): return self.v
-          class Coordinator:
-              max_workers=2
-              def __init__(self): self.ready=False
-              def submit(self,fn,*a,**k): return Future(fn(*a,**k))
-              def retrieve_many(self,q,v): return {}
-              def repositories_for_capabilities(self,c,g=None): return {x:("https://github.com/example/donor",) for x in c}
+          def test_pre_target_freeze_only_retrieves_target_neutral_reuse_evidence():
+              brief = obligations.build_evidence_obligation_brief(
+                  "test",
+                  _catalog(),
+                  {"_platform_selection": {"target_frozen": False}},
+              )
+              nodes = brief["evidence_obligation_dag"]["nodes"]
+              assert len(nodes) == 2
+              assert {node["kind"] for node in nodes} == {"reusable_implementation"}
+              assert brief["target_frozen"] is False
+              deferred = set(brief["deferred_obligation_kinds"])
+              assert {
+                  "target_compatibility",
+                  "implementation_api",
+                  "dependency_closure",
+                  "license_provenance",
+                  "validation_mechanism",
+              } <= deferred
 
-          def test_local_index_precedes_base_and_grounded_donor_survives_offline(monkeypatch):
-              c=Coordinator(); monkeypatch.setattr(grounded,"_COORDINATOR",c); monkeypatch.setattr(grounded,"_INSTALLED",False)
-              monkeypatch.setattr(grounded,"_augment",lambda a,p,**k:p)
-              old=grounded._grounded._external_retrieval
-              def ensure(a,r): c.ready=True; return {"status":"available"}
-              monkeypatch.setattr(grounded._grounded,"_ensure_local_index",ensure)
-              def base(r,b): assert c.ready; return {"versions":[],"domains":[]}
-              agentic=SimpleNamespace(_forced_rag_bundle=base)
-              def public(caps,client,*,capability_graph=None):
-                  if client is None: raise AssertionError
-                  return {x:() for x in caps}
-              reuse=SimpleNamespace(_parallel_donor_repository_discovery=public)
+
+          def test_frozen_target_expands_complete_obligation_dag():
+              brief = obligations.build_evidence_obligation_brief(
+                  "test",
+                  _catalog(1),
+                  {"_platform_selection": {"target_frozen": True}},
+              )
+              nodes = brief["evidence_obligation_dag"]["nodes"]
+              assert len(nodes) == len(obligations._OBLIGATIONS)
+              assert {node["kind"] for node in nodes} == {
+                  str(spec["kind"]) for spec in obligations._OBLIGATIONS
+              }
+              assert brief["target_frozen"] is True
+              assert brief["deferred_obligation_kinds"] == []
+
+
+          class _ImmediateFuture:
+              def __init__(self, value):
+                  self._value = value
+
+              def result(self):
+                  return self._value
+
+
+          class _ImmediateCoordinator:
+              max_workers = 2
+
+              def __init__(self):
+                  self.local_ready = False
+
+              def submit(self, fn, *args, **kwargs):
+                  return _ImmediateFuture(fn(*args, **kwargs))
+
+              def retrieve_many(self, queries, versions):
+                  return {}
+
+              def repositories_for_capabilities(
+                  self, capabilities, capability_graph=None
+              ):
+                  return {
+                      capability: ("https://github.com/example/donor",)
+                      for capability in capabilities
+                  }
+
+
+          def test_grounded_bundle_waits_for_local_index_before_base_bundle(monkeypatch):
+              coordinator = _ImmediateCoordinator()
+              monkeypatch.setattr(grounded, "_COORDINATOR", coordinator)
+              monkeypatch.setattr(grounded, "_INSTALLED", False)
+              monkeypatch.setattr(
+                  grounded,
+                  "_augment",
+                  lambda agentic, payload, **kwargs: payload,
+              )
+              old_external = grounded._grounded._external_retrieval
+
+              def ensure_local_index(agentic_module, router):
+                  coordinator.local_ready = True
+                  return {"status": "available", "index_path": "/tmp/index"}
+
+              monkeypatch.setattr(
+                  grounded._grounded,
+                  "_ensure_local_index",
+                  ensure_local_index,
+              )
+
+              def base(router, brief):
+                  assert coordinator.local_ready
+                  return {"versions": [], "domains": []}
+
+              agentic = SimpleNamespace(_forced_rag_bundle=base)
+
+              def public_discovery(capabilities, client, *, capability_graph=None):
+                  if client is None:
+                      raise AssertionError("public discovery must not run without a client")
+                  return {capability: () for capability in capabilities}
+
+              reuse = SimpleNamespace(
+                  _parallel_donor_repository_discovery=public_discovery
+              )
               try:
-                  grounded.install(agentic,reuse)
-                  agentic._forced_rag_bundle(None,{"domains":[]})
-                  assert reuse._parallel_donor_repository_discovery(("cap",),None,capability_graph={})["cap"]
-              finally: grounded._grounded._external_retrieval=old
+                  grounded.install(agentic, reuse)
+                  assert agentic._forced_rag_bundle(None, {"domains": []}) == {
+                      "versions": [],
+                      "domains": [],
+                  }
+                  donors = reuse._parallel_donor_repository_discovery(
+                      ("capability",),
+                      None,
+                      capability_graph={},
+                  )
+                  assert donors["capability"] == (
+                      "https://github.com/example/donor",
+                  )
+              finally:
+                  grounded._grounded._external_retrieval = old_external
 
-          def test_reuse_planner_invokes_marked_grounded_discovery_when_public_off():
-              s=inspect.getsource(reuse_planner.optimize_platform_and_reuse)
-              assert "grounded_donors_available" in s and "client if evidence_discovery_enabled else None" in s
+
+          def test_reuse_planner_does_not_gate_grounded_donors_on_public_discovery():
+              source = inspect.getsource(reuse_planner.optimize_platform_and_reuse)
+              assert "grounded_donors_available" in source
+              assert "__mmm_grounded_donors__" in source
+              assert "client if evidence_discovery_enabled else None" in source
           PY
+
       - name: Validate
         run: |
           python -m compileall -q minecraft_mod_ai
           python -m ruff check minecraft_mod_ai tests --select F,E7,E9
-          pytest -q tests/test_pipeline_invariants_regression.py tests/test_grounded_rag_runtime_contract.py
+          pytest -q \
+            tests/test_pipeline_invariants_regression.py \
+            tests/test_grounded_rag_runtime_contract.py \
+            tests/test_pre_design_rag_root_cause.py
+
       - name: Commit
         shell: bash
         run: |
-          rm -f .github/workflows/fix-research-pipeline-invariants.yml .github/workflows/fix-research-pipeline-invariants-v2.yml
+          rm -f \
+            .github/workflows/fix-research-pipeline-invariants.yml \
+            .github/workflows/fix-research-pipeline-invariants-v2.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
