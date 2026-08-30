@@ -1,0 +1,47 @@
+name: apply exhaustive retrieval migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-exhaustive-retrieval.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply migration
+        run: python .github/scripts/patch_exhaustive_retrieval.py
+      - name: Compile
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Lint changed contract files
+        run: python -m ruff check minecraft_mod_ai/github_adaptive_retrieval.py minecraft_mod_ai/research_grounded_rag_contract.py minecraft_mod_ai/pre_design_research_pipeline.py tests/test_exhaustive_retrieval_contract.py
+      - name: Run retrieval tests
+        run: |
+          python -m pytest -q tests/test_exhaustive_retrieval_contract.py tests/test_pre_design_rag_root_cause.py tests/test_grounded_rag_runtime_contract.py
+      - name: Commit migrated sources and cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f .github/scripts/patch_exhaustive_retrieval.py .github/workflows/apply-exhaustive-retrieval.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'fix: exhaust grounded retrieval frontiers'
+          git push origin HEAD:main
