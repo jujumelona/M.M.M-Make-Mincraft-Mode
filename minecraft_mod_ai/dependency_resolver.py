@@ -172,24 +172,33 @@ def _normalized_dependency_token(raw: str) -> str:
     return value.casefold().replace("-", "_")
 
 
+def _build_dependency_alias_index() -> dict[str, str]:
+    index: dict[str, str] = {}
+    for key, entry in _CANONICAL_DEPENDENCY_REGISTRY.items():
+        aliases = set(entry.get("aliases", ()))
+        aliases.add(key)
+        for artifact in entry.get("name_by_loader", {}).values():
+            aliases.add(str(artifact))
+            aliases.add(f"{entry.get('group', '')}:{artifact}")
+        for alias in aliases:
+            token = _normalized_dependency_token(alias)
+            if not token:
+                continue
+            previous = index.get(token)
+            if previous is not None and previous != key:
+                raise RuntimeError(
+                    f"Dependency alias collision: {alias!r} maps to {previous!r} and {key!r}"
+                )
+            index[token] = key
+    return index
+
+
+_CANONICAL_DEPENDENCY_ALIAS_INDEX = _build_dependency_alias_index()
+
+
 def _canonical_dependency_key(raw: str) -> str:
     token = _normalized_dependency_token(raw)
-    if not token:
-        return ""
-    for key, entry in _CANONICAL_DEPENDENCY_REGISTRY.items():
-        aliases = {
-            _normalized_dependency_token(alias)
-            for alias in entry.get("aliases", ())
-        }
-        aliases.add(_normalized_dependency_token(key))
-        for artifact in entry.get("name_by_loader", {}).values():
-            aliases.add(_normalized_dependency_token(artifact))
-            aliases.add(
-                _normalized_dependency_token(f"{entry.get('group', '')}:{artifact}")
-            )
-        if token in aliases:
-            return key
-    return ""
+    return _CANONICAL_DEPENDENCY_ALIAS_INDEX.get(token, "") if token else ""
 
 
 def _selected_version(

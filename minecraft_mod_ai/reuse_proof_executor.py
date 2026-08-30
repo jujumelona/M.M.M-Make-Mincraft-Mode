@@ -9,6 +9,7 @@ test with an exact JUnit XML identity and individual PASS result.
 """
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -20,7 +21,11 @@ from .build_model import BuildModel
 from .proof_level import ProofLevel, validate_proof_transition
 from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
 from .reuse_license import is_reusable_source_license
-from .source_transplant import DonorSlice, SourceTransplantError
+from .source_transplant import (
+    DonorSlice,
+    SourceTransplantError,
+    validate_donor_slice_manifest,
+)
 
 
 class ReuseTargetWorkspaceError(RuntimeError):
@@ -119,11 +124,12 @@ class ReuseProofReceipt:
 
 
 def _closure_sha256(donor_slice: DonorSlice) -> str:
-    combined = "".join(
-        f"{item.path}:{item.sha256}"
+    payload = [
+        [item.path, item.blob_sha, item.sha256, item.size_bytes]
         for item in sorted(donor_slice.files, key=lambda entry: entry.path)
-    )
-    return "sha256:" + hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    ]
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _residual_java_artifact_path(
@@ -215,6 +221,19 @@ def _existing_workspace_hashes(
     return hashes
 
 
+def _sandbox_destination(root: Path, relative_path: Any) -> Path:
+    normalized = _safe_workspace_relative_path(relative_path)
+    if not normalized:
+        raise ReuseTargetWorkspaceError("Reuse proof artifact path is unsafe.")
+    root_resolved = root.resolve()
+    destination = root.joinpath(*normalized.split("/"))
+    try:
+        destination.resolve(strict=False).relative_to(root_resolved)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ReuseTargetWorkspaceError("Reuse proof artifact escaped its sandbox.") from exc
+    return destination
+
+
 def scaffold_minimal_ephemeral_workspace(
     sandbox_path: Path,
     target_context: Mapping[str, Any],
@@ -247,21 +266,20 @@ def _render_proof_build_model(
         coordinate = str(
             _dependency_receipt_value(receipt, "resolved_coordinate", "")
         ).strip()
-        if not coordinate:
-            raise ValueError("Resolved dependency receipt has no coordinate.")
-        if repository:
-            model.add_repository(repository)
+        configuration = str(
+            _dependency_receipt_value(receipt, "gradle_configuration", "")
+        ).strip()
+        fingerprint = str(
+            _dependency_receipt_value(receipt, "resolution_fingerprint", "")
+        ).strip()
+        if not repository or not coordinate or not configuration:
+            raise ValueError("Resolved dependency receipt lacks authoritative Gradle fields.")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint):
+            raise ValueError("Resolved dependency receipt lacks an authoritative fingerprint.")
+        model.add_repository(repository)
         model.add_dependency(
             coordinate,
-            str(
-                _dependency_receipt_value(
-                    receipt,
-                    "gradle_configuration",
-                    "modImplementation"
-                    if model.target.loader == "fabric"
-                    else "implementation",
-                )
-            ),
+            configuration,
             sha256=str(_dependency_receipt_value(receipt, "artifact_hash", "")),
         )
 
@@ -380,6 +398,13 @@ def execute_reuse_proof(
     closure_hash = _closure_sha256(donor_slice)
     current_level = ProofLevel.DISCOVERED
 
+    try:
+        validate_donor_slice_manifest(donor_slice)
+    except SourceTransplantError:
+        return _license_rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash
+        )
+
     if not is_reusable_source_license(donor_slice.license_id):
         return _license_rejected_receipt(
             donor_slice,
@@ -400,14 +425,20 @@ def execute_reuse_proof(
         )
     current_level = ProofLevel.LICENSE_VERIFIED
 
-    if donor_slice.commit_sha:
-        valid, _ = validate_proof_transition(
-            current_level,
-            ProofLevel.PINNED,
-            receipt={"commit_sha": donor_slice.commit_sha},
+    valid, _ = validate_proof_transition(
+        current_level,
+        ProofLevel.PINNED,
+        receipt={"commit_sha": donor_slice.commit_sha},
+    )
+    if not valid:
+        return ReuseProofReceipt(
+            candidate_id=candidate_id, capability=donor_slice.capability,
+            commit_sha=donor_slice.commit_sha, closure_hash=closure_hash,
+            proof_level=current_level.value, compile_passed=False, tests_passed=False,
+            unresolved_symbols=(), missing_resources=(), adaptations_applied=(),
+            verified_capabilities=(), residual_capabilities=(donor_slice.capability,),
         )
-        if valid:
-            current_level = ProofLevel.PINNED
+    current_level = ProofLevel.PINNED
 
     if donor_slice.closure_complete:
         valid, _ = validate_proof_transition(
@@ -563,7 +594,7 @@ def execute_reuse_proof(
             unresolved_mandatory_deps.append(reason)
 
         for rel_path, content in adapted_files.items():
-            dest = sandbox_path / rel_path
+            dest = _sandbox_destination(sandbox_path, rel_path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(content, bytes):
                 dest.write_bytes(content)
@@ -662,6 +693,10 @@ def execute_reuse_proof(
     requirement_acceptance_map = tuple(acceptance_map)
 
     unresolved_set = set(unresolved_symbols)
+    donor_symbols_by_path = {
+        donor_file.path: set(donor_file.symbols)
+        for donor_file in donor_slice.files
+    }
     verified_art_list: list[str] = []
     residual_art_list: list[str] = []
     verified_subgraph_count = 0
@@ -683,15 +718,7 @@ def execute_reuse_proof(
                     if isinstance(content, str)
                     else content.decode("utf-8", errors="ignore")
                 )
-                donor_match = next(
-                    (
-                        donor_file
-                        for donor_file in donor_slice.files
-                        if donor_file.path == path
-                    ),
-                    None,
-                )
-                donor_symbols = set(donor_match.symbols) if donor_match else set()
+                donor_symbols = donor_symbols_by_path.get(path, set())
                 if (
                     any(symbol in text_content for symbol in unresolved_set if symbol)
                     or any(symbol in donor_symbols for symbol in unresolved_set if symbol)
@@ -717,36 +744,31 @@ def execute_reuse_proof(
                 else:
                     comp_passed = bool(comp_result)
             else:
-                try:
-                    with tempfile.TemporaryDirectory(
-                        prefix="mmm_subgraph_"
-                    ) as sub_tmp:
-                        sub_path = Path(sub_tmp)
-                        scaffold_minimal_ephemeral_workspace(
-                            sub_path,
-                            target_context=target_context,
-                        )
-                        for relative_path, content in comp_files.items():
-                            destination = sub_path / relative_path
-                            destination.parent.mkdir(parents=True, exist_ok=True)
-                            if isinstance(content, bytes):
-                                destination.write_bytes(content)
-                            else:
-                                destination.write_text(str(content), encoding="utf-8")
-                        _render_proof_build_model(
-                            sub_path,
-                            target_context,
-                            exact_dependency_receipts,
-                        )
-                        from .reuse_build_verifier import verify_scratch_workspace_build
+                with tempfile.TemporaryDirectory(prefix="mmm_subgraph_") as sub_tmp:
+                    sub_path = Path(sub_tmp)
+                    scaffold_minimal_ephemeral_workspace(
+                        sub_path,
+                        target_context=target_context,
+                    )
+                    for relative_path, content in comp_files.items():
+                        destination = _sandbox_destination(sub_path, relative_path)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        if isinstance(content, bytes):
+                            destination.write_bytes(content)
+                        else:
+                            destination.write_text(str(content), encoding="utf-8")
+                    _render_proof_build_model(
+                        sub_path,
+                        target_context,
+                        exact_dependency_receipts,
+                    )
+                    from .reuse_build_verifier import verify_scratch_workspace_build
 
-                        sub_receipt = verify_scratch_workspace_build(
-                            sub_path,
-                            run_tests=False,
-                        )
-                        comp_passed = sub_receipt.compile_passed
-                except Exception:
-                    comp_passed = False
+                    sub_receipt = verify_scratch_workspace_build(
+                        sub_path,
+                        run_tests=False,
+                    )
+                    comp_passed = sub_receipt.compile_passed
 
             if comp_passed:
                 verified_subgraph_count += 1

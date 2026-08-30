@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .reuse_license import is_reusable_source_license
-from .source_transplant import DonorSlice, materialize_pinned_donor
+from .source_transplant import DonorSlice, SourceTransplantError, materialize_pinned_donor
 
 
 def _sha256(data: bytes) -> str:
@@ -262,8 +262,7 @@ class ReusableArtifactBundle:
             }
         protected_paths = tuple(sorted(proven_hashes))
         protected_symbols = tuple(
-            _receipt_value(proof_receipt, "verified_symbols", ())
-            or donor.source_symbols
+            _receipt_value(proof_receipt, "verified_symbols", ()) or ()
         )
         dependency_receipts = tuple(
             _receipt_value(proof_receipt, "dependency_receipts", ()) or ()
@@ -390,7 +389,7 @@ class ReusableArtifactBundle:
                         donor, discovery_client=discovery_client
                     )
                 )
-            except Exception as exc:
+            except (SourceTransplantError, KeyError, TypeError, ValueError) as exc:
                 raise BundleMaterializationError("Pinned donor materialization failed.") from exc
         elif not files and self.origin_kind == "same_project":
             root = Path(workspace_root).expanduser().resolve()
@@ -425,11 +424,15 @@ class ReusableArtifactBundle:
             from .reuse_adapters import apply_deterministic_adapters
 
             files, _ = apply_deterministic_adapters(files, target_context)
-        return {
-            path: value
-            for raw_path, value in files.items()
-            if (path := _normalized_path(raw_path))
-        }
+        normalized_files: dict[str, str | bytes] = {}
+        for raw_path, value in files.items():
+            path = _normalized_path(raw_path)
+            if not path:
+                raise BundleMaterializationError("Materialized bundle contains an unsafe path.")
+            if path in normalized_files:
+                raise BundleMaterializationError("Materialized bundle contains duplicate paths.")
+            normalized_files[path] = value
+        return normalized_files
 
     def to_dict(self) -> dict[str, Any]:
         return {

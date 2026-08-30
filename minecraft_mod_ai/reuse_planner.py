@@ -1575,9 +1575,12 @@ def _plan_target(
             if best_donor is not None:
                 donor = best_donor
                 donor_identity = f"{donor.repository}@{donor.commit_sha}"
-                winning_receipt = next(
-                    (r for r in receipts if r.candidate_id == donor_identity),
-                    None,
+                matching_receipts = tuple(
+                    receipt for receipt in receipts
+                    if receipt.candidate_id == donor_identity
+                )
+                winning_receipt = (
+                    matching_receipts[0] if len(matching_receipts) == 1 else None
                 )
                 proof_lvl = winning_receipt.proof_level if winning_receipt else "UNVERIFIED"
 

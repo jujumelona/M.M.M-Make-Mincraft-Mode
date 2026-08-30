@@ -10,11 +10,12 @@ hashes before exposing them to the coder.
 """
 
 import base64
+import binascii
 import hashlib
 import json
 import os
 import re
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,11 +87,33 @@ def _tree_request_budget() -> int:
         minimum=8,
         maximum=100_000,
     )
+
+
+def _snapshot_cache_entries() -> int:
+    return _env_int(
+        "MMM_SOURCE_TRANSPLANT_SNAPSHOT_CACHE_ENTRIES",
+        32,
+        minimum=1,
+        maximum=512,
+    )
+
+
+def _blob_cache_byte_budget() -> int:
+    configured = _env_int(
+        "MMM_SOURCE_TRANSPLANT_BLOB_CACHE_BYTE_BUDGET",
+        256 * 1024 * 1024,
+        minimum=64 * 1024,
+        maximum=2 * 1024 * 1024 * 1024,
+    )
+    return max(configured, _single_blob_byte_budget())
+
+
 _SNAPSHOT_LOCK = Lock()
-_SNAPSHOT_CACHE: dict[str, Mapping[str, Any] | None] = {}
+_SNAPSHOT_CACHE: OrderedDict[str, Mapping[str, Any]] = OrderedDict()
 _SNAPSHOT_INFLIGHT: dict[str, Event] = {}
 _BLOB_LOCK = Lock()
-_BLOB_CACHE: dict[tuple[str, str], bytes] = {}
+_BLOB_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+_BLOB_CACHE_BYTES = 0
 _BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
 
 @dataclass(frozen=True)
@@ -385,7 +408,7 @@ def _repository_tree_entries(
     budget = _tree_request_budget()
     requests = 0
     queue: deque[tuple[str, str]] = deque([(root_sha, "")])
-    seen_trees: set[str] = set()
+    seen_trees: set[tuple[str, str]] = set()
     resolved: list[Mapping[str, Any]] = []
     while queue:
         if requests >= budget:
@@ -393,9 +416,10 @@ def _repository_tree_entries(
                 "Complete donor tree traversal exhausted the configured request budget."
             )
         tree_sha, prefix = queue.popleft()
-        if tree_sha in seen_trees:
+        tree_identity = (tree_sha, prefix)
+        if tree_identity in seen_trees:
             continue
-        seen_trees.add(tree_sha)
+        seen_trees.add(tree_identity)
         requests += 1
         payload = _github_json(
             client,
@@ -650,7 +674,7 @@ def inspect_repository_slice(
             unresolved_edges=tuple(unresolved_edges),
             compatibility_evidence=ev,
         )
-    except Exception:
+    except SourceTransplantError:
         return None
     finally:
         client.close()
@@ -761,7 +785,9 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
     owner = False
     with _SNAPSHOT_LOCK:
         if repository in _SNAPSHOT_CACHE:
-            return _SNAPSHOT_CACHE[repository]
+            cached = _SNAPSHOT_CACHE[repository]
+            _SNAPSHOT_CACHE.move_to_end(repository)
+            return cached
         event = _SNAPSHOT_INFLIGHT.get(repository)
         if event is None:
             event = Event()
@@ -808,6 +834,9 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
         with _SNAPSHOT_LOCK:
             if snapshot is not None:
                 _SNAPSHOT_CACHE[repository] = snapshot
+                _SNAPSHOT_CACHE.move_to_end(repository)
+                while len(_SNAPSHOT_CACHE) > _snapshot_cache_entries():
+                    _SNAPSHOT_CACHE.popitem(last=False)
             else:
                 _SNAPSHOT_CACHE.pop(repository, None)
             pending = _SNAPSHOT_INFLIGHT.pop(repository, None)
@@ -842,6 +871,8 @@ def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | 
 
 
 def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> bytes:
+    global _BLOB_CACHE_BYTES
+
     if not re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
         raise SourceTransplantError("Donor blob is not immutable.")
     key = (repository, blob_sha)
@@ -849,6 +880,7 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
     with _BLOB_LOCK:
         cached = _BLOB_CACHE.get(key)
         if cached is not None:
+            _BLOB_CACHE.move_to_end(key)
             return cached
         event = _BLOB_INFLIGHT.get(key)
         if event is None:
@@ -871,22 +903,72 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
         )
         if not isinstance(value, Mapping) or value.get("encoding") != "base64":
             raise SourceTransplantError("GitHub donor blob is not base64 encoded.")
-        raw = base64.b64decode(str(value.get("content") or "").replace("\n", ""), validate=True)
+        try:
+            raw = base64.b64decode(
+                str(value.get("content") or "").replace("\n", ""),
+                validate=True,
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise SourceTransplantError("GitHub donor blob contained invalid base64.") from exc
         single_blob_budget = _single_blob_byte_budget()
         if len(raw) > single_blob_budget:
             raise SourceTransplantError(
                 f"Single donor blob exceeded configured byte budget ({single_blob_budget} bytes)."
             )
         with _BLOB_LOCK:
-            while len(_BLOB_CACHE) >= 512:
-                _BLOB_CACHE.pop(next(iter(_BLOB_CACHE)))
+            existing = _BLOB_CACHE.pop(key, None)
+            if existing is not None:
+                _BLOB_CACHE_BYTES -= len(existing)
+            byte_budget = _blob_cache_byte_budget()
+            while _BLOB_CACHE and _BLOB_CACHE_BYTES + len(raw) > byte_budget:
+                _old_key, old_value = _BLOB_CACHE.popitem(last=False)
+                _BLOB_CACHE_BYTES -= len(old_value)
             _BLOB_CACHE[key] = raw
+            _BLOB_CACHE_BYTES += len(raw)
         return raw
     finally:
         with _BLOB_LOCK:
             pending = _BLOB_INFLIGHT.pop(key, None)
             if pending is not None:
                 pending.set()
+
+
+def validate_donor_slice_manifest(donor_slice: DonorSlice) -> None:
+    """Validate immutable donor identity and every manifest path/hash before I/O."""
+
+    repository = str(donor_slice.repository or "").strip()
+    if repository.count("/") != 1 or any(
+        not part or part in {".", ".."} for part in repository.split("/")
+    ):
+        raise SourceTransplantError("Donor repository identity is invalid.")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", str(donor_slice.commit_sha or "")):
+        raise SourceTransplantError("Donor commit is not an immutable full SHA.")
+    if not is_reusable_source_license(donor_slice.license_id):
+        raise SourceTransplantError("Donor source license is not admitted for reuse.")
+    if not donor_slice.files:
+        raise SourceTransplantError("Donor source-slice manifest is empty.")
+
+    seen_paths: set[str] = set()
+    for donor_file in donor_slice.files:
+        path = str(donor_file.path or "")
+        normalized = path.replace("\\", "/").strip()
+        parts = normalized.split("/")
+        if (
+            not normalized
+            or normalized != path
+            or normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:", normalized)
+            or any(part in {"", ".", ".."} for part in parts)
+            or normalized in seen_paths
+        ):
+            raise SourceTransplantError("Donor manifest contains an unsafe or duplicate path.")
+        if not re.fullmatch(r"[0-9a-f]{40,64}", str(donor_file.blob_sha or "")):
+            raise SourceTransplantError("Donor manifest contains a non-immutable blob SHA.")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(donor_file.sha256 or "").casefold()):
+            raise SourceTransplantError("Donor manifest contains an invalid SHA-256 binding.")
+        if donor_file.size_bytes < 0:
+            raise SourceTransplantError("Donor manifest contains a negative file size.")
+        seen_paths.add(normalized)
 
 
 def materialize_pinned_donor(
@@ -898,6 +980,7 @@ def materialize_pinned_donor(
     Validates SHA-256 integrity against donor file manifests. If any blob fails to
     fetch or hash does not match, raises SourceTransplantError (no placeholders allowed).
     """
+    validate_donor_slice_manifest(donor_slice)
     token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
     client = getattr(discovery_client, "_client", None)
     own_client = False
@@ -913,7 +996,13 @@ def materialize_pinned_donor(
                 raise SourceTransplantError(f"Failed to fetch blob for {df.path}")
             actual_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
             if actual_sha.casefold() != df.sha256.casefold():
-                raise SourceTransplantError(f"SHA-256 hash mismatch for {df.path}: expected {df.sha256}, got {actual_sha}")
+                raise SourceTransplantError(
+                    f"SHA-256 hash mismatch for {df.path}: expected {df.sha256}, got {actual_sha}"
+                )
+            if len(raw) != df.size_bytes:
+                raise SourceTransplantError(
+                    f"Pinned donor size mismatch for {df.path}: expected {df.size_bytes}, got {len(raw)}"
+                )
             materialized[df.path] = raw
         return materialized
     finally:
@@ -943,7 +1032,7 @@ def _build_metadata_text(
             continue
         try:
             chunks.append(_fetch_blob_bytes(client, repository, blob).decode("utf-8", errors="replace"))
-        except Exception:
+        except SourceTransplantError:
             continue
     return "\n".join(chunks)
 
@@ -1004,5 +1093,6 @@ __all__ = [
     "SourceTransplantError",
     "inspect_repository_slice",
     "materialize_source_slices",
+    "validate_donor_slice_manifest",
     "repository_from_candidate",
 ]

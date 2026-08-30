@@ -104,3 +104,118 @@ def test_unexpected_snapshot_programming_error_is_not_hidden():
             raise RuntimeError("snapshot programming error")
     with pytest.raises(RuntimeError, match="snapshot programming error"):
         source_transplant._repository_snapshot("example/programming", Discovery())
+
+
+
+def test_invalid_commit_is_rejected_before_materialization(monkeypatch, tmp_path):
+    donor = _donor()
+    invalid = source_transplant.DonorSlice(
+        **{**donor.__dict__, "commit_sha": "abc123"}
+    )
+    called = False
+    def materialize(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {}
+    monkeypatch.setattr(source_transplant, "materialize_pinned_donor", materialize)
+    receipt = reuse_proof.execute_reuse_proof(
+        invalid, target_workspace=tmp_path, target_context={}, compile_checker=lambda *_: True
+    )
+    assert called is False
+    assert receipt.compile_passed is False
+    assert receipt.proof_level == ProofLevel.DISCOVERED.value
+
+
+def test_unsafe_manifest_path_is_rejected_before_io(monkeypatch, tmp_path):
+    donor = _donor()
+    bad_file = source_transplant.DonorFile(
+        path="../escape.java", blob_sha="b" * 40,
+        sha256=donor.files[0].sha256, size_bytes=donor.files[0].size_bytes,
+        symbols=("BossEntity",),
+    )
+    unsafe = source_transplant.DonorSlice(
+        **{**donor.__dict__, "files": (bad_file,)}
+    )
+    called = False
+    def materialize(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {}
+    monkeypatch.setattr(source_transplant, "materialize_pinned_donor", materialize)
+    receipt = reuse_proof.execute_reuse_proof(
+        unsafe, target_workspace=tmp_path, target_context={}, compile_checker=lambda *_: True
+    )
+    assert called is False
+    assert receipt.compile_passed is False
+
+
+def test_pinned_materialization_verifies_declared_size(monkeypatch):
+    donor = _donor()
+    wrong_size = source_transplant.DonorSlice(
+        **{**donor.__dict__, "files": (
+            source_transplant.DonorFile(
+                path=donor.files[0].path, blob_sha=donor.files[0].blob_sha,
+                sha256=donor.files[0].sha256, size_bytes=donor.files[0].size_bytes + 1,
+                symbols=donor.files[0].symbols,
+            ),
+        )}
+    )
+    payload = b"package donor; public class BossEntity {}\n"
+    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", lambda *args, **kwargs: payload)
+    with pytest.raises(SourceTransplantError, match="size mismatch"):
+        source_transplant.materialize_pinned_donor(
+            wrong_size, discovery_client=type("D", (), {"_client": object()})()
+        )
+
+
+def test_reused_tree_sha_is_walked_for_each_prefix(monkeypatch):
+    root = "1" * 40
+    shared = "2" * 40
+    commit = "a" * 40
+    def fake_json(client, url, *, params=None):
+        del client
+        if "/git/commits/" in url:
+            return {"tree": {"sha": root}}
+        if url.endswith(root) and params == {"recursive": "1"}:
+            return {"truncated": True, "tree": []}
+        if url.endswith(root):
+            return {"truncated": False, "tree": [
+                {"path": "a", "sha": shared, "type": "tree"},
+                {"path": "b", "sha": shared, "type": "tree"},
+            ]}
+        if url.endswith(shared):
+            return {"truncated": False, "tree": [
+                {"path": "Boss.java", "sha": "3" * 40, "type": "blob"}
+            ]}
+        raise AssertionError(url)
+    monkeypatch.setattr(source_transplant, "_github_json", fake_json)
+    entries = source_transplant._repository_tree_entries(object(), "example/repo", commit)
+    assert {item["path"] for item in entries} == {"a/Boss.java", "b/Boss.java"}
+
+
+def test_blob_cache_is_byte_bounded_lru(monkeypatch):
+    source_transplant._BLOB_CACHE.clear()
+    source_transplant._BLOB_CACHE_BYTES = 0
+    monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_SINGLE_BLOB_BYTE_BUDGET", str(64 * 1024))
+    monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_BLOB_CACHE_BYTE_BUDGET", str(128 * 1024))
+    payloads = {
+        "1" * 40: b"a" * 60_000,
+        "2" * 40: b"b" * 60_000,
+        "3" * 40: b"c" * 60_000,
+    }
+    import base64
+    def fake_json(client, url, *, params=None):
+        del client, params
+        sha = url.rsplit("/", 1)[-1]
+        return {"encoding": "base64", "content": base64.b64encode(payloads[sha]).decode()}
+    monkeypatch.setattr(source_transplant, "_github_json", fake_json)
+    for sha in payloads:
+        source_transplant._fetch_blob_bytes(object(), "example/repo", sha)
+    assert source_transplant._BLOB_CACHE_BYTES <= source_transplant._blob_cache_byte_budget()
+    assert len(source_transplant._BLOB_CACHE) == 2
+    assert ("example/repo", "1" * 40) not in source_transplant._BLOB_CACHE
+
+
+def test_sandbox_destination_rejects_parent_escape(tmp_path):
+    with pytest.raises(reuse_proof.ReuseTargetWorkspaceError):
+        reuse_proof._sandbox_destination(tmp_path, "../escape.java")
