@@ -8,7 +8,6 @@ actual source files, and preserve provenance in the evidence ledger. Retrieval m
 corrected by broadening providers; they are never repaired by asking the model to invent data.
 """
 
-import base64
 import hashlib
 import json
 import os
@@ -21,28 +20,20 @@ from typing import Any
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .github_adaptive_retrieval import (
+    adaptive_github_evidence,
+    discover_repositories,
+    retrieve_repository_documents,
+)
 from .rag_index import ProjectRAGIndex
 
 _HTTP_TIMEOUT_SECONDS = 12.0
 _MAX_HTTP_BYTES = 2 * 1024 * 1024
 _MAX_SOURCE_TEXT_CHARS = 24_000
-_MAX_SOURCE_FILES_PER_REPO = 4
 _MAX_EXTERNAL_PROJECTS = 4
-_MAX_SOURCE_REPOS_PER_QUERY = 2
 _MAX_HTTP_CACHE_ITEMS = 256
-_ALLOWED_SOURCE_SUFFIXES = (
-    ".java",
-    ".kt",
-    ".kts",
-    ".json",
-    ".gradle",
-    ".properties",
-    ".md",
-    ".toml",
-    ".yaml",
-    ".yml",
-    ".mcfunction",
-)
+
+
 _TOKEN = re.compile(r"[^\W_]+(?:[.$:/_-][^\W_]+)*", flags=re.UNICODE)
 _HTTP_CACHE_LOCK = threading.RLock()
 _HTTP_CACHE: dict[tuple[str, bool], bytes] = {}
@@ -246,20 +237,6 @@ def _source_document(
     }
 
 
-def _path_score(path: str, query: str) -> tuple[int, str]:
-    folded = path.casefold()
-    query_terms = set(_tokens(query))
-    path_terms = set(_tokens(path.replace("/", " ")))
-    score = 4 * len(query_terms & path_terms)
-    if "/src/main/" in f"/{folded}":
-        score += 4
-    if folded.endswith((".java", ".kt")):
-        score += 3
-    if any(term in folded for term in ("entity", "item", "registry", "world", "network")):
-        score += 2
-    if "/test/" in f"/{folded}" or "/build/" in f"/{folded}":
-        score -= 3
-    return score, path
 
 
 def _github_repo_documents(
@@ -267,83 +244,17 @@ def _github_repo_documents(
     repo: str,
     query: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    documents: list[dict[str, Any]] = []
-    errors: list[str] = []
-    repo_api = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
-    try:
-        repo_meta = _http_json(repo_api, github=True)
-    except Exception as exc:
-        return [], [f"github_repo:{owner}/{repo}:{type(exc).__name__}: {exc}"]
+    """Query-specific source inspection with evidence/resource driven stopping."""
 
-    branch = str(repo_meta.get("default_branch", "main") or "main")
-    html_url = str(repo_meta.get("html_url", f"https://github.com/{owner}/{repo}"))
-
-    try:
-        readme = _http_json(f"{repo_api}/readme?ref={quote(branch)}", github=True)
-        encoded = str(readme.get("content", "")).replace("\n", "")
-        if encoded:
-            content = base64.b64decode(encoded).decode("utf-8", errors="replace")
-            documents.append(
-                _source_document(
-                    source_id=f"github:{owner}/{repo}:README",
-                    title=f"{owner}/{repo} README",
-                    url=str(readme.get("html_url", html_url)),
-                    content=content,
-                    source_type="github_readme",
-                    metadata={"repository": f"{owner}/{repo}", "branch": branch},
-                )
-            )
-    except Exception as exc:
-        errors.append(f"github_readme:{owner}/{repo}:{type(exc).__name__}: {exc}")
-
-    try:
-        tree = _http_json(
-            f"{repo_api}/git/trees/{quote(branch)}?recursive=1",
-            github=True,
-        )
-        candidates = [
-            str(item.get("path", ""))
-            for item in tree.get("tree", [])
-            if isinstance(item, Mapping)
-            and item.get("type") == "blob"
-            and str(item.get("path", "")).casefold().endswith(_ALLOWED_SOURCE_SUFFIXES)
-        ]
-        candidates.sort(key=lambda path: (-_path_score(path, query)[0], path))
-        for path in candidates[:_MAX_SOURCE_FILES_PER_REPO]:
-            raw_url = (
-                f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/"
-                f"{quote(branch, safe='')}/{quote(path, safe='/')}"
-            )
-            try:
-                content = _http_text(raw_url)
-            except Exception as exc:
-                errors.append(
-                    f"github_raw:{owner}/{repo}/{path}:{type(exc).__name__}: {exc}"
-                )
-                continue
-            license_value = None
-            if isinstance(repo_meta.get("license"), Mapping):
-                license_value = repo_meta["license"].get("spdx_id")
-            documents.append(
-                _source_document(
-                    source_id=f"github:{owner}/{repo}:{path}",
-                    title=f"{owner}/{repo}:{path}",
-                    url=f"{html_url}/blob/{quote(branch, safe='')}/{quote(path, safe='/')}",
-                    content=content,
-                    source_type="github_source",
-                    metadata={
-                        "repository": f"{owner}/{repo}",
-                        "branch": branch,
-                        "path": path,
-                        "license": license_value,
-                    },
-                )
-            )
-    except Exception as exc:
-        errors.append(f"github_tree:{owner}/{repo}:{type(exc).__name__}: {exc}")
-
-    return documents, errors
-
+    evidence = retrieve_repository_documents(
+        owner,
+        repo,
+        query,
+        http_json=lambda url: _http_json(url, github=True),
+        http_text=_http_text,
+        source_document=_source_document,
+    )
+    return [dict(item) for item in evidence.documents], list(evidence.errors)
 
 def _modrinth_search(
     query: str,
@@ -406,32 +317,49 @@ def _modrinth_search(
 
 
 def _github_repository_search(query: str) -> tuple[list[tuple[str, str]], list[str]]:
-    params = urlencode(
-        {
-            "q": f"{query} minecraft fabric mod",
-            "sort": "stars",
-            "order": "desc",
-            "per_page": 3,
-        }
-    )
-    try:
-        payload = _http_json(
-            f"https://api.github.com/search/repositories?{params}",
-            github=True,
-        )
-    except Exception as exc:
-        return [], [f"github_repository_search:{type(exc).__name__}: {exc}"]
-    repositories: list[tuple[str, str]] = []
-    for item in payload.get("items", []) if isinstance(payload, Mapping) else []:
-        if not isinstance(item, Mapping):
-            continue
-        full_name = str(item.get("full_name", "")).strip()
-        if "/" not in full_name:
-            continue
-        owner, repo = full_name.split("/", 1)
-        repositories.append((owner, repo))
-    return repositories, []
+    """High-recall repository candidate discovery; source inspection is separate."""
 
+    discovery = discover_repositories(
+        query,
+        http_json=lambda url: _http_json(url, github=True),
+    )
+    return list(discovery.repositories), list(discovery.errors)
+
+
+def _github_adaptive_search(
+    query: str,
+    *,
+    seed_repositories: Sequence[Any] = (),
+    search_if_needed: bool = True,
+) -> dict[str, Any]:
+    evidence = adaptive_github_evidence(
+        query,
+        http_json=lambda url: _http_json(url, github=True),
+        http_text=_http_text,
+        source_document=_source_document,
+        seed_repositories=seed_repositories,
+        search_if_needed=search_if_needed,
+    )
+    documents = [dict(item) for item in evidence.documents]
+    actual = sum(
+        1
+        for item in documents
+        if str(item.get("source_type") or "").startswith("github_")
+    )
+    return {
+        "status": "available" if actual else "unavailable",
+        "query": query,
+        "repositories": list(evidence.repositories),
+        "documents": documents,
+        "errors": list(evidence.errors),
+        "search_queries": list(evidence.search_queries),
+        "search_requests": evidence.search_requests,
+        "source_requests": evidence.source_requests,
+        "source_bytes": evidence.source_bytes,
+        "coverage_score": evidence.coverage_score,
+        "saturation_reason": evidence.saturation_reason,
+        "actual_source_document_count": actual,
+    }
 
 def _coverage_score(query: str, documents: Sequence[Mapping[str, Any]]) -> float:
     terms = set(_tokens(query))
@@ -450,7 +378,7 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
     variants = _query_variants(query)
     projects_by_id: dict[str, dict[str, Any]] = {}
     documents_by_id: dict[str, dict[str, Any]] = {}
-    fetched_repos: set[tuple[str, str]] = set()
+    seed_repositories: list[tuple[str, str]] = []
     errors: list[str] = []
 
     for variant in variants:
@@ -458,9 +386,10 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         errors.extend(variant_errors)
         for project in projects:
             project_id = str(project.get("project_id", ""))
-            projects_by_id.setdefault(project_id, project)
+            if project_id:
+                projects_by_id.setdefault(project_id, project)
             body = str(project.get("body") or project.get("description") or "")
-            if body:
+            if body and project_id:
                 document = _source_document(
                     source_id=f"modrinth:{project_id}",
                     title=str(project.get("title") or project_id),
@@ -476,47 +405,28 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
                         "source_url": project.get("source_url"),
                     },
                 )
-                documents_by_id.setdefault(document["source_id"], document)
-
+                documents_by_id.setdefault(str(document["source_id"]), document)
             repo_ref = _github_repo_from_url(str(project.get("source_url") or ""))
-            if repo_ref is None or repo_ref in fetched_repos:
-                continue
-            if len(fetched_repos) >= _MAX_SOURCE_REPOS_PER_QUERY:
-                continue
-            fetched_repos.add(repo_ref)
-            source_docs, source_errors = _github_repo_documents(
-                repo_ref[0], repo_ref[1], query
-            )
-            errors.extend(source_errors)
-            for document in source_docs:
-                documents_by_id.setdefault(str(document["source_id"]), document)
+            if repo_ref is not None and repo_ref not in seed_repositories:
+                seed_repositories.append(repo_ref)
 
-    actual_source_docs = [
-        document
-        for document in documents_by_id.values()
-        if document.get("source_type") in {"github_readme", "github_source"}
-    ]
-    corrective_search_used = False
-    if not actual_source_docs:
-        corrective_search_used = True
-        repositories, repository_errors = _github_repository_search(query)
-        errors.extend(repository_errors)
-        for owner, repo in repositories[:_MAX_SOURCE_REPOS_PER_QUERY]:
-            repo_ref = (owner, repo)
-            if repo_ref in fetched_repos:
-                continue
-            fetched_repos.add(repo_ref)
-            source_docs, source_errors = _github_repo_documents(owner, repo, query)
-            errors.extend(source_errors)
-            for document in source_docs:
-                documents_by_id.setdefault(str(document["source_id"]), document)
+    github = _github_adaptive_search(
+        query,
+        seed_repositories=tuple(seed_repositories),
+        search_if_needed=True,
+    )
+    errors.extend(str(item) for item in github.get("errors", ()))
+    for document in github.get("documents", ()):
+        if isinstance(document, Mapping):
+            source_id = str(document.get("source_id") or "")
+            if source_id:
+                documents_by_id.setdefault(source_id, dict(document))
 
     documents = list(documents_by_id.values())
-    coverage = _coverage_score(query, documents)
     actual_source_count = sum(
         1
         for document in documents
-        if document.get("source_type") in {"github_readme", "github_source"}
+        if str(document.get("source_type") or "").startswith("github_")
     )
     status = (
         "available"
@@ -528,19 +438,28 @@ def _external_retrieval(query: str, versions: Sequence[str]) -> dict[str, Any]:
         "status": status,
         "query": query,
         "query_variants": list(variants),
+        "github_search_queries": list(github.get("search_queries", ())),
         "providers": ["modrinth_public", "github_public_source"],
         "credentials_required": False,
-        "corrective_search_used": corrective_search_used,
+        "corrective_search_used": bool(github.get("search_queries")),
         "project_count": len(projects_by_id),
-        "source_repository_count": len(fetched_repos),
+        "source_repository_count": len(github.get("repositories", ())),
         "document_count": len(documents),
         "actual_source_document_count": actual_source_count,
-        "coverage_score": coverage,
+        "coverage_score": max(
+            _coverage_score(query, documents),
+            float(github.get("coverage_score") or 0.0),
+        ),
         "projects": list(projects_by_id.values()),
         "documents": documents,
         "errors": errors,
+        "github_retrieval": {
+            "search_requests": int(github.get("search_requests") or 0),
+            "source_requests": int(github.get("source_requests") or 0),
+            "source_bytes": int(github.get("source_bytes") or 0),
+            "saturation_reason": str(github.get("saturation_reason") or ""),
+        },
     }
-
 
 def _augment_bundle(
     agentic_module: Any,

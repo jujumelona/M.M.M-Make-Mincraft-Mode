@@ -21,14 +21,25 @@ def test_provider_work_overlaps_without_sleep(monkeypatch):
         barrier.wait(timeout=5)
         return [], []
 
-    def github(query):
+    def github(query, **kwargs):
+        del kwargs
         with lock:
             entered.append(("github", query))
         barrier.wait(timeout=5)
-        return [], []
+        return {
+            "repositories": [],
+            "documents": [],
+            "errors": [],
+            "search_queries": [],
+            "search_requests": 0,
+            "source_requests": 0,
+            "source_bytes": 0,
+            "coverage_score": 0.0,
+            "saturation_reason": "test",
+        }
 
     monkeypatch.setattr(grounded, "_modrinth_search", modrinth)
-    monkeypatch.setattr(grounded, "_github_repository_search", github)
+    monkeypatch.setattr(grounded, "_github_adaptive_search", github)
     result = coordinator.retrieve_many(("combat progression",), ("1.21.8",))
 
     assert result["combat progression"]["work_graph"]["nested_executor"] is False
@@ -182,3 +193,52 @@ def test_runtime_labels_are_stable_nonversioned():
         not value.endswith(("-v1", "-v2", "-v3"))
         for value in payload.values()
     )
+
+
+def test_same_repository_source_selection_is_recomputed_per_query(monkeypatch):
+    coordinator = runtime.GroundedRAGCoordinator()
+    calls: list[str] = []
+
+    monkeypatch.setattr(grounded, "_modrinth_search", lambda query, versions: ([], []))
+
+    def github(query, **kwargs):
+        del kwargs
+        calls.append(query)
+        path = (
+            "src/main/java/demo/TradeLedger.java"
+            if "trade" in query
+            else "src/main/java/demo/PlanetColony.java"
+        )
+        return {
+            "repositories": [("owner", "shared-repo")],
+            "documents": [
+                {
+                    "source_id": f"github:owner/shared-repo:{path}",
+                    "content": f"class {path.rsplit('/', 1)[-1].removesuffix('.java')} {{}}",
+                    "content_sha256": "sha256:" + query.replace(" ", "_"),
+                    "source_type": "github_source",
+                    "metadata": {"repository": "owner/shared-repo", "path": path},
+                }
+            ],
+            "errors": [],
+            "search_queries": [query],
+            "search_requests": 1,
+            "source_requests": 3,
+            "source_bytes": 100,
+            "coverage_score": 1.0,
+            "saturation_reason": "evidence_coverage_satisfied",
+        }
+
+    monkeypatch.setattr(grounded, "_github_adaptive_search", github)
+    result = coordinator.retrieve_many(("trade currency", "planet colony"), ())
+
+    trade_ids = {item["source_id"] for item in result["trade currency"]["documents"]}
+    planet_ids = {item["source_id"] for item in result["planet colony"]["documents"]}
+    assert "github:owner/shared-repo:src/main/java/demo/TradeLedger.java" in trade_ids
+    assert "github:owner/shared-repo:src/main/java/demo/PlanetColony.java" in planet_ids
+    assert set(calls) == {"trade currency", "planet colony"}
+    assert all(
+        item["work_graph"]["query_specific_source_selection"] is True
+        for item in result.values()
+    )
+    coordinator.executor.shutdown(wait=True, cancel_futures=True)

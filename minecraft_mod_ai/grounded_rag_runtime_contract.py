@@ -7,9 +7,7 @@ import os
 import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
 
 from . import research_grounded_rag_contract as _grounded
 
@@ -105,6 +103,7 @@ class GroundedRAGCoordinator:
         self._lock = threading.RLock()
         self._cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
         self._donors_by_query: dict[str, list[dict[str, Any]]] = {}
+        self._documents_by_hash: dict[str, dict[str, Any]] = {}
 
     @property
     def max_workers(self) -> int:
@@ -113,71 +112,12 @@ class GroundedRAGCoordinator:
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
         return self.executor.submit(fn, *args, **kwargs)
 
-    def _closure_documents(self, owner: str, repo: str, query: str) -> tuple[list[dict[str, Any]], list[str]]:
-        documents, errors = _grounded._github_repo_documents(owner, repo, query)
-        repo_api = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
-        try:
-            meta = _grounded._http_json(repo_api, github=True)
-            branch = str(meta.get("default_branch", "main") or "main")
-            tree = _grounded._http_json(
-                f"{repo_api}/git/trees/{quote(branch)}?recursive=1", github=True
-            )
-            paths = [
-                str(item.get("path", ""))
-                for item in tree.get("tree", [])
-                if isinstance(item, Mapping) and item.get("type") == "blob"
-            ]
-            closure: list[str] = []
-            preferred_names = {
-                "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-                "gradle.properties", "fabric.mod.json", "mods.toml", "neoforge.mods.toml",
-            }
-            for path in paths:
-                folded = path.casefold()
-                leaf = Path(path).name.casefold()
-                if (
-                    leaf in preferred_names
-                    or "/src/test/" in f"/{folded}"
-                    or "/src/gametest/" in f"/{folded}"
-                    or "/src/main/resources/" in f"/{folded}"
-                ):
-                    closure.append(path)
-            for path in closure[:10]:
-                folded = path.casefold()
-                source_id = f"github:{owner}/{repo}:{path}"
-                if any(str(item.get("source_id")) == source_id for item in documents):
-                    continue
-                raw_url = (
-                    f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/"
-                    f"{quote(branch, safe='')}/{quote(path, safe='/')}"
-                )
-                try:
-                    content = _grounded._http_text(raw_url)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"closure:{owner}/{repo}/{path}:{type(exc).__name__}: {exc}")
-                    continue
-                documents.append(
-                    _grounded._source_document(
-                        source_id=source_id,
-                        title=f"{owner}/{repo}:{path}",
-                        url=f"https://github.com/{owner}/{repo}/blob/{branch}/{path}",
-                        content=content,
-                        source_type="github_source_closure",
-                        metadata={
-                            "repository": f"{owner}/{repo}",
-                            "branch": branch,
-                            "path": path,
-                            "closure_role": (
-                                "test" if "/test/" in f"/{folded}"
-                                else "resource" if "/resources/" in f"/{folded}"
-                                else "build_dependency"
-                            ),
-                        },
-                    )
-                )
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"closure_tree:{owner}/{repo}:{type(exc).__name__}: {exc}")
-        return documents, errors
+    def _closure_documents(
+        self, owner: str, repo: str, query: str
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        # Compatibility seam. Adaptive retrieval owns source + build/test/resource
+        # closure and has no fixed file-count cutoff.
+        return _grounded._github_repo_documents(owner, repo, query)
 
     def retrieve_many(
         self, queries: Sequence[str], versions: Sequence[str]
@@ -202,62 +142,101 @@ class GroundedRAGCoordinator:
                 work[self.submit(_grounded._modrinth_search, variant, versions_key)] = (
                     query, "modrinth", variant
                 )
-                work[self.submit(_grounded._github_repository_search, variant)] = (
-                    query, "github_search", variant
-                )
+            work[self.submit(_grounded._github_adaptive_search, query)] = (
+                query, "github", query
+            )
 
         projects: dict[str, dict[str, dict[str, Any]]] = {q: {} for q in pending_queries}
-        repos_by_query: dict[str, set[tuple[str, str]]] = {q: set() for q in pending_queries}
-        errors_by_query: dict[str, list[str]] = {q: [] for q in pending_queries}
-        for future in as_completed(work):
-            query, provider, _variant = work[future]
-            try:
-                values, errors = future.result()
-            except Exception as exc:  # noqa: BLE001
-                errors_by_query[query].append(f"{provider}:{type(exc).__name__}: {exc}")
-                continue
-            errors_by_query[query].extend(str(item) for item in errors)
-            if provider == "modrinth":
-                for project in values:
-                    project_id = str(project.get("project_id") or "")
-                    if project_id:
-                        projects[query].setdefault(project_id, dict(project))
-                    repo_ref = _grounded._github_repo_from_url(str(project.get("source_url") or ""))
-                    if repo_ref is not None:
-                        repos_by_query[query].add(repo_ref)
-            else:
-                repos_by_query[query].update(values)
-
-        repo_consumers: dict[tuple[str, str], set[str]] = {}
-        for query, repo_refs in repos_by_query.items():
-            ordered = sorted(repo_refs)[: max(2, int(getattr(_grounded, "_MAX_SOURCE_REPOS_PER_QUERY", 2)))]
-            for repo_ref in ordered:
-                repo_consumers.setdefault(repo_ref, set()).add(query)
-
-        repo_work = {
-            self.submit(self._closure_documents, owner, repo, next(iter(consumers))): (owner, repo)
-            for (owner, repo), consumers in repo_consumers.items()
+        repositories_by_query: dict[str, list[tuple[str, str]]] = {
+            q: [] for q in pending_queries
         }
         documents_by_query: dict[str, dict[str, dict[str, Any]]] = {
             q: {} for q in pending_queries
         }
-        content_seen: set[str] = set()
-        for future in as_completed(repo_work):
-            repo_ref = repo_work[future]
+        errors_by_query: dict[str, list[str]] = {q: [] for q in pending_queries}
+        github_stats: dict[str, dict[str, Any]] = {q: {} for q in pending_queries}
+
+        def register_document(query: str, document: Mapping[str, Any]) -> None:
+            source_id = str(document.get("source_id") or "")
+            if not source_id:
+                return
+            item = dict(document)
+            content_hash = str(
+                item.get("content_sha256")
+                or _text_hash(str(item.get("content") or ""))
+            )
+            with self._lock:
+                canonical = self._documents_by_hash.setdefault(content_hash, item)
+            if canonical is not item and not item.get("content"):
+                item["content"] = canonical.get("content", "")
+            documents_by_query[query].setdefault(source_id, item)
+
+        for future in as_completed(work):
+            query, provider, _variant = work[future]
             try:
-                documents, repo_errors = future.result()
+                returned = future.result()
             except Exception as exc:  # noqa: BLE001
-                documents, repo_errors = [], [f"repo:{repo_ref[0]}/{repo_ref[1]}:{type(exc).__name__}: {exc}"]
-            consumers = repo_consumers.get(repo_ref, set())
-            for query in consumers:
-                errors_by_query[query].extend(repo_errors)
-                for document in documents:
-                    content_hash = str(document.get("content_sha256") or _text_hash(str(document.get("content") or "")))
-                    dedup_key = f"{content_hash}:{str(document.get('source_id') or '')}"
-                    if dedup_key in content_seen and str(document.get("source_id")) in documents_by_query[query]:
-                        continue
-                    content_seen.add(dedup_key)
-                    documents_by_query[query].setdefault(str(document.get("source_id")), dict(document))
+                errors_by_query[query].append(f"{provider}:{type(exc).__name__}: {exc}")
+                continue
+
+            if provider == "modrinth":
+                values, provider_errors = returned
+                errors_by_query[query].extend(str(item) for item in provider_errors)
+                for project in values:
+                    project_id = str(project.get("project_id") or "")
+                    if project_id:
+                        projects[query].setdefault(project_id, dict(project))
+                continue
+
+            payload = dict(returned) if isinstance(returned, Mapping) else {}
+            github_stats[query] = payload
+            errors_by_query[query].extend(str(item) for item in payload.get("errors", ()))
+            for raw_ref in payload.get("repositories", ()):
+                if (
+                    isinstance(raw_ref, Sequence)
+                    and not isinstance(raw_ref, (str, bytes, bytearray))
+                    and len(raw_ref) >= 2
+                ):
+                    ref = (str(raw_ref[0]), str(raw_ref[1]))
+                    if ref not in repositories_by_query[query]:
+                        repositories_by_query[query].append(ref)
+            for document in payload.get("documents", ()):
+                if isinstance(document, Mapping):
+                    register_document(query, document)
+
+        # Modrinth source URLs are high-confidence GitHub seeds discovered in parallel.
+        # Inspect every new seed for this query; never share a file selection chosen for
+        # another requirement just because the repository identity is the same.
+        for query in pending_queries:
+            seeds: list[tuple[str, str]] = []
+            known = set(repositories_by_query[query])
+            for project in projects[query].values():
+                repo_ref = _grounded._github_repo_from_url(str(project.get("source_url") or ""))
+                if repo_ref is not None and repo_ref not in known and repo_ref not in seeds:
+                    seeds.append(repo_ref)
+            if seeds:
+                try:
+                    seeded = _grounded._github_adaptive_search(
+                        query,
+                        seed_repositories=tuple(seeds),
+                        search_if_needed=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    errors_by_query[query].append(f"github_seed:{type(exc).__name__}: {exc}")
+                else:
+                    errors_by_query[query].extend(str(item) for item in seeded.get("errors", ()))
+                    for raw_ref in seeded.get("repositories", ()):
+                        if (
+                            isinstance(raw_ref, Sequence)
+                            and not isinstance(raw_ref, (str, bytes, bytearray))
+                            and len(raw_ref) >= 2
+                        ):
+                            ref = (str(raw_ref[0]), str(raw_ref[1]))
+                            if ref not in repositories_by_query[query]:
+                                repositories_by_query[query].append(ref)
+                    for document in seeded.get("documents", ()):
+                        if isinstance(document, Mapping):
+                            register_document(query, document)
 
         for query in pending_queries:
             for project_id, project in projects[query].items():
@@ -275,32 +254,47 @@ class GroundedRAGCoordinator:
                             "versions": project.get("versions"),
                         },
                     )
-                    documents_by_query[query].setdefault(str(doc["source_id"]), doc)
+                    register_document(query, doc)
+
             documents = list(documents_by_query[query].values())
             actual = sum(
                 1 for item in documents
                 if str(item.get("source_type", "")).startswith("github_")
             )
+            stats = github_stats[query]
             payload = {
                 "schema_version": "mmm/external-grounded-rag",
                 "status": "available" if actual else ("metadata_only" if documents else "unavailable"),
                 "query": query,
                 "query_variants": list(_grounded._query_variants(query)),
+                "github_search_queries": list(stats.get("search_queries", ())),
                 "providers": ["modrinth_public", "github_public_source"],
                 "credentials_required": False,
-                "corrective_search_used": bool(not projects[query]),
+                "corrective_search_used": bool(stats.get("search_queries")),
                 "project_count": len(projects[query]),
-                "source_repository_count": len(repos_by_query[query]),
+                "source_repository_count": len(repositories_by_query[query]),
                 "document_count": len(documents),
                 "actual_source_document_count": actual,
-                "coverage_score": _grounded._coverage_score(query, documents),
+                "coverage_score": max(
+                    _grounded._coverage_score(query, documents),
+                    float(stats.get("coverage_score") or 0.0),
+                ),
                 "projects": list(projects[query].values()),
                 "documents": documents,
                 "errors": errors_by_query[query],
+                "github_retrieval": {
+                    "search_requests": int(stats.get("search_requests") or 0),
+                    "source_requests": int(stats.get("source_requests") or 0),
+                    "source_bytes": int(stats.get("source_bytes") or 0),
+                    "saturation_reason": str(stats.get("saturation_reason") or ""),
+                },
                 "work_graph": {
                     "key_space": "requirement_x_provider_x_query_purpose",
                     "bounded_workers": self.max_workers,
                     "nested_executor": False,
+                    "repository_snapshot_dedup": True,
+                    "query_specific_source_selection": True,
+                    "fixed_file_count_cutoff": False,
                 },
             }
             with self._lock:

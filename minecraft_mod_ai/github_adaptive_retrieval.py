@@ -22,6 +22,16 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 _TOKEN = re.compile(r"[A-Za-z0-9]+", re.UNICODE)
+_CAMEL_BOUNDARY = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
+
+
+def _lexemes(value: str) -> tuple[str, ...]:
+    """Split path/source identifiers before lexical retrieval scoring."""
+
+    expanded = _CAMEL_BOUNDARY.sub(" ", str(value or ""))
+    return tuple(_TOKEN.findall(expanded))
 
 # Terms that describe the retrieval task rather than the implementation being sought.
 # Removing these is what prevents an obligation sentence from becoming an AND-heavy
@@ -192,7 +202,7 @@ def semantic_terms(query: str) -> tuple[str, ...]:
     values: list[str] = []
     seen: set[str] = set()
     normalized = re.sub(r"[._:/\\-]+", " ", str(query or ""))
-    for raw in _TOKEN.findall(normalized):
+    for raw in _lexemes(normalized):
         token = raw.casefold()
         if len(token) < 2 or token in _QUERY_BOILERPLATE:
             continue
@@ -206,7 +216,7 @@ def semantic_terms(query: str) -> tuple[str, ...]:
 
 def _feature_set(text: str) -> set[str]:
     features: set[str] = set()
-    for raw in _TOKEN.findall(str(text or "")):
+    for raw in _lexemes(str(text or "")):
         token = raw.casefold()
         if len(token) < 2 or token in _QUERY_BOILERPLATE:
             continue
@@ -604,6 +614,7 @@ def adaptive_github_evidence(
     http_text: HttpText,
     source_document: SourceDocument,
     seed_repositories: Sequence[Any] = (),
+    search_if_needed: bool = True,
 ) -> AdaptiveGitHubEvidence:
     """Resolve one query from GitHub under coverage/saturation/resource contracts."""
 
@@ -638,6 +649,9 @@ def adaptive_github_evidence(
                 reason = "evidence_coverage_satisfied"
                 break
             if discovery is None:
+                if not search_if_needed:
+                    reason = "seed_repositories_exhausted"
+                    break
                 discovery = discover_repositories(query, http_json=http_json)
                 errors.extend(discovery.errors)
                 for ref in discovery.repositories:
