@@ -17,13 +17,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install validation tools
+        run: python -m pip install -q ruff pytest
+
       - name: Patch systemic research invariants
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          # 1) Do not explode target-specific evidence obligations before target freeze.
           path = Path('minecraft_mod_ai/evidence_obligation_contract.py')
           text = path.read_text(encoding='utf-8')
           needle = '''\ndef build_evidence_obligation_brief(\n    prompt: str,\n    catalog: Mapping[str, Any],\n    game_design: Mapping[str, Any] | None = None,\n) -> dict[str, Any]:\n'''
@@ -47,8 +49,6 @@ jobs:
           text = text.replace(selection_anchor, metadata, 1)
           path.write_text(text, encoding='utf-8')
 
-          # 2) Eliminate local-RAG bootstrap race: external retrieval may overlap index build,
-          #    but the original research bundle must not inspect the index until it is ready.
           path = Path('minecraft_mod_ai/grounded_rag_runtime_contract.py')
           text = path.read_text(encoding='utf-8')
           old = '''        original_future = _COORDINATOR.submit(base, router, research_brief)\n        local_future = _COORDINATOR.submit(_grounded._ensure_local_index, agentic_module, router)\n        pre_external = _COORDINATOR.retrieve_many(pre_queries, pre_versions) if pre_queries else {}\n        payload = original_future.result()\n        local_index = local_future.result()\n'''
@@ -61,8 +61,6 @@ jobs:
           text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
 
-          # 3) Grounded donor candidates are authoritative input even when public ecosystem
-          #    discovery is disabled; fresh generation is not allowed to bypass them.
           path = Path('minecraft_mod_ai/reuse_planner.py')
           text = path.read_text(encoding='utf-8')
           old = '''    if evidence_discovery_enabled:\n        try:\n            repository_candidates = _parallel_donor_repository_discovery(\n                queries, client, capability_graph=graph.to_dict()\n            )\n        except Exception as exc:  # noqa: BLE001 - donor search is optional evidence\n            message = (\n                f"donor repository discovery failed: {type(exc).__name__}: {exc}"\n            )\n            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)\n            repository_candidates = {capability: () for capability in queries}\n    else:\n        repository_candidates = {capability: () for capability in queries}\n'''
@@ -103,56 +101,37 @@ jobs:
 
           def test_pre_target_freeze_only_retrieves_target_neutral_reuse_evidence():
               brief = obligations.build_evidence_obligation_brief(
-                  "test",
-                  _catalog(),
-                  {"_platform_selection": {"target_frozen": False}},
+                  "test", _catalog(), {"_platform_selection": {"target_frozen": False}}
               )
               nodes = brief["evidence_obligation_dag"]["nodes"]
               assert len(nodes) == 2
               assert {node["kind"] for node in nodes} == {"reusable_implementation"}
               assert brief["target_frozen"] is False
-              assert "target_compatibility" in brief["deferred_obligation_kinds"]
-              assert "implementation_api" in brief["deferred_obligation_kinds"]
-              assert "dependency_closure" in brief["deferred_obligation_kinds"]
-              assert "license_provenance" in brief["deferred_obligation_kinds"]
-              assert "validation_mechanism" in brief["deferred_obligation_kinds"]
+              deferred = set(brief["deferred_obligation_kinds"])
+              assert {"target_compatibility", "implementation_api", "dependency_closure", "license_provenance", "validation_mechanism"} <= deferred
 
 
           def test_frozen_target_expands_complete_obligation_dag():
               brief = obligations.build_evidence_obligation_brief(
-                  "test",
-                  _catalog(1),
-                  {"_platform_selection": {"target_frozen": True}},
+                  "test", _catalog(1), {"_platform_selection": {"target_frozen": True}}
               )
               nodes = brief["evidence_obligation_dag"]["nodes"]
               assert len(nodes) == len(obligations._OBLIGATIONS)
-              assert {node["kind"] for node in nodes} == {
-                  str(spec["kind"]) for spec in obligations._OBLIGATIONS
-              }
+              assert {node["kind"] for node in nodes} == {str(spec["kind"]) for spec in obligations._OBLIGATIONS}
               assert brief["target_frozen"] is True
               assert brief["deferred_obligation_kinds"] == []
 
 
           class _ImmediateFuture:
-              def __init__(self, value):
-                  self._value = value
-
-              def result(self):
-                  return self._value
+              def __init__(self, value): self._value = value
+              def result(self): return self._value
 
 
           class _ImmediateCoordinator:
               max_workers = 2
-
-              def __init__(self):
-                  self.local_ready = False
-
-              def submit(self, fn, *args, **kwargs):
-                  return _ImmediateFuture(fn(*args, **kwargs))
-
-              def retrieve_many(self, queries, versions):
-                  return {}
-
+              def __init__(self): self.local_ready = False
+              def submit(self, fn, *args, **kwargs): return _ImmediateFuture(fn(*args, **kwargs))
+              def retrieve_many(self, queries, versions): return {}
               def repositories_for_capabilities(self, capabilities, capability_graph=None):
                   return {capability: ("https://github.com/example/donor",) for capability in capabilities}
 
@@ -162,7 +141,6 @@ jobs:
               monkeypatch.setattr(grounded, "_COORDINATOR", coordinator)
               monkeypatch.setattr(grounded, "_INSTALLED", False)
               monkeypatch.setattr(grounded, "_augment", lambda agentic, payload, **kwargs: payload)
-
               old_external = grounded._grounded._external_retrieval
 
               def ensure_local_index(agentic_module, router):
@@ -185,13 +163,8 @@ jobs:
               reuse = SimpleNamespace(_parallel_donor_repository_discovery=public_discovery)
               try:
                   grounded.install(agentic, reuse)
-                  assert agentic._forced_rag_bundle(None, {"domains": []}) == {
-                      "versions": [],
-                      "domains": [],
-                  }
-                  donors = reuse._parallel_donor_repository_discovery(
-                      ("capability",), None, capability_graph={}
-                  )
+                  assert agentic._forced_rag_bundle(None, {"domains": []}) == {"versions": [], "domains": []}
+                  donors = reuse._parallel_donor_repository_discovery(("capability",), None, capability_graph={})
                   assert donors["capability"] == ("https://github.com/example/donor",)
               finally:
                   grounded._grounded._external_retrieval = old_external
