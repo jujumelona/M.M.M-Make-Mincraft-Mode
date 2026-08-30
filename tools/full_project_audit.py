@@ -24,6 +24,11 @@ from typing import Any
 import tomllib
 import yaml
 
+if __package__:
+    from .audit_stream_redactor import StreamingRedactor
+else:
+    from audit_stream_redactor import StreamingRedactor
+
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_DIR = ROOT / "audit"
 REPORT_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.json"
@@ -35,6 +40,7 @@ FAIL = "FAIL"
 SKIP = "SKIP"
 STATUSES = {PASS, WARN, FAIL, SKIP}
 _OUTPUT_TAIL_LIMIT = 1200
+_OUTPUT_CHUNK_CHARS = 64 * 1024
 
 _SECRET_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|cookie)"
@@ -111,17 +117,25 @@ def _append_log(value: str) -> None:
 
 
 def _drain_process_output(path: Path) -> str:
-    """Redact process output to the persistent log while retaining only a small tail."""
+    """Redact process output in bounded chunks while retaining only a small tail."""
 
-    secrets = _environment_secret_values()
+    redactor = StreamingRedactor(_environment_secret_values())
     tail = ""
     with path.open("r", encoding="utf-8", errors="replace") as source, LOG_PATH.open(
         "a", encoding="utf-8", errors="replace"
     ) as destination:
-        for line in source:
-            safe = redact(line, secrets=secrets)
-            destination.write(safe)
-            tail = (tail + safe)[-_OUTPUT_TAIL_LIMIT:]
+        while True:
+            chunk = source.read(_OUTPUT_CHUNK_CHARS)
+            if not chunk:
+                break
+            safe = redactor.feed(chunk)
+            if safe:
+                destination.write(safe)
+                tail = (tail + safe)[-_OUTPUT_TAIL_LIMIT:]
+        final = redactor.finish()
+        if final:
+            destination.write(final)
+            tail = (tail + final)[-_OUTPUT_TAIL_LIMIT:]
     return " ".join(tail.split())
 
 
