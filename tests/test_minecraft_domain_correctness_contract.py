@@ -1,24 +1,18 @@
 from __future__ import annotations
 
+import sys
+from functools import wraps
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 
 from minecraft_mod_ai import minecraft_domain_correctness_contract as contract
 
 
-class _Runtime:
-    class AgentToolRuntimeError(RuntimeError):
-        pass
-
-    @staticmethod
-    def _discover_model_project_root(workspace_root):
-        return Path(workspace_root) / "demo", "demo"
-
-
-class _Extended:
-    _SUPPORTED = frozenset({"item", "block", "recipe"})
+class _ExtendedContentError(RuntimeError):
+    pass
 
 
 def _adapter(*kinds: str):
@@ -41,117 +35,22 @@ def _spec(*kinds: str, boss: bool = False):
     )
 
 
-def test_live_target_without_reviewed_templates_fails_before_generator(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(contract, "_adapter_from_project", lambda _root: _adapter())
-
-    with pytest.raises(
-        _Runtime.AgentToolRuntimeError,
-        match="no reviewed deterministic module templates",
-    ) as raised:
-        contract._guard_target_capability(
-            _Runtime,
-            _Extended,
-            tmp_path,
-            {"modules": [{"id": "copper_hammer", "kind": "item"}]},
-        )
-
-    assert "No files were changed" in str(raised.value)
-    assert "fabric_live_ai" in str(raised.value)
+def _module(kind: str, module_id: str = "example") -> Any:
+    return SimpleNamespace(kind=kind, module_id=module_id)
 
 
-def test_target_specific_module_allowlist_rejects_unreviewed_kind(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        contract,
-        "_adapter_from_project",
-        lambda _root: _adapter("item"),
-    )
-
-    with pytest.raises(
-        _Runtime.AgentToolRuntimeError,
-        match="requested module kinds are not reviewed for this target: block",
-    ):
-        contract._guard_target_capability(
-            _Runtime,
-            _Extended,
-            tmp_path,
-            {
-                "modules": [
-                    {"id": "copper_hammer", "kind": "item"},
-                    {"id": "copper_block", "kind": "block"},
-                ]
-            },
-        )
-
-
-def test_target_specific_module_allowlist_accepts_reviewed_kinds(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        contract,
-        "_adapter_from_project",
-        lambda _root: _adapter("item", "recipe"),
-    )
-
-    contract._guard_target_capability(
-        _Runtime,
-        _Extended,
-        tmp_path,
-        {
-            "modules": [
-                {"id": "copper_hammer", "kind": "item"},
-                {"id": "copper_recipe", "kind": "recipe"},
-            ]
-        },
+def _extended(original: Any) -> Any:
+    return SimpleNamespace(
+        _SUPPORTED=frozenset({"item", "block", "recipe"}),
+        ExtendedContentError=_ExtendedContentError,
+        generate_extended_content=original,
     )
 
 
-def test_install_guards_existing_execute_without_replacing_its_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict] = []
-
-    class _Contract:
-        @staticmethod
-        def _execute(runtime_module, extended_module, workspace_root, payload):
-            calls.append(dict(payload))
-            return {"status": "GENERATED"}
-
-    original = _Contract._execute
-    contract.install(_Contract)
-    guarded = _Contract._execute
-    assert guarded.__wrapped__ is original
-
-    monkeypatch.setattr(contract, "_adapter_from_project", lambda _root: _adapter())
-    with pytest.raises(_Runtime.AgentToolRuntimeError):
-        guarded(
-            _Runtime,
-            _Extended,
-            tmp_path,
-            {"modules": [{"id": "copper_hammer", "kind": "item"}]},
-        )
-    assert calls == []
-
-    monkeypatch.setattr(
-        contract,
-        "_adapter_from_project",
-        lambda _root: _adapter("item"),
+def test_advertised_kinds_are_normalized_before_authorization() -> None:
+    assert contract._raw_advertised_kinds(_adapter(" item ", "", "block")) == frozenset(
+        {"item", "block"}
     )
-    result = guarded(
-        _Runtime,
-        _Extended,
-        tmp_path,
-        {"modules": [{"id": "copper_hammer", "kind": "item"}]},
-    )
-    assert result == {"status": "GENERATED"}
-    assert calls == [{"modules": [{"id": "copper_hammer", "kind": "item"}]}]
 
 
 def test_project_generator_guard_rejects_live_target_before_root_mutation(
@@ -239,24 +138,180 @@ def test_project_generator_guard_allows_reviewed_target_and_empty_inner_skeleton
     assert calls == [root, root]
 
 
-def test_runtime_install_covers_all_legacy_public_entrypoints_idempotently() -> None:
+def test_shared_extended_primitive_rejects_unreviewed_target_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "existing-project"
+    calls: list[tuple[Any, ...]] = []
+
+    def original(**kwargs: Any) -> dict[str, Any]:
+        calls.append(tuple(kwargs["modules"]))
+        root.mkdir(parents=True)
+        return {"status": "GENERATED"}
+
+    extended = _extended(original)
+    monkeypatch.setattr(contract, "_adapter_from_project", lambda _root: _adapter())
+    guarded = contract._install_extended_content_guard(extended)
+
+    with pytest.raises(
+        _ExtendedContentError,
+        match="no reviewed deterministic module templates",
+    ) as raised:
+        guarded(
+            project_root=root,
+            mod_id="demo",
+            package_name="demo.mod",
+            modules=(_module("item"),),
+        )
+
+    assert "No files were changed" in str(raised.value)
+    assert calls == []
+    assert not root.exists()
+
+
+def test_shared_extended_primitive_requires_every_requested_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    def original(**kwargs: Any) -> dict[str, Any]:
+        calls.append(tuple(kwargs["modules"]))
+        return {"status": "GENERATED"}
+
+    extended = _extended(original)
+    monkeypatch.setattr(contract, "_adapter_from_project", lambda _root: _adapter("item"))
+    guarded = contract._install_extended_content_guard(extended)
+
+    with pytest.raises(
+        _ExtendedContentError,
+        match="requested module kinds are not reviewed for this target: block",
+    ):
+        guarded(
+            project_root=tmp_path,
+            mod_id="demo",
+            package_name="demo.mod",
+            modules=(_module("item", "one"), _module("block", "two")),
+        )
+
+    assert calls == []
+
+
+def test_shared_extended_primitive_materializes_once_and_allows_reviewed_kinds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[Any, ...]] = []
+
+    def original(**kwargs: Any) -> dict[str, Any]:
+        modules = kwargs["modules"]
+        assert isinstance(modules, tuple)
+        observed.append(modules)
+        return {"status": "GENERATED"}
+
+    extended = _extended(original)
+    monkeypatch.setattr(
+        contract,
+        "_adapter_from_project",
+        lambda _root: _adapter("item", "recipe"),
+    )
+    guarded = contract._install_extended_content_guard(extended)
+    source = iter((_module("item", "one"), _module("recipe", "two")))
+
+    result = guarded(
+        project_root=tmp_path,
+        mod_id="demo",
+        package_name="demo.mod",
+        modules=source,
+    )
+
+    assert result == {"status": "GENERATED"}
+    assert [module.module_id for module in observed[0]] == ["one", "two"]
+    assert tuple(source) == ()
+
+
+def test_unsupported_only_batch_does_not_require_deterministic_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter_lookups: list[Path] = []
+
+    def original(**kwargs: Any) -> dict[str, Any]:
+        return {"status": "SKIPPED", "modules": []}
+
+    extended = _extended(original)
+
+    def lookup(root: Path) -> Any:
+        adapter_lookups.append(Path(root))
+        return _adapter()
+
+    monkeypatch.setattr(contract, "_adapter_from_project", lookup)
+    guarded = contract._install_extended_content_guard(extended)
+
+    assert guarded(
+        project_root=tmp_path,
+        mod_id="demo",
+        package_name="demo.mod",
+        modules=(_module("custom"),),
+    ) == {"status": "SKIPPED", "modules": []}
+    assert adapter_lookups == []
+
+
+def test_stale_import_by_value_aliases_are_retargeted_across_wrapper_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raw(**kwargs: Any) -> dict[str, Any]:
+        return {"status": "GENERATED", "count": len(tuple(kwargs["modules"]))}
+
+    @wraps(raw)
+    def registration_wrapper(**kwargs: Any) -> dict[str, Any]:
+        return raw(**kwargs)
+
+    holder_raw = ModuleType("minecraft_mod_ai._worker8_raw_alias")
+    holder_raw.generate_extended_content = raw
+    holder_middle = ModuleType("minecraft_mod_ai._worker8_middle_alias")
+    holder_middle.generate_extended_content = registration_wrapper
+    monkeypatch.setitem(sys.modules, holder_raw.__name__, holder_raw)
+    monkeypatch.setitem(sys.modules, holder_middle.__name__, holder_middle)
+
+    extended = _extended(registration_wrapper)
+    monkeypatch.setattr(contract, "_adapter_from_project", lambda _root: _adapter("item"))
+    guarded = contract._install_extended_content_guard(extended)
+
+    assert holder_raw.generate_extended_content is guarded
+    assert holder_middle.generate_extended_content is guarded
+    assert guarded(
+        project_root=tmp_path,
+        mod_id="demo",
+        package_name="demo.mod",
+        modules=(_module("item"),),
+    ) == {"status": "GENERATED", "count": 1}
+
+
+def test_runtime_install_covers_central_and_project_boundaries_idempotently() -> None:
+    from minecraft_mod_ai import complete_orchestrator, extended_content_generator
+    from minecraft_mod_ai import scalable_generator
     from minecraft_mod_ai import deterministic_minecraft_content_contract
     from minecraft_mod_ai.generator import FabricProjectGenerator
     from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 
-    execute = deterministic_minecraft_content_contract._execute
+    content_generate = extended_content_generator.generate_extended_content
     base_generate = FabricProjectGenerator.generate
     scalable_generate = ScalableFabricProjectGenerator.generate
+    execute = deterministic_minecraft_content_contract._execute
 
-    assert getattr(execute, contract._MARKER, False)
+    assert getattr(content_generate, contract._MARKER, False)
     assert getattr(base_generate, contract._MARKER, False)
     assert getattr(scalable_generate, contract._MARKER, False)
-    assert hasattr(execute, "__wrapped__")
-    assert hasattr(base_generate, "__wrapped__")
-    assert hasattr(scalable_generate, "__wrapped__")
+    assert not getattr(execute, contract._MARKER, False)
+    assert complete_orchestrator.generate_extended_content is content_generate
+    assert scalable_generator.generate_extended_content is content_generate
 
     contract.install()
 
-    assert deterministic_minecraft_content_contract._execute is execute
+    assert extended_content_generator.generate_extended_content is content_generate
     assert FabricProjectGenerator.generate is base_generate
     assert ScalableFabricProjectGenerator.generate is scalable_generate
+    assert deterministic_minecraft_content_contract._execute is execute
