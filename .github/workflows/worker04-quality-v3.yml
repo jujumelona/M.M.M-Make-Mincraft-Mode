@@ -31,11 +31,21 @@ jobs:
 
           path = Path('minecraft_mod_ai/agent_capability_context.py')
           text = path.read_text(encoding='utf-8')
-          stale = ', skills_for_model_role\n'
-          explicit = ', skills_for_model_role as skills_for_model_role\n'
-          if text.count(stale) != 1:
-              raise SystemExit(f'expected one compatibility import, found {text.count(stale)}')
-          path.write_text(text.replace(stale, explicit, 1), encoding='utf-8')
+          old = '''from . import model_tool_aliases as _model_tool_aliases
+from .agent_roles import AgentRoleRoute, load_agent_role_routes, skills_for_model_role
+'''
+          new = '''from . import agent_roles as _agent_roles
+from . import model_tool_aliases as _model_tool_aliases
+from .agent_roles import AgentRoleRoute, load_agent_role_routes
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one compatibility import block, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          anchor = 'from .tool_validation_surface_contract import _assert_unique_schema_names\n'
+          export = '\nskills_for_model_role = _agent_roles.skills_for_model_role\n'
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one compatibility export anchor, found {text.count(anchor)}')
+          path.write_text(text.replace(anchor, anchor + export, 1), encoding='utf-8')
 
           path = Path('minecraft_mod_ai/temporary_skill_contract.py')
           text = path.read_text(encoding='utf-8')
