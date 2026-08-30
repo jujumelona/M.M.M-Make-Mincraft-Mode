@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
+from .reuse_license import is_reusable_source_license
+
 
 class ProofLevel(str, Enum):
     DISCOVERED = "DISCOVERED"
@@ -178,8 +180,10 @@ def _validate_receipt(dst: ProofLevel, receipt: Any) -> tuple[bool, str]:
     if data is None:
         return False, f"MISSING_RECEIPT: transition to {dst.value} requires an attested proof receipt"
 
-    if dst == ProofLevel.LICENSE_VERIFIED and not _nonempty_text(data, "license"):
-        return False, "INVALID_RECEIPT: LICENSE_VERIFIED requires a non-empty license"
+    if dst == ProofLevel.LICENSE_VERIFIED and not is_reusable_source_license(
+        data.get("license")
+    ):
+        return False, "INVALID_RECEIPT: LICENSE_VERIFIED requires a reusable source license"
     if dst == ProofLevel.PINNED and not _nonempty_text(data, "commit_sha"):
         return False, "INVALID_RECEIPT: PINNED requires a non-empty commit_sha"
     if dst == ProofLevel.CLOSURE_COMPLETE and data.get("closure_complete") is not True:
