@@ -33,7 +33,7 @@ jobs:
           python .github/scripts/worker05_liveness_reporter_canonical_v1.py
       - name: Verify liveness reporter ownership
         run: |
-          # V1.3: no redundant reporter thread; optional stream surface; explicit owner boundaries.
+          # V1.4: direct optional stream installer + no redundant reporter thread.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/llama_stream_efficiency_contract.py minecraft_mod_ai/llama_completion_liveness_contract.py tests/test_llama_completion_liveness_contract.py
