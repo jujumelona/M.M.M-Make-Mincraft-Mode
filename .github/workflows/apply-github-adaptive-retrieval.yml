@@ -25,6 +25,34 @@ jobs:
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply retrieval architecture patch
         run: python scripts/apply_github_retrieval_overhaul.py
+      - name: Make source tokenization identifier-aware
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('minecraft_mod_ai/github_adaptive_retrieval.py')
+          s = p.read_text(encoding='utf-8')
+          anchor = '_TOKEN = re.compile(r"[A-Za-z0-9]+", re.UNICODE)\n'
+          replacement = '''_TOKEN = re.compile(r"[A-Za-z0-9]+", re.UNICODE)
+          _CAMEL_BOUNDARY = re.compile(
+              r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+          )
+
+
+          def _lexemes(value: str) -> tuple[str, ...]:
+              """Split path/source identifiers before lexical retrieval scoring."""
+
+              expanded = _CAMEL_BOUNDARY.sub(" ", str(value or ""))
+              return tuple(_TOKEN.findall(expanded))
+          '''
+          if anchor not in s:
+              raise SystemExit('tokenizer anchor drifted')
+          s = s.replace(anchor, replacement, 1)
+          s = s.replace('for raw in _TOKEN.findall(normalized):', 'for raw in _lexemes(normalized):', 1)
+          s = s.replace('for raw in _TOKEN.findall(str(text or "")):', 'for raw in _lexemes(str(text or "")):', 1)
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Reject legacy recall cutoffs
         shell: bash
         run: |
