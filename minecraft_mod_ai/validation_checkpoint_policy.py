@@ -105,16 +105,89 @@ def validation_checkpoint_input(
     return scoped
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
+    if value.get("schema_version") != "mmm/java-diagnostics-v2":
+        return False
+    diagnostics = value.get("diagnostics")
+    pages = value.get("pages")
+    files_opened = _nonnegative_int(value.get("files_opened"))
+    page_count = _nonnegative_int(value.get("page_count"))
+    error_count = _nonnegative_int(value.get("error_count"))
+    warning_count = _nonnegative_int(value.get("warning_count"))
+    if (
+        not isinstance(diagnostics, Mapping)
+        or not isinstance(pages, list)
+        or files_opened is None
+        or page_count is None
+        or error_count is None
+        or warning_count is None
+        or page_count != len(pages)
+        or len(diagnostics) != files_opened
+    ):
+        return False
+
+    observed_errors = 0
+    observed_warnings = 0
+    for uri, raw_items in diagnostics.items():
+        if not isinstance(uri, str) or not uri or not isinstance(raw_items, list):
+            return False
+        for item in raw_items:
+            if not isinstance(item, Mapping):
+                return False
+            severity = item.get("severity", 1)
+            if isinstance(severity, bool) or not isinstance(severity, int):
+                return False
+            if severity == 1:
+                observed_errors += 1
+            elif severity == 2:
+                observed_warnings += 1
+    if observed_errors != error_count or observed_warnings != warning_count:
+        return False
+
+    page_files = 0
+    page_diagnostics = 0
+    page_errors = 0
+    page_warnings = 0
+    for page in pages:
+        if not isinstance(page, Mapping):
+            return False
+        file_count = _nonnegative_int(page.get("file_count"))
+        diagnostic_uri_count = _nonnegative_int(page.get("diagnostic_uri_count"))
+        errors = _nonnegative_int(page.get("error_count"))
+        warnings = _nonnegative_int(page.get("warning_count"))
+        if (
+            file_count is None
+            or diagnostic_uri_count is None
+            or errors is None
+            or warnings is None
+            or diagnostic_uri_count != file_count
+        ):
+            return False
+        page_files += file_count
+        page_diagnostics += diagnostic_uri_count
+        page_errors += errors
+        page_warnings += warnings
+    return (
+        page_files == files_opened
+        and page_diagnostics == files_opened
+        and page_errors == error_count
+        and page_warnings == warning_count
+    )
+
+
 def cached_validation_is_reusable(checkpoint_id: str, value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     if checkpoint_id == "validate-source":
         return value.get("status") == "PASS"
     if checkpoint_id == "validate-jdt":
-        return (
-            value.get("schema_version") == "mmm/java-diagnostics-v2"
-            and isinstance(value.get("diagnostics"), dict)
-        )
+        return _complete_jdt_receipt(value)
     return False
 
 
