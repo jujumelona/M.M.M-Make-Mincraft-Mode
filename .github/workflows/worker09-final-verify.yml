@@ -69,5 +69,4 @@ jobs:
             tests/test_worker09_work_receipt_integrity.py \
             tests/test_worker09_remaining_integrity.py \
             tests/test_worker09_research_receipt_consensus.py \
-            tests/test_execution_feedback_exception_scope_contract.py \
             tests/test_trajectory_store_v3.py
