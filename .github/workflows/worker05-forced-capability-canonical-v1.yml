@@ -31,6 +31,7 @@ jobs:
         run: python .github/scripts/worker05_forced_capability_canonical_v1.py
       - name: Verify canonical forced capability owner
         run: |
+          # V1.1: canonical TTL/cooldown cache, per-key probe dedupe, strict exception boundaries.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/forced_tool_execution_contract.py minecraft_mod_ai/runtime_bootstrap.py tests/test_llama_forced_tool_capability_contract.py
