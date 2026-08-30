@@ -115,6 +115,8 @@ def test_actual_coder_call_receives_research_context(monkeypatch, tmp_path):
             return "done"
 
     class Engine:
+        monitor = object()
+
         def ingest_code_owned_request(self, messages):
             self.ingested = messages
 
