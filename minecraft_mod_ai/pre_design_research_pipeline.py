@@ -8,31 +8,34 @@ platform target. Third-party donor discovery likewise belongs to the frozen-desi
 phase. The host keeps complete evidence while model turns receive bounded receipts.
 """
 
+import hashlib
 import json
+import re
 import traceback
 from collections.abc import Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
 from .agent_capability_context import target_neutral_research_scope
-from .central_research import normalize_research_brief, retrieve_domain_evidence
+from .central_research import normalize_research_brief
 from .external_procedural_skill_contract import attach_procedural_skillbank
 from .minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
 )
 from .pre_design_domain_research import research_document_domain
-from .pre_design_local_project_evidence import collect_local_project_evidence
 from .research_coordinator import collect_technology_radar
 from .retrieval import BUILTIN_CORPUS, OfficialCorpusIndex
 from .small_model_execution_extensions_contract import compose_research_skillbank
 from .technology_radar import build_technology_radar
 
-_DETERMINISTIC_STAGES = (
-    "official_rag",
-    "technology_radar",
-    "forced_project_rag",
+_CONTENT_FIELDS = ("content", "excerpt", "snippet", "text", "body")
+_QUERY_STOP_TERMS = frozenset(
+    {
+        "fabric", "minecraft", "mod", "mods", "requested", "existing", "host",
+        "resolved", "target", "implementation", "mechanic", "system", "game",
+        "player", "players", "official", "documentation", "docs", "source",
+    }
 )
 
 
@@ -118,22 +121,34 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
     )
 
 
+def _evidence_tokens(value: Any) -> set[str]:
+    folded = re.sub(r"[_./:+-]+", " ", str(value).casefold())
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+|[가-힣]{2,}", folded)
+        if len(token) > 1 and token not in _QUERY_STOP_TERMS
+    }
+
+
+def _document_relevance(query: str, document: Mapping[str, Any]) -> int:
+    query_tokens = _evidence_tokens(query)
+    if not query_tokens:
+        return 0
+    searchable = " ".join(
+        str(document.get(field, ""))
+        for field in ("document_id", "source_id", "title", "url", "topics", "content")
+    )
+    return len(query_tokens & _evidence_tokens(searchable))
+
+
 def _target_neutral_official_evidence(
     research_brief: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Expose every reviewed target-neutral primary-source document with its content.
-
-    No ranking cutoff is applied here. The host owns the full corpus and the downstream
-    evidence-document protocol performs bounded, lossless paging. Exact target-specific
-    symbols and coordinates remain intentionally absent until target freeze.
-    """
+    """Return only query-relevant reviewed documents, never the whole corpus/TOC."""
 
     index = OfficialCorpusIndex(BUILTIN_CORPUS)
-    documents = [
-        {
-            **document.public_metadata(),
-            "content": document.content,
-        }
+    reviewed = [
+        {**document.public_metadata(), "content": document.content}
         for document in index.documents
     ]
     domains: list[dict[str, Any]] = []
@@ -142,35 +157,235 @@ def _target_neutral_official_evidence(
         for domain in raw_domains:
             if not isinstance(domain, Mapping):
                 continue
+            raw_queries = domain.get("queries", [])
+            queries = (
+                [str(item).strip() for item in raw_queries if str(item).strip()]
+                if isinstance(raw_queries, list)
+                else []
+            )
+            query_text = " ".join([str(domain.get("objective", "")), *queries])
+            scored = [
+                (_document_relevance(query_text, document), document)
+                for document in reviewed
+            ]
+            selected = [
+                document
+                for score, document in sorted(
+                    scored,
+                    key=lambda item: (-item[0], str(item[1].get("document_id", ""))),
+                )
+                if score > 0
+            ][:4]
             domains.append(
                 {
                     "domain_id": str(domain.get("domain_id", "")),
-                    "queries": list(domain.get("queries", []))
-                    if isinstance(domain.get("queries"), list)
-                    else [],
-                    "documents": documents,
+                    "queries": queries,
+                    "documents": selected,
                 }
             )
     return {
-        "schema_version": "mmm/pre-design-official-evidence-v1",
+        "schema_version": "mmm/pre-design-official-evidence",
         "status": "available",
         "target_scope": "target_neutral",
         "target_frozen": False,
         "corpus_snapshot_hash": index.snapshot_hash,
-        "document_count": len(documents),
+        "document_count": sum(len(item["documents"]) for item in domains),
         "domains": domains,
     }
+
+
+def _builtin_content_record(
+    record: Mapping[str, Any], query: str
+) -> dict[str, Any] | None:
+    source_id = str(record.get("source_id") or record.get("document_id") or "").strip()
+    for document in BUILTIN_CORPUS:
+        document_id = str(getattr(document, "document_id", "")).strip()
+        if not source_id or source_id != document_id:
+            continue
+        candidate = {
+            **document.public_metadata(),
+            "source_id": source_id,
+            "content": document.content,
+        }
+        if _document_relevance(query, candidate) <= 0:
+            return None
+        candidate["evidence_origin"] = "official_reviewed_document"
+        return candidate
+    return None
+
+
+def _record_content(record: Mapping[str, Any]) -> str:
+    for field in _CONTENT_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and len(value.strip()) >= 24:
+            return value.strip()
+    return ""
+
+
+def _section_records(section: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(section, Mapping):
+        return []
+    rows: list[Mapping[str, Any]] = []
+    for key in ("documents", "hits", "sources", "records", "results"):
+        value = section.get(key)
+        if isinstance(value, list):
+            rows.extend(item for item in value if isinstance(item, Mapping))
+    return rows
+
+
+def _query_content_records(query_item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    query = str(query_item.get("query", ""))
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for section_name in ("external_rag", "code_rag", "project_rag"):
+        section = query_item.get(section_name)
+        for raw in _section_records(section):
+            item = dict(raw)
+            content = _record_content(item)
+            if not content and section_name == "project_rag":
+                materialized = _builtin_content_record(item, query)
+                if materialized is not None:
+                    item = materialized
+                    content = _record_content(item)
+            if not content:
+                continue
+            digest = str(item.get("content_sha256", "")).strip()
+            if not digest:
+                digest = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+                item["content_sha256"] = digest
+            if digest in seen:
+                continue
+            seen.add(digest)
+            item["retrieval_section"] = section_name
+            records.append(item)
+    return records
+
+
+def _is_github_record(record: Mapping[str, Any]) -> bool:
+    source_id = str(record.get("source_id", "")).casefold()
+    url = str(record.get("url", "")).casefold()
+    metadata = record.get("metadata")
+    repository = (
+        str(metadata.get("repository", "")).strip()
+        if isinstance(metadata, Mapping)
+        else ""
+    )
+    return source_id.startswith("github:") or "github.com/" in url or bool(repository)
+
+
+def _grounded_domain_evidence(
+    agentic: Any, domain_id: str, bundle: Mapping[str, Any]
+) -> dict[str, Any]:
+    selected = agentic._domain_source_value(domain_id, bundle)
+    queries: list[dict[str, Any]] = []
+    raw_queries = selected.get("queries", []) if isinstance(selected, Mapping) else []
+    if isinstance(raw_queries, list):
+        for item in raw_queries:
+            if not isinstance(item, Mapping):
+                continue
+            records = _query_content_records(item)
+            queries.append(
+                {
+                    "query": str(item.get("query", "")),
+                    "query_sha256": str(item.get("query_sha256", "")),
+                    "evidence_records": records,
+                    "content_record_count": len(records),
+                    "github_record_count": sum(
+                        1 for record in records if _is_github_record(record)
+                    ),
+                }
+            )
+    return {
+        "schema_version": "mmm/pre-design-grounded-domain-evidence",
+        "domain_id": domain_id,
+        "queries": queries,
+    }
+
+
+def _grounded_rag_receipt(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    domains: list[dict[str, Any]] = []
+    raw_domains = bundle.get("domains", [])
+    for domain in raw_domains if isinstance(raw_domains, list) else []:
+        if not isinstance(domain, Mapping):
+            continue
+        queries: list[dict[str, Any]] = []
+        raw_queries = domain.get("queries", [])
+        for item in raw_queries if isinstance(raw_queries, list) else []:
+            if not isinstance(item, Mapping):
+                continue
+            records = _query_content_records(item)
+            queries.append(
+                {
+                    "query": str(item.get("query", "")),
+                    "query_sha256": str(item.get("query_sha256", "")),
+                    "content_record_count": len(records),
+                    "github_record_count": sum(
+                        1 for record in records if _is_github_record(record)
+                    ),
+                }
+            )
+        domains.append(
+            {"domain_id": str(domain.get("domain_id", "")), "queries": queries}
+        )
+    return {
+        "schema_version": "mmm/pre-design-grounded-rag-receipt",
+        "status": "available",
+        "research_sha256": bundle.get("research_sha256"),
+        "domain_count": len(domains),
+        "domains": domains,
+        "source_content_omitted": True,
+    }
+
+
+def _validate_domain_provider_grounding(
+    domain: Mapping[str, Any],
+    grounded: Mapping[str, Any],
+) -> None:
+    records = [
+        record
+        for query in grounded.get("queries", [])
+        if isinstance(query, Mapping)
+        for record in query.get("evidence_records", [])
+        if isinstance(record, Mapping)
+    ]
+    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
+    if not records:
+        raise PreDesignResearchFailure(
+            f"Pre-design retrieval gap for domain {domain_id!r}: retrieval returned only "
+            "catalog/TOC/metadata or empty hits; no claim-bearing source content was retrieved."
+        )
+    providers = {
+        str(item).casefold()
+        for item in domain.get("providers", [])
+        if str(item).strip()
+    }
+    if "github" in providers and not any(_is_github_record(record) for record in records):
+        raise PreDesignResearchFailure(
+            f"Pre-design retrieval gap for domain {domain_id!r}: required provider 'github' "
+            "returned no content-bearing source document."
+        )
 
 
 def _domain_document_evidence(
     agentic: Any,
     domain_id: str,
     deterministic: Mapping[str, Any],
+    *,
+    grounded_bundle: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {
-        str(source): agentic._domain_source_value(domain_id, value)
-        for source, value in deterministic.items()
+    result: dict[str, Any] = {
+        "grounded_rag": _grounded_domain_evidence(agentic, domain_id, grounded_bundle)
     }
+    for source, value in deterministic.items():
+        if source == "grounded_rag":
+            continue
+        if isinstance(value, Mapping) and str(value.get("status", "")) in {
+            "deferred_until_target_freeze",
+            "unavailable",
+        }:
+            continue
+        result[str(source)] = agentic._domain_source_value(domain_id, value)
+    return result
 
 
 def _validate_document_grounding(
@@ -512,9 +727,55 @@ def collect_design_research(
     )
 
     target_frozen = _target_frozen(knowledge_plan)
-    active_stages = ["official_rag", "forced_project_rag"]
+    try:
+        # This is the only live pre-design retrieval owner. Runtime contracts wrap
+        # it with bounded external GitHub/Modrinth source retrieval plus local RAG.
+        grounded_bundle = project_rag._forced_rag_bundle(router, research_brief)
+        deterministic["grounded_rag"] = _grounded_rag_receipt(grounded_bundle)
+        _emit_research_diagnostic(
+            "deterministic_stage_complete",
+            stage="grounded_rag",
+            result=deterministic["grounded_rag"],
+        )
+    except Exception as exc:
+        diagnostic = _exception_payload(exc)
+        _emit_research_diagnostic(
+            "deterministic_stage_failure",
+            stage="grounded_rag",
+            exception=diagnostic,
+        )
+        raise PreDesignResearchFailure(
+            "Unified pre-design grounded retrieval failed before evidence extraction: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
     if target_frozen:
-        active_stages.insert(1, "technology_radar")
+        try:
+            deterministic["technology_radar"] = collect_technology_radar(
+                prompt,
+                research_brief,
+                page_size=50,
+                page_builder=build_technology_radar,
+            )
+            _emit_research_diagnostic(
+                "deterministic_stage_complete",
+                stage="technology_radar",
+                result=deterministic["technology_radar"],
+            )
+        except Exception as exc:
+            diagnostic = _exception_payload(exc)
+            _emit_research_diagnostic(
+                "deterministic_stage_failure",
+                stage="technology_radar",
+                exception=diagnostic,
+            )
+            errors.append(
+                {"stage": "technology_radar", "error": f"{type(exc).__name__}: {exc}"}
+            )
+            deterministic["technology_radar"] = {
+                "status": "unavailable",
+                "failure": diagnostic,
+            }
     else:
         deterministic["technology_radar"] = _deferred_technology_receipt(knowledge_plan)
         _emit_research_diagnostic(
@@ -522,50 +783,6 @@ def collect_design_research(
             stage="technology_radar",
             result=deterministic["technology_radar"],
         )
-
-    futures: dict[str, Future[Any]] = {}
-    with ThreadPoolExecutor(
-        max_workers=len(active_stages),
-        thread_name_prefix="mmm-design-evidence",
-    ) as executor:
-        futures["official_rag"] = executor.submit(
-            retrieve_domain_evidence if target_frozen else _target_neutral_official_evidence,
-            research_brief,
-        )
-        futures["forced_project_rag"] = executor.submit(
-            collect_local_project_evidence,
-            research_brief,
-        )
-        if target_frozen:
-            futures["technology_radar"] = executor.submit(
-                collect_technology_radar,
-                prompt,
-                research_brief,
-                page_size=50,
-                page_builder=build_technology_radar,
-            )
-
-        for stage in _DETERMINISTIC_STAGES:
-            future = futures.get(stage)
-            if future is None:
-                continue
-            try:
-                result = future.result()
-                deterministic[stage] = result
-                _emit_research_diagnostic(
-                    "deterministic_stage_complete",
-                    stage=stage,
-                    result=result,
-                )
-            except Exception as exc:
-                diagnostic = _exception_payload(exc)
-                _emit_research_diagnostic(
-                    "deterministic_stage_failure",
-                    stage=stage,
-                    exception=diagnostic,
-                )
-                errors.append({"stage": stage, "error": f"{type(exc).__name__}: {exc}"})
-                deterministic[stage] = {"status": "unavailable", "failure": diagnostic}
 
     domain_notes: list[dict[str, Any]] = []
     for domain in research_brief.get("domains", []):
@@ -583,6 +800,11 @@ def collect_design_research(
                 agentic,
                 domain_id,
                 deterministic,
+                grounded_bundle=grounded_bundle,
+            )
+            _validate_domain_provider_grounding(
+                domain,
+                domain_evidence["grounded_rag"],
             )
             document = project_rag._materialize_domain_evidence_document(
                 domain_id,
@@ -623,10 +845,10 @@ def collect_design_research(
         "errors": errors,
         "method": {
             "reason_act": "target-neutral host evidence collection before design",
-            "adaptive_retrieval": "lossless evidence documents are paged to the model within bounded context",
-            "corrective_retrieval": "official and local-project evidence are independently retained in the host ledger",
+            "adaptive_retrieval": "query-scoped claim-bearing evidence is paged to the model within bounded context",
+            "corrective_retrieval": "one grounded retrieval owner supplies local, official and external source evidence",
             "reflection": "final sufficient claims must cite exact host-owned evidence page refs",
-            "planning_search": "third-party donor search is deferred to frozen-design reuse planning",
+            "planning_search": "pre-design source discovery is grounded; donor selection remains a frozen-design reuse decision",
             "minecraft_knowledge": (
                 "version-sensitive routes are explicit deferred work until platform target freeze"
             ),

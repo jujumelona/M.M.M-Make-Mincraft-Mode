@@ -393,6 +393,8 @@ def evaluate_route_coverage(plan: Mapping[str, Any], research: Mapping[str, Any]
         isinstance(policy, Mapping) and policy.get('target_frozen')
     ) or _resolved_target(research_brief) is not None
     deterministic = research.get('deterministic')
+    grounded = deterministic.get('grounded_rag') if isinstance(deterministic, Mapping) else None
+    grounded_map = {str(x.get('domain_id', '')): x for x in (grounded.get('domains', []) if isinstance(grounded, Mapping) else []) if isinstance(x, Mapping)}
     forced = deterministic.get('forced_project_rag') if isinstance(deterministic, Mapping) else None
     forced_map = {str(x.get('domain_id', '')): x for x in (forced.get('domains', []) if isinstance(forced, Mapping) else []) if isinstance(x, Mapping)}
     official = deterministic.get('official_rag') if isinstance(deterministic, Mapping) else None
@@ -401,6 +403,7 @@ def evaluate_route_coverage(plan: Mapping[str, Any], research: Mapping[str, Any]
     receipts, blocking, deferred = ([], [], [])
     for domain_id, domain in expected.items():
         candidates = [
+            ('grounded_rag', grounded_map.get(domain_id)),
             ('official_versioned_rag', official_map.get(domain_id)),
             ('project_rag', forced_map.get(domain_id)),
         ]
