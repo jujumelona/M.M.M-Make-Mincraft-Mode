@@ -50,6 +50,22 @@ _INCOMPLETE_FLAGS = (
     "request_budget_exhausted",
     "round_limit_reached",
 )
+_SATURATION_FIELDS = (
+    "saturation_reason",
+    "github_saturation_reason",
+    "retrieval_saturation_reason",
+)
+_INCOMPLETE_SATURATION_MARKERS = (
+    "request_budget_exhausted",
+    "byte_budget_exhausted",
+    "pagination_incomplete",
+    "tree_truncated",
+    "round_limit_reached",
+    "rate_limited",
+    "provider_limited",
+    "repository_metadata_failed",
+    "repository_tree_failed",
+)
 _BODY_RETRIEVAL_FLAGS = (
     "body_retrieved",
     "source_body_retrieved",
@@ -60,6 +76,7 @@ _FATAL_STATUS_VALUES = {
     "error",
     "failed",
     "forbidden",
+    "provider_limited",
     "rate_limited",
     "timeout",
     "timed_out",
@@ -248,9 +265,13 @@ def _incomplete_reason(value: Mapping[str, Any]) -> str:
         if _flag(value, name):
             return name
     for layer in _mapping_layers(value):
-        saturation = str(layer.get("saturation_reason") or "").strip().casefold()
-        if any(marker in saturation for marker in _INCOMPLETE_FLAGS):
-            return f"saturation_reason:{saturation}"
+        for field in _SATURATION_FIELDS:
+            saturation = str(layer.get(field) or "").strip().casefold()
+            if any(
+                marker in saturation
+                for marker in _INCOMPLETE_SATURATION_MARKERS
+            ):
+                return f"{field}:{saturation}"
     return ""
 
 
