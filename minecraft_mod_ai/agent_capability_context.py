@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+from . import agent_roles as _agent_roles
 from . import model_tool_aliases as _model_tool_aliases
 from .agent_roles import AgentRoleRoute, load_agent_role_routes
 from .external_mcp_router import ExternalMCPRouter
@@ -18,6 +19,8 @@ from .skill_catalog import (
     compile_skill_catalog,
 )
 from .tool_validation_surface_contract import _assert_unique_schema_names
+
+skills_for_model_role = _agent_roles.skills_for_model_role
 
 _EXTERNAL_AGENT_TOOLS = frozenset(
     {

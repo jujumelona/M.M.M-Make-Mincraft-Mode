@@ -127,12 +127,12 @@ def _is_workspace_file_path(path: str) -> bool:
     if not path or not isinstance(path, str):
         return False
     clean = path.strip().replace("\\", "/")
-    if clean.startswith("http://") or clean.startswith("https://") or "://" in clean:
+    if clean.startswith(("http://", "https://")) or "://" in clean:
         return False
     suffix = Path(clean).suffix.casefold()
-    if "/" not in clean and suffix not in {".java", ".json", ".toml", ".gradle", ".properties", ".txt", ".md", ".kt", ".groovy"}:
-        return False
-    return True
+    return "/" in clean or suffix in {
+        ".java", ".json", ".toml", ".gradle", ".properties", ".txt", ".md", ".kt", ".groovy"
+    }
 
 
 def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> str:
@@ -1286,7 +1286,7 @@ def _generate_turn_with_context_recovery(
                         try:
                             with router._generation_scope(config):
                                 return adapter.generate_turn(ultra_request)
-                        except BaseException as ultra_exc:
+                        except Exception as ultra_exc:  # noqa: BLE001 - classify backend boundary
                             if completion_boundary_kind(ultra_exc) == OUTPUT_EXHAUSTED:
                                 return _retry_atomic_after_output_exhaustion(
                                     router,
@@ -1767,7 +1767,11 @@ def generate_with_tools(
                 or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))
             )
 
-        def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
+        def execute(
+            call: Any,
+            allowed_phase_tools: frozenset[str] = phase_tool_names,
+            localization_stage: LocalizationStage = current_localization_stage,
+        ) -> tuple[Any, Mapping[str, Any]]:
             route_metadata: dict[str, Any] = {
                 "skills": list(skills_for_tool(stage, call.name, model_role=role))
             }
@@ -1776,10 +1780,10 @@ def generate_with_tools(
                 if capability:
                     route_metadata["external_mcp_capability"] = capability
 
-            if call.name not in phase_tool_names:
+            if call.name not in allowed_phase_tools:
                 err_msg = (
                     f"Agent attempted tool {call.name!r} outside its allowed phase {state.phase.value!r} "
-                    f"(allowed tools: {sorted(phase_tool_names)})."
+                    f"(allowed tools: {sorted(allowed_phase_tools)})."
                 )
                 state.record_failure(call.name, err_msg)
                 print(f"  [!] PHASE VIOLATION: {call.name} -> {err_msg}", flush=True)
@@ -1805,7 +1809,7 @@ def generate_with_tools(
                         "error": err_msg,
                     }
                 localization_attempt_stage = (
-                    current_localization_stage
+                    localization_stage
                     if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE
                     else None
                 )
@@ -1841,7 +1845,7 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - tool failures become observations
                 err_msg = f"{type(exc).__name__}: {exc}"
                 payload = {
                     "ok": False,
@@ -1917,18 +1921,27 @@ def generate_with_tools(
                 recorded = state.record_evidence(payload.get("result"), usable=usable)
                 after_ctx = state.mutation_context
 
-                ctx_progress = False
-                if after_ctx is not None:
-                    if before_ctx is None or after_ctx.localization_stage != before_ctx.localization_stage or after_ctx.target_path != before_ctx.target_path or after_ctx.target_symbol != before_ctx.target_symbol or after_ctx.source_body != before_ctx.source_body:
-                        ctx_progress = True
+                ctx_progress = bool(
+                    after_ctx is not None
+                    and (
+                        before_ctx is None
+                        or after_ctx.localization_stage != before_ctx.localization_stage
+                        or after_ctx.target_path != before_ctx.target_path
+                        or after_ctx.target_symbol != before_ctx.target_symbol
+                        or after_ctx.source_body != before_ctx.source_body
+                    )
+                )
 
                 initial_evidence_progress = recorded and len(state.evidence_fingerprints) == 1
 
                 if ctx_progress or initial_evidence_progress or (not implementation_requires_mutation and recorded):
                     turn_made_progress = True
-                    if state.phase == LoopPhase.OBSERVE and implementation_requires_mutation:
-                        if is_mutation_ready(messages, state):
-                            state.phase = LoopPhase.ACT
+                    if (
+                        state.phase == LoopPhase.OBSERVE
+                        and implementation_requires_mutation
+                        and is_mutation_ready(messages, state)
+                    ):
+                        state.phase = LoopPhase.ACT
 
         if turn_made_progress:
             state.clear_failure()

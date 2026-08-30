@@ -269,13 +269,19 @@ class ExternalAgentBridge:
         )
 
     def _external_router(self) -> Any:
-        if self._router is None:
-            from .external_mcp_router import ExternalMCPRouter
+        router = self._router
+        if router is not None:
+            return router
+        with self._lock:
+            router = self._router
+            if router is None:
+                from .external_mcp_router import ExternalMCPRouter
 
-            self._router = ExternalMCPRouter(
-                timeout_seconds=min(self.timeout_seconds, 120.0)
-            )
-        return self._router
+                router = ExternalMCPRouter(
+                    timeout_seconds=min(self.timeout_seconds, 120.0)
+                )
+                self._router = router
+            return router
 
     def _run_async(self, function: Any, *args: Any) -> Any:
         async def runner() -> Any:
@@ -292,7 +298,7 @@ class ExternalAgentBridge:
         def worker() -> None:
             try:
                 result["value"] = anyio.run(runner)
-            except BaseException as exc:  # pragma: no cover - event-loop bridge
+            except BaseException as exc:  # noqa: BLE001  # pragma: no cover - bridge
                 errors.append(exc)
 
         thread = threading.Thread(target=worker, daemon=True)
@@ -364,7 +370,7 @@ class ExternalAgentBridge:
                     "input_schema": live["input_schema"],
                     "status": "PASS",
                 }
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - provider failure must fall back
                 attempts.append(
                     {
                         "server": server,
@@ -431,9 +437,11 @@ async def _provider_schema(
         if transport == "streamable_http":
             if not url:
                 raise ExternalAgentBridgeError("External MCP HTTP URL is missing")
-            async with streamable_http_client(url) as (read_stream, write_stream, _):
-                async with ClientSession(read_stream, write_stream) as session:
-                    return await read(session)
+            async with (
+                streamable_http_client(url) as (read_stream, write_stream, _),
+                ClientSession(read_stream, write_stream) as session,
+            ):
+                return await read(session)
     raise ExternalAgentBridgeError(
         f"Unsupported external MCP transport for schema discovery: {transport!r}"
     )
@@ -462,5 +470,5 @@ def _jsonable(value: Any) -> Any:
         return _jsonable(model_dump(mode="json"))
     try:
         return json.loads(json.dumps(value, default=str))
-    except Exception:
+    except (TypeError, ValueError, OverflowError, RecursionError):
         return str(value)

@@ -91,7 +91,6 @@ class ExternalMCPRouter:
         if not 1.0 <= float(timeout_seconds) <= 600.0:
             raise ValueError("External MCP timeout must be between 1 and 600 seconds.")
         self.timeout_seconds = float(timeout_seconds)
-        self._lock = threading.RLock()
 
     def capability_manifest(
         self,
@@ -232,7 +231,7 @@ class ExternalMCPRouter:
                 successes.append(receipt)
                 if len(successes) >= corroborate:
                     break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - route failure must fall back
                 attempts.append(
                     {
                         "server": server_name,
@@ -276,34 +275,32 @@ class ExternalMCPRouter:
                 server_name, entry, tool=tool, arguments=arguments
             )
 
-        with self._lock:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return anyio.run(run)
+
+        # Each call owns an independent MCP transport/session, so serializing the
+        # complete provider I/O behind one router lock only adds head-of-line latency.
+        value: dict[str, Any] = {}
+        error: list[BaseException] = []
+
+        def worker() -> None:
             try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return anyio.run(run)
+                value["result"] = anyio.run(run)
+            except BaseException as exc:  # noqa: BLE001  # pragma: no cover - bridge
+                error.append(exc)
 
-            # The public MMM APIs are synchronous, but an MCP host may call them
-            # from an already-running event loop.  Run the nested MCP session in a
-            # dedicated thread instead of illegally nesting asyncio.run().
-            value: dict[str, Any] = {}
-            error: list[BaseException] = []
-
-            def worker() -> None:
-                try:
-                    value["result"] = anyio.run(run)
-                except BaseException as exc:  # pragma: no cover - thread bridge
-                    error.append(exc)
-
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
-            thread.join(self.timeout_seconds + 5.0)
-            if thread.is_alive():
-                raise ExternalMCPError(
-                    f"External MCP {server_name} exceeded the synchronous bridge timeout."
-                )
-            if error:
-                raise ExternalMCPError(str(error[0])) from error[0]
-            return value["result"]
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(self.timeout_seconds + 5.0)
+        if thread.is_alive():
+            raise ExternalMCPError(
+                f"External MCP {server_name} exceeded the synchronous bridge timeout."
+            )
+        if error:
+            raise ExternalMCPError(str(error[0])) from error[0]
+        return value["result"]
 
     async def _call_provider_async(
         self,

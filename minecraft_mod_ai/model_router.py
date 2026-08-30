@@ -331,20 +331,14 @@ class ModelRouter:
             runtime = self._tool_runtime()
             raw_tools = tuple(runtime.tool_schemas(stage))
             if raw_tools:
-                from .agent_capability_context import (
-                    build_agent_capability_context,
-                    filter_tool_schemas_for_role,
-                )
+                from .agent_capability_context import prepare_agent_tool_surface
 
-                tools = filter_tool_schemas_for_role(stage, role, raw_tools)
+                tools, capability_context = prepare_agent_tool_surface(
+                    stage, role, raw_tools
+                )
                 if tools:
                     request_messages = _inject_system_context(
-                        request_messages,
-                        build_agent_capability_context(
-                            stage,
-                            tools,
-                            model_role=role,
-                        ),
+                        request_messages, capability_context
                     )
         request = GenerationRequest(
             messages=request_messages,
@@ -562,6 +556,17 @@ def _parallel_read_workers() -> int:
     return max(1, min(value, 16))
 
 
+def _parallel_read_call(call: Any) -> bool:
+    """Return whether a reviewed call is side-effect-free and safe in a read wave."""
+
+    if call.name in _PARALLEL_READ_TOOLS:
+        return True
+    if call.name != "external_mcp_call":
+        return False
+    access = str(call.arguments.get("max_access", "read")).strip().lower() or "read"
+    return access == "read"
+
+
 def _execute_tool_waves(
     calls: Sequence[Any],
     execute: Callable[[Any], tuple[Any, Mapping[str, Any]]],
@@ -587,7 +592,7 @@ def _execute_tool_waves(
             completed.extend(executor.map(execute, batch))
 
     for call in calls:
-        if call.name in _PARALLEL_READ_TOOLS:
+        if _parallel_read_call(call):
             pending_reads.append(call)
             continue
         flush_reads()

@@ -238,7 +238,7 @@ def _install_read_wave_dedup(model_router_module: Any) -> None:
     if getattr(current, "_mmm_exact_read_wave_dedup", False):
         return
 
-    parallel_reads = frozenset(model_router_module._PARALLEL_READ_TOOLS)
+    parallel_read_call = model_router_module._parallel_read_call
 
     @wraps(current)
     def execute_with_dedup(
@@ -281,7 +281,7 @@ def _install_read_wave_dedup(model_router_module: Any) -> None:
                 completed.append((call, payload))
 
         for call in calls:
-            if call.name in parallel_reads:
+            if parallel_read_call(call):
                 pending_reads.append(call)
                 continue
             flush_reads()
@@ -384,7 +384,7 @@ def _install_work_trajectory(work_graph_module: Any) -> None:
                     sync = flush_remote_outbox(base) if remote_configured() else None
                     if sync:
                         print("trajectory remote sync:", sync.get("status"), sync.get("flushed", 0), flush=True)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - best-effort telemetry sync
                     print("trajectory remote sync deferred:", f"{type(exc).__name__}: {str(exc)[:240]}", flush=True)
             return result
 

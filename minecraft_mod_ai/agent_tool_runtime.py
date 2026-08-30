@@ -11,6 +11,7 @@ from collections.abc import Collection, Mapping, Sequence
 from contextlib import AsyncExitStack
 from itertools import islice
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import anyio
@@ -373,7 +374,7 @@ class AgentToolRuntime:
         def worker() -> None:
             try:
                 value["result"] = anyio.run(runner)
-            except BaseException as exc:  # pragma: no cover - event-loop bridge
+            except BaseException as exc:  # noqa: BLE001  # pragma: no cover - bridge
                 errors.append(exc)
 
         thread = threading.Thread(target=worker, daemon=True)
@@ -467,7 +468,7 @@ class _MCPStdioSession:
         try:
             stack.enter_context(anyio.fail_after(self.timeout_seconds))
             errlog = stack.enter_context(
-                tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+                tempfile.TemporaryFile(mode="w+", encoding="utf-8")  # noqa: SIM115
             )
             params = StdioServerParameters(
                 command=sys.executable,
@@ -485,7 +486,7 @@ class _MCPStdioSession:
         except BaseException as original:
             try:
                 await stack.aclose()
-            except BaseException as cleanup_error:
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve original
                 add_note = getattr(original, "add_note", None)
                 if callable(add_note):
                     add_note(
@@ -496,7 +497,12 @@ class _MCPStdioSession:
             self.session = None
             raise
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
         stack = self._stack
         self._stack = None
         self.session = None
