@@ -12,11 +12,98 @@ def install(java_lsp_module: Any) -> None:
 
     The legacy client could leave a killed JDT process unreaped and could wait until
     the full request timeout after its stdout reader crashed (for example on a
-    malformed Content-Length header).  Requests are also serialized so two callers
+    malformed Content-Length header). Requests are also serialized so two callers
     cannot repeatedly dequeue and defer one another's responses from the shared queue.
+    Diagnostic collection additionally fails closed unless every opened Java URI has
+    published one diagnostics notification, including an explicit empty list for a
+    clean source file.
     """
 
     cls = java_lsp_module._JsonRpcProcess
+
+    current_collect = java_lsp_module._collect_diagnostics
+    if not getattr(current_collect, "_mmm_jdt_complete_diagnostics", False):
+
+        @wraps(current_collect)
+        def collect_diagnostics(
+            rpc: Any,
+            *,
+            expected_uris: set[str],
+            timeout_seconds: float,
+            quiet_seconds: float,
+        ) -> dict[str, list[dict[str, Any]]]:
+            if timeout_seconds <= 0:
+                raise ValueError("JDT diagnostics timeout must be positive.")
+            if quiet_seconds < 0:
+                raise ValueError("JDT diagnostics quiet period cannot be negative.")
+            if not expected_uris:
+                return {}
+
+            diagnostics: dict[str, list[dict[str, Any]]] = {}
+            deadline = time.monotonic() + float(timeout_seconds)
+            while True:
+                if expected_uris.issubset(diagnostics):
+                    return dict(sorted(diagnostics.items()))
+
+                reader_failure = getattr(rpc, "_mmm_reader_failure", None)
+                if reader_failure is not None:
+                    raise java_lsp_module.JDTLanguageServerError(
+                        "JDT LS stdout reader failed while collecting diagnostics: "
+                        f"{type(reader_failure).__name__}: {reader_failure}"
+                    ) from reader_failure
+
+                process = getattr(rpc, "process", None)
+                poll = getattr(process, "poll", None)
+                if callable(poll):
+                    returncode = poll()
+                    if returncode is not None:
+                        stderr = "\n".join(
+                            list(getattr(rpc, "stderr", ())) [-8:]
+                        )
+                        detail = f"; stderr={stderr}" if stderr else ""
+                        raise java_lsp_module.JDTLanguageServerError(
+                            "JDT LS exited before publishing complete diagnostics: "
+                            f"returncode={returncode}{detail}"
+                        )
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    message = rpc.messages.get(timeout=min(0.25, remaining))
+                except java_lsp_module.queue.Empty:
+                    continue
+                if java_lsp_module._respond_to_server_request(rpc, message):
+                    continue
+                if message.get("method") != "textDocument/publishDiagnostics":
+                    continue
+                params = message.get("params", {})
+                if not isinstance(params, dict):
+                    continue
+                uri = str(params.get("uri", ""))
+                if uri not in expected_uris:
+                    continue
+                values = params.get("diagnostics")
+                if not isinstance(values, list):
+                    raise java_lsp_module.JDTLanguageServerError(
+                        "JDT LS published a malformed diagnostics payload for an "
+                        "opened Java file."
+                    )
+                diagnostics[uri] = java_lsp_module._sorted_diagnostics(
+                    item for item in values if isinstance(item, dict)
+                )
+
+            missing_count = len(expected_uris.difference(diagnostics))
+            raise java_lsp_module.JDTLanguageServerError(
+                "JDT LS did not publish diagnostics for every opened Java file "
+                "before the validation deadline: "
+                f"observed={len(diagnostics)}, expected={len(expected_uris)}, "
+                f"missing={missing_count}."
+            )
+
+        collect_diagnostics._mmm_jdt_complete_diagnostics = True  # type: ignore[attr-defined]
+        collect_diagnostics.__wrapped__ = current_collect  # type: ignore[attr-defined]
+        java_lsp_module._collect_diagnostics = collect_diagnostics
 
     current_init = cls.__init__
     if not getattr(current_init, "_mmm_jdt_process_safety", False):
