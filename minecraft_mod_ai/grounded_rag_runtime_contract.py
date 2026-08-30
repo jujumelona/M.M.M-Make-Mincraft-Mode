@@ -314,8 +314,8 @@ def _coordinator_retrieve_one(
 def _augment(
     agentic_module: Any,
     payload: Mapping[str, Any],
-    research_brief: Mapping[str, Any],
     *,
+    research_brief: Mapping[str, Any],
     versions: Sequence[str],
     local_index: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -346,7 +346,7 @@ def _install_pre_design_owner_if_missing(agentic_module: Any) -> None:
         return _augment(
             agentic_module,
             payload,
-            research_brief,
+            research_brief=research_brief,
             versions=versions,
             local_index=local_index,
         )
@@ -401,10 +401,6 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
         reuse_module._parallel_donor_repository_discovery = donor_discovery
 
     _grounded._external_retrieval = _coordinator_retrieve_one
-
-    from .pre_design_research_routing_contract import install as install_pre_design_routing
-
-    install_pre_design_routing()
     _INSTALLED = True
 
 
