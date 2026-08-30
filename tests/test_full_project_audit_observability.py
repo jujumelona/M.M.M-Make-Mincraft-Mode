@@ -128,7 +128,7 @@ def test_streaming_redactor_masks_secrets_across_every_small_chunk_boundary() ->
     )
     expected = (
         "prefix/<redacted>/middle token=<redacted>; "
-        "authorization : <redacted> /suffix"
+        "authorization : <redacted>"
     )
 
     for width in range(1, 33):
@@ -139,6 +139,117 @@ def test_streaming_redactor_masks_secrets_across_every_small_chunk_boundary() ->
         assert exact_secret not in rendered
         assert "Bearer-super-secret" not in rendered
         assert "v" * 32 not in rendered
+
+
+def test_streaming_redactor_masks_quoted_structured_and_header_values() -> None:
+    source = (
+        '{"token": "alpha beta", '
+        '"password":"abc\\\" def", '
+        '"secret":{"nested":["one two", {"credential":"three"}]}, '
+        '"safe": 1}\n'
+        "Authorization: Bearer bearer-credential\n"
+        "Cookie: session=abc; other=def\n"
+        "visible=ok"
+    )
+    expected = (
+        '{"token": "<redacted>", '
+        '"password":"<redacted>", '
+        '"secret":<redacted>, '
+        '"safe": 1}\n'
+        "Authorization: <redacted>\n"
+        "Cookie: <redacted>\n"
+        "visible=ok"
+    )
+
+    for width in range(1, 41):
+        redactor = audit.StreamingRedactor()
+        rendered = "".join(
+            redactor.feed(source[index : index + width])
+            for index in range(0, len(source), width)
+        ) + redactor.finish()
+        assert rendered == expected, f"chunk width {width} broke structured redaction"
+        for leaked in (
+            "alpha beta",
+            "abc\\\" def",
+            "one two",
+            "credential",
+            "three",
+            "bearer-credential",
+            "session=abc",
+            "other=def",
+        ):
+            assert leaked not in rendered
+
+
+def test_streaming_redactor_does_not_match_sensitive_substrings_in_identifiers() -> None:
+    source = "mytoken=value tokenizer=value apikeyring=value token=value"
+    expected = "mytoken=value tokenizer=value apikeyring=value token=<redacted>"
+
+    for width in range(1, 17):
+        redactor = audit.StreamingRedactor()
+        rendered = "".join(
+            redactor.feed(source[index : index + width])
+            for index in range(0, len(source), width)
+        ) + redactor.finish()
+        assert rendered == expected, f"chunk width {width} caused a boundary false positive"
+
+
+def test_streaming_redactor_finish_never_flushes_unclosed_sensitive_payload() -> None:
+    sources = (
+        'token=unclosed-secret-value',
+        '{"token":"unclosed quoted secret',
+        '{"secret":{"nested":"unclosed structured secret"',
+    )
+    for source in sources:
+        for width in range(1, 11):
+            redactor = audit.StreamingRedactor()
+            rendered = "".join(
+                redactor.feed(source[index : index + width])
+                for index in range(0, len(source), width)
+            ) + redactor.finish()
+            assert "unclosed" not in rendered
+            assert "secret-value" not in rendered
+            assert "quoted secret" not in rendered
+            assert "structured secret" not in rendered
+            assert "<redacted>" in rendered
+
+
+def test_nonstreaming_redact_uses_same_structured_contract() -> None:
+    source = (
+        '{"token": "alpha beta", '
+        '"password": {"raw": "nested value"}, '
+        '"safe": "visible"}'
+    )
+    rendered = audit.redact(source, secrets=())
+    assert rendered == (
+        '{"token": "<redacted>", '
+        '"password": <redacted>, '
+        '"safe": "visible"}'
+    )
+    assert "alpha beta" not in rendered
+    assert "nested value" not in rendered
+
+
+def test_streamed_process_redacts_quoted_json_without_exact_secret_registration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _redirect_artifacts(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit, "_OUTPUT_CHUNK_CHARS", 5)
+    code = "print('{\"token\": \"alpha beta\", \"safe\": 1}')"
+    result = audit._run_logged_process(
+        [sys.executable, "-c", code],
+        timeout=30,
+        cwd=tmp_path,
+        label="quoted-json-secret-output",
+    )
+
+    assert result.returncode == 0
+    assert "alpha beta" not in result.output_tail
+    assert '"safe": 1' in result.output_tail
+    log = audit.LOG_PATH.read_text(encoding="utf-8")
+    assert "alpha beta" not in log
+    assert '"token": "<redacted>"' in log
+    assert '"safe": 1' in log
 
 
 def test_single_unbroken_multimegabyte_line_has_bounded_python_memory(
