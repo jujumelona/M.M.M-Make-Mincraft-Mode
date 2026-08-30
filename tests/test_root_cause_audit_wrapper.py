@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai.diagnostics import FailureCategory
 from tools import root_cause_audit_wrapper as audit_wrapper
 from tools.root_cause_audit_wrapper import (
     failure_groups_from_report,
@@ -49,6 +50,24 @@ def test_duplicate_failed_check_is_collapsed_to_one_root_with_attempt_count() ->
     assert rendered.count("ROOT FAILURE") == 1
     assert "ATTEMPTS\n2" in rendered
     assert "CHECKS pass=1 warn=0 fail=2 skip=0" in rendered
+
+
+def test_internal_audit_check_is_not_mislabeled_validation() -> None:
+    report = {
+        "summary": {"passed": 0, "warned": 0, "failed": 1, "skipped": 0},
+        "checks": [
+            {
+                "name": "probe",
+                "category": "audit-internal",
+                "status": "FAIL",
+                "detail": "TypeError: broken audit code",
+            }
+        ],
+    }
+    groups = failure_groups_from_report(report)
+    assert len(groups) == 1
+    assert groups[0].event.category is FailureCategory.INTERNAL
+    assert groups[0].event.cause_type == "AuditInternalFailure"
 
 
 def test_warning_is_not_mislabeled_as_pass() -> None:
@@ -116,12 +135,13 @@ def test_report_consistency_rejects_status_index_mismatch() -> None:
         validate_report_consistency(report)
 
 
-def test_main_never_reuses_stale_report(tmp_path, monkeypatch, capsys) -> None:
+def test_main_never_reuses_stale_report_or_runner_log(tmp_path, monkeypatch, capsys) -> None:
     audit_dir = tmp_path / "audit"
     report_path = audit_dir / "FULL_PROJECT_AUDIT.json"
     runner_log = audit_dir / "FULL_PROJECT_AUDIT.runner.log"
     audit_dir.mkdir()
     report_path.write_text(json.dumps(_complete_report()), encoding="utf-8")
+    runner_log.write_text("stale runner evidence\n", encoding="utf-8")
 
     monkeypatch.setattr(audit_wrapper, "ROOT", tmp_path)
     monkeypatch.setattr(audit_wrapper, "AUDIT_DIR", audit_dir)
@@ -130,6 +150,7 @@ def test_main_never_reuses_stale_report(tmp_path, monkeypatch, capsys) -> None:
 
     def fake_run(*args, **kwargs):
         assert not report_path.exists(), "stale report must be removed before the subprocess starts"
+        assert runner_log.read_text(encoding="utf-8") == ""
         assert kwargs["stdout"] is not subprocess.PIPE
         kwargs["stdout"].write("current run crashed before writing a report\n")
         return SimpleNamespace(returncode=7)
