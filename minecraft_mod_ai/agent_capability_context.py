@@ -5,15 +5,12 @@ import os
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 from . import model_tool_aliases as _model_tool_aliases
-from .agent_roles import (
-    mcp_servers_for_model_role,
-    routes_for_model_role,
-    skills_for_model_role,
-)
+from .agent_roles import AgentRoleRoute, load_agent_role_routes
 from .external_mcp_router import ExternalMCPRouter
 from .skill_catalog import (
     REVIEWED_TOOL_STAGES,
@@ -45,6 +42,16 @@ _TARGET_NEUTRAL_RESEARCH: ContextVar[bool] = ContextVar(
 _COMPACT_CONTEXT_MARKER = "_mmm_compact_skill_context_v1"
 
 
+@dataclass(frozen=True)
+class _RolePolicySnapshot:
+    """One immutable role-routing view for a single model request preparation."""
+
+    model_role: str
+    routes: tuple[AgentRoleRoute, ...]
+    skills: frozenset[str]
+    mcp_servers: frozenset[str]
+
+
 @contextmanager
 def target_neutral_research_scope() -> Iterator[None]:
     """Mark one request-local research turn as intentionally pre-target.
@@ -72,14 +79,33 @@ def _policy_model_role(stage: str, model_role: str) -> str:
     return selected_role
 
 
+def _role_policy_snapshot(stage: str, model_role: str) -> _RolePolicySnapshot:
+    """Read the live role contract once and derive all request-local permissions."""
+
+    policy_role = _policy_model_role(stage, model_role)
+    if not policy_role:
+        return _RolePolicySnapshot(policy_role, (), frozenset(), frozenset())
+    routes = tuple(
+        route
+        for route in load_agent_role_routes()
+        if policy_role in route.model_roles
+    )
+    return _RolePolicySnapshot(
+        model_role=policy_role,
+        routes=routes,
+        skills=frozenset(skill for route in routes for skill in route.skills),
+        mcp_servers=frozenset(
+            server for route in routes for server in route.mcp_servers
+        ),
+    )
+
+
 def reviewed_mcp_servers_for_model_role(
     stage: str, model_role: str
 ) -> frozenset[str]:
     """Return reviewed external MCP servers for this logical agent turn."""
 
-    return frozenset(
-        mcp_servers_for_model_role(_policy_model_role(stage, model_role))
-    )
+    return _role_policy_snapshot(stage, model_role).mcp_servers
 
 
 @lru_cache(maxsize=8)
@@ -98,15 +124,25 @@ def _manifest_router() -> ExternalMCPRouter:
     return ExternalMCPRouter()
 
 
-def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]:
+def _request_contracts_from_policy(
+    stage: str,
+    policy: _RolePolicySnapshot,
+) -> tuple[SkillContract, ...]:
     stage_contracts = _stage_contracts(stage)
-    policy_role = _policy_model_role(stage, model_role)
-    if not policy_role:
+    if not policy.model_role:
         return stage_contracts
-    if not routes_for_model_role(policy_role):
+    if not policy.routes:
         return ()
-    assigned = skills_for_model_role(policy_role)
-    return tuple(contract for contract in stage_contracts if contract.name in assigned)
+    return tuple(
+        contract for contract in stage_contracts if contract.name in policy.skills
+    )
+
+
+def _request_contracts(stage: str, model_role: str) -> tuple[SkillContract, ...]:
+    return _request_contracts_from_policy(
+        stage,
+        _role_policy_snapshot(stage, model_role),
+    )
 
 
 def _reviewed_stage_for_model_tool(name: str, stage: str) -> bool:
@@ -125,31 +161,28 @@ def _target_is_bound() -> bool:
     )
 
 
-def filter_tool_schemas_for_role(
+def _filter_tool_schemas_with_policy(
     stage: str,
     model_role: str,
     tool_schemas: Sequence[Mapping[str, Any]],
+    policy: _RolePolicySnapshot,
 ) -> tuple[Mapping[str, Any], ...]:
-    """Expose only tools reachable through reviewed stage/Skill/agent routes."""
-
     surface = tuple(tool_schemas)
     _assert_unique_schema_names(
         surface,
         surface=f"role-filter:{stage.strip().lower()}:{model_role.strip()}",
     )
-    policy_role = _policy_model_role(stage, model_role)
-    if not policy_role:
+    if not policy.model_role:
         return surface
-    role_routes = routes_for_model_role(policy_role)
-    if not role_routes:
+    if not policy.routes:
         return ()
 
     allowed = {
         tool
-        for contract in _request_contracts(stage, policy_role)
+        for contract in _request_contracts_from_policy(stage, policy)
         for tool in contract.allowed_tools
     }
-    if mcp_servers_for_model_role(policy_role):
+    if policy.mcp_servers:
         allowed.update(_EXTERNAL_AGENT_TOOLS)
 
     selected_stage = stage.strip().lower()
@@ -174,6 +207,21 @@ def filter_tool_schemas_for_role(
     return tuple(result)
 
 
+def filter_tool_schemas_for_role(
+    stage: str,
+    model_role: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    """Expose only tools reachable through reviewed stage/Skill/agent routes."""
+
+    return _filter_tool_schemas_with_policy(
+        stage,
+        model_role,
+        tool_schemas,
+        _role_policy_snapshot(stage, model_role),
+    )
+
+
 def skills_for_tool(
     stage: str,
     tool: str,
@@ -189,30 +237,26 @@ def skills_for_tool(
     canonical = _model_tool_aliases.canonical_model_tool(selected_tool)
     if selected_stage not in REVIEWED_TOOL_STAGES.get(canonical, frozenset()):
         return ()
-    policy_role = _policy_model_role(selected_stage, model_role)
+    policy = _role_policy_snapshot(selected_stage, model_role)
     return tuple(
         contract.name
-        for contract in _request_contracts(selected_stage, policy_role)
+        for contract in _request_contracts_from_policy(selected_stage, policy)
         if canonical in contract.allowed_tools
     )
 
 
-def build_agent_capability_context(
+def _build_agent_capability_context_with_policy(
     stage: str,
     tool_schemas: Sequence[Mapping[str, Any]],
     *,
-    model_role: str = "",
+    model_role: str,
+    policy: _RolePolicySnapshot,
 ) -> str:
-    """Build the canonical compact Skill/MCP guidance for model tool choice."""
-
     selected = stage.strip().lower()
-    policy_role = _policy_model_role(selected, model_role)
     exposed_tools = frozenset(_tool_names(tool_schemas))
-    role_routes = routes_for_model_role(policy_role)
-    reviewed_servers = reviewed_mcp_servers_for_model_role(selected, model_role)
 
     skills: list[dict[str, Any]] = []
-    for contract in _request_contracts(selected, policy_role):
+    for contract in _request_contracts_from_policy(selected, policy):
         stage_tools = tuple(
             tool
             for tool in contract.allowed_tools
@@ -273,9 +317,9 @@ def build_agent_capability_context(
                         if isinstance(route, Mapping)
                         and str(route.get("server", "")).strip()
                         and (
-                            not policy_role
+                            not policy.model_role
                             or str(route.get("server", "")).strip()
-                            in reviewed_servers
+                            in policy.mcp_servers
                         )
                     )
                     servers = tuple(
@@ -297,7 +341,7 @@ def build_agent_capability_context(
                         or "read"
                         for route in selected_routes
                     }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - capability discovery must fail closed
             external_capabilities = {}
             external_access = {}
             external_manifest_status = {
@@ -309,10 +353,10 @@ def build_agent_capability_context(
     payload = {
         "schema_version": "mmm/agent-capability-context-v5",
         "stage": selected,
-        "model_role": policy_role,
+        "model_role": policy.model_role,
         "execution_model_role": model_role,
-        "agent_roles": [route.name for route in role_routes],
-        "reviewed_mcp_servers": sorted(reviewed_servers),
+        "agent_roles": [route.name for route in policy.routes],
+        "reviewed_mcp_servers": sorted(policy.mcp_servers),
         "eligible_skills": skills,
         "external_minecraft_mcp_capabilities": external_capabilities,
         "external_minecraft_mcp_access": external_access,
@@ -344,7 +388,47 @@ def build_agent_capability_context(
     )
 
 
+def build_agent_capability_context(
+    stage: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+    *,
+    model_role: str = "",
+) -> str:
+    """Build the canonical compact Skill/MCP guidance for model tool choice."""
+
+    return _build_agent_capability_context_with_policy(
+        stage,
+        tool_schemas,
+        model_role=model_role,
+        policy=_role_policy_snapshot(stage, model_role),
+    )
+
+
+def prepare_agent_tool_surface(
+    stage: str,
+    model_role: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[Mapping[str, Any], ...], str]:
+    """Filter tools and build context from one live, request-atomic role snapshot."""
+
+    policy = _role_policy_snapshot(stage, model_role)
+    filtered = _filter_tool_schemas_with_policy(
+        stage,
+        model_role,
+        tool_schemas,
+        policy,
+    )
+    context = _build_agent_capability_context_with_policy(
+        stage,
+        filtered,
+        model_role=model_role,
+        policy=policy,
+    )
+    return filtered, context
+
+
 setattr(build_agent_capability_context, _COMPACT_CONTEXT_MARKER, True)
+setattr(prepare_agent_tool_surface, _COMPACT_CONTEXT_MARKER, True)
 
 
 def _schema_tool_name(schema: Mapping[str, Any]) -> str:
