@@ -97,6 +97,7 @@ jobs:
 
           coordinator = Path('minecraft_mod_ai/grounded_rag_runtime_contract.py')
           text = coordinator.read_text(encoding='utf-8')
+          text = text.replace('import json\n', '', 1)
           stale = '            for path in closure[:10]:\n                source_id = f"github:{owner}/{repo}:{path}"\n'
           fixed = '            for path in closure[:10]:\n                folded = path.casefold()\n                source_id = f"github:{owner}/{repo}:{path}"\n'
           if fixed not in text:
