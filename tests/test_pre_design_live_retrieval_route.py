@@ -4,17 +4,13 @@ import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import authored_scope_research_contract as authored
-from minecraft_mod_ai import grounded_rag_runtime_contract as runtime
 from minecraft_mod_ai import pre_design_rag_corrective as corrective
 from minecraft_mod_ai import research_grounded_rag_contract as grounded
 
 
-def test_approved_queries_reach_public_source_retrieval(monkeypatch) -> None:
+def test_pre_design_executes_small_discovery_set_without_deep_source_crawl(monkeypatch) -> None:
     prompt = "우주선을 부위마다 만들고 다른 행성을 탐사하는 모드"
-    planned_queries = [
-        "minecraft mod modular spacecraft construction",
-        "minecraft mod alien planet exploration",
-    ]
+    planned_queries = [f"minecraft mod mechanic {index} discovery" for index in range(30)]
     monkeypatch.setattr(
         authored,
         "_active_catalog",
@@ -41,34 +37,34 @@ def test_approved_queries_reach_public_source_retrieval(monkeypatch) -> None:
 
     rewritten = authored._rewrite_pre_design_candidate(prompt, candidate)
     domain = rewritten["domains"][0]
-
     assert domain["queries"] == planned_queries
     assert prompt not in domain["queries"]
     assert "github" in domain["providers"]
     assert "modrinth" in domain["providers"]
 
-    grounded_queries = grounded._external_brief_queries(rewritten)
-    runtime_queries = runtime._external_brief_queries(rewritten)
-    assert grounded_queries == tuple(planned_queries)
-    assert runtime_queries == tuple(planned_queries)
+    discovery_queries = grounded._external_brief_queries(rewritten)
+    assert len(discovery_queries) == 6
+    assert discovery_queries[0] == planned_queries[0]
+    assert discovery_queries[-1] == planned_queries[-1]
 
-    calls: list[str] = []
+    calls: list[tuple[str, str]] = []
 
-    def fake_external_retrieval(query: str, versions):
+    def fake_external_retrieval(query: str, versions, *, mode: str = "source"):
         del versions
-        calls.append(query)
+        calls.append((query, mode))
         return {
             "schema_version": "mmm/external-grounded-rag-v1",
             "status": "available",
+            "retrieval_mode": mode,
             "query": query,
-            "actual_source_document_count": 1,
+            "actual_source_document_count": 0,
             "document_count": 1,
             "documents": [
                 {
-                    "source_id": f"github:example/{query}",
-                    "source_type": "github_source",
-                    "url": "https://github.com/example/mod/blob/main/Example.java",
-                    "content": f"source evidence for {query}",
+                    "source_id": f"modrinth:example/{query}",
+                    "source_type": "modrinth_project",
+                    "url": "https://modrinth.com/mod/example",
+                    "content": f"project description for {query}",
                 }
             ],
         }
@@ -89,15 +85,70 @@ def test_approved_queries_reach_public_source_retrieval(monkeypatch) -> None:
         payload,
         versions=(),
         local_index={"status": "workspace_unconfigured"},
-        external_queries=grounded_queries,
+        external_queries=discovery_queries,
     )
 
-    assert calls == planned_queries
-    assert result["external_query_count"] == len(planned_queries)
-    assert result["external_source_count"] == len(planned_queries)
-    for query_row in result["domains"][0]["queries"]:
-        document = query_row["external_rag"]["documents"][0]
-        assert document["content"].startswith("source evidence for minecraft mod")
+    assert len(calls) == 6
+    assert all(mode == "planning_discovery" for _, mode in calls)
+    assert result["external_query_count"] == 6
+    assert result["external_source_count"] == 0
+    assert sum(
+        1
+        for row in result["domains"][0]["queries"]
+        if "external_rag" in row
+    ) == 6
+
+
+def test_corrective_retrieval_uses_targeted_source_mode(monkeypatch) -> None:
+    query = "minecraft modular spacecraft assembly source"
+    brief = {
+        "schema_version": "mmm/corrective-retrieval-request-v1",
+        "domains": [
+            {
+                "domain_id": "request",
+                "providers": ["github", "modrinth"],
+                "queries": [query],
+            }
+        ],
+    }
+    assert grounded._external_brief_queries(brief) == (query,)
+    calls: list[str] = []
+
+    def fake_external_retrieval(value: str, versions, *, mode: str = "source"):
+        del versions
+        calls.append(mode)
+        return {
+            "status": "available",
+            "query": value,
+            "actual_source_document_count": 1,
+            "document_count": 1,
+            "documents": [
+                {
+                    "source_id": "github:example/Spacecraft.java",
+                    "source_type": "github_source",
+                    "content": "targeted spacecraft assembly evidence",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(grounded, "_external_retrieval", fake_external_retrieval)
+    payload = {
+        "domains": [
+            {
+                "domain_id": "request",
+                "queries": [{"query": query}],
+            }
+        ]
+    }
+    grounded._augment_bundle(
+        SimpleNamespace(_sha256=lambda value: "sha256:test"),
+        payload,
+        versions=(),
+        local_index={"status": "workspace_unconfigured"},
+        external_queries=(query,),
+        default_mode="planning_gap_source",
+    )
+    assert calls == ["planning_gap_source"]
 
 
 def test_corrective_query_keeps_queries_when_model_adds_diagnostics() -> None:
