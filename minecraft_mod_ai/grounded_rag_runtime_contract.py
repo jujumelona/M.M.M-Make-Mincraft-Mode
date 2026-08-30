@@ -421,11 +421,11 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
     def forced_rag_bundle(router: Any, research_brief: Mapping[str, Any]) -> dict[str, Any]:
         pre_queries = _brief_queries(research_brief)
         pre_versions = _brief_versions(research_brief)
-        original_future = _COORDINATOR.submit(base, router, research_brief)
         local_future = _COORDINATOR.submit(_grounded._ensure_local_index, agentic_module, router)
         pre_external = _COORDINATOR.retrieve_many(pre_queries, pre_versions) if pre_queries else {}
-        payload = original_future.result()
         local_index = local_future.result()
+        original_future = _COORDINATOR.submit(base, router, research_brief)
+        payload = original_future.result()
         versions = tuple(str(item) for item in payload.get("versions", ()) if str(item).strip()) or pre_versions
         payload_queries = _dedupe_text(tuple(
             str(item.get("query") or "")
@@ -454,7 +454,13 @@ def install(agentic_module: Any, reuse_module: Any) -> None:
     if not getattr(original_discovery, "__mmm_grounded_donors__", False):
         def donor_discovery(capabilities: Sequence[str], client: Any, *, capability_graph: Mapping[str, Any] | None = None):
             grounded = _COORDINATOR.repositories_for_capabilities(capabilities, capability_graph)
-            public = original_discovery(capabilities, client, capability_graph=capability_graph)
+            public = (
+                {}
+                if client is None
+                else original_discovery(
+                    capabilities, client, capability_graph=capability_graph
+                )
+            )
             merged: dict[str, tuple[str, ...]] = {}
             for capability in capabilities:
                 values = [*grounded.get(capability, ()), *public.get(capability, ())]

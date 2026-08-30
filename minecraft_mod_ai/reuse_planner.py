@@ -1132,16 +1132,24 @@ def optimize_platform_and_reuse(
     # Source search is capability-level and target-neutral. Do it once, then evaluate
     # every executable target against the same pinned donor candidates. This avoids
     # the old capability x version public-search cross product.
-    if evidence_discovery_enabled:
+    donor_discovery = _parallel_donor_repository_discovery
+    grounded_donors_available = bool(
+        getattr(donor_discovery, "__mmm_grounded_donors__", False)
+    )
+    if evidence_discovery_enabled or grounded_donors_available:
         try:
-            repository_candidates = _parallel_donor_repository_discovery(
-                queries, client, capability_graph=graph.to_dict()
+            repository_candidates = donor_discovery(
+                queries,
+                client if evidence_discovery_enabled else None,
+                capability_graph=graph.to_dict(),
             )
         except Exception as exc:  # noqa: BLE001 - donor search is optional evidence
             message = (
                 f"donor repository discovery failed: {type(exc).__name__}: {exc}"
             )
-            _emit_discovery_log(f"discovery {message}; using fresh-only planning", exc_info=True)
+            _emit_discovery_log(
+                f"discovery {message}; using fresh-only planning", exc_info=True
+            )
             repository_candidates = {capability: () for capability in queries}
     else:
         repository_candidates = {capability: () for capability in queries}

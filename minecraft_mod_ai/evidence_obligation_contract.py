@@ -147,6 +147,32 @@ def _catalog_for(prompt: str) -> dict[str, Any] | None:
         return dict(value) if isinstance(value, Mapping) else None
 
 
+def _target_is_frozen(game_design: Mapping[str, Any] | None) -> bool:
+    """Return true only for an explicitly or fully grounded executable target."""
+
+    design = dict(game_design or {})
+    selection = design.get("_platform_selection")
+    if not isinstance(selection, Mapping):
+        return False
+    explicit = selection.get("target_frozen")
+    if type(explicit) is bool:
+        return explicit
+    target = selection.get("target")
+    target = dict(target) if isinstance(target, Mapping) else {}
+    explicit = target.get("target_frozen")
+    if type(explicit) is bool:
+        return explicit
+    for candidate in (selection, target):
+        grounding = candidate.get("target_grounding")
+        if not isinstance(grounding, Mapping):
+            continue
+        status = str(grounding.get("status") or "").strip().upper()
+        gate = str(candidate.get("hard_gate_status") or "").strip().casefold()
+        if status == "COMPLETE" and gate == "passed":
+            return True
+    return False
+
+
 def build_evidence_obligation_brief(
     prompt: str,
     catalog: Mapping[str, Any],
@@ -158,6 +184,16 @@ def build_evidence_obligation_brief(
             "Approved requirement graph has no requirements for evidence routing."
         )
 
+    target_frozen = _target_is_frozen(game_design)
+    active_obligations = (
+        _OBLIGATIONS
+        if target_frozen
+        else tuple(
+            spec
+            for spec in _OBLIGATIONS
+            if str(spec.get("kind") or "") == "reusable_implementation"
+        )
+    )
     nodes: list[dict[str, Any]] = []
     node_id: dict[tuple[str, str], str] = {}
     normalized_requirements: list[tuple[str, str, str]] = []
@@ -174,7 +210,7 @@ def build_evidence_obligation_brief(
                 "Approved requirement is missing stable identity/capability/statement."
             )
         normalized_requirements.append((req_id, capability, statement))
-        for spec in _OBLIGATIONS:
+        for spec in active_obligations:
             kind = str(spec["kind"])
             oid = _safe_id(f"{req_id}:{kind}")
             node_id[(req_id, kind)] = oid
@@ -197,7 +233,7 @@ def build_evidence_obligation_brief(
             )
 
     for node in nodes:
-        spec = next(item for item in _OBLIGATIONS if item["kind"] == node["kind"])
+        spec = next(item for item in active_obligations if item["kind"] == node["kind"])
         node["depends_on"] = [
             node_id[(node["requirement_id"], parent)] for parent in spec["depends_on"]
         ]
@@ -208,7 +244,7 @@ def build_evidence_obligation_brief(
     for node in nodes:
         if not node["retrieval_required"]:
             continue
-        spec = next(item for item in _OBLIGATIONS if item["kind"] == node["kind"])
+        spec = next(item for item in active_obligations if item["kind"] == node["kind"])
         query = " ".join(
             str(spec["query"]).format(
                 capability=node["capability"],
@@ -278,6 +314,16 @@ def build_evidence_obligation_brief(
             "until its own evidence contract is fulfilled."
         ),
     }
+    payload["target_frozen"] = target_frozen
+    payload["deferred_obligation_kinds"] = (
+        []
+        if target_frozen
+        else [
+            str(spec["kind"])
+            for spec in _OBLIGATIONS
+            if str(spec["kind"]) != "reusable_implementation"
+        ]
+    )
     selection = dict(game_design or {}).get("_platform_selection")
     if isinstance(selection, Mapping):
         target = selection.get("target")
