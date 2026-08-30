@@ -154,6 +154,9 @@ def finalize_runtime() -> None:
         from .tool_validation_surface_contract import (
             install as install_tool_validation_surface,
         )
+        from .work_graph_receipt_integrity_contract import (
+            install as install_work_graph_receipt_integrity,
+        )
 
         install_agent_mcp_transport_pool()
         install_mcp_schema_integrity(
@@ -186,6 +189,7 @@ def finalize_runtime() -> None:
         install_llama_finish_reason(llama_cpp_adapter)
         install_prefill_calibration_strictness(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
+        install_work_graph_receipt_integrity(work_graph)
 
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
