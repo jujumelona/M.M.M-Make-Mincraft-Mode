@@ -33,7 +33,7 @@ jobs:
           python .github/scripts/worker05_forced_capability_canonical_v1.py
       - name: Verify canonical forced capability owner
         run: |
-          # V1.2: isolated cache fixtures + canonical TTL/cooldown cache + per-key probe dedupe.
+          # V1.3: isolated cache fixtures + canonical TTL/cooldown cache + per-key probe dedupe.
           python -m compileall -q minecraft_mod_ai
           python .github/scripts/debug_repo_audit.py
           ruff check minecraft_mod_ai/forced_tool_execution_contract.py minecraft_mod_ai/runtime_bootstrap.py tests/test_llama_forced_tool_capability_contract.py
@@ -44,5 +44,19 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'refactor(llama): fold forced capability cache into owner'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          for attempt in 1 2 3 4 5 6 7 8; do
+            git fetch origin main
+            git rebase origin/main
+            python -m compileall -q minecraft_mod_ai
+            python .github/scripts/debug_repo_audit.py
+            ruff check minecraft_mod_ai/forced_tool_execution_contract.py minecraft_mod_ai/runtime_bootstrap.py tests/test_llama_forced_tool_capability_contract.py
+            pytest -q tests/test_llama_forced_tool_capability_contract.py tests/test_agent_tool_round_policy.py tests/test_llama_context_safety_contract.py tests/test_agent_context_window_contract.py tests/test_llama_sse_error_contract.py tests/test_llama_kv_correctness_contract.py
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 8 ]; then
+              echo 'worker05 forced capability push could not acquire current main after 8 verified attempts' >&2
+              exit 1
+            fi
+            sleep 1
+          done
