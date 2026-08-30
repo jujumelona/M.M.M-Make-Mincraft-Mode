@@ -24,7 +24,23 @@ jobs:
         run: python -m pip install --prefer-binary -e '.[dev]'
 
       - name: Apply final Worker 6 hardening
-        run: python scripts/worker6_final_authority_once.py
+        run: |
+          python scripts/worker6_final_authority_once.py
+          python scripts/worker6_final_lint_once.py
+
+      - name: Apply safe lint fixes
+        run: >-
+          python -m ruff check --fix
+          minecraft_mod_ai/reuse_proof_executor.py
+          minecraft_mod_ai/proof_level.py
+          minecraft_mod_ai/reuse_artifacts.py
+          minecraft_mod_ai/source_transplant.py
+          minecraft_mod_ai/reuse_planner.py
+          minecraft_mod_ai/dependency_resolver.py
+          minecraft_mod_ai/reuse_license.py
+          tests/test_worker6_reuse_fail_closed.py
+          tests/test_worker6_reuse_hardening.py
+          tests/test_worker6_reuse_authority.py
 
       - name: Syntax verification
         run: python -m compileall -q minecraft_mod_ai tests
@@ -54,7 +70,7 @@ jobs:
         run: |
           git config user.name "jujumelona"
           git config user.email "qasdaa025@gmail.com"
-          git add minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_artifacts.py tests/test_worker6_reuse_authority.py
+          git add minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/source_transplant.py minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/dependency_resolver.py minecraft_mod_ai/reuse_license.py tests/test_worker6_reuse_fail_closed.py tests/test_worker6_reuse_hardening.py tests/test_worker6_reuse_authority.py
           git commit -m "fix(worker6): require authoritative compile proof"
           git fetch origin main
           git rebase origin/main
