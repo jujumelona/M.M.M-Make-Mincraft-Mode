@@ -81,6 +81,24 @@ def test_license_verified_requires_discovery_admitted_license() -> None:
     assert reason == "transition_valid"
 
 
+def test_pinned_requires_immutable_full_commit_sha() -> None:
+    valid, reason = validate_proof_transition(
+        ProofLevel.LICENSE_VERIFIED,
+        ProofLevel.PINNED,
+        receipt={"commit_sha": "abc123"},
+    )
+    assert valid is False
+    assert "immutable 40-64 hex commit_sha" in reason
+
+    valid, reason = validate_proof_transition(
+        ProofLevel.LICENSE_VERIFIED,
+        ProofLevel.PINNED,
+        receipt={"commit_sha": "a" * 40},
+    )
+    assert valid is True
+    assert reason == "transition_valid"
+
+
 def test_direct_donor_license_bypass_stops_before_materialization(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
