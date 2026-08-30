@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Compatibility facade for the side-effect-free pre-design RAG quality stack."""
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -24,6 +25,70 @@ from .pre_design_rag_fusion import (
 from .pre_design_rag_support import _verify_page_claims as _verify_page_claims
 
 _INSTALLED = False
+
+_BODY_FIELDS = ("content", "body", "text")
+_PROVENANCE_FIELDS = (
+    "source_locator",
+    "url",
+    "path",
+    "file_path",
+    "document_id",
+    "source_id",
+    "source_key",
+    "page_ref",
+)
+_INCOMPLETE_FLAGS = (
+    "content_omitted",
+    "source_content_omitted",
+    "omitted",
+    "content_truncated",
+    "truncated",
+    "text_truncated",
+    "payload_truncated",
+    "queue_truncated",
+    "tree_truncated",
+    "pagination_incomplete",
+    "request_budget_exhausted",
+    "round_limit_reached",
+)
+_BODY_RETRIEVAL_FLAGS = (
+    "body_retrieved",
+    "source_body_retrieved",
+    "raw_retrieved",
+    "blob_retrieved",
+)
+_FATAL_STATUS_VALUES = {
+    "error",
+    "failed",
+    "forbidden",
+    "rate_limited",
+    "timeout",
+    "timed_out",
+    "unavailable",
+}
+_METADATA_ONLY_SOURCE_MARKERS = (
+    "search_result",
+    "metadata_only",
+    "metadata-only",
+    "snippet_only",
+    "snippet-only",
+)
+_DISCOVERY_ONLY_SOURCE_TYPES = {"modrinth_project"}
+_RELEVANCE_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
+_RELEVANCE_STOPWORDS = {
+    "api",
+    "code",
+    "example",
+    "fabric",
+    "forge",
+    "implementation",
+    "java",
+    "minecraft",
+    "mod",
+    "mods",
+    "project",
+    "source",
+}
 
 
 def _stable_text_list(value: Any) -> list[str]:
@@ -109,6 +174,153 @@ def _approved_requirement_query_obligations(
     return tuple(obligations)
 
 
+def _mapping_layers(value: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    layers: list[Mapping[str, Any]] = []
+    queue: list[Mapping[str, Any]] = [value]
+    seen: set[int] = set()
+    while queue:
+        layer = queue.pop(0)
+        marker = id(layer)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        layers.append(layer)
+        for key in ("metadata", "retrieval", "github_retrieval", "external_rag"):
+            nested = layer.get(key)
+            if isinstance(nested, Mapping):
+                queue.append(nested)
+    return tuple(layers)
+
+
+def _flag(value: Mapping[str, Any], name: str) -> bool:
+    for layer in _mapping_layers(value):
+        if name in layer:
+            raw = layer.get(name)
+            if isinstance(raw, str):
+                return raw.strip().casefold() in {"1", "true", "yes", "on"}
+            return bool(raw)
+    return False
+
+
+def _explicit_false(value: Mapping[str, Any], name: str) -> bool:
+    for layer in _mapping_layers(value):
+        if name not in layer:
+            continue
+        raw = layer.get(name)
+        if isinstance(raw, str):
+            return raw.strip().casefold() in {"0", "false", "no", "off"}
+        return raw is False
+    return False
+
+
+def _failure_status(value: Mapping[str, Any]) -> str:
+    for layer in _mapping_layers(value):
+        for key in ("status", "provider_status", "github_provider_status", "retrieval_status"):
+            status = str(layer.get(key) or "").strip().casefold()
+            if status in _FATAL_STATUS_VALUES:
+                return f"{key}:{status}"
+    return ""
+
+
+def _retrieval_errors(value: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for layer in _mapping_layers(value):
+        raw = layer.get("retrieval_errors")
+        if raw is None:
+            raw = layer.get("errors")
+        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+            errors.extend(str(item).strip() for item in raw if str(item).strip())
+        elif isinstance(raw, str) and raw.strip():
+            errors.append(raw.strip())
+        for key in ("retrieval_error", "error"):
+            text = str(layer.get(key) or "").strip()
+            if text:
+                errors.append(text)
+    return errors
+
+
+def _incomplete_reason(value: Mapping[str, Any]) -> str:
+    for name in _INCOMPLETE_FLAGS:
+        if _flag(value, name):
+            return name
+    for layer in _mapping_layers(value):
+        saturation = str(layer.get("saturation_reason") or "").strip().casefold()
+        if any(marker in saturation for marker in _INCOMPLETE_FLAGS):
+            return f"saturation_reason:{saturation}"
+    return ""
+
+
+def _record_locator(record: Mapping[str, Any]) -> str:
+    for layer in _mapping_layers(record):
+        for field in _PROVENANCE_FIELDS:
+            text = str(layer.get(field) or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _metadata_only_record(record: Mapping[str, Any]) -> bool:
+    if _flag(record, "metadata_only") or _flag(record, "snippet_only"):
+        return True
+    source_types = [
+        str(record.get(key) or "").strip().casefold()
+        for key in ("source_type", "source_kind", "record_type")
+        if str(record.get(key) or "").strip()
+    ]
+    if any(source_type in _DISCOVERY_ONLY_SOURCE_TYPES for source_type in source_types):
+        return True
+    joined = " ".join(source_types)
+    return any(marker in joined for marker in _METADATA_ONLY_SOURCE_MARKERS)
+
+
+def _source_body(record: Mapping[str, Any]) -> str:
+    """Return only a verified source body; never promote snippets/excerpts/metadata."""
+
+    if _metadata_only_record(record):
+        return ""
+    if _retrieval_errors(record) or _failure_status(record) or _incomplete_reason(record):
+        return ""
+    if any(_explicit_false(record, flag) for flag in _BODY_RETRIEVAL_FLAGS):
+        return ""
+    if not _record_locator(record):
+        return ""
+    for field in _BODY_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _query_terms(query: str) -> set[str]:
+    tokens = {
+        token.casefold()
+        for token in _RELEVANCE_WORD.findall(query)
+        if len(token) >= 3
+    }
+    specific = {token for token in tokens if token not in _RELEVANCE_STOPWORDS}
+    return specific or tokens
+
+
+def _body_relevant_to_query(query: str, body: str) -> bool:
+    wanted = _query_terms(query)
+    if not wanted:
+        return bool(body.strip())
+    body_tokens = {
+        token.casefold()
+        for token in _RELEVANCE_WORD.findall(body)
+        if len(token) >= 3
+    }
+    return bool(wanted & body_tokens)
+
+
+def _query_row_is_complete(row: Mapping[str, Any]) -> bool:
+    return not (
+        _retrieval_errors(row)
+        or _failure_status(row)
+        or _incomplete_reason(row)
+    )
+
+
 def _requirement_evidence_sufficiency(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
@@ -118,6 +330,7 @@ def _requirement_evidence_sufficiency(
         return None
 
     query_has_content: dict[str, bool] = {}
+    query_receipts: dict[str, dict[str, Any]] = {}
     raw_rows = grounded.get("queries")
     rows = raw_rows if isinstance(raw_rows, list) else []
     for raw in rows:
@@ -128,12 +341,38 @@ def _requirement_evidence_sufficiency(
             continue
         raw_records = raw.get("evidence_records")
         records = raw_records if isinstance(raw_records, list) else []
-        has_content = any(
-            isinstance(record, Mapping) and bool(_record_content(record))
-            for record in records
-        )
+        row_complete = _query_row_is_complete(raw)
+        usable_ids: list[str] = []
+        rejected_count = 0
+        for index, record in enumerate(records, start=1):
+            if not isinstance(record, Mapping):
+                rejected_count += 1
+                continue
+            body = _source_body(record) if row_complete else ""
+            if not body or not _body_relevant_to_query(query, body):
+                rejected_count += 1
+                continue
+            usable_ids.append(
+                str(record.get("evidence_id") or record.get("source_id") or "")
+                or f"record:{index}"
+            )
+        has_content = bool(usable_ids)
         key = query.casefold()
         query_has_content[key] = query_has_content.get(key, False) or has_content
+        receipt = query_receipts.setdefault(
+            key,
+            {
+                "query": query,
+                "usable_source_body_ids": [],
+                "rejected_record_count": 0,
+                "complete_retrieval": False,
+            },
+        )
+        receipt["complete_retrieval"] = bool(receipt["complete_retrieval"] or row_complete)
+        receipt["rejected_record_count"] += rejected_count
+        for evidence_id in usable_ids:
+            if evidence_id not in receipt["usable_source_body_ids"]:
+                receipt["usable_source_body_ids"].append(evidence_id)
 
     requirement_receipts: list[dict[str, Any]] = []
     unresolved: list[str] = []
@@ -157,12 +396,14 @@ def _requirement_evidence_sufficiency(
 
     receipt = {
         "schema_version": "mmm/pre-design-requirement-evidence-sufficiency-v1",
-        "authority": "approved_requirement_retrieval_plan",
+        "validation_version": 2,
+        "authority": "approved_requirement_retrieval_plan+verified_source_body",
         "required_requirement_count": len(requirement_receipts),
         "satisfied_requirement_count": len(requirement_receipts) - len(unresolved),
         "unresolved_requirement_ids": unresolved,
         "sufficient": not unresolved,
         "requirements": requirement_receipts,
+        "query_evidence_receipts": list(query_receipts.values()),
     }
     if unresolved:
         raise ValueError(
@@ -199,6 +440,7 @@ __all__ = [
     "_quality_research_document_domain",
     "_read_and_verify_document",
     "_requirement_evidence_sufficiency",
+    "_source_body",
     "_verify_page_claims",
     "fuse_grounded_domain_evidence",
     "install",
