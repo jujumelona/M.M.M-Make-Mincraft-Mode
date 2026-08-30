@@ -53,6 +53,7 @@ class _FakeClient:
 
 
 def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_AUXILIARY_TELEMETRY", raising=False)
     client = _FakeClient()
     created: list[_FakeClient] = []
     fake_httpx = SimpleNamespace(
@@ -95,3 +96,10 @@ def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics
     assert client.metrics_gets == 0
     assert client.stream_calls == 1
     assert not client.closed
+
+
+def test_auxiliary_native_telemetry_is_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_AUXILIARY_TELEMETRY", raising=False)
+    assert policy._auxiliary_native_telemetry_enabled() is False
+    monkeypatch.setenv("MMM_LLAMA_AUXILIARY_TELEMETRY", "true")
+    assert policy._auxiliary_native_telemetry_enabled() is True

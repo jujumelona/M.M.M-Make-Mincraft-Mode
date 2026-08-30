@@ -15,6 +15,7 @@ from typing import Any
 _TELEMETRY_LOCK = threading.Lock()
 _TELEMETRY_TOTALS = {
     "prompt_tokens": 0,
+    "prompt_seconds": 0.0,
     "output_tokens": 0,
     "generation_seconds": 0.0,
     "requests": 0,
@@ -66,7 +67,7 @@ def _named_tool_choice_name(request: Any) -> str:
         return ""
     function = choice.get("function")
     if not isinstance(function, Mapping):
-        raise ValueError("named tool_choice requires function metadata")
+        raise TypeError("named tool_choice requires function metadata")
     name = str(function.get("name", "")).strip()
     if not name:
         raise ValueError("named tool_choice requires a function name")
@@ -188,14 +189,26 @@ def _request_content_chars(payload: dict[str, Any]) -> int:
         elif value is not None:
             try:
                 total += len(json.dumps(value, ensure_ascii=False))
-            except Exception:
-                pass
+            except (TypeError, ValueError, RecursionError):
+                # Telemetry sizing must never make inference fail on an exotic payload.
+                total += len(str(value))
     return total
 
 
 def _server_origin(server_url: str) -> str:
     value = server_url.rstrip("/")
     return value.removesuffix("/v1")
+
+
+def _auxiliary_native_telemetry_enabled() -> bool:
+    """Keep auxiliary /metrics and /slots requests off the default inference path."""
+
+    return os.environ.get("MMM_LLAMA_AUXILIARY_TELEMETRY", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _parse_prometheus_metrics(text: str) -> dict[str, float]:
@@ -226,7 +239,12 @@ def _metrics_snapshot(httpx_module: Any, server_url: str) -> dict[str, float] | 
         values = _parse_prometheus_metrics(response.text)
         required = {"prompt_tokens_total", "tokens_predicted_total"}
         return values if required.issubset(values) else None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - optional metrics endpoint boundary
+        print(
+            "llama server: metrics snapshot unavailable",
+            f" error={type(exc).__name__}",
+            flush=True,
+        )
         return None
 
 
@@ -266,7 +284,12 @@ def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
             ),
             "output_tokens": max(0, int(next_token.get("n_decoded", 0) or 0)),
         }
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - optional slot endpoint boundary
+        print(
+            "llama server: slot snapshot unavailable",
+            f" error={type(exc).__name__}",
+            flush=True,
+        )
         return None
 
 
@@ -291,6 +314,11 @@ def _commit_metrics_delta(
         int(after.get("tokens_predicted_total", 0))
         - int(before.get("tokens_predicted_total", 0)),
     )
+    prompt_seconds = max(
+        0.0,
+        float(after.get("prompt_seconds_total", 0.0))
+        - float(before.get("prompt_seconds_total", 0.0)),
+    )
     generation_seconds = max(
         0.0,
         float(after.get("tokens_predicted_seconds_total", 0.0))
@@ -298,19 +326,43 @@ def _commit_metrics_delta(
     )
     with _TELEMETRY_LOCK:
         _TELEMETRY_TOTALS["prompt_tokens"] += prompt
+        _TELEMETRY_TOTALS["prompt_seconds"] = (
+            float(_TELEMETRY_TOTALS.get("prompt_seconds", 0.0)) + prompt_seconds
+        )
         _TELEMETRY_TOTALS["output_tokens"] += output
         _TELEMETRY_TOTALS["generation_seconds"] += generation_seconds
         _TELEMETRY_TOTALS["requests"] += 1
         cumulative = dict(_TELEMETRY_TOTALS)
-    return {
+    prompt_tps = prompt / prompt_seconds if prompt_seconds > 0 else 0.0
+    cumulative_prompt_seconds = float(cumulative["prompt_seconds"])
+    cumulative_prompt_tps = (
+        float(cumulative["prompt_tokens"]) / cumulative_prompt_seconds
+        if cumulative_prompt_seconds > 0
+        else 0.0
+    )
+    result = {
         "prompt_tokens": prompt,
+        "prompt_seconds": prompt_seconds,
+        "prompt_tps": prompt_tps,
         "output_tokens": output,
         "generation_seconds": generation_seconds,
         "cumulative_prompt_tokens": int(cumulative["prompt_tokens"]),
+        "cumulative_prompt_seconds": cumulative_prompt_seconds,
+        "cumulative_prompt_tps": cumulative_prompt_tps,
         "cumulative_output_tokens": int(cumulative["output_tokens"]),
         "cumulative_generation_seconds": float(cumulative["generation_seconds"]),
         "cumulative_requests": int(cumulative["requests"]),
     }
+    print(
+        "llama server: prefill complete",
+        f" prompt_tokens={prompt}",
+        f" prompt_seconds={prompt_seconds:.3f}",
+        f" prompt_tok_s={prompt_tps:.2f}",
+        f" cumulative_prompt_tok_s={cumulative_prompt_tps:.2f}",
+        sep="",
+        flush=True,
+    )
+    return result
 
 
 def _reject_tool_stream_request(adapter: Any, request: Any) -> None:
@@ -338,6 +390,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     from .model_adapters import ModelBackendError
 
     _reject_tool_stream_request(adapter, request)
+    auxiliary_telemetry = _auxiliary_native_telemetry_enabled()
     metrics_before: dict[str, float] | None = None
     metrics_committed = False
     client: Any | None = None
@@ -366,7 +419,8 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         first_output_reported = False
         saw_done = False
         last_slot: dict[str, int] | None = None
-        metrics_before = _metrics_snapshot(client, server_url)
+        if auxiliary_telemetry:
+            metrics_before = _metrics_snapshot(client, server_url)
         committed_at_start = _telemetry_totals()
 
         with client.stream("POST", endpoint, json=payload, timeout=timeout) as response:
@@ -436,7 +490,11 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                     )
                     first_output_reported = True
                 if now - last_progress_report >= 15.0:
-                    slot = _slot_snapshot(client, server_url)
+                    slot = (
+                        _slot_snapshot(client, server_url)
+                        if auxiliary_telemetry
+                        else None
+                    )
                     if slot is not None:
                         last_slot = slot
                         output_tokens = slot["output_tokens"]
@@ -489,7 +547,11 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 )
             raise RuntimeError("llama server stream produced no text content")
 
-        metrics_after = _metrics_snapshot(client, server_url)
+        metrics_after = (
+            _metrics_snapshot(client, server_url)
+            if metrics_before is not None
+            else None
+        )
         usage = _commit_metrics_delta(metrics_before, metrics_after)
         metrics_committed = usage is not None
         elapsed = time.monotonic() - request_started
@@ -541,8 +603,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             try:
                 metrics_after = _metrics_snapshot(client, server_url)
                 _commit_metrics_delta(metrics_before, metrics_after)
-            except Exception:
-                pass
+            except Exception as telemetry_exc:  # noqa: BLE001 - best-effort failure telemetry
+                print(
+                    "llama server: failure telemetry unavailable",
+                    f" error={type(telemetry_exc).__name__}",
+                    flush=True,
+                )
         if isinstance(exc, ModelBackendError):
             raise
         raise ModelBackendError(
@@ -554,8 +620,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as close_exc:  # noqa: BLE001 - transport cleanup boundary
+                print(
+                    "llama server: client close failed",
+                    f" error={type(close_exc).__name__}",
+                    flush=True,
+                )
 
 
 def install(autotune_module: Any) -> None:
@@ -728,7 +798,12 @@ def install(autotune_module: Any) -> None:
                         and config.adapter == "image_diffusion"
                         and config.exclusive_gpu
                     )
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - optional registry lookup boundary
+                    print(
+                        "llama server: image role lookup unavailable",
+                        f" error={type(exc).__name__}",
+                        flush=True,
+                    )
                     local_exclusive_image = False
             if local_exclusive_image:
                 process = getattr(autotune_module, "_MANAGED_PROCESS", None)

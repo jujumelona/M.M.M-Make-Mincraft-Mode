@@ -93,9 +93,6 @@ def _install_model_runtime_contracts() -> None:
     )
     from .llama_context_safety_contract import install as install_context_safety
     from .llama_generation_budget import install as install_llama_generation_budget
-    from .llama_prefill_telemetry_contract import (
-        install as install_llama_prefill_telemetry,
-    )
     from .llama_sse_error_contract import install as install_sse_errors
     from .llama_stream_efficiency_contract import (
         install as install_llama_stream_efficiency,
@@ -123,7 +120,6 @@ def _install_model_runtime_contracts() -> None:
         llama_stream_efficiency_contract,
     )
     install_context_safety(model_context_budget)
-    install_llama_prefill_telemetry(llama_server_hardware_policy)
     install_forced_tool_execution(
         openai_compatible_module=openai_compatible,
         llama_cpp_module=llama_cpp_adapter,
