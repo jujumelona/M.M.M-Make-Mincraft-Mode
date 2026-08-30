@@ -595,8 +595,6 @@ def install() -> None:
         central.normalize_research_brief = normalize
         agentic.normalize_research_brief = normalize
         pipeline.normalize_research_brief = normalize
-    else:
-        pipeline.normalize_research_brief = current_normalize
 
     current_compile = knowledge.compile_minecraft_knowledge_plan
     if not getattr(current_compile, _MARKER, False):
@@ -615,8 +613,6 @@ def install() -> None:
         compile_plan.__wrapped__ = current_compile  # type: ignore[attr-defined]
         knowledge.compile_minecraft_knowledge_plan = compile_plan
         pipeline.compile_minecraft_knowledge_plan = compile_plan
-    else:
-        pipeline.compile_minecraft_knowledge_plan = current_compile
 
     pipeline._pre_design_brief = _approved_pre_design_brief
     _INSTALLED = True
