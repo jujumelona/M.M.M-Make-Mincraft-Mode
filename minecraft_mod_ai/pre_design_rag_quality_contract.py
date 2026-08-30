@@ -26,7 +26,6 @@ from .pre_design_rag_support import _verify_page_claims as _verify_page_claims
 
 _INSTALLED = False
 
-_BODY_FIELDS = ("content", "body", "text")
 _PROVENANCE_FIELDS = (
     "source_locator",
     "url",
@@ -110,7 +109,7 @@ def _approved_requirement_query_obligations(
 ) -> tuple[dict[str, Any], ...]:
     """Recover the frozen requirement->query plan for the live request domain.
 
-    The central research brief intentionally carries a compact flat query list.  During the
+    The central research brief intentionally carries a compact flat query list. During the
     guarded planning call the approved requirement catalog is still the semantic authority,
     so this boundary binds every flat query back to the requirement that authorized it.
     No requirement meaning is reconstructed from query text.
@@ -215,7 +214,12 @@ def _explicit_false(value: Mapping[str, Any], name: str) -> bool:
 
 def _failure_status(value: Mapping[str, Any]) -> str:
     for layer in _mapping_layers(value):
-        for key in ("status", "provider_status", "github_provider_status", "retrieval_status"):
+        for key in (
+            "status",
+            "provider_status",
+            "github_provider_status",
+            "retrieval_status",
+        ):
             status = str(layer.get(key) or "").strip().casefold()
             if status in _FATAL_STATUS_VALUES:
                 return f"{key}:{status}"
@@ -284,11 +288,7 @@ def _source_body(record: Mapping[str, Any]) -> str:
         return ""
     if not _record_locator(record):
         return ""
-    for field in _BODY_FIELDS:
-        value = record.get(field)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    return _record_content(record)
 
 
 def _query_terms(query: str) -> set[str]:
@@ -368,7 +368,9 @@ def _requirement_evidence_sufficiency(
                 "complete_retrieval": False,
             },
         )
-        receipt["complete_retrieval"] = bool(receipt["complete_retrieval"] or row_complete)
+        receipt["complete_retrieval"] = bool(
+            receipt["complete_retrieval"] or row_complete
+        )
         receipt["rejected_record_count"] += rejected_count
         for evidence_id in usable_ids:
             if evidence_id not in receipt["usable_source_body_ids"]:
@@ -396,7 +398,7 @@ def _requirement_evidence_sufficiency(
 
     receipt = {
         "schema_version": "mmm/pre-design-requirement-evidence-sufficiency-v1",
-        "validation_version": 2,
+        "validation_version": 3,
         "authority": "approved_requirement_retrieval_plan",
         "evidence_validation": "verified_source_body",
         "required_requirement_count": len(requirement_receipts),
