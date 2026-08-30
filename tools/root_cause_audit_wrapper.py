@@ -53,6 +53,76 @@ def normalize_report_semantics(report: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _summary_count(summary: dict[str, Any], key: str) -> int:
+    value = summary.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"audit summary {key} must be a non-negative integer")
+    return value
+
+
+def validate_report_consistency(report: dict[str, Any]) -> None:
+    """Fail closed when summary/index fields disagree with the actual checks."""
+
+    checks = report.get("checks")
+    summary = report.get("summary")
+    if not isinstance(checks, list):
+        raise ValueError("audit report checks must be a list")
+    if not isinstance(summary, dict):
+        raise ValueError("audit report summary must be an object")
+
+    statuses = [str(check.get("status", "")) for check in checks if isinstance(check, dict)]
+    if len(statuses) != len(checks):
+        raise ValueError("audit report contains a non-object check")
+    expected = {
+        "total": len(checks),
+        "passed": statuses.count("PASS"),
+        "warned": statuses.count("WARN"),
+        "failed": statuses.count("FAIL"),
+        "skipped": statuses.count("SKIP"),
+    }
+    observed = {key: _summary_count(summary, key) for key in expected}
+    if observed != expected:
+        raise ValueError(
+            "audit summary/check mismatch: "
+            f"expected={expected!r} observed={observed!r}"
+        )
+
+    expected_lists = {
+        "failed_checks": [
+            str(check.get("name") or "unknown-check")
+            for check in checks
+            if check.get("status") == "FAIL"
+        ],
+        "warning_checks": [
+            str(check.get("name") or "unknown-check")
+            for check in checks
+            if check.get("status") == "WARN"
+        ],
+        "skipped_checks": [
+            str(check.get("name") or "unknown-check")
+            for check in checks
+            if check.get("status") == "SKIP"
+        ],
+    }
+    for key, expected_names in expected_lists.items():
+        value = report.get(key)
+        if not isinstance(value, list) or [str(item) for item in value] != expected_names:
+            raise ValueError(f"audit {key} does not match check statuses")
+
+    expected_overall = (
+        "failed"
+        if expected["failed"]
+        else "warning"
+        if expected["warned"]
+        else "passed"
+    )
+    if report.get("overall_status") != expected_overall:
+        raise ValueError(
+            "audit overall_status/check mismatch: "
+            f"expected={expected_overall!r} observed={report.get('overall_status')!r}"
+        )
+
+
 def failure_groups_from_report(report: dict[str, Any]):
     collector = DiagnosticCollector()
     checks = report.get("checks")
@@ -90,6 +160,14 @@ def render_report_summary(report: dict[str, Any]) -> str:
     return "FINAL STATUS\nPASS\n" + counts
 
 
+def _raw_log_fallback() -> str:
+    try:
+        relative = RUNNER_LOG_PATH.relative_to(ROOT)
+    except ValueError:
+        return f"raw runner output preserved at {RUNNER_LOG_PATH}"
+    return f"raw runner output preserved at {relative}"
+
+
 def _render_internal_report_error(exc: BaseException, operation: str) -> str:
     collector = DiagnosticCollector()
     collector.record_exception(
@@ -99,63 +177,120 @@ def _render_internal_report_error(exc: BaseException, operation: str) -> str:
         category=FailureCategory.INTERNAL,
         retryable=False,
         final_status=FailureStatus.FAILED,
-        fallback=f"raw runner output preserved at {RUNNER_LOG_PATH.relative_to(ROOT)}",
+        fallback=_raw_log_fallback(),
     )
     return render_failure_summary(collector.groups())
 
 
+def _render_internal_event(cause_type: str, cause: str, operation: str) -> str:
+    collector = DiagnosticCollector()
+    collector.record(
+        FailureEvent(
+            stage="full-debug:audit-runner",
+            operation=operation,
+            category=FailureCategory.INTERNAL,
+            cause_type=cause_type,
+            cause=cause,
+            retryable=False,
+            final_status=FailureStatus.FAILED,
+            fallback=_raw_log_fallback(),
+        )
+    )
+    return render_failure_summary(collector.groups())
+
+
+def _atomic_write_report(report: dict[str, Any]) -> None:
+    temporary = REPORT_PATH.with_name(REPORT_PATH.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(REPORT_PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _run_audit() -> int | None:
+    try:
+        REPORT_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        print(_render_internal_report_error(exc, "remove stale audit report"))
+        return None
+
+    try:
+        with RUNNER_LOG_PATH.open("w", encoding="utf-8", errors="replace") as log_handle:
+            process = subprocess.run(
+                [sys.executable, str(ROOT / "tools/full_project_audit.py")],
+                cwd=ROOT,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+    except OSError as exc:
+        print(_render_internal_report_error(exc, "launch audit runner"))
+        return None
+    return process.returncode
+
+
 def main() -> int:
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-    process = subprocess.run(
-        [sys.executable, str(ROOT / "tools/full_project_audit.py")],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    RUNNER_LOG_PATH.write_text(process.stdout or "", encoding="utf-8")
+    process_returncode = _run_audit()
+    if process_returncode is None:
+        return 1
+
     if not REPORT_PATH.is_file():
-        collector = DiagnosticCollector()
-        collector.record(
-            FailureEvent(
-                stage="full-debug:audit-runner",
-                operation="load audit report",
-                category=FailureCategory.INTERNAL,
-                cause_type="MissingAuditReport",
-                cause=f"{REPORT_PATH.relative_to(ROOT)} was not produced",
-                retryable=False,
-                final_status=FailureStatus.FAILED,
-                fallback=f"raw runner output preserved at {RUNNER_LOG_PATH.relative_to(ROOT)}",
+        print(
+            _render_internal_event(
+                "MissingAuditReport",
+                f"{REPORT_PATH} was not produced by the current audit run",
+                "load audit report",
             )
         )
-        print(render_failure_summary(collector.groups()))
-        return process.returncode or 1
+        return process_returncode or 1
+
     try:
         report = json.loads(REPORT_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(_render_internal_report_error(exc, "parse audit report"))
-        return process.returncode or 1
+        return process_returncode or 1
     if not isinstance(report, dict):
         print(
-            "ROOT FAILURE 1\n"
-            "full-debug:audit-runner / parse audit report [INTERNAL]\n"
-            "CAUSE\nInvalidAuditReport: top-level report is not an object\n"
-            "ATTEMPTS\n1\nFALLBACK\nraw runner output preserved\n"
-            "FINAL STATUS\nFAILED"
+            _render_internal_event(
+                "InvalidAuditReport",
+                "top-level report is not an object",
+                "parse audit report",
+            )
         )
-        return process.returncode or 1
+        return process_returncode or 1
+
     try:
         report = normalize_report_semantics(report)
-        REPORT_PATH.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        validate_report_consistency(report)
+        _atomic_write_report(report)
     except (OSError, ValueError) as exc:
-        print(_render_internal_report_error(exc, "normalize audit report"))
-        return process.returncode or 1
+        print(_render_internal_report_error(exc, "validate audit report"))
+        return process_returncode or 1
+
+    groups = failure_groups_from_report(report)
+    expected_returncode = 1 if groups else 0
+    if process_returncode != expected_returncode:
+        print(render_report_summary(report))
+        print()
+        print(
+            _render_internal_event(
+                "AuditExitMismatch",
+                (
+                    f"audit process exit={process_returncode}; "
+                    f"report requires exit={expected_returncode}"
+                ),
+                "validate audit process/report agreement",
+            )
+        )
+        return process_returncode or 1
+
     print(render_report_summary(report))
-    return process.returncode
+    return process_returncode
 
 
 if __name__ == "__main__":
