@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -19,32 +20,64 @@ def _file_digest(module: Any) -> str:
         return "unreadable"
 
 
+def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
+    """Return every module whose bytes can change one cached validation decision."""
+
+    from . import complete_orchestrator, runtime_bootstrap
+
+    common: list[Any] = [
+        sys.modules[__name__],
+        runtime_bootstrap,
+        complete_orchestrator,
+    ]
+    if checkpoint_id == "validate-source":
+        from . import (
+            platform_validation_contract,
+            scalable_validator,
+            scale_policy,
+            validator,
+            validator_boss_contract,
+        )
+
+        common.extend(
+            (
+                scalable_validator,
+                validator,
+                scale_policy,
+                validator_boss_contract,
+                platform_validation_contract,
+            )
+        )
+    else:
+        from . import (
+            java_lsp,
+            java_lsp_process_safety_contract,
+            orchestrator_jdt_gate_contract,
+        )
+
+        common.extend(
+            (
+                java_lsp,
+                java_lsp_process_safety_contract,
+                orchestrator_jdt_gate_contract,
+            )
+        )
+    return tuple(common)
+
+
 def validation_implementation_fingerprint(checkpoint_id: str) -> str:
-    """Hash the validation implementation and active MMM runtime policy.
+    """Hash the complete active validation implementation and MMM host policy.
 
     Validation checkpoints are reusable only when their generated inputs, validation
-    implementation, and host policy all match the original successful run.
+    implementation (including runtime-installed validation contracts), bootstrap
+    composition, and host policy all match the original successful run.
     """
 
     if checkpoint_id not in _VALIDATION_CHECKPOINTS:
         raise ValueError(f"Unsupported validation checkpoint: {checkpoint_id}")
 
-    from . import (
-        complete_orchestrator,
-        java_lsp,
-        scalable_validator,
-        scale_policy,
-        validator,
-    )
-
-    modules = [complete_orchestrator]
-    if checkpoint_id == "validate-source":
-        modules.extend((scalable_validator, validator, scale_policy))
-    else:
-        modules.append(java_lsp)
-
     digest = hashlib.sha256()
-    for module in modules:
+    for module in _validation_modules(checkpoint_id):
         digest.update(str(getattr(module, "__name__", "")).encode("utf-8"))
         digest.update(b"\0")
         digest.update(_file_digest(module).encode("ascii"))
