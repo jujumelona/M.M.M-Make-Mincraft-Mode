@@ -1,6 +1,6 @@
 name: Worker6 final proof authority
 
-# Temporary Worker 6 finalization gate; removed after successful verification.
+# Temporary Worker 6 finalization gate; one final hardening run before read-only conversion.
 on:
   push:
     paths:
