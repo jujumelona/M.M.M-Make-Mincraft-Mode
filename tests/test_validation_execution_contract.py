@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import extended_content_generator
+from minecraft_mod_ai import validation_execution_contract as validation
 from minecraft_mod_ai.extended_registration_contract import _replace_registration_method
 from minecraft_mod_ai.java_lsp import JavaLanguageService
 from minecraft_mod_ai.repair_engine import RepairEngine
@@ -33,10 +36,11 @@ def _project(root: Path, mod_id: str = "example_mod") -> Path:
 
 
 def test_validation_runtime_contracts_are_installed() -> None:
-    assert getattr(GradleRunner.build, "_mmm_incremental_validation", False)
+    assert getattr(GradleRunner.build, "_mmm_project_parallel_validation", False)
     assert getattr(GradleRunner.build, "_mmm_exact_input_cache", False)
     assert getattr(GradleRunner._ensure_gradle, "_mmm_target_parallel_distribution", False)
     assert getattr(JavaLanguageService.diagnostics, "_mmm_exact_java_cache", False)
+    assert getattr(JavaLanguageService.diagnostics, "_mmm_snapshot_stable_java_cache", False)
     assert getattr(RepairEngine._evidence, "_mmm_progressive_evidence", False)
     assert getattr(RepairEngine._request_patch, "_mmm_tracks_repair_scope", False)
     assert getattr(
@@ -61,6 +65,45 @@ def test_build_fingerprint_ignores_outputs_and_logs_but_not_sources(tmp_path: Pa
         encoding="utf-8",
     )
     assert project_build_fingerprint(root) != first
+
+
+def test_build_fingerprint_prunes_excluded_trees_before_descent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = _project(tmp_path / "project")
+    excluded = (
+        root / "build/deep/tree",
+        root / "node_modules/pkg/deep",
+        root / ".minecraft_ai/logs/deep",
+        root / ".minecraft_ai/runtime/deep",
+        root / ".minecraft_ai/validation-cache/deep",
+    )
+    for directory in excluded:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "ignored.bin").write_bytes(b"ignored")
+
+    scanned: list[Path] = []
+    original = validation.os.scandir
+
+    def tracked(path):
+        scanned.append(Path(path).resolve())
+        return original(path)
+
+    monkeypatch.setattr(validation.os, "scandir", tracked)
+    project_build_fingerprint(root)
+
+    assert not any(
+        excluded_root.resolve() in candidate.parents or candidate == excluded_root.resolve()
+        for candidate in scanned
+        for excluded_root in (
+            root / "build",
+            root / "node_modules",
+            root / ".minecraft_ai/logs",
+            root / ".minecraft_ai/runtime",
+            root / ".minecraft_ai/validation-cache",
+        )
+    )
 
 
 def test_exact_input_successful_build_is_reused_in_process(tmp_path: Path) -> None:
@@ -156,6 +199,30 @@ def test_progressive_repair_skips_gradle_when_jdt_is_not_clean(tmp_path: Path) -
     evidence = repair._evidence(root, run_gametest=True)
     assert evidence["passed"] is False
     assert evidence["build"]["status"] == "SKIPPED"
+
+
+def test_progressive_repair_does_not_hide_programming_errors(tmp_path: Path) -> None:
+    root = _project(tmp_path / "project")
+
+    class Diagnostics:
+        def diagnostics(self, *_args, **_kwargs):
+            return {"diagnostics": {}}
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def build(self, *_args, **_kwargs):
+            raise TypeError("internal build programming defect")
+
+    repair = RepairEngine(
+        router=SimpleNamespace(),
+        gradle_cache=tmp_path / "cache",
+        diagnostics_factory=Diagnostics,
+        runner_factory=Runner,
+    )
+    with pytest.raises(TypeError, match="programming defect"):
+        repair._evidence(root, run_gametest=False)
 
 
 def test_static_registrar_replaces_runtime_reflection_with_bounded_root() -> None:
