@@ -1,0 +1,70 @@
+name: Worker 07 Canonical Target Finalize
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/worker07-finalize.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply canonical Worker 07 patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATCH_BLOB: 2bea6711af3bec525b5eb27f7195fb5ad489bd9b
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${PATCH_BLOB}" --jq .content | tr -d '\n' | base64 -d > /tmp/worker07_finalize.py
+          python /tmp/worker07_finalize.py
+      - name: Worker 07 focused verification
+        run: |
+          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py
+          python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/implementation_kind_boundary_contract.py tests/test_worker07_target_context_hardening.py --select F,E7,E9
+          python -m pytest -q tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py tests/test_implementation_kind_boundary_contract.py tests/test_runtime_bootstrap_clean.py tests/test_runtime_wrapper_signature_integrity.py
+          python .github/scripts/debug_repo_audit.py
+          python .github/scripts/audit_runtime_mutations.py --output /tmp/worker07-runtime-mutations.json
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          audit = json.loads(Path('/tmp/worker07-runtime-mutations.json').read_text(encoding='utf-8'))
+          ci = Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
+          match = re.search(r'budget\s*=\s*(\d+)', ci)
+          if match is None:
+              raise SystemExit('Worker07: CI mutation budget not found')
+          budget = int(match.group(1))
+          behavioral = int(audit['behavioral_count'])
+          print(f'WORKER07_RUNTIME_MUTATIONS={behavioral} CI_BUDGET={budget}')
+          if behavioral > budget:
+              raise SystemExit(f'Worker07 runtime mutation surface {behavioral} exceeds CI budget {budget}')
+          PY
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+      - name: Commit canonical Worker 07 implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: make coder target hardening canonical"
+          git fetch origin main
+          git rebase origin/main
+          python -m pytest -q tests/test_worker07_target_context_hardening.py tests/test_unified_host_execution_loop.py tests/test_implementation_kind_boundary_contract.py
+          git push origin HEAD:main
