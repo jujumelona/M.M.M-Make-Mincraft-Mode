@@ -204,6 +204,26 @@ def _prepare_output_directories(log_path: Path, junit_path: Path) -> bool:
     return True
 
 
+def _remove_stale_outputs(log_path: Path, junit_path: Path) -> bool:
+    for path, operation in (
+        (log_path, "remove stale pytest log"),
+        (junit_path, "remove stale JUnit"),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(
+                _render_internal_failure(
+                    operation=operation,
+                    cause_type=type(exc).__name__,
+                    cause=_compact_message(str(exc)),
+                    fallback="pytest was not started; no current raw evidence is available",
+                )
+            )
+            return False
+    return True
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     args = _parse_args(argv)
     if not _validate_output_paths(args.log, args.junit):
@@ -220,17 +240,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if not _prepare_output_directories(args.log, args.junit):
         return 1
-    try:
-        args.junit.unlink(missing_ok=True)
-    except OSError as exc:
-        print(
-            _render_internal_failure(
-                operation="remove stale JUnit",
-                cause_type=type(exc).__name__,
-                cause=_compact_message(str(exc)),
-                fallback=f"raw output target={args.log}",
-            )
-        )
+    if not _remove_stale_outputs(args.log, args.junit):
         return 1
 
     command = [
