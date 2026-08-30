@@ -139,6 +139,7 @@ def _protocol_safe_minimal_fit(
 
     mandatory = _leading_authority_indices(original)
     mandatory.update(_latest_mutation_indices(original))
+    mandatory.update(_latest_protocol_tail_indices(original, width=1))
     candidate = tuple(original[index] for index in sorted(mandatory))
     candidate = context_module._compact_implementation_seed(candidate)
     candidate = context_module._compact_tool_messages(
