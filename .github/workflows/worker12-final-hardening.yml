@@ -31,6 +31,7 @@ jobs:
           python .github/scripts/worker12_final_hardening.py
           python .github/scripts/worker12_repair_memory_patch_v2.py
           python .github/scripts/worker12_final_fixture_fix.py
+          python .github/scripts/worker12_agentic_compat_cleanup.py
       - name: Static and architecture gates
         run: |
           git diff --check
