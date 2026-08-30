@@ -1,10 +1,31 @@
+from __future__ import annotations
+
+import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 
-from tools.pytest_diagnostics import failure_groups_from_junit, render_junit_failure_summary
+from tools import pytest_diagnostics
+from tools.pytest_diagnostics import (
+    analyze_junit,
+    failure_groups_from_junit,
+    render_junit_failure_summary,
+)
 
 
-def _write_junit(path: Path, cases: str) -> None:
-    path.write_text(f'<testsuite tests="2" failures="2">{cases}</testsuite>', encoding="utf-8")
+def _write_junit(path: Path, cases: str, *, tests: int = 2, failures: int = 2) -> None:
+    path.write_text(
+        f'<testsuite tests="{tests}" failures="{failures}">{cases}</testsuite>',
+        encoding="utf-8",
+    )
+
+
+def _write_passing_junit(path: Path) -> None:
+    _write_junit(
+        path,
+        '<testcase classname="tests.a" name="one" />',
+        tests=1,
+        failures=0,
+    )
 
 
 def test_duplicate_junit_failures_collapse_to_one_root_cause(tmp_path: Path) -> None:
@@ -40,3 +61,152 @@ def test_distinct_junit_causes_remain_distinct(tmp_path: Path) -> None:
     assert rendered.count("ROOT FAILURE") == 2
     assert "first cause" in rendered
     assert "second cause" in rendered
+
+
+def test_streaming_junit_parser_handles_namespaces_and_counts(tmp_path: Path) -> None:
+    path = tmp_path / "junit.xml"
+    path.write_text(
+        '<testsuite xmlns="urn:junit">'
+        '<testcase classname="tests.a" name="pass" />'
+        '<testcase classname="tests.a" name="skip"><skipped /></testcase>'
+        '<testcase classname="tests.a" name="fail"><failure message="boom">trace</failure></testcase>'
+        '<testcase classname="tests.a" name="error"><error message="broken">trace</error></testcase>'
+        '</testsuite>',
+        encoding="utf-8",
+    )
+    analysis = analyze_junit(path)
+    assert (analysis.total, analysis.failed, analysis.errors, analysis.skipped) == (4, 1, 1, 1)
+    assert len(analysis.groups) == 2
+
+
+def test_main_never_reuses_stale_junit(tmp_path: Path, monkeypatch, capsys) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+    _write_passing_junit(junit)
+
+    def fake_run(*args, **kwargs):
+        assert not junit.exists(), "stale JUnit must be removed before pytest starts"
+        assert kwargs["stdout"] is not subprocess.PIPE
+        kwargs["stdout"].write("pytest crashed before producing JUnit\n")
+        return SimpleNamespace(returncode=5)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    result = pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_missing.py"]
+    )
+    assert result == 5
+    output = capsys.readouterr().out
+    assert "MissingJUnit" in output
+    assert "FINAL STATUS\nPASS" not in output
+
+
+def test_success_without_junit_fails_closed(tmp_path: Path, monkeypatch, capsys) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+
+    def fake_run(*args, **kwargs):
+        kwargs["stdout"].write("pytest claimed success without proof\n")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+        )
+        == 1
+    )
+    assert "MissingJUnit" in capsys.readouterr().out
+
+
+def test_success_with_failure_nodes_fails_closed(tmp_path: Path, monkeypatch, capsys) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+
+    def fake_run(*args, **kwargs):
+        kwargs["stdout"].write("contradictory pytest run\n")
+        _write_junit(
+            junit,
+            '<testcase classname="tests.a" name="one"><failure message="boom">trace</failure></testcase>',
+            tests=1,
+            failures=1,
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+        )
+        == 1
+    )
+    assert "PytestExitMismatch" in capsys.readouterr().out
+
+
+def test_empty_success_junit_is_not_accepted_as_test_evidence(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+
+    def fake_run(*args, **kwargs):
+        kwargs["stdout"].write("no tests somehow returned zero\n")
+        junit.write_text('<testsuite tests="0" failures="0" />', encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+        )
+        == 1
+    )
+    assert "EmptyJUnit" in capsys.readouterr().out
+
+
+def test_output_path_collision_is_rejected_before_pytest(tmp_path: Path, monkeypatch, capsys) -> None:
+    output = tmp_path / "same.file"
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            ["--log", str(output), "--junit", str(output), "tests/test_anything.py"]
+        )
+        == 2
+    )
+    assert called is False
+    assert "OutputPathCollision" in capsys.readouterr().out
+
+
+def test_zero_durations_omits_pytest_all_durations_mode(tmp_path: Path, monkeypatch) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+    seen_command: list[str] = []
+
+    def fake_run(command, **kwargs):
+        seen_command.extend(command)
+        kwargs["stdout"].write("pass\n")
+        _write_passing_junit(junit)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            [
+                "--log",
+                str(log),
+                "--junit",
+                str(junit),
+                "--durations",
+                "0",
+                "tests/test_anything.py",
+            ]
+        )
+        == 0
+    )
+    assert not any(item.startswith("--durations=") for item in seen_command)
