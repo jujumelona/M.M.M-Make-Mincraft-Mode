@@ -19,7 +19,8 @@ from .artifact_dependency_graph import ArtifactDependencyGraph
 from .build_model import BuildModel
 from .proof_level import ProofLevel, validate_proof_transition
 from .reuse_adapters import AdapterReceipt, apply_deterministic_adapters
-from .source_transplant import DonorSlice
+from .reuse_license import is_reusable_source_license
+from .source_transplant import DonorSlice, SourceTransplantError
 
 
 @dataclass(frozen=True)
@@ -336,6 +337,28 @@ def _symbols_for_artifacts(
     )
 
 
+def _license_rejected_receipt(
+    donor_slice: DonorSlice,
+    *,
+    candidate_id: str,
+    closure_hash: str,
+) -> ReuseProofReceipt:
+    return ReuseProofReceipt(
+        candidate_id=candidate_id,
+        capability=donor_slice.capability,
+        commit_sha=donor_slice.commit_sha,
+        closure_hash=closure_hash,
+        proof_level=ProofLevel.DISCOVERED.value,
+        compile_passed=False,
+        tests_passed=False,
+        unresolved_symbols=(),
+        missing_resources=(),
+        adaptations_applied=(),
+        verified_capabilities=(),
+        residual_capabilities=(donor_slice.capability,),
+    )
+
+
 def execute_reuse_proof(
     donor_slice: DonorSlice,
     *,
@@ -351,24 +374,11 @@ def execute_reuse_proof(
     closure_hash = _closure_sha256(donor_slice)
     current_level = ProofLevel.DISCOVERED
 
-    if not donor_slice.license_id or donor_slice.license_id.casefold() in {
-        "unlicensed",
-        "all rights reserved",
-        "unknown",
-    }:
-        return ReuseProofReceipt(
+    if not is_reusable_source_license(donor_slice.license_id):
+        return _license_rejected_receipt(
+            donor_slice,
             candidate_id=candidate_id,
-            capability=donor_slice.capability,
-            commit_sha=donor_slice.commit_sha,
             closure_hash=closure_hash,
-            proof_level=current_level.value,
-            compile_passed=False,
-            tests_passed=False,
-            unresolved_symbols=(),
-            missing_resources=(),
-            adaptations_applied=(),
-            verified_capabilities=(),
-            residual_capabilities=(donor_slice.capability,),
         )
 
     valid, _ = validate_proof_transition(
@@ -376,8 +386,13 @@ def execute_reuse_proof(
         ProofLevel.LICENSE_VERIFIED,
         receipt={"license": donor_slice.license_id},
     )
-    if valid:
-        current_level = ProofLevel.LICENSE_VERIFIED
+    if not valid:
+        return _license_rejected_receipt(
+            donor_slice,
+            candidate_id=candidate_id,
+            closure_hash=closure_hash,
+        )
+    current_level = ProofLevel.LICENSE_VERIFIED
 
     if donor_slice.commit_sha:
         valid, _ = validate_proof_transition(
@@ -411,7 +426,7 @@ def execute_reuse_proof(
                 in_memory_files[rel_path] = raw_bytes.decode("utf-8")
             except UnicodeDecodeError:
                 in_memory_files[rel_path] = raw_bytes
-    except Exception:
+    except SourceTransplantError:
         if not in_memory_files:
             materialization_failed = True
 
@@ -1017,10 +1032,11 @@ def execute_candidate_fallback_loop(
             compile_checker=compile_checker,
         )
         receipts.append(receipt)
-        if receipt.compile_passed:
+        receipt_level = ProofLevel.from_value(receipt.proof_level)
+        if receipt.compile_passed and receipt_level.is_verified():
             return candidate, tuple(receipts)
         if (
-            receipt.proof_level == ProofLevel.PARTIAL_REUSE.value
+            receipt_level == ProofLevel.PARTIAL_REUSE
             and partial_candidate is None
         ):
             partial_candidate = candidate
