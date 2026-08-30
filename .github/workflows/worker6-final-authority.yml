@@ -1,5 +1,6 @@
 name: Worker6 final proof authority
 
+# Temporary Worker 6 finalization gate; removed after successful verification.
 on:
   push:
     paths:
