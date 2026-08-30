@@ -1,32 +1,42 @@
 from __future__ import annotations
 
-"""Fail-closed access to the source-transplant donor-license authority.
+"""Canonical fail-closed license policy for reusable external source donors.
 
-Source discovery owns the canonical permissive SPDX allowlist. Proof code reaches
-that same policy through this narrow predicate so a directly constructed DonorSlice
-cannot bypass the discovery-time license gate.
+Both discovery and executable proof must consult this module. Keeping the SPDX
+allowlist here avoids circular authority, duplicated policy, and silent drift between
+candidate admission and proof-time verification.
 """
 
 from typing import Any
 
+REUSABLE_SOURCE_LICENSES = frozenset(
+    {
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+        "Zlib",
+        "Unlicense",
+        "CC0-1.0",
+    }
+)
+
 
 def normalize_source_license(value: Any) -> str:
-    """Return the canonical candidate spelling used by the strict allowlist."""
+    """Return the exact SPDX-style spelling used by the strict allowlist."""
 
     return str(value or "").strip()
 
 
 def is_reusable_source_license(value: Any) -> bool:
-    """Return True only for a license admitted by source-transplant discovery."""
+    """Return True only for licenses explicitly admitted for source reuse."""
 
-    # Import lazily so proof-level definitions do not pull the discovery stack into
-    # module import time. source_transplant is the existing discovery authority.
-    from .source_transplant import _PERMISSIVE
-
-    return normalize_source_license(value) in _PERMISSIVE
+    return normalize_source_license(value) in REUSABLE_SOURCE_LICENSES
 
 
 __all__ = [
+    "REUSABLE_SOURCE_LICENSES",
     "is_reusable_source_license",
     "normalize_source_license",
 ]
