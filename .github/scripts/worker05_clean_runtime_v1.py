@@ -21,11 +21,6 @@ replace_exact(
     '''_DEFAULT_AGENT_TOOL_ROUNDS = 128\n_MIN_AGENT_TOOL_ROUNDS = 16\n_MAX_AGENT_TOOL_ROUNDS = 512\n\n\ndef _default_agent_tool_rounds() -> int:\n    raw = os.environ.get("MMM_AGENT_DEFAULT_TOOL_ROUNDS", "").strip()\n    if not raw:\n        return _DEFAULT_AGENT_TOOL_ROUNDS\n    try:\n        value = int(raw)\n    except ValueError:\n        return _DEFAULT_AGENT_TOOL_ROUNDS\n    return max(_MIN_AGENT_TOOL_ROUNDS, min(_MAX_AGENT_TOOL_ROUNDS, value))\n\n\ndef _agent_tool_round_limit() -> int:\n    raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()\n    if not raw:\n        return _default_agent_tool_rounds()\n    try:\n        value = int(raw)\n    except ValueError:\n        return _default_agent_tool_rounds()\n    return value if value > 0 else _default_agent_tool_rounds()\n''',
 )
 
-replace_exact(
-    "minecraft_mod_ai/runtime_bootstrap.py",
-    "        model_router,\n    )\n",
-    "        model_router,\n    )\n",
-)
 # Remove only the explicit shim import/install; the model_router import remains used.
 replace_exact(
     "minecraft_mod_ai/runtime_bootstrap.py",
@@ -74,12 +69,10 @@ replace_exact(
 # 3) Once the lossy fallback is gone, its defensive replacement wrapper is dead code.
 context_path = ROOT / "minecraft_mod_ai/llama_context_safety_contract.py"
 context_text = context_path.read_text(encoding="utf-8")
-context_text = context_text.replace('from functools import wraps\n', 'from functools import wraps\n')
-replace_exact(
-    "minecraft_mod_ai/llama_context_safety_contract.py",
-    '_REPLACE_MARKER = "_mmm_protocol_safe_live_replace_v1"\n',
-    "",
-)
+marker = '_REPLACE_MARKER = "_mmm_protocol_safe_live_replace_v1"\n'
+if context_text.count(marker) != 1:
+    raise SystemExit("llama_context_safety_contract.py: replacement marker mismatch")
+context_text = context_text.replace(marker, "", 1)
 start = context_text.find("\ndef _is_unsafe_three_message_fallback(")
 end = context_text.find("\ndef install(context_module: Any) -> None:")
 if start < 0 or end < 0 or end <= start:
