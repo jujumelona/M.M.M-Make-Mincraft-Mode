@@ -1,20 +1,27 @@
 from __future__ import annotations
 
-"""Prevent implementation classifier names from becoming semantic authority.
+"""Keep implementation routing subordinate to evidence and target identity.
 
-``ProductionModule.kind`` selects a generator.  Names such as ``quest`` or ``gui`` are
-therefore implementation classifications, not permission to replace an evidence-owned
-task with the semantics of a built-in template.  Evidence-backed modules are routed to
-the bounded custom generator unless an explicit non-semantic integration route owns the
-implementation.  Legacy proposals without an evidence task retain their old built-in
-routes for compatibility.
+``ProductionModule.kind`` selects a generator; it is never semantic authority. Evidence-
+owned modules therefore use the bounded custom generator unless a concrete integration
+route owns them. The late runtime contract also hardens coder target state so a planned
+fresh file cannot bypass repository reuse evidence and observations from different files
+cannot be merged into one mutation context.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from functools import wraps
 from typing import Any
 
 _INSTALLED = False
+_EXISTING_TARGET_EVIDENCE_PREFIXES = (
+    "search_code_rag",
+    "sources_",
+    "java_workspace_symbols",
+    "observation_page_",
+    "files_",
+)
 
 
 def _is_evidence_owned(module: Any) -> bool:
@@ -36,7 +43,7 @@ def _route_evidence_owned_custom(module: Any, production_module_type: Any) -> An
     kind = str(getattr(module, "kind", "") or "")
     config = dict(getattr(module, "config", {}) or {})
     # Integrations already require a concrete integration_type or go through the
-    # custom integration lane.  Do not rewrite their identity here.
+    # custom integration lane. Do not rewrite their identity here.
     if kind in {"custom_java", "integration"}:
         return module
     config.setdefault("requested_kind", kind)
@@ -52,95 +59,212 @@ def _route_evidence_owned_custom(module: Any, production_module_type: Any) -> An
 
 
 def _fresh_owned_symbol_context(payload: Any, tool_loop: Any) -> Any | None:
-    """Project a fresh evidence task's host-reserved source anchor into coder state.
+    """Compatibility delegate to the single host-owned fresh-target resolver."""
 
-    Fresh work is creation, not mutation of an already-existing file.  The evidence
-    planner already reserved the exact source locator, so repository search must never
-    be used to guess another file (for example ``fabric.mod.json``) or to prove that a
-    not-yet-created Java file exists.  Adapt/reuse work deliberately does not enter this
-    path and retains the normal file -> symbol -> body localization contract.
+    return tool_loop._fresh_owned_symbol_context(payload)
+
+
+def _sequence_has_values(value: Any) -> bool:
+    return bool(
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and value
+    )
+
+
+def _fresh_target_has_reuse_evidence(payload: Any) -> bool:
+    """Detect evidence that contradicts treating an evidence task as a new file.
+
+    The evidence planner may reserve a fresh anchor, but an execution projection that
+    also carries component/source reuse references is internally inconsistent. Fail
+    closed to repository localization instead of letting ``is_new_file`` skip source
+    body grounding.
+    """
+
+    if not isinstance(payload, Mapping):
+        return False
+    module = payload.get("module")
+    if not isinstance(module, Mapping):
+        return False
+    config = module.get("config")
+    if not isinstance(config, Mapping):
+        return False
+    task = config.get("evidence_task")
+    if not isinstance(task, Mapping):
+        return False
+
+    for key in ("reuse_refs", "component_refs", "source_refs"):
+        if _sequence_has_values(task.get(key)):
+            return True
+
+    bindings = task.get("production_bindings")
+    if not isinstance(bindings, Sequence) or isinstance(
+        bindings, (str, bytes, bytearray)
+    ):
+        return False
+    for binding in bindings:
+        if not isinstance(binding, Mapping):
+            continue
+        if str(binding.get("reuse_action") or "").strip().casefold() != "fresh":
+            continue
+        for key in ("reuse_refs", "component_refs", "source_refs"):
+            if _sequence_has_values(binding.get(key)):
+                return True
+    return False
+
+
+def _normalized_target_path(value: Any) -> str:
+    return str(value or "").strip().replace("\\", "/")
+
+
+def _proves_existing_target(context: Any) -> bool:
+    if bool(getattr(context, "is_new_file", False)):
+        return False
+    if not _normalized_target_path(getattr(context, "target_path", None)):
+        return False
+    if getattr(context, "source_body", None):
+        return True
+    source = str(getattr(context, "evidence_source", "") or "")
+    return source.startswith(_EXISTING_TARGET_EVIDENCE_PREFIXES)
+
+
+def _initial_exact_target_context(
+    payload: Any,
+    *,
+    prospective: Any,
+    extract: Any,
+) -> Any | None:
+    """Return already-supplied exact source when it is the reserved target itself.
+
+    ``CustomModuleGenerator`` ranks the cached ``ProjectIndex`` with the full module
+    query before the coder turn. Reuse that bounded exact-source page instead of doing
+    another repository walk. Incidental files remain irrelevant: only an exact path
+    match can overturn the prospective new-file assumption.
     """
 
     if not isinstance(payload, Mapping):
         return None
-    module = payload.get("module")
-    if not isinstance(module, Mapping):
+    initial = payload.get("initial_exact_source_context")
+    if not isinstance(initial, (Mapping, list, tuple)):
         return None
-    config = module.get("config")
-    if not isinstance(config, Mapping):
-        return None
-    task = config.get("evidence_task")
-    if not isinstance(task, Mapping):
-        return None
-    bindings = task.get("production_bindings")
-    if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes, bytearray)):
+    target_path = _normalized_target_path(prospective.target_path)
+    if not target_path:
         return None
 
-    production_bindings = [item for item in bindings if isinstance(item, Mapping)]
-    if not production_bindings:
-        return None
-    actions = {
-        str(item.get("reuse_action") or "").strip().casefold()
-        for item in production_bindings
-        if str(item.get("reuse_action") or "").strip()
-    }
-    # Mixed/unknown action ownership is not safe to reinterpret as file creation.
-    if actions != {"fresh"}:
-        return None
-
-    for binding in production_bindings:
-        anchors = binding.get("owned_anchors")
-        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
-            continue
-        for anchor in anchors:
-            if not isinstance(anchor, Mapping) or str(anchor.get("kind") or "") != "symbol":
-                continue
-            locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
-            target_path, separator, target_symbol = locator.partition("#")
-            target_path = target_path.strip()
-            if (
-                not target_path
-                or target_path.startswith("/")
-                or ".." in target_path.split("/")
-                or not tool_loop._is_workspace_file_path(target_path)
+    candidates: list[Any] = []
+    if isinstance(initial, Mapping):
+        for key in ("global_anchors", "records", "excerpts", "files", "sources", "hits", "results"):
+            value = initial.get(key)
+            if isinstance(value, Mapping):
+                # ``files`` may be a path -> source mapping. Keep each entry bounded.
+                candidates.extend(
+                    {"path": str(path), "content": content}
+                    for path, content in value.items()
+                )
+            elif isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
             ):
-                continue
-            return tool_loop.TargetMutationContext(
+                candidates.extend(value)
+        candidates.append(initial)
+    else:
+        candidates.extend(initial)
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_path = _normalized_target_path(
+            candidate.get("source_path")
+            or candidate.get("path")
+            or candidate.get("file")
+            or candidate.get("uri")
+        )
+        candidate_path = candidate_path.removeprefix("file:///").removeprefix("file://")
+        if candidate_path != target_path:
+            continue
+        existing = extract({"hits": [candidate]})
+        if existing is None or _normalized_target_path(existing.target_path) != target_path:
+            existing = prospective.__class__(
                 target_path=target_path,
-                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
-                is_new_file=True,
-                evidence_source="evidence_fresh_owned_anchor",
+                target_symbol=prospective.target_symbol,
+                is_new_file=False,
+                evidence_source="initial_exact_target_path",
             )
+        elif prospective.target_symbol and not existing.target_symbol:
+            existing = replace(existing, target_symbol=prospective.target_symbol)
+        return replace(existing, is_new_file=False)
     return None
 
 
-def _install_fresh_owned_target_grounding() -> None:
-    """Make host-reserved fresh targets outrank incidental RAG/source observations."""
+def _install_target_context_hardening() -> None:
+    """Harden fresh/reuse routing and file-identity-preserving context merges."""
 
     from . import progress_aware_tool_loop as tool_loop
 
-    current = tool_loop._extract_mutation_context_from_payload
-    if getattr(current, "_mmm_fresh_owned_target_grounding", False):
+    current_extract = tool_loop._extract_mutation_context_from_payload
+    if not getattr(current_extract, "_mmm_fresh_owned_target_grounding", False):
+
+        @wraps(current_extract)
+        def extract_mutation_context(payload: Any):
+            context = current_extract(payload)
+            if context is None or not context.is_new_file:
+                return context
+            if _fresh_target_has_reuse_evidence(payload):
+                return tool_loop.TargetMutationContext(
+                    evidence_source="reuse_evidence_requires_localization"
+                )
+            existing = _initial_exact_target_context(
+                payload, prospective=context, extract=current_extract
+            )
+            return existing or context
+
+        # Keep the historical marker: runtime integrity/tests use it to identify the
+        # one late fresh-target boundary, while semantics are now fail-closed on reuse.
+        extract_mutation_context._mmm_fresh_owned_target_grounding = True
+        extract_mutation_context.__wrapped__ = current_extract
+        tool_loop._extract_mutation_context_from_payload = extract_mutation_context
+
+    context_type = tool_loop.TargetMutationContext
+    current_merge = context_type.merge
+    if getattr(current_merge, "_mmm_target_identity_merge_guard", False):
         return
 
-    @wraps(current)
-    def extract_mutation_context(payload: Any):
-        fresh = _fresh_owned_symbol_context(payload, tool_loop)
-        if fresh is not None:
-            return fresh
-        return current(payload)
+    @wraps(current_merge)
+    def merge_target_context(self: Any, other: Any):
+        self_path = _normalized_target_path(self.target_path)
+        other_path = _normalized_target_path(other.target_path)
 
-    extract_mutation_context._mmm_fresh_owned_target_grounding = True
-    extract_mutation_context.__wrapped__ = current
-    tool_loop._extract_mutation_context_from_payload = extract_mutation_context
+        # A newly localized different file starts a new localization chain. Carrying
+        # the previous file's symbol/body/line range into it can authorize an edit
+        # against source that belongs to another target.
+        if self_path and other_path and self_path != other_path:
+            return other
+
+        merged = current_merge(self, other)
+        if other.is_new_file:
+            return merged
+        if _proves_existing_target(other) and merged.is_new_file:
+            # Exact repository evidence for the same path overrides an earlier
+            # prospective-new-file assumption. This restores body grounding.
+            return replace(merged, is_new_file=False)
+        return merged
+
+    merge_target_context._mmm_target_identity_merge_guard = True
+    merge_target_context.__wrapped__ = current_merge
+    context_type.merge = merge_target_context
 
 
-def install(*, complete_spec_module: Any, support_module: Any, orchestrator_module: Any, template_module: Any) -> None:
+def install(
+    *,
+    complete_spec_module: Any,
+    support_module: Any,
+    orchestrator_module: Any,
+    template_module: Any,
+) -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
-    # One canonical classifier catalog.  The planner template may expose the same
+    # One canonical classifier catalog. The planner template may expose the same
     # closed execution choices but must not maintain an independently drifting copy.
     template_module.MODULE_KINDS = complete_spec_module.MODULE_KINDS
     template_module.ASSET_KINDS = complete_spec_module.ASSET_KINDS
@@ -148,10 +272,13 @@ def install(*, complete_spec_module: Any, support_module: Any, orchestrator_modu
 
     current = support_module._normalize_modules
     if not getattr(current, "_mmm_semantic_authority_guard", False):
+
         @wraps(current)
         def normalize_modules(modules: tuple[Any, ...], spec: Any):
             routed = tuple(
-                _route_evidence_owned_custom(module, complete_spec_module.ProductionModule)
+                _route_evidence_owned_custom(
+                    module, complete_spec_module.ProductionModule
+                )
                 for module in modules
             )
             ordered, receipts = current(routed, spec)
@@ -159,7 +286,8 @@ def install(*, complete_spec_module: Any, support_module: Any, orchestrator_modu
                 module.module_id: str(module.config.get("requested_kind") or "")
                 for module in ordered
                 if module.kind == "custom_java"
-                and str(module.config.get("semantic_authority") or "") == "evidence_task"
+                and str(module.config.get("semantic_authority") or "")
+                == "evidence_task"
             }
             if routed_ids:
                 receipts = list(receipts)
@@ -180,17 +308,18 @@ def install(*, complete_spec_module: Any, support_module: Any, orchestrator_modu
         normalize_modules.__wrapped__ = current
         support_module._normalize_modules = normalize_modules
 
-        # complete_orchestrator imported the function by name.  Replace only the exact
+        # complete_orchestrator imported the function by name. Replace only the exact
         # old alias so unrelated wrappers remain intact.
         if getattr(orchestrator_module, "_normalize_modules", None) is current:
             orchestrator_module._normalize_modules = normalize_modules
 
-    _install_fresh_owned_target_grounding()
+    _install_target_context_hardening()
     _INSTALLED = True
 
 
 __all__ = [
     "_fresh_owned_symbol_context",
+    "_fresh_target_has_reuse_evidence",
     "_is_evidence_owned",
     "_route_evidence_owned_custom",
     "install",
