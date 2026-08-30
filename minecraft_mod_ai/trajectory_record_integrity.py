@@ -8,6 +8,7 @@ and must agree with objective evidence before a record can influence a skill.
 """
 
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -16,6 +17,7 @@ from typing import Any
 _TRAJECTORY_SCHEMA = "mmm/verified-trajectory-v3"
 _VERIFICATION_SCHEMA = "mmm/trajectory-verification-v1"
 _PROCEDURE_SCHEMA = "mmm/procedure-trace-v1"
+_REMOTE_SCHEMA = "mmm/remote-trajectory-v1"
 _CODE_TASKS = {"repair", "generation", "build", "runtime", "quality", "release"}
 _TASK_CLASSES = _CODE_TASKS | {"research", "planning", "general"}
 _PROCEDURE_KINDS = {"tool", "action", "operation", "verifier"}
@@ -88,19 +90,49 @@ def _procedure_valid(row: Mapping[str, Any]) -> bool:
     return True
 
 
+def _canonical_hash(value: Mapping[str, Any]) -> str:
+    rendered = json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _remote_identity_valid(row: Mapping[str, Any]) -> bool:
+    """Verify the post-sanitization identity of a remote trajectory record."""
+
+    if row.get("remote_format_version") != _REMOTE_SCHEMA:
+        return False
+    identity = row.get("remote_record_id")
+    if not isinstance(identity, str) or not _ID.fullmatch(identity):
+        return False
+    body = dict(row)
+    body.pop("remote_record_id", None)
+    try:
+        expected = _canonical_hash(body)
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(identity, expected)
+
+
 def _local_identity_valid(row: Mapping[str, Any]) -> bool:
     identity = str(row.get("trajectory_id", ""))
     if not _ID.fullmatch(identity):
         return False
-    # Remote records are intentionally sanitized after the local trajectory hash
-    # was created; their post-sanitization integrity is checked by remote_record_id.
-    if row.get("remote_format_version") is not None or row.get("remote_record_id") is not None:
-        return True
+    has_remote_version = row.get("remote_format_version") is not None
+    has_remote_id = row.get("remote_record_id") is not None
+    if has_remote_version or has_remote_id:
+        return has_remote_version and has_remote_id and _remote_identity_valid(row)
     body = dict(row)
     body.pop("trajectory_id", None)
-    rendered = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    expected = "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
-    return identity == expected
+    try:
+        expected = _canonical_hash(body)
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(identity, expected)
 
 
 def derive_levels(row: Mapping[str, Any]) -> dict[str, Any] | None:
