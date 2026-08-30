@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Executable Minecraft platform-provider registry.
 
-A loader name is not support. A target becomes selectable only when a registered
-provider resolves the complete toolchain needed by generation/build/validation.
-No Minecraft version, mappings, loader/API coordinate, Java version, Loom version,
-Gradle version, or pack metadata is selected from an offline default here.
+A loader name alone is not support. A target is selectable only when its provider
+can resolve and validate the complete generation/build/validation toolchain.
+Candidate discovery is deliberately bounded: platform selection must never crawl
+an entire historical Minecraft catalogue and fail one version at a time.
 """
 
 import re
@@ -167,55 +167,57 @@ def provider_for_loader(loader: str) -> PlatformProvider:
     return provider
 
 
-def _discover_all_versions(
+def _candidate_versions(
     provider: PlatformProvider,
     *,
-    initial_limit: int,
+    limit: int,
 ) -> tuple[str, ...]:
-    """Exhaust a prefix-limited provider without imposing a semantic candidate cap.
+    """Read one bounded newest-first candidate page from a provider.
 
-    ``discover_versions(n)`` is a bounded I/O interface, not an authorization to ignore
-    older valid targets. Increase the requested prefix until the provider returns fewer
-    than requested. A provider that ignores the larger request is treated as complete at
-    the returned prefix; no fixed project-level maximum participates in target selection.
+    The old implementation repeatedly doubled the page size until every historical
+    Minecraft release had been enumerated. That converted ordinary target selection
+    into an unbounded compatibility crawl. Providers are now asked once and the caller's
+    candidate bound is authoritative even if a provider accidentally returns more rows.
     """
 
-    limit = max(1, int(initial_limit))
-    previous: tuple[str, ...] = ()
-    while True:
-        raw = provider.discover_versions(limit)
-        current = tuple(
-            dict.fromkeys(
-                version
-                for item in raw
-                if (version := str(item).strip())
-            )
+    bound = max(1, int(limit))
+    raw = provider.discover_versions(bound)
+    normalized = tuple(
+        dict.fromkeys(
+            version
+            for item in raw
+            if (version := str(item).strip())
         )
-        if not current:
-            return ()
-        if len(current) < limit:
-            return current
-        if current == previous:
-            return current
-        previous = current
-        limit *= 2
+    )
+    return normalized[:bound]
 
 
-def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    """Return all provider-discovered versions; no offline version fallback exists."""
-    if loader is not None:
-        return _discover_all_versions(provider_for_loader(loader), initial_limit=32)
-    values: list[str] = []
-    seen: set[str] = set()
-    for loader_id in executable_loaders():
-        for version in _discover_all_versions(
-            provider_for_loader(loader_id),
-            initial_limit=32,
-        ):
-            if version not in seen:
-                seen.add(version)
-                values.append(version)
-    return tuple(values)
+def _resolve_candidate(
+    provider: PlatformProvider,
+    version: str,
+) -> tuple[PlatformAdapter | None, str | None]:
+    """Resolve a candidate without emitting a traceback for normal incompatibility."""
+
+    try:
+        adapter = provider.resolve(version)
+        adapter.validate()
+        return adapter, None
+    except (PlatformDiscoveryError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    except Exception as exc:  # noqa: BLE001 - a bad candidate must not poison discovery
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _record_diagnostic(
+    message: str,
+    diagnostics: list[str] | None,
+    *,
+    emit: bool = True,
+) -> None:
+    if diagnostics is not None:
+        diagnostics.append(message)
+    if emit:
+        _emit_discovery_log(message)
 
 
 def discover_target_keys(
@@ -225,46 +227,82 @@ def discover_target_keys(
     limit_per_loader: int = 12,
     diagnostics: list[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
-    """Return the complete provider-discovered target set.
+    """Return only complete executable platform targets.
 
-    ``limit_per_loader`` is now only the initial provider page size. It cannot truncate
-    the semantic candidate set used by the optimizer.
+    Exact version requests bypass catalogue enumeration and resolve that target directly.
+    Automatic selection examines at most ``limit_per_loader`` newest candidates per
+    provider and rejects incomplete candidates before they become optimizer inputs.
     """
 
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
-    initial_limit = max(1, int(limit_per_loader))
     requested_version = str(minecraft_version or "").strip()
+    bound = max(1, int(limit_per_loader))
     result: list[tuple[str, str]] = []
+
     for loader_id in loaders:
         provider = provider_for_loader(loader_id)
-        try:
-            versions = _discover_all_versions(provider, initial_limit=initial_limit)
-        except Exception as exc:  # noqa: BLE001 - one provider must not hide other providers
-            message = (
-                f"version discovery failed loader={loader_id}: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            if diagnostics is not None:
-                diagnostics.append(message)
-            _emit_discovery_log(message, exc_info=True)
+
+        if requested_version:
+            adapter, error = _resolve_candidate(provider, requested_version)
+            if adapter is not None:
+                result.append((loader_id, requested_version))
+            else:
+                _record_diagnostic(
+                    f"target unavailable loader={loader_id} version={requested_version}: {error}",
+                    diagnostics,
+                )
             continue
+
+        try:
+            versions = _candidate_versions(provider, limit=bound)
+        except Exception as exc:  # noqa: BLE001 - one provider must not hide other providers
+            _record_diagnostic(
+                f"version discovery failed loader={loader_id}: "
+                f"{type(exc).__name__}: {exc}",
+                diagnostics,
+            )
+            continue
+
         if not versions:
-            message = f"provider returned no discoverable Minecraft versions loader={loader_id}"
-            if diagnostics is not None:
-                diagnostics.append(message)
-            _emit_discovery_log(message)
+            _record_diagnostic(
+                f"provider returned no candidate Minecraft versions loader={loader_id}",
+                diagnostics,
+            )
+            continue
+
+        executable_count = 0
         for version in versions:
-            if requested_version and version != requested_version:
+            adapter, error = _resolve_candidate(provider, version)
+            if adapter is None:
+                _record_diagnostic(
+                    f"target skipped loader={loader_id} version={version}: {error}",
+                    diagnostics,
+                )
                 continue
+            executable_count += 1
             result.append((loader_id, version))
-    if requested_version and not result:
-        message = (
-            f"no provider-discovered target matched minecraft_version={requested_version!r}"
-        )
-        if diagnostics is not None:
-            diagnostics.append(message)
-        _emit_discovery_log(message)
+
+        if executable_count == 0:
+            _record_diagnostic(
+                f"provider exposed no executable target in newest {len(versions)} candidates "
+                f"loader={loader_id}",
+                diagnostics,
+            )
+
     return tuple(result)
+
+
+def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
+    """Return bounded, provider-validated executable Minecraft versions."""
+
+    keys = discover_target_keys(loader=loader, limit_per_loader=32)
+    values: list[str] = []
+    seen: set[str] = set()
+    for _loader, version in keys:
+        if version not in seen:
+            seen.add(version)
+            values.append(version)
+    return tuple(values)
 
 
 def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
@@ -273,11 +311,7 @@ def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
     for loader in executable_loaders():
         try:
             result.append(adapter_for_target(version, loader))
-        except ValueError as exc:
-            _emit_discovery_log(
-                f"adapter resolution skipped loader={loader} version={version}: "
-                f"{type(exc).__name__}: {exc}"
-            )
+        except ValueError:
             continue
     return tuple(result)
 
@@ -287,13 +321,25 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
     if not version:
         raise ValueError("Minecraft version must not be empty when resolving an exact target.")
     normalized_loader = _loader_id(loader)
+    provider = provider_for_loader(normalized_loader)
     try:
-        adapter = provider_for_loader(normalized_loader).resolve(version)
+        adapter = provider.resolve(version)
         adapter.validate()
         return adapter
-    except Exception as exc:
+    except (PlatformDiscoveryError, ValueError) as exc:
+        # An unavailable/incompatible target is an ordinary resolution result. Do not
+        # print a chained traceback for every candidate the selector considers.
         _emit_discovery_log(
             f"target resolution failed loader={normalized_loader} version={version}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError(str(exc)) from None
+    except Exception as exc:
+        # Unexpected implementation/infrastructure failures remain visible with a trace.
+        _emit_discovery_log(
+            f"target resolution crashed loader={normalized_loader} version={version}: "
             f"{type(exc).__name__}: {exc}",
             exc_info=True,
         )
@@ -301,10 +347,10 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
 
 
 def newest_adapter(*, loader: str) -> PlatformAdapter:
-    versions = supported_minecraft_versions(loader=loader)
-    if not versions:
-        raise ValueError(f"No discoverable platform target for loader={loader!r}.")
-    return adapter_for_target(versions[0], loader)
+    keys = discover_target_keys(loader=loader, limit_per_loader=12)
+    if not keys:
+        raise ValueError(f"No executable platform target for loader={loader!r}.")
+    return adapter_for_target(keys[0][1], keys[0][0])
 
 
 def adapter_for_lock_values(value: Any) -> PlatformAdapter:
@@ -392,17 +438,16 @@ def platform_catalog_receipt() -> dict[str, Any]:
     providers = []
     for loader in executable_loaders():
         provider = provider_for_loader(loader)
+        keys = discover_target_keys(loader=loader, limit_per_loader=32)
         providers.append(
             {
                 "loader": loader,
                 "provider_id": provider.provider_id,
-                "minecraft_versions": list(
-                    _discover_all_versions(provider, initial_limit=32)
-                ),
+                "minecraft_versions": [version for _loader, version in keys],
             }
         )
     return {
-        "schema_version": "mmm/executable-platform-registry-v2",
+        "schema_version": "mmm/executable-platform-registry-v3",
         "providers": providers,
     }
 
@@ -425,7 +470,8 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
     try:
         target = discover_fabric_target(version)
     except PlatformDiscoveryError as exc:
-        raise ValueError(str(exc)) from exc
+        # Expected target incompatibility must not create a chained traceback.
+        raise ValueError(str(exc)) from None
     digest = target.discovery_sha256.split(":", 1)[-1][:12]
     try:
         resource_major = int(target.resource_pack_version.split(".", 1)[0])
@@ -482,7 +528,7 @@ def _safe_id(value: str) -> str:
 register_platform_provider(
     PlatformProvider(
         loader="fabric",
-        provider_id="official-fabric-meta-maven-minecraft-release-v2",
+        provider_id="official-fabric-meta-maven-minecraft-release-v3",
         discover_versions=_fabric_versions,
         resolve=_fabric_adapter,
     )
