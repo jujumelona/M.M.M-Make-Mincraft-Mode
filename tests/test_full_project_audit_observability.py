@@ -32,6 +32,46 @@ def test_check_payload_has_one_unambiguous_status_semantics() -> None:
         ) == semantics
 
 
+def test_unexpected_probe_exception_is_internal_with_traceback_only_in_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _redirect_artifacts(tmp_path, monkeypatch)
+    audit.CHECKS.clear()
+
+    def broken_probe() -> None:
+        raise TypeError("programming defect")
+
+    audit.isolated_probe("broken_probe", "runtime", broken_probe)
+    assert len(audit.CHECKS) == 1
+    check = audit.CHECKS[0]
+    assert check.status == audit.FAIL
+    assert check.category == "audit-internal"
+    assert "TypeError: programming defect" in check.detail
+    assert "Traceback" not in check.detail
+
+    log = audit.LOG_PATH.read_text(encoding="utf-8")
+    assert "[INTERNAL TRACEBACK]" in log
+    assert "TypeError: programming defect" in log
+
+
+def test_assertion_probe_failure_remains_validation_not_internal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _redirect_artifacts(tmp_path, monkeypatch)
+    audit.CHECKS.clear()
+
+    def failed_contract() -> None:
+        raise AssertionError("contract mismatch")
+
+    audit.isolated_probe("contract_probe", "runtime", failed_contract)
+    assert len(audit.CHECKS) == 1
+    check = audit.CHECKS[0]
+    assert check.status == audit.FAIL
+    assert check.category == "runtime"
+    assert "AssertionError: contract mismatch" in check.detail
+    assert "[INTERNAL TRACEBACK]" not in audit.LOG_PATH.read_text(encoding="utf-8")
+
+
 def test_logged_process_streams_full_output_but_keeps_bounded_tail(
     tmp_path: Path, monkeypatch
 ) -> None:
