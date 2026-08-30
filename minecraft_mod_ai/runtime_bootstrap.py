@@ -77,7 +77,6 @@ def _install_core_contracts() -> None:
 def _install_model_runtime_contracts() -> None:
     from . import (
         complete_orchestrator_services,
-        forced_tool_execution_contract,
         llama_completion_liveness_contract,
         llama_server_autotune,
         llama_server_hardware_policy,
@@ -95,9 +94,6 @@ def _install_model_runtime_contracts() -> None:
         install as install_completion_liveness,
     )
     from .llama_context_safety_contract import install as install_context_safety
-    from .llama_forced_tool_capability_contract import (
-        install as install_forced_tool_capability,
-    )
     from .llama_generation_budget import install as install_llama_generation_budget
     from .llama_prefill_telemetry_contract import (
         install as install_llama_prefill_telemetry,
@@ -129,7 +125,6 @@ def _install_model_runtime_contracts() -> None:
         llama_stream_efficiency_contract,
     )
     install_context_safety(model_context_budget)
-    install_forced_tool_capability(forced_tool_execution_contract)
     install_llama_prefill_telemetry(llama_server_hardware_policy)
     install_forced_tool_execution(
         openai_compatible_module=openai_compatible,

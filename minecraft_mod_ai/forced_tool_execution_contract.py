@@ -11,7 +11,9 @@ Other exact local actions use native ``required`` decoding after a live capabili
 
 import hashlib
 import json
+import os
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
@@ -31,6 +33,31 @@ _MAX_ARGUMENT_ERROR_CHARS = 1600
 _NATIVE_PROBE_TOOL = "mmm_required_tool_probe"
 _NATIVE_PROBE_LOCK = threading.RLock()
 _NATIVE_PROBE_CACHE: dict[tuple[str, str], bool] = {}
+_NATIVE_PROBE_NEGATIVE_AT: dict[tuple[str, str], float] = {}
+_NATIVE_PROBE_TRANSIENT_AT: dict[tuple[str, str], float] = {}
+_NATIVE_PROBE_KEY_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_DEFAULT_NATIVE_NEGATIVE_TTL_SECONDS = 60.0
+_DEFAULT_NATIVE_TRANSIENT_COOLDOWN_SECONDS = 5.0
+
+
+def _positive_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _native_probe_key_lock(key: tuple[str, str]) -> threading.Lock:
+    with _NATIVE_PROBE_LOCK:
+        lock = _NATIVE_PROBE_KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _NATIVE_PROBE_KEY_LOCKS[key] = lock
+        return lock
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -279,8 +306,6 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
         validator = validator_cls(schema_dict, format_checker=checker)
         return not any(validator.iter_errors(dict(arguments)))
     except (SchemaError, TypeError, ValueError, KeyError, RecursionError):
-        return False
-    except Exception:
         return False
 
 
@@ -589,7 +614,7 @@ def _native_probe_request(request: Any) -> Any:
 def _native_probe_key(adapter: Any, request: Any) -> tuple[str, str] | None:
     try:
         endpoint = str(adapter._server_url(request)).strip().rstrip("/")
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional adapter endpoint boundary
         return None
     model_id = str(getattr(getattr(adapter, "config", None), "model_id", "local"))
     return (endpoint, model_id) if endpoint else None
@@ -599,30 +624,86 @@ def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool
     key = _native_probe_key(adapter, request)
     if key is None:
         return False
-    with _NATIVE_PROBE_LOCK:
-        cached = _NATIVE_PROBE_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    supported = False
-    try:
-        turn = current(adapter, _native_probe_request(request))
-        if _contains_exact_call(turn, _NATIVE_PROBE_TOOL):
-            call = tuple(getattr(turn, "tool_calls", ()) or ())[0]
-            arguments = getattr(call, "arguments", {})
-            supported = isinstance(arguments, Mapping) and arguments.get("nonce") == "mmm"
-    except Exception:
-        supported = False
-
-    with _NATIVE_PROBE_LOCK:
-        _NATIVE_PROBE_CACHE[key] = supported
-    print(
-        "llama native forced-tool preflight:",
-        f" supported={'yes' if supported else 'no'}",
-        f" model={key[1]}",
-        flush=True,
+    negative_ttl = _positive_seconds(
+        "MMM_LLAMA_NATIVE_TOOL_NEGATIVE_TTL_SECONDS",
+        _DEFAULT_NATIVE_NEGATIVE_TTL_SECONDS,
     )
-    return supported
+    transient_cooldown = _positive_seconds(
+        "MMM_LLAMA_NATIVE_TOOL_TRANSIENT_COOLDOWN_SECONDS",
+        _DEFAULT_NATIVE_TRANSIENT_COOLDOWN_SECONDS,
+    )
+
+    # Serialize probes only per endpoint/model. Different local models remain concurrent,
+    # while duplicate simultaneous requests do not each launch the same capability decode.
+    with _native_probe_key_lock(key):
+        now = time.monotonic()
+        with _NATIVE_PROBE_LOCK:
+            cached = _NATIVE_PROBE_CACHE.get(key)
+            negative_at = _NATIVE_PROBE_NEGATIVE_AT.get(key)
+            transient_at = _NATIVE_PROBE_TRANSIENT_AT.get(key)
+            if cached is True:
+                return True
+            if cached is False and negative_at is not None:
+                if now - negative_at < negative_ttl:
+                    return False
+                _NATIVE_PROBE_CACHE.pop(key, None)
+                _NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
+            elif cached is False:
+                # Reprobe legacy unbounded negative entries instead of inheriting a
+                # permanent false capability state.
+                _NATIVE_PROBE_CACHE.pop(key, None)
+            if transient_at is not None and now - transient_at < transient_cooldown:
+                return False
+
+        supported = False
+        try:
+            turn = current(adapter, _native_probe_request(request))
+            if _contains_exact_call(turn, _NATIVE_PROBE_TOOL):
+                call = next(iter(getattr(turn, "tool_calls", ()) or ()))
+                arguments = getattr(call, "arguments", {})
+                supported = (
+                    isinstance(arguments, Mapping)
+                    and arguments.get("nonce") == "mmm"
+                )
+        except Exception as exc:  # noqa: BLE001 - capability transport/protocol boundary
+            with _NATIVE_PROBE_LOCK:
+                if _native_protocol_failure(exc):
+                    _NATIVE_PROBE_CACHE[key] = False
+                    _NATIVE_PROBE_NEGATIVE_AT[key] = now
+                    _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
+                    reason = "protocol"
+                    retry_after = negative_ttl
+                else:
+                    _NATIVE_PROBE_CACHE.pop(key, None)
+                    _NATIVE_PROBE_TRANSIENT_AT[key] = now
+                    reason = "transient"
+                    retry_after = transient_cooldown
+            print(
+                "llama native forced-tool preflight:",
+                " supported=unknown" if reason == "transient" else " supported=no",
+                f" reason={reason}",
+                f" model={key[1]}",
+                f" retry_after={retry_after:.0f}s",
+                flush=True,
+            )
+            return False
+
+        with _NATIVE_PROBE_LOCK:
+            _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
+            _NATIVE_PROBE_CACHE[key] = supported
+            if supported:
+                _NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
+            else:
+                _NATIVE_PROBE_NEGATIVE_AT[key] = now
+        print(
+            "llama native forced-tool preflight:",
+            f" supported={'yes' if supported else 'no'}",
+            f" model={key[1]}",
+            "" if supported else f" retry_after={negative_ttl:.0f}s",
+            sep="",
+            flush=True,
+        )
+        return supported
 
 
 def _native_probe_cache_key(adapter: Any, request: Any) -> tuple[str, str] | None:
@@ -634,6 +715,8 @@ def _mark_native_unsupported(adapter: Any, request: Any) -> None:
     if key is not None:
         with _NATIVE_PROBE_LOCK:
             _NATIVE_PROBE_CACHE[key] = False
+            _NATIVE_PROBE_NEGATIVE_AT[key] = time.monotonic()
+            _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
 
 
 def _native_protocol_failure(exc: BaseException) -> bool:
