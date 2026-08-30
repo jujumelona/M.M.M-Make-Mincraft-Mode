@@ -190,3 +190,29 @@ def test_nested_retrieval_incompleteness_is_fail_closed():
             ]
         )
     )
+
+
+def test_fusion_boundary_blocks_metadata_before_model_consumption():
+    record = _record(content="")
+    record.pop("content")
+    record["snippet"] = "colony persistent state source implementation"
+    record["source_type"] = "github_search_result"
+    with pytest.raises(
+        ValueError,
+        match="pre-design evidence is insufficient for approved requirements",
+    ):
+        quality.fuse_grounded_domain_evidence(DOMAIN, _grounded([record]))
+
+
+def test_fusion_boundary_preserves_actual_body_for_model_consumption():
+    body = "colony persistent state source implementation"
+    fused = quality.fuse_grounded_domain_evidence(
+        DOMAIN,
+        _grounded([_record(content=body)]),
+    )
+
+    records = fused["queries"][0]["evidence_records"]
+    assert records
+    assert records[0]["content"] == body
+    assert fused["requirement_sufficiency"]["sufficient"] is True
+    assert fused["requirement_sufficiency"]["evidence_validation"] == "verified_source_body"
