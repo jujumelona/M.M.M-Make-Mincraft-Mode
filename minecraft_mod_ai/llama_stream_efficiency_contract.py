@@ -122,26 +122,26 @@ def _append_tool_call_deltas(message: dict[str, Any], raw_calls: Any) -> int:
     if raw_calls is None:
         return 0
     if not isinstance(raw_calls, list):
-        raise RuntimeError("llama server streamed tool_calls in a non-list shape")
+        raise TypeError("llama server streamed tool_calls in a non-list shape")
     calls = message.setdefault("tool_calls", [])
     if not isinstance(calls, list):
-        raise RuntimeError("internal streamed tool-call accumulator is invalid")
+        raise TypeError("internal streamed tool-call accumulator is invalid")
 
     progressed = 0
     for raw_call in raw_calls:
         if not isinstance(raw_call, Mapping):
-            raise RuntimeError("llama server streamed an invalid tool-call delta")
+            raise TypeError("llama server streamed an invalid tool-call delta")
         index = _tool_call_index(raw_call.get("index", 0))
         while len(calls) <= index:
             calls.append(_empty_tool_call())
         target = calls[index]
         if not isinstance(target, dict):
-            raise RuntimeError("internal streamed tool-call entry is invalid")
+            raise TypeError("internal streamed tool-call entry is invalid")
 
         call_id = raw_call.get("id")
         if call_id is not None:
             if not isinstance(call_id, str):
-                raise RuntimeError("llama server streamed a non-string tool-call id")
+                raise TypeError("llama server streamed a non-string tool-call id")
             if call_id:
                 previous_id = target.get("id")
                 target["id"] = (previous_id if isinstance(previous_id, str) else "") + call_id
@@ -150,23 +150,23 @@ def _append_tool_call_deltas(message: dict[str, Any], raw_calls: Any) -> int:
         call_type = raw_call.get("type")
         if call_type is not None:
             if not isinstance(call_type, str):
-                raise RuntimeError("llama server streamed a non-string tool-call type")
+                raise TypeError("llama server streamed a non-string tool-call type")
             target["type"] = call_type
 
         raw_function = raw_call.get("function")
         if raw_function is None:
             continue
         if not isinstance(raw_function, Mapping):
-            raise RuntimeError("llama server streamed invalid tool-call function metadata")
+            raise TypeError("llama server streamed invalid tool-call function metadata")
         function = target.setdefault("function", {"name": "", "arguments": ""})
         if not isinstance(function, dict):
-            raise RuntimeError("internal streamed tool-call function accumulator is invalid")
+            raise TypeError("internal streamed tool-call function accumulator is invalid")
         for key in ("name", "arguments"):
             value = raw_function.get(key)
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise RuntimeError(
+                raise TypeError(
                     f"llama server streamed non-string tool-call function {key}"
                 )
             previous = function.get(key)
@@ -240,21 +240,37 @@ def _probe_native_tool_progress(client: Any, completion_url: str) -> dict[str, A
         "MMM_LLAMA_TOOL_PROBE_TIMEOUT_SECONDS",
         _DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS,
     )
+    slots_error = ""
     try:
         response = client.get(f"{origin}/slots", timeout=timeout)
         if response.status_code == 200:
             snapshot = _slot_progress_from_payload(response.json())
             if snapshot is not None:
                 return {"state": "slots", **snapshot}
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - optional native observability boundary
+        slots_error = type(exc).__name__
     try:
         response = client.get(f"{origin}/health", timeout=timeout)
         if response.status_code == 200:
-            return {"state": "healthy-unobservable"}
-        return {"state": f"health-http-{response.status_code}"}
-    except Exception:
-        return {"state": "probe-unavailable"}
+            result = {"state": "healthy-unobservable"}
+            if slots_error:
+                result["slots_error"] = slots_error
+            return result
+        result = {"state": f"health-http-{response.status_code}"}
+        if slots_error:
+            result["slots_error"] = slots_error
+        return result
+    except Exception as exc:  # noqa: BLE001 - optional native observability boundary
+        result = {"state": "probe-unavailable", "health_error": type(exc).__name__}
+        if slots_error:
+            result["slots_error"] = slots_error
+        return result
+
+
+def _needs_native_tool_liveness_reporter(payload: Mapping[str, Any]) -> bool:
+    """Use slot polling only as a fallback when semantic SSE progress is unavailable."""
+
+    return bool(payload.get("tools")) and payload.get("return_progress") is not True
 
 
 def _native_tool_liveness_reporter(
@@ -416,7 +432,7 @@ class _StreamingCompletionClient:
         started = time.monotonic()
         stop = threading.Event()
         reporter: threading.Thread | None = None
-        if has_tools:
+        if _needs_native_tool_liveness_reporter(streamed_payload):
             reporter = threading.Thread(
                 target=_native_tool_liveness_reporter,
                 args=(self._client, url, stop, started),
@@ -534,8 +550,12 @@ def _client(server_url: str) -> Any:
             stale = _CLIENTS.pop(key)
             try:
                 stale.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - best-effort stale-client cleanup
+                print(
+                    "llama server: stale client close failed",
+                    f" error={type(exc).__name__}",
+                    flush=True,
+                )
         return client
 
 

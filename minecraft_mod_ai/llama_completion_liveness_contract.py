@@ -22,7 +22,6 @@ _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
 _ADAPTER_MARKER = "_mmm_single_progress_aware_completion_owner_v1"
 _CLIENT_INIT_MARKER = "_mmm_semantic_progress_client_v1"
-_REPORTER_MARKER = "_mmm_no_slot_poll_completion_liveness_v1"
 
 
 class LlamaSemanticProgressTimeout(TimeoutError):
@@ -289,8 +288,20 @@ def _install_raw_client_watchdog(stream_module: Any) -> None:
     if not getattr(current_init, _CLIENT_INIT_MARKER, False):
 
         @wraps(current_init)
-        def progress_checked_init(self: Any, client: Any) -> None:
-            current_init(self, _wrap_raw_client(client, stream_module))
+        def progress_checked_init(self: Any, *args: Any, **kwargs: Any) -> None:
+            if args:
+                updated_args = list(args)
+                updated_args[0] = _wrap_raw_client(updated_args[0], stream_module)
+                current_init(self, *updated_args, **kwargs)
+                return
+            if "client" in kwargs:
+                updated_kwargs = dict(kwargs)
+                updated_kwargs["client"] = _wrap_raw_client(
+                    updated_kwargs["client"], stream_module
+                )
+                current_init(self, **updated_kwargs)
+                return
+            current_init(self, *args, **kwargs)
 
         setattr(progress_checked_init, _CLIENT_INIT_MARKER, True)
         progress_checked_init.__wrapped__ = current_init  # type: ignore[attr-defined]
@@ -304,8 +315,8 @@ def _install_raw_client_watchdog(stream_module: Any) -> None:
 
 def _install_stream_progress_payload(stream_module: Any) -> None:
     client_type = stream_module._StreamingCompletionClient
-    current = client_type.stream
-    if getattr(current, _STREAM_MARKER, False):
+    current = getattr(client_type, "stream", None)
+    if not callable(current) or getattr(current, _STREAM_MARKER, False):
         return
 
     @wraps(current)
@@ -324,20 +335,6 @@ def _install_stream_progress_payload(stream_module: Any) -> None:
     setattr(progress_aware_stream, _STREAM_MARKER, True)
     progress_aware_stream.__wrapped__ = current  # type: ignore[attr-defined]
     client_type.stream = progress_aware_stream
-
-
-def _install_no_slot_poll_reporter(stream_module: Any) -> None:
-    current = stream_module._native_tool_liveness_reporter
-    if getattr(current, _REPORTER_MARKER, False):
-        return
-
-    @wraps(current)
-    def sse_owned_reporter(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    setattr(sse_owned_reporter, _REPORTER_MARKER, True)
-    sse_owned_reporter.__wrapped__ = current  # type: ignore[attr-defined]
-    stream_module._native_tool_liveness_reporter = sse_owned_reporter
 
 
 def _install_adapter_completion_transport(stream_module: Any, adapter_module: Any) -> None:
@@ -398,7 +395,6 @@ def install(stream_module: Any, adapter_module: Any | None = None) -> None:
     stream_module._slot_progress_from_payload = _slot_progress_from_payload
     _install_raw_client_watchdog(stream_module)
     _install_stream_progress_payload(stream_module)
-    _install_no_slot_poll_reporter(stream_module)
 
     client_type = stream_module._StreamingCompletionClient
     current = client_type.post

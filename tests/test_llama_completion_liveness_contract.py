@@ -89,6 +89,56 @@ def test_install_wraps_nonstream_chat_completion_without_changing_timeout() -> N
     assert stream_module._slot_progress_from_payload is contract._slot_progress_from_payload
 
 
+def test_semantic_progress_disables_native_slot_reporter() -> None:
+    from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
+
+    assert (
+        stream_contract._needs_native_tool_liveness_reporter(
+            {"tools": [{"type": "function"}], "return_progress": True}
+        )
+        is False
+    )
+
+
+def test_native_slot_reporter_remains_fallback_without_semantic_progress() -> None:
+    from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
+
+    assert (
+        stream_contract._needs_native_tool_liveness_reporter(
+            {"tools": [{"type": "function"}]}
+        )
+        is True
+    )
+    assert stream_contract._needs_native_tool_liveness_reporter({"messages": []}) is False
+
+
+def test_liveness_install_has_no_reporter_monkeypatch_dependency() -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def __init__(self, _client=None):
+            self._client = _client
+
+        def post(self, url: str, **kwargs):
+            calls.append((url, kwargs))
+            return "ok"
+
+        def stream(self, method: str, url: str, **kwargs):
+            return (method, url, kwargs)
+
+    stream_module = SimpleNamespace(
+        _StreamingCompletionClient=FakeClient,
+        _CLIENTS={},
+        _tool_idle_timeout_seconds=lambda: 12.0,
+        _stream_idle_timeout_seconds=lambda: 120.0,
+    )
+
+    contract.install(stream_module)
+
+    assert not hasattr(stream_module, "_native_tool_liveness_reporter")
+    assert stream_module._slot_progress_from_payload is contract._slot_progress_from_payload
+
+
 def test_runtime_completion_transport_has_one_progress_aware_owner() -> None:
     assert getattr(
         llama_cpp_adapter._post_completion,
