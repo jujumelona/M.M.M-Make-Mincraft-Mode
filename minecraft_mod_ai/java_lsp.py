@@ -393,24 +393,49 @@ class JavaLanguageService:
             }
 
 
+def _validated_java_file(root: Path, candidate: Path) -> Path:
+    """Return one canonical in-root Java file without following symlink aliases."""
+
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Java file escaped the project root.") from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Java file path is not a canonical project-relative path.")
+
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Java file path traversed a symbolic link.")
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise FileNotFoundError(candidate) from exc
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Java file escaped the project root.") from exc
+    if resolved.suffix != ".java" or not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return resolved
+
+
 def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     if relative_files is None:
         candidates = (
-            path.resolve()
+            _validated_java_file(root, path)
             for path in root.rglob("*.java")
-            if path.is_file() and not path.is_symlink()
+            if path.is_file()
         )
     else:
         requested: list[Path] = []
         for relative in relative_files:
-            path = (root / relative).resolve()
-            try:
-                path.relative_to(root)
-            except ValueError as exc:
-                raise ValueError("Java file escaped the project root.") from exc
-            if path.suffix != ".java" or not path.is_file() or path.is_symlink():
-                raise FileNotFoundError(path)
-            requested.append(path)
+            raw = Path(relative)
+            if raw.is_absolute():
+                raise ValueError("Java file path must be project-relative.")
+            requested.append(_validated_java_file(root, root / raw))
         candidates = iter(requested)
     return sorted(set(candidates), key=lambda path: path.as_posix())
 
@@ -532,14 +557,14 @@ def _collect_diagnostics(
         if uri not in expected_uris:
             continue
         values = params.get("diagnostics")
-        if not isinstance(values, list):
+        if not isinstance(values, list) or any(
+            not isinstance(item, dict) for item in values
+        ):
             raise JDTLanguageServerError(
                 "JDT LS published a malformed diagnostics payload for an opened "
                 "Java file."
             )
-        diagnostics[uri] = _sorted_diagnostics(
-            item for item in values if isinstance(item, dict)
-        )
+        diagnostics[uri] = _sorted_diagnostics(values)
         settled_since = time.monotonic()
 
     missing_count = len(expected_uris.difference(diagnostics))
