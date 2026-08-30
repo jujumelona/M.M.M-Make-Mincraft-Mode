@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 
+from minecraft_mod_ai import runner as runner_module
+from minecraft_mod_ai import runner_parallel_validation_contract as parallel
 from minecraft_mod_ai import validation_execution_contract as validation
-from minecraft_mod_ai.runner import BuildReport, GradleRunner
-from minecraft_mod_ai.runner_parallel_validation_contract import _safe_regular_file
+from minecraft_mod_ai.runner import BuildReport, CommandResult, GradleRunner
+from minecraft_mod_ai.runner_parallel_validation_contract import (
+    _passing_gametest_xml,
+    _safe_regular_file,
+)
 
 
 def _project(root: Path) -> Path:
@@ -40,7 +45,7 @@ def _fake_runner(tmp_path: Path, root: Path) -> tuple[GradleRunner, dict[str, in
             report = project_root / "build/gametest-report.xml"
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(
-                f'<testsuite tests="1" failures="0" errors="0" skipped="0" name="run-{calls["count"]}"/>\n',
+                f'<testsuite tests="1" failures="0" errors="0" skipped="0" name="run-{calls["count"]}"><testcase name="ok"/></testsuite>\n',
                 encoding="utf-8",
             )
         return BuildReport(
@@ -123,6 +128,111 @@ def test_gametest_resource_gate_fails_closed_without_evidence(tmp_path: Path) ->
     findings = validation.gametest_resource_errors(root, log)
     assert findings
     assert "fabric.mod.json" in findings[0]
+
+
+def test_gametest_xml_requires_real_passing_tests(tmp_path: Path) -> None:
+    root = _project(tmp_path / "project")
+    report = root / "build/gametest-report.xml"
+    report.parent.mkdir(parents=True)
+
+    report.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase name="ok"/></testsuite>\n',
+        encoding="utf-8",
+    )
+    assert _passing_gametest_xml(root, report) is True
+
+    for payload in (
+        '<testsuite tests="0" failures="0" errors="0" skipped="0"/>',
+        '<testsuite tests="1" failures="1" errors="0" skipped="0"><testcase name="bad"><failure/></testcase></testsuite>',
+        '<testsuite tests="1" failures="0" errors="0" skipped="1"><testcase name="skip"><skipped/></testcase></testsuite>',
+        '<broken>',
+    ):
+        report.write_text(payload, encoding="utf-8")
+        assert _passing_gametest_xml(root, report) is False
+
+
+def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = _project(tmp_path / "project")
+    runner = GradleRunner(tmp_path / "cache")
+    executable = tmp_path / "cache/gradle-test/bin/gradle"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    jar = root / "build/libs/demo.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"jar")
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(
+        runner_module,
+        "adapter_from_project",
+        lambda _root: SimpleNamespace(gradle="test", gradle_sha256="a" * 64),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_ensure_gradle",
+        MethodType(lambda self, _version, _sha: executable, runner),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_find_release_jar",
+        MethodType(lambda self, _root: str(jar), runner),
+    )
+    monkeypatch.setattr(
+        parallel,
+        "_sync_wrapper",
+        lambda *args, **kwargs: CommandResult(
+            name="wrapper",
+            command=("wrapper",),
+            exit_code=0,
+            duration_seconds=0.0,
+            log_path=str(root / ".minecraft_ai/logs/gradle-wrapper.log"),
+            timed_out=False,
+        ),
+    )
+
+    def fake_run(self, *, name, executable, arguments, cwd, env, log_path):
+        calls.append((name, tuple(arguments)))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("clean\n", encoding="utf-8")
+        if name == "gametest":
+            report = root / "build/gametest-report.xml"
+            report.write_text(
+                '<testsuite tests="1" failures="0" errors="0" skipped="1"><testcase name="skip"><skipped/></testcase></testsuite>\n',
+                encoding="utf-8",
+            )
+        return CommandResult(
+            name=name,
+            command=(str(executable), *arguments),
+            exit_code=0,
+            duration_seconds=0.0,
+            log_path=str(log_path),
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(runner, "_run", MethodType(fake_run, runner))
+    result = runner._build_locked(root, run_gametest=True)
+
+    assert calls[0][0] == "clean_build"
+    assert calls[0][1][:3] == ("--no-daemon", "clean", "build")
+    assert "--build-cache" in calls[0][1]
+    assert result.status == "FAIL"
+    assert "GameTest report" in str(result.error)
+
+
+def test_build_rejects_symlink_project_root(tmp_path: Path) -> None:
+    root = _project(tmp_path / "project")
+    link = tmp_path / "project-link"
+    link.symlink_to(root, target_is_directory=True)
+    runner, _calls = _fake_runner(tmp_path, root)
+    try:
+        runner.build(link, run_gametest=False)
+    except runner_module.BuildRunnerError as exc:
+        assert "symbolic link" in str(exc)
+    else:
+        raise AssertionError("symlink project root must not be validated")
 
 
 def test_safe_output_file_rejects_symlink_and_escape(tmp_path: Path) -> None:
