@@ -188,6 +188,8 @@ jobs:
           import sys
           from pathlib import Path
 
+          from tools.ci_test_shard import select_shard
+
           dedicated = {
               "test_runtime_bootstrap_clean.py",
               "test_runtime_contract_composer.py",
@@ -203,12 +205,18 @@ jobs:
               "test_llama_parallel_runtime_contract.py",
           }
           shard_number = int(os.environ["SHARD"])
-          shard = shard_number - 1
-          files = [
-              str(path)
-              for index, path in enumerate(sorted(Path("tests").glob("test_*.py")))
-              if path.name not in dedicated and index % 3 == shard
+          eligible = [
+              path
+              for path in Path("tests").glob("test_*.py")
+              if path.name not in dedicated
           ]
+          files = list(
+              select_shard(
+                  eligible,
+                  shard_number=shard_number,
+                  shard_count=3,
+              )
+          )
           if not files:
               raise SystemExit("pytest shard selected no files")
           raise SystemExit(
