@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import MethodType
 
 import minecraft_mod_ai.agent_capability_context as capability_context
-import minecraft_mod_ai.external_mcp_router as external_mcp_router
+from minecraft_mod_ai import external_mcp_router
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
 from minecraft_mod_ai.external_mcp_router import ExternalMCPRouter
 from minecraft_mod_ai.model_adapters.base import ToolCall
