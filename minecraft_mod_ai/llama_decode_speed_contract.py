@@ -12,7 +12,8 @@ from types import SimpleNamespace
 from typing import Any
 
 _SCHEMA_VERSION = "mmm/llama-decode-speed-v3-unified-e2e-pmin"
-_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v2"
+_KV_SCHEMA_VERSION = "mmm/llama-kv-decode-speed-v3-precision-reference"
+_KV_PRECISION_RANK = {"f16": 0, "q8_0": 1, "q4_0": 2}
 _INSTALL_LOCK = threading.RLock()
 _BENCHMARK_LOCK = threading.RLock()
 _KV_TUNE_LOCK = threading.RLock()
@@ -139,6 +140,16 @@ def _representative_benchmark_request(request: Any) -> Any:
     )
 
 
+def _precision_reference_order(candidates: Any) -> tuple[str, ...]:
+    values = tuple(str(value) for value in candidates)
+    return tuple(
+        sorted(
+            values,
+            key=lambda value: (_KV_PRECISION_RANK.get(value, 100), value),
+        )
+    )
+
+
 def _kv_candidates() -> tuple[str, ...]:
     allowed = ("q4_0", "q8_0", "f16")
     preferred = os.environ.get("MMM_KV_CACHE_QUANT", "q4_0").strip().lower()
@@ -201,7 +212,7 @@ def _kv_fingerprint(
                 "MMM_LLAMA_AUTOTUNE_TOKENS", autotune._BENCHMARK_OUTPUT_TOKENS
             ),
         ),
-        "candidates": list(candidates),
+        "candidates": list(_precision_reference_order(candidates)),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -211,7 +222,9 @@ def _kv_fingerprint(
 def _load_kv_selection(autotune: Any, fingerprint: str, candidates: tuple[str, ...]) -> str | None:
     try:
         payload = json.loads(_kv_cache_path(autotune).read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
         return None
     selected = str(payload.get("selected", "")).strip().lower()
     if (
@@ -253,6 +266,7 @@ def _probe_kv_types(
     request: Any,
     candidates: tuple[str, ...],
 ) -> tuple[str, list[dict[str, Any]]]:
+    candidates = _precision_reference_order(candidates)
     bench_request = autotune._compact_benchmark_request(request)
     probe_tokens = min(
         int(config.max_new_tokens),
@@ -281,7 +295,7 @@ def _probe_kv_types(
                     max_tokens=probe_tokens,
                     variant=variant,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate optional KV candidate failures
                 probe = autotune.ProbeResult(
                     variant=variant,
                     ok=False,
@@ -396,7 +410,7 @@ def _probe_p_min(
                 variant=variant,
                 concurrency=max(1, int(getattr(variant, "parallel", 1) or 1)),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - isolate optional benchmark candidate failures
             probe = autotune.ProbeResult(
                 variant=variant,
                 ok=False,
