@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 from collections.abc import Mapping
@@ -111,18 +112,41 @@ def _nonnegative_int(value: Any) -> int | None:
     return value
 
 
+def _diagnostic_sort_key(value: Mapping[str, Any]) -> str:
+    return json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
     if value.get("schema_version") != "mmm/java-diagnostics-v2":
         return False
-    diagnostics = value.get("diagnostics")
+
+    raw_diagnostics = value.get("diagnostics")
+    diagnostics_by_uri = value.get("diagnostics_by_uri")
+    legacy_errors: list[dict[str, Any]] | None = None
+    if isinstance(raw_diagnostics, Mapping):
+        diagnostics = raw_diagnostics
+        if diagnostics_by_uri is not None and diagnostics_by_uri != raw_diagnostics:
+            return False
+    elif isinstance(raw_diagnostics, list) and isinstance(diagnostics_by_uri, Mapping):
+        if any(not isinstance(item, Mapping) for item in raw_diagnostics):
+            return False
+        diagnostics = diagnostics_by_uri
+        legacy_errors = [dict(item) for item in raw_diagnostics]
+    else:
+        return False
+
     pages = value.get("pages")
     files_opened = _nonnegative_int(value.get("files_opened"))
     page_count = _nonnegative_int(value.get("page_count"))
     error_count = _nonnegative_int(value.get("error_count"))
     warning_count = _nonnegative_int(value.get("warning_count"))
     if (
-        not isinstance(diagnostics, Mapping)
-        or not isinstance(pages, list)
+        not isinstance(pages, list)
         or files_opened is None
         or page_count is None
         or error_count is None
@@ -134,6 +158,7 @@ def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
 
     observed_errors = 0
     observed_warnings = 0
+    expected_legacy_errors: list[dict[str, Any]] = []
     for uri, raw_items in diagnostics.items():
         if not isinstance(uri, str) or not uri or not isinstance(raw_items, list):
             return False
@@ -145,9 +170,14 @@ def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
                 return False
             if severity == 1:
                 observed_errors += 1
+                expected_legacy_errors.append(dict(item))
             elif severity == 2:
                 observed_warnings += 1
     if observed_errors != error_count or observed_warnings != warning_count:
+        return False
+    if legacy_errors is not None and sorted(
+        legacy_errors, key=_diagnostic_sort_key
+    ) != sorted(expected_legacy_errors, key=_diagnostic_sort_key):
         return False
 
     page_files = 0
