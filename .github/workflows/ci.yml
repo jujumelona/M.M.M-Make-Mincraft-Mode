@@ -52,10 +52,11 @@ jobs:
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
           # Reviewed surface: inherited main was already at 424; Worker 03 adds one
-          # requirement-traceability owner and pre-design external source acquisition adds
-          # one explicit _forced_rag_bundle owner, bringing the audited surface to 426.
-          # Any new runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 426
+          # requirement-traceability owner, pre-design external source acquisition adds
+          # one explicit _forced_rag_bundle owner, and prose-first deep-design compatibility
+          # adds one reviewed installer owner. The audited surface is therefore 427.
+          # Any further runtime rebinding is a hard CI failure until deliberately reviewed.
+          budget = 427
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
