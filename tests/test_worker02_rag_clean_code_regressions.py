@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 
-import pytest
-
 from minecraft_mod_ai import pre_design_rag_corrective as corrective
 from minecraft_mod_ai import pre_design_rag_fusion as fusion
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
@@ -221,12 +219,13 @@ def test_fusion_projection_keeps_source_hash_and_hashes_model_facing_content(
     assert all(field not in record for field in ("body", "text", "snippet", "excerpt"))
 
 
-def test_production_corrective_round_limit_with_claim_and_gap_fails_closed(
+def test_production_verified_claim_survives_page_local_gap(
     monkeypatch,
     tmp_path,
 ):
     monkeypatch.setenv("MMM_PREDESIGN_CORRECTIVE_ROUNDS", "0")
     writes: list[tuple[str, dict]] = []
+    validations: list[tuple[dict, frozenset[str]]] = []
     page = {
         "page_ref": "sha256:base#page=1/1",
         "content": "colony state persistence partial evidence",
@@ -235,6 +234,7 @@ def test_production_corrective_round_limit_with_claim_and_gap_fails_closed(
         "claim": "Colony state can be persisted.",
         "evidence_refs": [page["page_ref"]],
         "support_quote": "colony state persistence",
+        "support_verification": "model_entailment+host_exact_quote",
     }
 
     monkeypatch.setattr(
@@ -250,7 +250,7 @@ def test_production_corrective_round_limit_with_claim_and_gap_fails_closed(
                     "gaps": ["Need restart recovery evidence."],
                     "next_queries": ["minecraft colony restart recovery source"],
                     "procedures": [],
-                    "sufficient": False,
+                    "sufficient": True,
                 }
             ],
             0,
@@ -268,7 +268,7 @@ def test_production_corrective_round_limit_with_claim_and_gap_fails_closed(
         @staticmethod
         def _sha256(value):
             del value
-            return "sha256:worker02-round-limit"
+            return "sha256:worker02-page-local-gap"
 
         @staticmethod
         def _domain_lock(key):
@@ -315,30 +315,33 @@ def test_production_corrective_round_limit_with_claim_and_gap_fails_closed(
 
         @staticmethod
         def _validate_sufficient_research(note, *, allowed_refs):
-            del note, allowed_refs
-            raise AssertionError("failed corrective state must not validate as sufficient")
+            validations.append((dict(note), frozenset(allowed_refs)))
 
-    with pytest.raises(RuntimeError, match="corrective_round_limit_reached"):
-        corrective._quality_research_document_domain(
-            object(),
-            FakeAgentic,
-            FakeRag,
-            router=object(),
-            prompt="Build a persistent colony system.",
-            domain={
-                "domain_id": "req_colony",
-                "queries": ["minecraft colony persistent state source"],
-            },
-            document={"document_sha256": "base-doc"},
-            trace_metadata=None,
-        )
+    result = corrective._quality_research_document_domain(
+        object(),
+        FakeAgentic,
+        FakeRag,
+        router=object(),
+        prompt="Build a persistent colony system.",
+        domain={
+            "domain_id": "req_colony",
+            "queries": ["minecraft colony persistent state source"],
+        },
+        document={"document_sha256": "base-doc"},
+        trace_metadata=None,
+    )
 
     assert writes
     status, note = writes[-1]
-    assert status == "failed"
-    assert note["sufficient"] is False
-    assert note["fixed_point"] is True
-    assert note["quality_contract"]["fixed_point_reason"] == (
-        "corrective_round_limit_reached"
+    assert status == "complete"
+    assert result["sufficient"] is True
+    assert result["fixed_point"] is False
+    assert result["gaps"] == []
+    assert result["page_local_gaps"] == ["Need restart recovery evidence."]
+    assert result["quality_contract"]["fixed_point_reason"] == (
+        "verified_claims_sufficient"
     )
-    assert "unresolved evidence gaps remain" in note["failure_reasons"]
+    assert result["quality_contract"]["page_local_gap_count"] == 1
+    assert validations
+    assert validations[-1][1] == frozenset({page["page_ref"]})
+    assert note["sufficient"] is True
