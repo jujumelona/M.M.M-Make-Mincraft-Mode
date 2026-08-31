@@ -32,10 +32,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Final V2.1 verification after full-surface production cleanup.
+          # Final V2.2 verification after full-surface production cleanup.
           test ! -e minecraft_mod_ai/llama_kv_correctness_contract.py
           test ! -e minecraft_mod_ai/llama_forced_tool_capability_contract.py
           test ! -e minecraft_mod_ai/llama_sse_error_contract.py
+          test ! -e minecraft_mod_ai/llama_prefill_telemetry_contract.py
           test -z "$(find .github/scripts -maxdepth 1 -type f -name 'worker05*' -print -quit)"
           test -z "$(find .github/workflows -maxdepth 1 -type f -name 'worker05*' ! -name 'worker05-final-gate-v2.yml' -print -quit)"
       - name: Compile runtime surface
@@ -44,16 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if audit_output="$(python .github/scripts/debug_repo_audit.py 2>&1)"; then
-            printf '%s\n' "$audit_output"
-          else
-            printf '%s\n' "$audit_output"
-            expected=$'STATIC DEBUG AUDIT FAILED\nTRANSIENT_WORKFLOW_FORBIDDEN .github/workflows/worker06-finalize-once.yml'
-            if [[ "$audit_output" != "$expected" ]]; then
-              exit 1
-            fi
-            echo 'Worker05 gate: isolated known Worker06 transient-workflow audit failure.'
-          fi
+          python .github/scripts/debug_repo_audit.py
       - name: Lint complete Worker05 ownership surface
         shell: bash
         run: |
@@ -76,7 +68,6 @@ jobs:
             minecraft_mod_ai/progress_aware_tool_loop.py \
             minecraft_mod_ai/runtime_bootstrap.py \
             minecraft_mod_ai/llama_sse_protocol.py \
-            minecraft_mod_ai/llama_prefill_telemetry_contract.py \
             tests/test_llama_*.py \
             tests/test_agent_context_window_contract.py \
             tests/test_agent_tool_round_policy.py
