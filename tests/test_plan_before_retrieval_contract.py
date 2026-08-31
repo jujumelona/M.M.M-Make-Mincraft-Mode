@@ -15,17 +15,33 @@ from minecraft_mod_ai.evidence_first_planning import build_request_catalog
 from minecraft_mod_ai.game_design import GameDesignPlanner
 
 
-def _design() -> dict[str, object]:
+def _design(catalog: dict[str, object]) -> dict[str, object]:
+    raw_requirements = catalog.get("requirements", [])
+    requirement_ids = [
+        str(item.get("requirement_id") or "")
+        for item in raw_requirements
+        if isinstance(item, dict) and str(item.get("requirement_id") or "")
+    ]
     return {
         "title": "Plan First",
         "pitch": "Build the authored gameplay requirement.",
-        "core_loop": [],
-        "progression": [],
+        "core_loop": ["Exercise the authored gameplay behavior."],
+        "progression": ["Preserve the authored requirement through implementation."],
         "combat": {},
         "mod_context": {},
-        "modules": [],
+        "modules": [
+            {
+                "plugin_id": "authored_behavior",
+                "status": "custom",
+                "reason": "Own the exact authored gameplay behavior.",
+                "requirement_refs": requirement_ids,
+                "implementation_obligations": [
+                    "Implement the approved observable behavior without changing scope."
+                ],
+            }
+        ],
         "assets": [],
-        "acceptance_tests": [],
+        "acceptance_tests": ["The approved authored behavior is observable in Minecraft."],
     }
 
 
@@ -78,7 +94,7 @@ def test_installed_platform_search_consumes_authoritative_plan_first(
     monkeypatch.setattr(
         game_design,
         "_generate_game_design_once",
-        lambda *_args, **_kwargs: _design(),
+        lambda *_args, **_kwargs: _design(authoritative),
     )
 
     def resolve_platform(_prompt: str, *, design: dict[str, object], **_kwargs: object):
