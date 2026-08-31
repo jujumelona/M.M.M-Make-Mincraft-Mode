@@ -189,7 +189,7 @@ def payload_input_token_estimate(payload: Mapping[str, Any]) -> int:
             separators=(",", ":"),
             default=str,
         ).encode("utf-8")
-    except Exception:
+    except (TypeError, ValueError, OverflowError, RecursionError):
         return 0
     return max(
         0,

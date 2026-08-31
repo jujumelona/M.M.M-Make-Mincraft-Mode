@@ -5,8 +5,8 @@ import pytest
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
 from minecraft_mod_ai.llama_completion_liveness_contract import (
     LlamaSemanticProgressTimeout,
-    _SemanticProgressWatchdog,
     _semantic_progress_from_sse_line,
+    _SemanticProgressWatchdog,
 )
 
 
@@ -101,8 +101,6 @@ def test_runtime_uses_semantic_sse_owner_and_disables_slot_poll_reporter() -> No
         "_mmm_semantic_progress_client_v1",
         False,
     )
-    assert getattr(
-        stream_contract._native_tool_liveness_reporter,
-        "_mmm_no_slot_poll_completion_liveness_v1",
-        False,
-    )
+    assert not hasattr(stream_contract, "_native_tool_liveness_reporter")
+    assert not hasattr(stream_contract, "_probe_native_tool_progress")
+    assert not hasattr(stream_contract, "_slot_progress_from_payload")

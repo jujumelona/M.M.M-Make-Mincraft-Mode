@@ -253,7 +253,7 @@ def _install_nonfatal_prefill_calibration(llama_cpp_module: Any) -> None:
             return ""
         try:
             return str(original_calibration(server_url, original) or "")
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional prefill calibration must not block inference
             return ""
 
     safe_calibration.__wrapped__ = original_calibration  # type: ignore[attr-defined]
@@ -294,13 +294,13 @@ def install(llama_cpp_module: Any) -> None:
             raise RuntimeError("native llama-server returned no completion choice")
         choice = choices[0]
         if not isinstance(choice, Mapping):
-            raise RuntimeError("native llama-server returned an invalid completion choice")
+            raise TypeError("native llama-server returned an invalid completion choice")
         finish_reason = str(choice.get("finish_reason", "") or "").strip().lower()
         if finish_reason == "length":
             raise _length_error(data, payload)
         message = choice.get("message")
         if not isinstance(message, Mapping):
-            raise RuntimeError("native llama-server returned no assistant message")
+            raise TypeError("native llama-server returned no assistant message")
         return message
 
     llama_cpp_module._completion_message = completion_message

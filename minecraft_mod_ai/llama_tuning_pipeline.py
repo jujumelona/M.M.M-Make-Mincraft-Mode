@@ -304,7 +304,7 @@ class NativeLlamaTuningPipeline:
             install_kernel_autotune(self.autotune, self.runtime_tuning)
             try:
                 hardware = str(self.autotune._hardware_identity()).casefold()
-            except Exception:
+            except Exception:  # noqa: BLE001 - optional hardware identity must not block portable tuning
                 hardware = ""
             if "t4" not in hardware:
                 self.runtime_tuning._ubatch_candidates = original_ubatch_candidates

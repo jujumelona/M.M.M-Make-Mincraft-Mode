@@ -11,8 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import threading
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -35,7 +33,6 @@ from .qwen_tool_parser import (
 
 _DEFAULT_HTTPX_POST = httpx.post
 _DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
-_DEFAULT_COMPLETION_HEARTBEAT_SECONDS = 15.0
 _REASONING_CONTINUATION = (
     "Continue from the reasoning above and complete this same assistant turn now. "
     "Call an available tool if evidence or an action is required; otherwise return "
@@ -339,7 +336,7 @@ def _calibrate_assistant_prefill_generation_prompt(
         raise RuntimeError("assistant-prefill calibration request was rejected")
     data = response.json()
     if not isinstance(data, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned invalid JSON")
+        raise TypeError("assistant-prefill calibration returned invalid JSON")
     usage = data.get("usage")
     if not isinstance(usage, Mapping) or usage.get("completion_tokens") != 0:
         raise RuntimeError("assistant-prefill calibration generated model tokens")
@@ -348,10 +345,10 @@ def _calibrate_assistant_prefill_generation_prompt(
         raise RuntimeError("assistant-prefill calibration returned invalid choices")
     choice = choices[0]
     if not isinstance(choice, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned an invalid choice")
+        raise TypeError("assistant-prefill calibration returned an invalid choice")
     message = choice.get("message")
     if not isinstance(message, Mapping):
-        raise RuntimeError("assistant-prefill calibration returned no message")
+        raise TypeError("assistant-prefill calibration returned no message")
     if message.get("tool_calls"):
         raise RuntimeError("assistant-prefill calibration returned a tool call")
     if message.get("reasoning_content") or message.get("reasoning"):
@@ -694,7 +691,7 @@ def _tool_schema_map(
     for schema in schemas:
         function = schema.get("function")
         if not isinstance(function, Mapping):
-            raise RuntimeError("tool schema lacks function metadata")
+            raise TypeError("tool schema lacks function metadata")
         name = str(function.get("name", "")).strip()
         if not name:
             raise RuntimeError("tool schema lacks a function name")
@@ -724,7 +721,7 @@ def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall])
     if isinstance(choice, Mapping):
         function = choice.get("function")
         if not isinstance(function, Mapping):
-            raise RuntimeError("named tool_choice lacks function metadata")
+            raise TypeError("named tool_choice lacks function metadata")
         expected = str(function.get("name", "")).strip()
         if not expected:
             raise RuntimeError("named tool_choice lacks a function name")
@@ -783,7 +780,7 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
         raise RuntimeError("native llama-server returned no completion choice")
     choice = choices[0]
     if not isinstance(choice, Mapping):
-        raise RuntimeError("native llama-server returned an invalid completion choice")
+        raise TypeError("native llama-server returned an invalid completion choice")
     finish_reason = str(choice.get("finish_reason", "") or "").strip().lower()
     if finish_reason == "length":
         raise RuntimeError(
@@ -792,7 +789,7 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
         )
     message = choice.get("message")
     if not isinstance(message, Mapping):
-        raise RuntimeError("native llama-server returned no assistant message")
+        raise TypeError("native llama-server returned no assistant message")
     return message
 
 
@@ -834,12 +831,6 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         "MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS",
         _DEFAULT_COMPLETION_TIMEOUT_SECONDS,
     )
-    heartbeat_seconds = _positive_env_float(
-        "MMM_LLAMA_COMPLETION_HEARTBEAT_SECONDS",
-        _DEFAULT_COMPLETION_HEARTBEAT_SECONDS,
-    )
-    started = time.monotonic()
-    stop = threading.Event()
     input_chars = _payload_content_chars(payload)
     max_tokens = payload.get("max_tokens", "?")
     tool_count = len(payload.get("tools", ()) or ())
@@ -853,24 +844,6 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         flush=True,
     )
 
-    def report_pending() -> None:
-        while not stop.wait(heartbeat_seconds):
-            print(
-                "llama server: completion pending",
-                f" elapsed={time.monotonic() - started:.1f}s",
-                f" input_chars={input_chars}",
-                f" max_tokens={max_tokens}",
-                f" tools={tool_count}",
-                sep="",
-                flush=True,
-            )
-
-    reporter = threading.Thread(
-        target=report_pending,
-        name="mmm-llama-completion-liveness",
-        daemon=True,
-    )
-    reporter.start()
     timeout = httpx.Timeout(connect=30.0, read=read_timeout, write=30.0, pool=30.0)
     try:
         if httpx.post is not _DEFAULT_HTTPX_POST:
@@ -883,15 +856,12 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
             "native llama-server completion made no readable progress for "
             f"{read_timeout:.0f}s"
         ) from exc
-    finally:
-        stop.set()
-        reporter.join(timeout=0.2)
 
 
 def _bounded_response_body(response: Any, *, limit: int = 1600) -> str:
     try:
         body = str(response.text)
-    except Exception:
+    except (AttributeError, httpx.HTTPError, RuntimeError, TypeError, ValueError):
         return ""
     compact = " ".join(body.split())
     return compact if len(compact) <= limit else compact[:limit] + "..."

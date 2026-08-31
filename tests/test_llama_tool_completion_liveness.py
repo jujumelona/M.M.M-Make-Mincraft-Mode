@@ -19,35 +19,11 @@ class _ImmediateRawClient:
         return self.response
 
 
-class _JsonResponse:
-    def __init__(self, status_code: int, payload: Any) -> None:
-        self.status_code = status_code
-        self._payload = payload
-
-    def json(self) -> Any:
-        return self._payload
-
-
-class _ProbeClient:
-    def __init__(self, slots: Any) -> None:
-        self.slots = slots
-        self.urls: list[str] = []
-
-    def get(self, url: str, *, timeout: float) -> _JsonResponse:
-        assert timeout > 0
-        self.urls.append(url)
-        if url.endswith("/slots"):
-            return _JsonResponse(200, self.slots)
-        return _JsonResponse(200, {"status": "ok"})
-
-
 def _timeout(read: float) -> httpx.Timeout:
     return httpx.Timeout(connect=30.0, read=read, write=30.0, pool=30.0)
 
 
-def test_native_tool_turn_enforces_bounded_idle_read_timeout(
-    monkeypatch,
-) -> None:
+def test_native_tool_turn_enforces_bounded_idle_read_timeout(monkeypatch) -> None:
     raw = _ImmediateRawClient()
     client = contract._StreamingCompletionClient(raw)
     monkeypatch.delenv("MMM_LLAMA_TOOL_IDLE_TIMEOUT_SECONDS", raising=False)
@@ -78,49 +54,7 @@ def test_explicit_tool_completion_timeout_is_honored(monkeypatch) -> None:
     assert raw.timeout.read == 75.0
 
 
-def test_slot_progress_reports_only_counters_not_generated_text() -> None:
-    snapshot = contract._slot_progress_from_payload(
-        [
-            {
-                "id": 0,
-                "is_processing": True,
-                "n_prompt_tokens_processed": 4096,
-                "n_decoded": 73,
-                "generated": "secret model output must not be logged",
-            },
-            {"id": 1, "is_processing": False, "n_decoded": 999},
-        ]
-    )
-
-    assert snapshot == {
-        "processing_slots": 1,
-        "decoded": 73,
-        "prompt_processed": 4096,
-    }
-    assert "generated" not in snapshot
-
-
-def test_live_probe_uses_origin_slots_endpoint() -> None:
-    client = _ProbeClient(
-        [
-            {
-                "id": 0,
-                "is_processing": True,
-                "n_prompt_tokens_processed": 4550,
-                "n_decoded": 128,
-            }
-        ]
-    )
-
-    snapshot = contract._probe_native_tool_progress(
-        client,
-        "http://127.0.0.1:8080/v1/chat/completions",
-    )
-
-    assert snapshot == {
-        "state": "slots",
-        "processing_slots": 1,
-        "decoded": 128,
-        "prompt_processed": 4550,
-    }
-    assert client.urls == ["http://127.0.0.1:8080/slots"]
+def test_slot_poll_liveness_api_stays_removed() -> None:
+    assert not hasattr(contract, "_native_tool_liveness_reporter")
+    assert not hasattr(contract, "_probe_native_tool_progress")
+    assert not hasattr(contract, "_slot_progress_from_payload")

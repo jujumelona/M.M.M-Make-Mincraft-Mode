@@ -446,9 +446,12 @@ def _process_is_llama_server_on_port(pid: int, port: int) -> bool:
     for index, value in enumerate(args):
         if value.startswith("--port=") and value.partition("=")[2] == target:
             return True
-        if value in {"--port", "-p"} and index + 1 < len(args):
-            if args[index + 1] == target:
-                return True
+        if (
+            value in {"--port", "-p"}
+            and index + 1 < len(args)
+            and args[index + 1] == target
+        ):
+            return True
     return False
 
 

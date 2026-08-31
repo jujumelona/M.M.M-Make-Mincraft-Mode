@@ -10,9 +10,9 @@ from minecraft_mod_ai.llama_stream_efficiency_contract import _StreamingCompleti
 
 class _StreamResponse:
     status_code = 200
-    headers: dict[str, str] = {}
 
     def __init__(self, lines: list[str]) -> None:
+        self.headers: dict[str, str] = {}
         self._lines = lines
 
     def __enter__(self):

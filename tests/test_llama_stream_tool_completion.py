@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 import httpx
 
@@ -15,10 +16,15 @@ class _FakeStreamResponse:
         self._lines = lines
         self._body = body
 
-    def __enter__(self) -> _FakeStreamResponse:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         return None
 
     def iter_lines(self):

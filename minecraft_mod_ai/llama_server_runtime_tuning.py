@@ -78,7 +78,7 @@ def _attach_startup_log(process: Any) -> None:
                 if isinstance(chunk, str):
                     chunk = chunk.encode("utf-8", errors="replace")
                 buffer.append(chunk)
-        except Exception:
+        except (OSError, ValueError):
             return
 
     reader = threading.Thread(
@@ -189,7 +189,7 @@ def _setup_receipt() -> Any:
         return {}
     try:
         return json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
         return {}
 
 
@@ -215,8 +215,8 @@ def _runtime_resources() -> RuntimeResources:
         gpu_free = max(0, free_mib) * _MIB
         gpu_total = max(0, total_mib) * _MIB
         gpu_probe_succeeded = True
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        gpu_probe_succeeded = False
 
     ram_available = 0
     ram_probe_succeeded = False
@@ -226,8 +226,8 @@ def _runtime_resources() -> RuntimeResources:
                 ram_available = max(0, int(line.split()[1])) * 1024
                 ram_probe_succeeded = True
                 break
-    except Exception:
-        pass
+    except (OSError, UnicodeError, IndexError, ValueError):
+        ram_probe_succeeded = False
 
     gpu_free_override = _optional_env_int("MMM_LLAMA_GPU_FREE_MIB")
     gpu_total_override = _optional_env_int("MMM_LLAMA_GPU_TOTAL_MIB")
@@ -787,7 +787,7 @@ def _parallel_probe(
             prompt_tps=(sum(prompt_values) / len(prompt_values) if prompt_values else 0.0),
             elapsed_seconds=elapsed,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - benchmark failures become comparable ProbeResults
         return autotune_module.ProbeResult(
             variant=variant,
             ok=False,
@@ -813,7 +813,7 @@ def _run_parallel_stage(
     minimum_gain: float,
     forced_parallel: int | None = None,
 ) -> tuple[ServerVariant, Any | None, Any | None, tuple[Any, ...]]:
-    values = tuple(sorted(set(int(value) for value in parallel_values)))
+    values = tuple(sorted({int(value) for value in parallel_values}))
     if not any(value > 1 for value in values):
         return selected, None, None, ()
     root_name = selected.name.split("|p", 1)[0]
@@ -1293,7 +1293,7 @@ def install(autotune_module: Any) -> None:
                 try:
                     url = current_launch(binary, model_path, config, active)
                     break
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - isolate sequential launch candidates
                     failures.append(f"p{slots}: {type(exc).__name__}: {exc}")
             if not url:
                 message = (
@@ -1404,7 +1404,7 @@ def install(autotune_module: Any) -> None:
                         receipt = json.loads(
                             os.environ.get("MMM_LLAMA_RUNTIME_RECEIPT", "")
                         )
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         receipt = None
                 receipt_sha = (
                     str(receipt.get("selection_inputs_sha256", ""))

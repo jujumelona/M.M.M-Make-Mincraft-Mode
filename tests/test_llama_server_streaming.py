@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_runtime
 from minecraft_mod_ai.llama_server_hardware_policy import _strict_server_generate
@@ -104,9 +105,5 @@ def test_local_native_stream_requires_done_marker(monkeypatch) -> None:
         response_format="text",
     )
 
-    try:
+    with pytest.raises(RuntimeError, match=r"stream ended before the \[DONE\] marker"):
         _strict_server_generate(adapter, request, "http://127.0.0.1:8910/v1")
-    except Exception as exc:
-        assert "stream ended before the [DONE] marker" in str(exc)
-    else:
-        raise AssertionError("truncated SSE stream must fail closed")
