@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from minecraft_mod_ai import agentic_research_game_design as design
@@ -13,16 +11,16 @@ from minecraft_mod_ai.planner_design_readiness_contract import (
 from minecraft_mod_ai.spec import SpecValidationError
 
 
-class _RepairRouter:
-    def __init__(self, responses: list[dict[str, object]]) -> None:
+class _TextRouter:
+    def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
         self.calls: list[dict[str, object]] = []
 
     def generate_text(self, role: str, messages: list[dict[str, str]], **kwargs: object) -> str:
         self.calls.append({"role": role, "messages": messages, "kwargs": kwargs})
         if not self.responses:
-            raise AssertionError("unexpected extra planner repair call")
-        return json.dumps(self.responses.pop(0), ensure_ascii=False)
+            raise AssertionError("unexpected extra planner call")
+        return self.responses.pop(0)
 
 
 def _catalog(prompt: str, *requirement_ids: str) -> dict[str, object]:
@@ -46,18 +44,10 @@ def _catalog(prompt: str, *requirement_ids: str) -> dict[str, object]:
     }
 
 
-def _module_properties() -> dict[str, object]:
-    for section_id, _fields, properties in design._SECTION_SPECS:
-        if section_id == "modules_and_assets":
-            return properties
-    raise AssertionError("modules_and_assets section not found")
-
-
 def test_runtime_installs_worker03_design_readiness_contract() -> None:
     assert getattr(design._generate_section, "__mmm_requirement_design_context__", False)
-    # Deep-design execution is intentionally installed after Worker 03 and wraps the
-    # requirement-aware message owner. Verify both layers rather than requiring the
-    # outermost callable to duplicate the inner owner's marker.
+    # Deep-design execution remains the outer prompt owner, while its wrapped owner keeps
+    # the requirement-readiness marker. The compatibility layer must preserve both markers.
     assert getattr(design._section_messages, "__mmm_deep_design_section_prompt__", False)
     assert getattr(
         getattr(design._section_messages, "__wrapped__", None),
@@ -72,28 +62,16 @@ def test_runtime_installs_worker03_design_readiness_contract() -> None:
     assert getattr(evidence._semantic_spans, "__mmm_crlf_lossless__", False)
 
 
-def test_empty_first_module_section_is_rejected_and_repaired() -> None:
+def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     prompt = "플레이어가 수정 조각을 모으고 포탈을 연다."
     requirement_id = "req_crystal_portal"
-    router = _RepairRouter(
+    router = _TextRouter(
         [
-            {"section": {"modules": [], "assets": []}},
-            {
-                "section": {
-                    "modules": [
-                        {
-                            "plugin_id": "crystal_portal",
-                            "status": "custom",
-                            "reason": "수정 수집과 포탈 진행을 구현한다.",
-                            "requirement_refs": [requirement_id],
-                            "implementation_obligations": [
-                                "수정 조각 수집 상태와 포탈 해금 조건을 구현한다."
-                            ],
-                        }
-                    ],
-                    "assets": [],
-                }
-            },
+            """## modules
+- crystal_portal | custom | 수정 수집과 포탈 진행을 구현한다. | req_crystal_portal | 수정 조각 수집 상태를 저장한다; 포탈 해금 조건을 구현한다
+## assets
+- none
+"""
         ]
     )
     token = request_guard._ACTIVE_REQUEST_CATALOG.set(
@@ -105,7 +83,6 @@ def test_empty_first_module_section_is_rejected_and_repaired() -> None:
             prompt=prompt,
             section_id="modules_and_assets",
             fields=("modules", "assets"),
-            properties=_module_properties(),
             research={},
             media_paths=(),
             trace_metadata={"test": "worker03"},
@@ -113,13 +90,50 @@ def test_empty_first_module_section_is_rejected_and_repaired() -> None:
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
 
-    assert len(router.calls) == 2
+    assert len(router.calls) == 1
+    call = router.calls[0]
+    kwargs = call["kwargs"]
+    assert kwargs["response_format"] == "text"
+    assert kwargs["response_schema"] is None
+    assert kwargs["enable_tools"] is False
+    rendered = "\n".join(str(message["content"]) for message in call["messages"])
+    assert "APPROVED REQUIREMENTS (HOST AUTHORITY)" in rendered
+    assert requirement_id in rendered
+    assert "requirement_refs" in rendered
     assert section["modules"][0]["requirement_refs"] == [requirement_id]
-    first_payload = json.loads(router.calls[0]["messages"][1]["content"])
-    assert first_payload["approved_requirements"][0]["requirement_id"] == requirement_id
-    second_payload = json.loads(router.calls[1]["messages"][1]["content"])
-    assert "modules must be non-empty" in second_payload["validator_error"]
-    assert second_payload["previous_candidate"] == {"modules": [], "assets": []}
+    assert section["modules"][0]["implementation_obligations"] == [
+        "수정 조각 수집 상태를 저장한다",
+        "포탈 해금 조건을 구현한다",
+    ]
+
+
+def test_missing_requirement_module_fails_closed_without_model_repair_loop() -> None:
+    prompt = "플레이어가 수정 조각을 모으고 포탈을 연다."
+    requirement_id = "req_crystal_portal"
+    router = _TextRouter(["""## modules
+- none
+## assets
+- none
+"""])
+    token = request_guard._ACTIVE_REQUEST_CATALOG.set(
+        (prompt, _catalog(prompt, requirement_id))
+    )
+    try:
+        section = design._generate_section(
+            router,
+            prompt=prompt,
+            section_id="modules_and_assets",
+            fields=("modules", "assets"),
+            research={},
+            media_paths=(),
+            trace_metadata={"test": "worker03-empty"},
+        )
+        with pytest.raises(SpecValidationError, match="modules are empty"):
+            _validate_design_coverage(section, _catalog(prompt, requirement_id)["requirements"])
+    finally:
+        request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
+
+    assert len(router.calls) == 1
 
 
 def test_missing_required_design_field_is_not_silently_synthesized() -> None:
