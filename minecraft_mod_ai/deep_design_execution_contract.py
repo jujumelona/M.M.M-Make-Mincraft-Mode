@@ -6,10 +6,13 @@ The authored request catalog remains immutable. Game-design subsystems are deriv
 implementation obligations beneath those authored requirements: they may refine donor
 search and coder task granularity, but they cannot become new public requirements.
 
-This contract also restores the intended pre-design research path without replacing
+This contract restores the intended pre-design research path without replacing
 ``GameDesignPlanner.plan``. The host-owned plan method continues to own inventory binding,
 request freezing, pre-retrieval planning, target/reuse selection, and proposal construction;
 only its bounded design-generation primitive is replaced.
+
+Game-design prompt formatting and Markdown parsing are deliberately not owned here. Those
+belong exclusively to ``agentic_research_game_design``.
 """
 
 import hashlib
@@ -25,7 +28,6 @@ from . import evidence_first_planning as _evidence
 _INSTALLED = False
 _GENERATOR_MARKER = "__mmm_research_first_design_generator__"
 _SHARDED_MARKER = "__mmm_research_first_sharded_barrier__"
-_SECTION_MARKER = "__mmm_deep_design_section_prompt__"
 _STEPS_MARKER = "__mmm_design_leaf_semantic_steps__"
 _TASKS_MARKER = "__mmm_design_leaf_reuse_binding__"
 _COMPILE_MARKER = "__mmm_design_leaf_evidence_plan__"
@@ -79,49 +81,6 @@ def _strings(value: Any) -> tuple[str, ...]:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _deep_section_messages(
-    *,
-    prompt: str,
-    section_id: str,
-    fields: Sequence[str],
-    research: Mapping[str, Any],
-    prior_error: str,
-    prior_candidate: Mapping[str, Any] | None,
-) -> list[dict[str, str]]:
-    original = _deep_section_messages.__wrapped__
-    messages = original(
-        prompt=prompt,
-        section_id=section_id,
-        fields=fields,
-        research=research,
-        prior_error=prior_error,
-        prior_candidate=prior_candidate,
-    )
-    if not messages:
-        return messages
-    output = [dict(message) for message in messages]
-    system = output[0]
-    system["content"] = (
-        str(system.get("content") or "")
-        + "\n\nPRODUCTION DEPTH: finish the game/mod design before implementation search. "
-        "Decompose every requested mechanic into the smallest meaningful subsystems "
-        "that can be independently implemented, tested, and searched for reuse. Split "
-        "different player verbs, resources, state transitions, purchase/assembly steps, "
-        "upgrade gates, travel phases, encounters, combat outcomes, world interactions, "
-        "persistence-visible state, networking/client surfaces, and integration rules when "
-        "they can fail independently. The modules array is the implementation-leaf index: "
-        "every implementation-bearing core-loop/progression/combat/mod-context behavior "
-        "must have a concrete modules entry with a stable snake_case plugin_id and a reason "
-        "that states its owned behavior. Do not collapse an epic such as planet interaction, "
-        "ship construction, trading, or progression into one generic module. Use as many "
-        "leaf modules as the authored design genuinely needs; never add unrelated features. "
-        "Use the supplied research evidence for Minecraft/Fabric facts and unresolved "
-        "assumptions, but do not claim a third-party donor was selected here: donor/reuse "
-        "selection happens only after this design is frozen."
-    )
-    return output
 
 
 def _research_first_generate_once(
@@ -180,7 +139,9 @@ def _sharded_research_ledger(
     page_research: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     pages: list[dict[str, Any]] = []
-    for page_index, (page_text, research) in enumerate(zip(request_pages, page_research, strict=True)):
+    for page_index, (page_text, research) in enumerate(
+        zip(request_pages, page_research, strict=True)
+    ):
         pages.append(
             {
                 "page_index": page_index,
@@ -208,7 +169,9 @@ def _sharded_research_ledger(
         separators=(",", ":"),
         default=str,
     )
-    ledger["research_sha256"] = "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    ledger["research_sha256"] = (
+        "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    )
     return ledger
 
 
@@ -291,7 +254,9 @@ def _indexed_value(
     index: int,
 ) -> Any:
     values = game_design.get(field)
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+    if not isinstance(values, Sequence) or isinstance(
+        values, (str, bytes, bytearray)
+    ):
         return None
     return values[index] if 0 <= index < len(values) else None
 
@@ -611,14 +576,7 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    from . import agentic_research_game_design as agentic
     from . import game_design
-
-    original_messages = agentic._section_messages
-    if not getattr(original_messages, _SECTION_MARKER, False):
-        _deep_section_messages.__wrapped__ = original_messages  # type: ignore[attr-defined]
-        setattr(_deep_section_messages, _SECTION_MARKER, True)
-        agentic._section_messages = _deep_section_messages
 
     original_generator = game_design._generate_game_design_once
     if not getattr(original_generator, _GENERATOR_MARKER, False):
