@@ -81,7 +81,9 @@ def _commit_success(
 
     # Keep the claim fence live while publishing the shared index and durable success.
     # This closes the window where a reclaimed attempt could become current between an
-    # index check and the task-state commit.
+    # index check and the task-state commit. Persist the independent receipt hash in the
+    # same transaction; otherwise the receipt-integrity owner must invalidate the
+    # freshly committed success on the very next read.
     with ledger._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
@@ -125,7 +127,7 @@ def _commit_success(
         cursor = connection.execute(
             """
             UPDATE tasks
-            SET state = ?, output_hash = ?, receipt_json = ?,
+            SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,
                 lease_owner = NULL, lease_until = NULL, error = NULL,
                 updated_at = ?
             WHERE node_id = ? AND state = ? AND attempt = ? AND lease_owner = ?
@@ -134,6 +136,7 @@ def _commit_success(
                 work_graph_module.WorkState.SUCCEEDED.value,
                 digest,
                 rendered,
+                digest,
                 time.time(),
                 node_id,
                 work_graph_module.WorkState.RUNNING.value,
