@@ -1,0 +1,38 @@
+name: Worker13 Final Reconcile
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/worker13-final-reconcile.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply final reconcile patch
+        run: python .github/scripts/worker13_final_reconcile.py
+      - name: Validate patched Python syntax
+        run: python -m compileall -q minecraft_mod_ai tests .github/scripts/worker13_final_reconcile.py
+      - name: Commit reconciled production and tests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/reuse_build_verifier.py tests/test_agentic_research_game_design.py tests/test_canonical_capability_ontology_and_reuse_proof.py tests/test_worker13_reuse_build_verifier_target_authority.py
+          if git diff --cached --quiet; then
+            echo "Worker13 reconcile produced no changes" >&2
+            exit 1
+          fi
+          git commit -m "fix: reconcile final reuse proof contracts"
+          git push origin HEAD:main
