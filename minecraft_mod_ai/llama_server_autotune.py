@@ -22,6 +22,7 @@ _MANAGED_KEY: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
 _BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v2-compact"
 _BENCHMARK_OUTPUT_TOKENS = 96
+_SERVER_STDERR_TAIL_BYTES = 8 * 1024
 
 
 @dataclass(frozen=True)
@@ -396,6 +397,55 @@ def _variant_args(variant: ServerVariant) -> list[str]:
     ]
 
 
+def _drain_server_stderr(process: subprocess.Popen[bytes]) -> None:
+    stream = getattr(process, "stderr", None)
+    if stream is None:
+        return
+    tail = getattr(process, "_mmm_stderr_tail", None)
+    lock = getattr(process, "_mmm_stderr_tail_lock", None)
+    if not isinstance(tail, bytearray) or lock is None:
+        return
+    try:
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                break
+            with lock:
+                tail.extend(chunk)
+                overflow = len(tail) - _SERVER_STDERR_TAIL_BYTES
+                if overflow > 0:
+                    del tail[:overflow]
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never affect server life
+        setattr(process, "_mmm_stderr_reader_error", type(exc).__name__)
+
+
+def _server_stderr_tail(
+    process: subprocess.Popen[bytes] | Any | None,
+    *,
+    limit: int = 4096,
+) -> str:
+    """Return a whitespace-compacted bounded stderr tail for one managed server."""
+
+    if process is None:
+        return ""
+    tail = getattr(process, "_mmm_stderr_tail", None)
+    lock = getattr(process, "_mmm_stderr_tail_lock", None)
+    if not isinstance(tail, bytearray):
+        return ""
+    if lock is None:
+        payload = bytes(tail)
+    else:
+        try:
+            with lock:
+                payload = bytes(tail)
+        except Exception:
+            payload = bytes(tail)
+    if limit > 0 and len(payload) > limit:
+        payload = payload[-limit:]
+    text = payload.decode("utf-8", errors="replace")
+    return " ".join(text.split())
+
+
 def _start_server(
     binary: str,
     model_path: str,
@@ -404,23 +454,50 @@ def _start_server(
     port: int,
 ) -> subprocess.Popen[bytes]:
     debug = _env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
-    stream = None if debug else subprocess.DEVNULL
-    return subprocess.Popen(
+    if debug:
+        return subprocess.Popen(
+            _base_args(binary, model_path, config, port) + _variant_args(variant),
+            stdout=None,
+            stderr=None,
+        )
+
+    process = subprocess.Popen(
         _base_args(binary, model_path, config, port) + _variant_args(variant),
-        stdout=stream,
-        stderr=stream,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
+    setattr(process, "_mmm_stderr_tail", bytearray())
+    setattr(process, "_mmm_stderr_tail_lock", threading.Lock())
+    reader = threading.Thread(
+        target=_drain_server_stderr,
+        args=(process,),
+        name=f"mmm-llama-stderr-{getattr(process, 'pid', 'unknown')}",
+        daemon=True,
+    )
+    setattr(process, "_mmm_stderr_thread", reader)
+    reader.start()
+    return process
 
 
 def _stop_server(process: subprocess.Popen[bytes] | None) -> None:
-    if process is None or process.poll() is not None:
+    if process is None:
         return
-    process.terminate()
-    try:
-        process.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=10)
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+    reader = getattr(process, "_mmm_stderr_thread", None)
+    if isinstance(reader, threading.Thread) and reader is not threading.current_thread():
+        reader.join(timeout=1.0)
+    stream = getattr(process, "stderr", None)
+    if stream is not None:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def _wait_ready(process: subprocess.Popen[bytes], port: int) -> str:
@@ -432,7 +509,11 @@ def _wait_ready(process: subprocess.Popen[bytes], port: int) -> str:
     last_error = "server did not become ready"
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"llama-server exited with code {process.returncode}.")
+            tail = _server_stderr_tail(process)
+            detail = f" stderr_tail={tail}" if tail else ""
+            raise RuntimeError(
+                f"llama-server exited with code {process.returncode}.{detail}"
+            )
         try:
             response = httpx.get(f"{origin}/health", timeout=1.0)
             if response.status_code == 200:
@@ -441,6 +522,9 @@ def _wait_ready(process: subprocess.Popen[bytes], port: int) -> str:
         except Exception as exc:
             last_error = str(exc)
         time.sleep(0.25)
+    tail = _server_stderr_tail(process)
+    if tail:
+        last_error = f"{last_error}; stderr_tail={tail}"
     raise RuntimeError(last_error)
 
 
@@ -598,7 +682,7 @@ def _benchmark(
         selected=decision.selected,
         baseline_tps=decision.baseline_tps,
         selected_tps=decision.selected_tps,
-        speedup=decision.speedup,
+        speedup=decision.predicted_tps / baseline.predicted_tps,
         probes=decision.probes,
     )
 
@@ -743,6 +827,7 @@ __all__ = [
     "_probe_server",
     "_release_recoverable_attempt",
     "_server_binary",
+    "_server_stderr_tail",
     "_shutdown_managed_server",
     "_variant_args",
     "ensure_tuned_server",
