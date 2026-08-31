@@ -32,6 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Final V2.1 verification after full-surface production cleanup.
           test ! -e minecraft_mod_ai/llama_kv_correctness_contract.py
           test ! -e minecraft_mod_ai/llama_forced_tool_capability_contract.py
           test ! -e minecraft_mod_ai/llama_sse_error_contract.py
