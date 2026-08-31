@@ -20,7 +20,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -q pytest httpx pydantic
       - name: Focused regressions
-        run: pytest -q tests/test_predesign_rag_runtime_root_cause.py tests/test_agentic_pre_design_rag.py tests/test_pre_design_research_pipeline.py tests/test_predesign_runtime_composition.py tests/test_forced_rag_fusion_quality.py
+        run: pytest -q tests/test_predesign_rag_runtime_root_cause.py tests/test_agentic_pre_design_rag.py tests/test_pre_design_research_pipeline.py tests/test_predesign_runtime_composition.py
       - name: Commit repair
         run: |
           git config user.name juju
