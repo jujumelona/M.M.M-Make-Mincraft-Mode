@@ -1,0 +1,59 @@
+name: Worker 05 Shared Hardware Client V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/worker05-shared-hardware-client-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply persistent-client cleanup
+        run: python .github/scripts/worker05_shared_hardware_client_v1.py
+      - name: Verify worker05 runtime surface
+        run: |
+          python -m compileall -q minecraft_mod_ai
+          python .github/scripts/debug_repo_audit.py
+          ruff check minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_stream_efficiency_contract.py tests/test_llama_server_hardware_policy.py
+          pytest -q \
+            tests/test_llama_server_hardware_policy.py \
+            tests/test_llama_completion_liveness_contract.py \
+            tests/test_llama_kv_correctness_contract.py \
+            tests/test_llama_forced_tool_capability_contract.py \
+            tests/test_llama_context_safety_contract.py \
+            tests/test_agent_context_window_contract.py \
+            tests/test_agent_tool_round_policy.py \
+            tests/test_llama_sse_error_contract.py
+      - name: Commit verified production change
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf(llama): reuse persistent client for detailed telemetry'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git fetch origin main
+            git rebase origin/main
+            python -m compileall -q minecraft_mod_ai
+            python .github/scripts/debug_repo_audit.py
+            pytest -q tests/test_llama_server_hardware_policy.py tests/test_llama_completion_liveness_contract.py tests/test_llama_kv_correctness_contract.py tests/test_llama_forced_tool_capability_contract.py tests/test_llama_context_safety_contract.py tests/test_agent_context_window_contract.py tests/test_agent_tool_round_policy.py tests/test_llama_sse_error_contract.py
+          done
+          exit 1
