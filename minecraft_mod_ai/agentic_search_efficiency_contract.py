@@ -198,18 +198,19 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
                 if root is not None
                 else []
             )
+            router = getattr(self, "router", None)
 
             config = None
             if read_search_mode() != "off":
                 config = prime_native_repair_slots(
-                    self.router,
+                    router,
                     evidence=evidence,
                     context=context,
                 )
             width = agentic_module._repair_candidate_count(self, evidence, memory)
-            workers = parallel_workers(self.router, width, config)
+            workers = parallel_workers(router, width, config)
             generated: list[tuple[int, list[dict[str, Any]]]] = []
-            errors: list[BaseException | None] = [None] * width
+            errors: list[Exception | None] = [None] * width
 
             def solve(candidate_index: int) -> list[dict[str, Any]]:
                 candidate_context = copy.deepcopy(context)
@@ -235,7 +236,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
                 for candidate_index in range(width):
                     try:
                         generated.append((candidate_index, solve(candidate_index)))
-                    except BaseException as exc:
+                    except Exception as exc:
                         errors[candidate_index] = exc
             else:
                 contexts = [copy_context() for _ in range(width)]
@@ -250,7 +251,7 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
                     for candidate_index, future in enumerate(futures):
                         try:
                             generated.append((candidate_index, future.result()))
-                        except BaseException as exc:
+                        except Exception as exc:
                             errors[candidate_index] = exc
 
             if not generated:
