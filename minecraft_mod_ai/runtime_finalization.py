@@ -4,9 +4,8 @@ from __future__ import annotations
 
 ``runtime_bootstrap.initialize_runtime`` installs the ordered core/late/post-bootstrap
 contracts. Integrations that intentionally happen only *after* that sequence live here.
-This module also owns the final product-policy layer that used to be assembled from package
-``__init__``. Keeping all child-contract composition here makes import order explicit and
-prevents package initialization from becoming a second, untracked patch chain.
+Request semantics and retrieval-query planning are native calls owned by
+``planning_authority`` and therefore are deliberately absent from this mutation phase.
 
 Late finalization is process-lifetime composition just like bootstrap. If any installer
 fails after mutating a callable, replaying the prefix is not transactionally safe. A
@@ -75,7 +74,6 @@ def finalize_runtime() -> None:
             install as install_evidence_first_pipeline,
         )
         from .evidence_obligation_contract import install_evidence_obligation_contract
-        from .evidence_request_guard import install_evidence_request_guard
         from .evidence_task_receipt_contract import (
             install as install_evidence_task_receipts,
         )
@@ -143,8 +141,6 @@ def finalize_runtime() -> None:
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
         from .runtime_wrapper_integrity import verify_installed_wrappers
-        from .semantic_requirement_authority import install_semantic_requirement_authority
-        from .semantic_single_pass_contract import install as install_semantic_single_pass
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .target_grounding_contract import install_target_grounding_contract
         from .task_artifact_contract import install_task_artifact_contract
@@ -193,20 +189,15 @@ def finalize_runtime() -> None:
 
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
-        install_evidence_request_guard()
-        # Install the single-pass public authority first so the downstream authority
-        # binding captures that exact callable rather than a stale pre-contract reference.
-        install_semantic_single_pass()
-        install_semantic_requirement_authority()
+        # Request semantics and retrieval-query planning are explicit calls from
+        # GameDesignPlanner via planning_authority. Do not rebind them here.
         install_planner_graph_integrity()
         install_planner_design_readiness()
-        # Graph expansion runs before retrieval. Rebind every design facet to explicit or
-        # conservative authored requirement ownership before deep-design task compilation.
         install_planner_requirement_traceability()
         install_deep_design_execution()
         install_evidence_obligation_contract()
-        # The approved graph is now frozen and the obligation DAG owner is installed.
-        # Rebind stale import-by-value edges before any planning request can execute.
+        # This legacy integration still supplies central research/knowledge-plan views;
+        # its request-builder wrapper is no longer on the GameDesignPlanner live path.
         install_authored_scope_research()
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
@@ -227,7 +218,6 @@ def finalize_runtime() -> None:
             work_graph_module=work_graph,
         )
 
-        # Validate the runtime only after every late installer has mutated its owner.
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
             external_mcp_router_module=external_mcp_router,
