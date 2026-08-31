@@ -27,6 +27,7 @@ else:
 
 _OUTPUT_CHUNK_CHARS = 64 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 2400
+_XML_REDACTION_MARKER = "&lt;redacted&gt;"
 
 
 @dataclass(frozen=True)
@@ -252,8 +253,11 @@ def _remove_stale_outputs(log_path: Path, junit_path: Path) -> bool:
     return True
 
 
-def _redact_file(source: Path, destination: Path) -> None:
-    redactor = StreamingRedactor(_environment_secret_values())
+def _redact_file(source: Path, destination: Path, *, replacement: str = "<redacted>") -> None:
+    redactor = StreamingRedactor(
+        _environment_secret_values(),
+        replacement=replacement,
+    )
     with source.open("r", encoding="utf-8", errors="replace") as source_handle, destination.open(
         "w", encoding="utf-8", errors="replace"
     ) as destination_handle:
@@ -269,7 +273,7 @@ def _redact_file(source: Path, destination: Path) -> None:
             destination_handle.write(final)
 
 
-def _redact_file_in_place(path: Path) -> None:
+def _redact_file_in_place(path: Path, *, replacement: str = "<redacted>") -> None:
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -281,7 +285,7 @@ def _redact_file_in_place(path: Path) -> None:
             delete=False,
         ) as handle:
             temporary_path = Path(handle.name)
-        _redact_file(path, temporary_path)
+        _redact_file(path, temporary_path, replacement=replacement)
         temporary_path.replace(path)
         temporary_path = None
     finally:
@@ -289,7 +293,12 @@ def _redact_file_in_place(path: Path) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
-def _capture_pytest(command: list[str], log_path: Path, *, timeout_seconds: int) -> tuple[int | None, BaseException | None]:
+def _capture_pytest(
+    command: list[str],
+    log_path: Path,
+    *,
+    timeout_seconds: int,
+) -> tuple[int | None, BaseException | None]:
     temporary_path: Path | None = None
     try:
         log_path.write_text("", encoding="utf-8")
@@ -309,7 +318,7 @@ def _capture_pytest(command: list[str], log_path: Path, *, timeout_seconds: int)
                     stdout=raw_handle,
                     stderr=subprocess.STDOUT,
                     check=False,
-                    timeout=None if timeout_seconds <= 0 else timeout_seconds,
+                    timeout=timeout_seconds,
                 )
                 returncode: int | None = process.returncode
                 failure: BaseException | None = None
@@ -331,6 +340,17 @@ def main(argv: Iterable[str] | None = None) -> int:
                 operation="validate diagnostic outputs",
                 cause_type="OutputPathCollision",
                 cause="--log and --junit must refer to different files",
+                fallback="pytest was not started",
+                category=FailureCategory.INPUT,
+            )
+        )
+        return 2
+    if args.timeout_seconds <= 0:
+        print(
+            _render_internal_failure(
+                operation="validate pytest timeout",
+                cause_type="InvalidPytestTimeout",
+                cause=f"--timeout-seconds must be positive, got {args.timeout_seconds}",
                 fallback="pytest was not started",
                 category=FailureCategory.INPUT,
             )
@@ -399,7 +419,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.junit.is_file():
         try:
-            _redact_file_in_place(args.junit)
+            _redact_file_in_place(args.junit, replacement=_XML_REDACTION_MARKER)
         except OSError as exc:
             print(
                 _render_internal_failure(
