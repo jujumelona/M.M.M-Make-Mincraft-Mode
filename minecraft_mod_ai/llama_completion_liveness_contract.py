@@ -9,10 +9,17 @@ connection must not keep a stalled decode alive forever. A host watchdog therefo
 resets only on prompt processing, visible/reasoning/token/tool deltas, or terminal
 completion events. Current ``/slots`` decoding remains available for compatibility, but
 active completion liveness no longer polls ``/slots`` on the decode hot path.
+
+Every progress-aware request also owns a correlation id and emits a complete lifecycle:
+created -> accepted -> first semantic progress -> complete/failure -> finalized.  Failure
+records include the managed llama-server PID/exit status when MMM owns that process, so
+an accepted request can no longer disappear from the Python log without a boundary
+record while the Python process is still alive.
 """
 
 import json
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from functools import wraps
 from types import TracebackType
@@ -24,6 +31,7 @@ _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
 _ADAPTER_MARKER = "_mmm_single_progress_aware_completion_owner_v1"
 _CLIENT_INIT_MARKER = "_mmm_semantic_progress_client_v1"
+_REQUEST_ID_HEADER = "X-MMM-Request-Id"
 
 
 class LlamaSemanticProgressTimeout(TimeoutError):
@@ -37,6 +45,52 @@ def _coerce_nonnegative_int(value: Any) -> int | None:
         return None
     return max(0, parsed)
 
+
+def _request_id_from_headers(headers: Any) -> str:
+    if isinstance(headers, Mapping):
+        for key, value in headers.items():
+            if str(key).casefold() == _REQUEST_ID_HEADER.casefold():
+                text = str(value or "").strip()
+                if text:
+                    return text[:96]
+    return f"llama-{uuid.uuid4().hex[:16]}"
+
+
+def _bounded_error(exc: BaseException, *, limit: int = 600) -> str:
+    text = " ".join(str(exc).split())
+    if len(text) > limit:
+        text = text[:limit] + "..."
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _managed_server_state() -> str:
+    """Return bounded managed-process diagnostics without making a network request."""
+
+    try:
+        from . import llama_server_autotune
+
+        process = getattr(llama_server_autotune, "_MANAGED_PROCESS", None)
+        if process is None:
+            return "managed=none"
+        pid = getattr(process, "pid", None)
+        try:
+            returncode = process.poll()
+        except Exception as exc:  # noqa: BLE001 - diagnostic path must never mask failure
+            return f"managed_pid={pid or 'unknown'} poll_error={type(exc).__name__}"
+        return (
+            f"managed_pid={pid or 'unknown'} "
+            f"managed_returncode={returncode if returncode is not None else 'running'}"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic path must never mask failure
+        return f"managed_state_error={type(exc).__name__}"
+
+
+def _done_line(raw_line: Any) -> bool:
+    if isinstance(raw_line, bytes):
+        line = raw_line.decode("utf-8", errors="replace").strip()
+    else:
+        line = str(raw_line or "").strip()
+    return line == "data: [DONE]"
 
 
 def _ping_interval_seconds(stream_module: Any, payload: Mapping[str, Any]) -> int:
@@ -153,7 +207,7 @@ class _SemanticProgressWatchdog:
         self._last_progress_at = clock()
         self._last_prompt_processed: int | None = None
 
-    def observe(self, raw_line: Any) -> None:
+    def observe(self, raw_line: Any) -> bool:
         now = self._clock()
         progressed, prompt_processed = _semantic_progress_from_sse_line(
             raw_line,
@@ -162,7 +216,7 @@ class _SemanticProgressWatchdog:
         self._last_prompt_processed = prompt_processed
         if progressed:
             self._last_progress_at = now
-            return
+            return True
         idle_for = max(0.0, now - self._last_progress_at)
         if idle_for >= self.idle_seconds:
             raise LlamaSemanticProgressTimeout(
@@ -170,38 +224,149 @@ class _SemanticProgressWatchdog:
                 "prompt/decode/tool progress for "
                 f"{self.idle_seconds:.0f}s; request aborted"
             )
+        return False
 
 
 class _ProgressCheckedResponse:
-    def __init__(self, response: Any, idle_seconds: float) -> None:
+    def __init__(
+        self,
+        response: Any,
+        idle_seconds: float,
+        *,
+        request_id: str,
+        started_at: float,
+    ) -> None:
         self._response = response
         self._idle_seconds = idle_seconds
+        self._request_id = request_id
+        self._started_at = started_at
+        self._first_progress = False
+        self._saw_done = False
+        self._finalized = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._response, name)
 
+    def _finalize(self, exc: BaseException | None = None) -> None:
+        if self._finalized:
+            return
+        self._finalized = True
+        elapsed = max(0.0, time.monotonic() - self._started_at)
+        if exc is not None:
+            print(
+                "llama server: lifecycle failure",
+                f" request_id={self._request_id}",
+                f" elapsed={elapsed:.1f}s",
+                f" error={_bounded_error(exc)}",
+                f" {_managed_server_state()}",
+                sep="",
+                flush=True,
+            )
+        elif self._saw_done:
+            print(
+                "llama server: lifecycle complete",
+                f" request_id={self._request_id}",
+                f" elapsed={elapsed:.1f}s",
+                f" first_semantic_progress={'yes' if self._first_progress else 'no'}",
+                sep="",
+                flush=True,
+            )
+        else:
+            print(
+                "llama server: lifecycle incomplete",
+                f" request_id={self._request_id}",
+                f" elapsed={elapsed:.1f}s",
+                " reason=stream_closed_without_done",
+                f" {_managed_server_state()}",
+                sep="",
+                flush=True,
+            )
+        print(
+            "llama server: lifecycle finalized",
+            f" request_id={self._request_id}",
+            flush=True,
+        )
+
     def iter_lines(self, *args: Any, **kwargs: Any):
         watchdog = _SemanticProgressWatchdog(self._idle_seconds)
-        for raw_line in self._response.iter_lines(*args, **kwargs):
-            parsed_error = sse_error_from_line(raw_line)
-            if parsed_error is not None:
-                status, error = parsed_error
-                raise LlamaSseServerError(status, error)
-            watchdog.observe(raw_line)
-            yield raw_line
+        try:
+            for raw_line in self._response.iter_lines(*args, **kwargs):
+                parsed_error = sse_error_from_line(raw_line)
+                if parsed_error is not None:
+                    status, error = parsed_error
+                    raise LlamaSseServerError(status, error)
+                progressed = watchdog.observe(raw_line)
+                if progressed and not self._first_progress and not _done_line(raw_line):
+                    self._first_progress = True
+                    print(
+                        "llama server: first semantic progress",
+                        f" request_id={self._request_id}",
+                        f" elapsed={time.monotonic() - self._started_at:.1f}s",
+                        flush=True,
+                    )
+                if _done_line(raw_line):
+                    self._saw_done = True
+                yield raw_line
+        except BaseException as exc:
+            self._finalize(exc)
+            raise
+        finally:
+            self._finalize()
 
 
 class _ProgressCheckedStream:
-    def __init__(self, stream: Any, idle_seconds: float) -> None:
+    def __init__(
+        self,
+        stream: Any,
+        idle_seconds: float,
+        *,
+        request_id: str,
+        started_at: float,
+    ) -> None:
         self._stream = stream
         self._idle_seconds = idle_seconds
+        self._request_id = request_id
+        self._started_at = started_at
+        self._checked_response: _ProgressCheckedResponse | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
 
     def __enter__(self) -> Any:
-        response = self._stream.__enter__()
-        return _ProgressCheckedResponse(response, self._idle_seconds)
+        try:
+            response = self._stream.__enter__()
+        except BaseException as exc:
+            print(
+                "llama server: lifecycle connect failure",
+                f" request_id={self._request_id}",
+                f" elapsed={time.monotonic() - self._started_at:.1f}s",
+                f" error={_bounded_error(exc)}",
+                f" {_managed_server_state()}",
+                sep="",
+                flush=True,
+            )
+            print(
+                "llama server: lifecycle finalized",
+                f" request_id={self._request_id}",
+                flush=True,
+            )
+            raise
+        print(
+            "llama server: lifecycle accepted",
+            f" request_id={self._request_id}",
+            f" status={getattr(response, 'status_code', 'unknown')}",
+            f" elapsed={time.monotonic() - self._started_at:.1f}s",
+            sep="",
+            flush=True,
+        )
+        checked = _ProgressCheckedResponse(
+            response,
+            self._idle_seconds,
+            request_id=self._request_id,
+            started_at=self._started_at,
+        )
+        self._checked_response = checked
+        return checked
 
     def __exit__(
         self,
@@ -209,6 +374,8 @@ class _ProgressCheckedStream:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> Any:
+        if self._checked_response is not None:
+            self._checked_response._finalize(exc)
         return self._stream.__exit__(exc_type, exc, tb)
 
 
@@ -241,7 +408,23 @@ class _SemanticProgressClient:
             if payload.get("tools")
             else float(self._stream_module._stream_idle_timeout_seconds())
         )
-        return _ProgressCheckedStream(stream, idle_seconds)
+        request_id = _request_id_from_headers(kwargs.get("headers"))
+        started_at = time.monotonic()
+        print(
+            "llama server: lifecycle start",
+            f" request_id={request_id}",
+            f" max_tokens={payload.get('max_tokens', '?')}",
+            f" tools={len(payload.get('tools', ()) or ())}",
+            f" idle_timeout={idle_seconds:.0f}s",
+            sep="",
+            flush=True,
+        )
+        return _ProgressCheckedStream(
+            stream,
+            idle_seconds,
+            request_id=request_id,
+            started_at=started_at,
+        )
 
 
 def _wrap_raw_client(client: Any, stream_module: Any) -> Any:
@@ -324,8 +507,10 @@ def _install_adapter_completion_transport(stream_module: Any, adapter_module: An
         input_chars = adapter_module._payload_content_chars(payload)
         max_tokens = payload.get("max_tokens", "?")
         tool_count = len(payload.get("tools", ()) or ())
+        request_id = f"llama-{uuid.uuid4().hex[:16]}"
         print(
             "llama server: completion request",
+            f" request_id={request_id}",
             f" input_chars={input_chars}",
             f" max_tokens={max_tokens}",
             f" tools={tool_count}",
@@ -347,6 +532,7 @@ def _install_adapter_completion_transport(stream_module: Any, adapter_module: An
                 endpoint,
                 json=payload,
                 timeout=timeout,
+                headers={_REQUEST_ID_HEADER: request_id},
             )
         except adapter_module.httpx.TimeoutException as exc:
             raise RuntimeError(
@@ -393,6 +579,7 @@ def install(stream_module: Any, adapter_module: Any | None = None) -> None:
 __all__ = [
     "LlamaSemanticProgressTimeout",
     "_SemanticProgressWatchdog",
+    "_managed_server_state",
     "_progress_aware_payload",
     "_semantic_progress_from_sse_line",
     "install",
