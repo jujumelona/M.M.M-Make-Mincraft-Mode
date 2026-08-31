@@ -90,7 +90,7 @@ def domain_worker(_agentic, _project_rag, _router, *, prompt, domain, document, 
         "gaps": [],
         "next_queries": [],
         "sufficient": True,
-        "fixed_point": True,
+        "fixed_point": False,
         "procedures": [],
         "checkpoint": {"status": "complete"},
     }
