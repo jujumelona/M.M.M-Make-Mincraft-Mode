@@ -44,7 +44,6 @@ jobs:
           minecraft_mod_ai/reuse_planner.py
           minecraft_mod_ai/dependency_resolver.py
           minecraft_mod_ai/reuse_license.py
-          minecraft_mod_ai/final_project_assembler.py
           tests/test_worker6_reuse_fail_closed.py
           tests/test_worker6_reuse_hardening.py
           tests/test_worker6_reuse_authority.py
@@ -69,7 +68,6 @@ jobs:
           minecraft_mod_ai/reuse_planner.py
           minecraft_mod_ai/dependency_resolver.py
           minecraft_mod_ai/reuse_license.py
-          minecraft_mod_ai/final_project_assembler.py
           tests/test_worker6_reuse_fail_closed.py
           tests/test_worker6_reuse_hardening.py
           tests/test_worker6_reuse_authority.py
@@ -84,7 +82,6 @@ jobs:
           minecraft_mod_ai/reuse_planner.py
           minecraft_mod_ai/dependency_resolver.py
           minecraft_mod_ai/reuse_license.py
-          minecraft_mod_ai/final_project_assembler.py
           --min-confidence 90
 
       - name: Commit and push verified product changes
@@ -92,7 +89,7 @@ jobs:
         run: |
           git config user.name "OpenAI Worker 6"
           git config user.email "worker6@users.noreply.github.com"
-          git add minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/source_transplant.py minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/dependency_resolver.py minecraft_mod_ai/reuse_license.py minecraft_mod_ai/final_project_assembler.py tests/test_worker6_reuse_fail_closed.py tests/test_worker6_reuse_hardening.py tests/test_worker6_reuse_authority.py
+          git add minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/source_transplant.py minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/dependency_resolver.py minecraft_mod_ai/reuse_license.py tests/test_worker6_reuse_fail_closed.py tests/test_worker6_reuse_hardening.py tests/test_worker6_reuse_authority.py
           if git diff --cached --quiet; then
             echo "No Worker 6 product changes"
             exit 0
