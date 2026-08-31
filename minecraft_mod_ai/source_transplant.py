@@ -36,6 +36,7 @@ from .capability_implementation_locator import CapabilityImplementationLocator
 from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
 from .reuse_license import is_reusable_source_license
+
 _TYPE_DECL = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _METHOD_DECL = re.compile(
     r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
@@ -149,7 +150,7 @@ class DonorFile:
     symbols: tuple[str, ...]
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "DonorFile":
+    def from_dict(cls, value: Mapping[str, Any]) -> DonorFile:
         size = value.get("size_bytes")
         if size is None:
             size = value.get("size", 0)
@@ -258,7 +259,7 @@ class DonorSlice:
         return self.metadata_match
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "DonorSlice":
+    def from_dict(cls, value: Mapping[str, Any]) -> DonorSlice:
         files = tuple(DonorFile.from_dict(f) for f in value.get("files", ()))
         artifact_nodes = tuple(
             _artifact_node_from_dict(n)
@@ -1093,6 +1094,6 @@ __all__ = [
     "SourceTransplantError",
     "inspect_repository_slice",
     "materialize_source_slices",
-    "validate_donor_slice_manifest",
     "repository_from_candidate",
+    "validate_donor_slice_manifest",
 ]

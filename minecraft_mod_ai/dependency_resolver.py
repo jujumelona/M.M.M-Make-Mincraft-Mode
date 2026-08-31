@@ -225,14 +225,9 @@ def _resolution_fingerprint(
     target_loader: str,
     target_minecraft: str,
 ) -> str:
-    payload = "\n".join(
-        (
-            repository,
-            coordinate,
-            configuration,
-            target_loader.casefold(),
-            target_minecraft,
-        )
+    payload = (
+        f"{repository}\n{coordinate}\n{configuration}\n"
+        f"{target_loader.casefold()}\n{target_minecraft}"
     )
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

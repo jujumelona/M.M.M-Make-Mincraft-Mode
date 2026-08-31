@@ -6,13 +6,26 @@ from dataclasses import replace
 import pytest
 
 import minecraft_mod_ai.reuse_proof_executor as reuse_proof
-import minecraft_mod_ai.source_transplant as source_transplant
+
+
+@pytest.fixture(autouse=True)
+def _worker6_isolate_scaffold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        reuse_proof,
+        "scaffold_minimal_ephemeral_workspace",
+        lambda *args, **kwargs: None,
+    )
+from minecraft_mod_ai import source_transplant
 from minecraft_mod_ai.proof_level import ProofLevel, validate_proof_transition
 from minecraft_mod_ai.reuse_artifacts import (
     ReusableArtifactBundle,
     bundle_proof_allows_reuse,
 )
-from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice, SourceTransplantError
+from minecraft_mod_ai.source_transplant import (
+    DonorFile,
+    DonorSlice,
+    SourceTransplantError,
+)
 
 
 def _donor(

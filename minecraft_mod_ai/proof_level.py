@@ -195,12 +195,18 @@ def _validate_receipt(dst: ProofLevel, receipt: Any) -> tuple[bool, str]:
         return False, "INVALID_RECEIPT: CLOSURE_COMPLETE requires closure_complete=true"
     if dst == ProofLevel.MATERIALIZED and not _positive_int(data, "files"):
         return False, "INVALID_RECEIPT: MATERIALIZED requires files>0"
-    if dst == ProofLevel.SUBGRAPH_COMPILE_VERIFIED and not _positive_int(data, "verified_subgraphs"):
-        return False, "INVALID_RECEIPT: SUBGRAPH_COMPILE_VERIFIED requires verified_subgraphs>0"
+    if dst == ProofLevel.SUBGRAPH_COMPILE_VERIFIED:
+        if not _positive_int(data, "verified_subgraphs"):
+            return False, "INVALID_RECEIPT: SUBGRAPH_COMPILE_VERIFIED requires verified_subgraphs>0"
+        if data.get("authoritative_compile") is not True:
+            return False, "INVALID_RECEIPT: SUBGRAPH_COMPILE_VERIFIED requires authoritative compile execution"
     if dst == ProofLevel.PARTIAL_REUSE and data.get("partial") is not True:
         return False, "INVALID_RECEIPT: PARTIAL_REUSE requires partial=true"
-    if dst == ProofLevel.COMPILE_VERIFIED and data.get("compile_passed") is not True:
-        return False, "INVALID_RECEIPT: COMPILE_VERIFIED requires compile_passed=true"
+    if dst == ProofLevel.COMPILE_VERIFIED:
+        if data.get("compile_passed") is not True:
+            return False, "INVALID_RECEIPT: COMPILE_VERIFIED requires compile_passed=true"
+        if data.get("authoritative_compile") is not True:
+            return False, "INVALID_RECEIPT: COMPILE_VERIFIED requires authoritative compile execution"
     if dst == ProofLevel.INTEGRATION_VERIFIED and data.get("integration_passed") is not True:
         return False, "INVALID_RECEIPT: INTEGRATION_VERIFIED requires integration_passed=true"
     if dst == ProofLevel.RUNTIME_BOOT_VERIFIED and data.get("runtime_boot_passed") is not True:

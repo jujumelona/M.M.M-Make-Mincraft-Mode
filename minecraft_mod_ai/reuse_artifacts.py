@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from .reuse_license import is_reusable_source_license
-from .source_transplant import DonorSlice, SourceTransplantError, materialize_pinned_donor
+from .source_transplant import (
+    DonorSlice,
+    SourceTransplantError,
+    materialize_pinned_donor,
+)
 
 
 def _sha256(data: bytes) -> str:
@@ -62,7 +66,7 @@ def _receipt_value(receipt: Any, key: str, default: Any = None) -> Any:
 
 
 def _hashes_match(
-    expected: Mapping[str, Any], bundle: "ReusableArtifactBundle"
+    expected: Mapping[str, Any], bundle: ReusableArtifactBundle
 ) -> bool:
     normalized_expected = _normalized_hash_mapping(expected)
     normalized_bundle = _normalized_hash_mapping(bundle.file_hashes)
@@ -101,7 +105,7 @@ def _proof_dependencies_are_exact(values: Sequence[Any]) -> bool:
 
 
 def bundle_proof_allows_reuse(
-    bundle: "ReusableArtifactBundle", receipt: Any,
+    bundle: ReusableArtifactBundle, receipt: Any,
 ) -> bool:
     """Accept reuse only when a receipt binds this exact bundle and its bytes."""
 
@@ -116,6 +120,8 @@ def bundle_proof_allows_reuse(
         return False
 
     if bundle.origin_kind == "external_donor":
+        if _receipt_value(receipt, "authoritative_compile") is not True:
+            return False
         if str(_receipt_value(receipt, "candidate_id", "")).strip() != bundle.source_ref:
             return False
         repository = str(bundle.provenance.get("repository") or "").strip()
@@ -273,17 +279,19 @@ class ReusableArtifactBundle:
         owned_ns: list[str] = []
         if repo_name:
             owned_ns.append(repo_name)
-        for p in protected_paths:
-            if p.startswith("src/main/resources/assets/"):
-                parts = p.split("/")
-                if len(parts) > 4 and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge"):
-                    if parts[4] not in owned_ns:
-                        owned_ns.append(parts[4])
-            elif p.startswith("src/main/resources/data/"):
-                parts = p.split("/")
-                if len(parts) > 4 and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge"):
-                    if parts[4] not in owned_ns:
-                        owned_ns.append(parts[4])
+        for path in protected_paths:
+            if not path.startswith((
+                "src/main/resources/assets/",
+                "src/main/resources/data/",
+            )):
+                continue
+            parts = path.split("/")
+            if (
+                len(parts) > 4
+                and parts[4] not in ("minecraft", "c", "fabric", "neoforge", "forge")
+                and parts[4] not in owned_ns
+            ):
+                owned_ns.append(parts[4])
 
         return cls(
             bundle_id=f"donor:{donor.repository}@{donor.commit_sha}:{donor.capability}",

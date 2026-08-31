@@ -68,6 +68,10 @@ class ReuseProofReceipt:
     adaptations_applied: tuple[AdapterReceipt, ...]
     verified_capabilities: tuple[str, ...]
     residual_capabilities: tuple[str, ...]
+    authoritative_compile: bool = False
+    failure_scope: str = ""
+    failure_code: str = ""
+    failure_message: str = ""
     dependency_receipts: tuple[Mapping[str, Any], ...] = ()
     verified_artifacts: tuple[str, ...] = ()
     residual_artifacts: tuple[str, ...] = ()
@@ -99,6 +103,10 @@ class ReuseProofReceipt:
             "adaptations_applied": [a.to_dict() for a in self.adaptations_applied],
             "verified_capabilities": list(self.verified_capabilities),
             "residual_capabilities": list(self.residual_capabilities),
+            "authoritative_compile": self.authoritative_compile,
+            "failure_scope": self.failure_scope,
+            "failure_code": self.failure_code,
+            "failure_message": self.failure_message,
             "dependency_receipts": [dict(item) for item in self.dependency_receipts],
             "verified_artifacts": list(self.verified_artifacts),
             "residual_artifacts": list(self.residual_artifacts),
@@ -361,25 +369,33 @@ def _symbols_for_artifacts(
     )
 
 
-def _license_rejected_receipt(
+def _rejected_receipt(
     donor_slice: DonorSlice,
     *,
     candidate_id: str,
     closure_hash: str,
+    failure_code: str,
+    failure_message: str = "",
+    failure_scope: str = "donor",
+    proof_level: ProofLevel = ProofLevel.DISCOVERED,
+    missing_resources: Sequence[str] = (),
 ) -> ReuseProofReceipt:
     return ReuseProofReceipt(
         candidate_id=candidate_id,
         capability=donor_slice.capability,
         commit_sha=donor_slice.commit_sha,
         closure_hash=closure_hash,
-        proof_level=ProofLevel.DISCOVERED.value,
+        proof_level=proof_level.value,
         compile_passed=False,
         tests_passed=False,
         unresolved_symbols=(),
-        missing_resources=(),
+        missing_resources=tuple(missing_resources),
         adaptations_applied=(),
         verified_capabilities=(),
         residual_capabilities=(donor_slice.capability,),
+        failure_scope=failure_scope,
+        failure_code=failure_code,
+        failure_message=failure_message,
     )
 
 
@@ -400,16 +416,17 @@ def execute_reuse_proof(
 
     try:
         validate_donor_slice_manifest(donor_slice)
-    except SourceTransplantError:
-        return _license_rejected_receipt(
-            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash
+    except SourceTransplantError as exc:
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            failure_code="MANIFEST_INVALID", failure_message=str(exc),
         )
 
     if not is_reusable_source_license(donor_slice.license_id):
-        return _license_rejected_receipt(
-            donor_slice,
-            candidate_id=candidate_id,
-            closure_hash=closure_hash,
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            failure_code="LICENSE_NOT_REUSABLE",
+            failure_message=f"License {donor_slice.license_id!r} is not approved for source reuse.",
         )
 
     valid, _ = validate_proof_transition(
@@ -418,10 +435,9 @@ def execute_reuse_proof(
         receipt={"license": donor_slice.license_id},
     )
     if not valid:
-        return _license_rejected_receipt(
-            donor_slice,
-            candidate_id=candidate_id,
-            closure_hash=closure_hash,
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            failure_code="LICENSE_PROOF_INVALID",
         )
     current_level = ProofLevel.LICENSE_VERIFIED
 
@@ -431,12 +447,9 @@ def execute_reuse_proof(
         receipt={"commit_sha": donor_slice.commit_sha},
     )
     if not valid:
-        return ReuseProofReceipt(
-            candidate_id=candidate_id, capability=donor_slice.capability,
-            commit_sha=donor_slice.commit_sha, closure_hash=closure_hash,
-            proof_level=current_level.value, compile_passed=False, tests_passed=False,
-            unresolved_symbols=(), missing_resources=(), adaptations_applied=(),
-            verified_capabilities=(), residual_capabilities=(donor_slice.capability,),
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            proof_level=current_level, failure_code="PIN_INVALID",
         )
     current_level = ProofLevel.PINNED
 
@@ -453,6 +466,7 @@ def execute_reuse_proof(
 
     in_memory_files: dict[str, str | bytes] = {}
     materialization_failed = False
+    materialization_error = ""
     try:
         raw_map = materialize_pinned_donor(
             donor_slice,
@@ -463,26 +477,19 @@ def execute_reuse_proof(
                 in_memory_files[rel_path] = raw_bytes.decode("utf-8")
             except UnicodeDecodeError:
                 in_memory_files[rel_path] = raw_bytes
-    except SourceTransplantError:
+    except SourceTransplantError as exc:
         if not in_memory_files:
             materialization_failed = True
+            materialization_error = str(exc)
 
     if materialization_failed:
-        return ReuseProofReceipt(
-            candidate_id=candidate_id,
-            capability=donor_slice.capability,
-            commit_sha=donor_slice.commit_sha,
-            closure_hash=closure_hash,
-            proof_level=current_level.value,
-            compile_passed=False,
-            tests_passed=False,
-            unresolved_symbols=(),
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            proof_level=current_level, failure_code="MATERIALIZATION_FAILED",
+            failure_message=materialization_error,
             missing_resources=tuple(
                 edge.requested_target for edge in donor_slice.unresolved_edges
             ),
-            adaptations_applied=(),
-            verified_capabilities=(),
-            residual_capabilities=(donor_slice.capability,),
         )
 
 
@@ -540,6 +547,7 @@ def execute_reuse_proof(
     generated_tests: dict[str, str] = {}
     test_source_hash = ""
     dependency_injection_failed = False
+    authoritative_compile_execution = not callable(compile_checker)
 
     with tempfile.TemporaryDirectory() as sandbox_dir:
         sandbox_path = Path(sandbox_dir)
@@ -576,22 +584,22 @@ def execute_reuse_proof(
                     "Failed to copy target workspace into reuse proof sandbox."
                 ) from exc
 
-        scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
-
         exact_dependency_receipts = tuple(
             receipt for receipt in resolved_dependencies if receipt.is_resolved
         )
-        try:
-            _render_proof_build_model(
-                sandbox_path,
-                target_context,
-                exact_dependency_receipts,
-            )
-        except (OSError, RuntimeError, ValueError) as inj_err:
-            dependency_injection_failed = True
-            reason = f"BUILD_MODEL_RENDER_FAILED: {inj_err}"
-            unresolved_symbols.append(reason)
-            unresolved_mandatory_deps.append(reason)
+        if authoritative_compile_execution:
+            scaffold_minimal_ephemeral_workspace(sandbox_path, target_context)
+            try:
+                _render_proof_build_model(
+                    sandbox_path,
+                    target_context,
+                    exact_dependency_receipts,
+                )
+            except (OSError, RuntimeError, ValueError, ImportError) as inj_err:
+                dependency_injection_failed = True
+                reason = f"BUILD_MODEL_RENDER_FAILED: {inj_err}"
+                unresolved_symbols.append(reason)
+                unresolved_mandatory_deps.append(reason)
 
         for rel_path, content in adapted_files.items():
             dest = _sandbox_destination(sandbox_path, rel_path)
@@ -651,7 +659,7 @@ def execute_reuse_proof(
     matched_tests: list[str] = []
     acceptance_map: list[tuple[str, str, str, bool]] = []
     exact_host_test_ids: list[str] = []
-    authoritative_host_execution = not callable(compile_checker)
+    authoritative_host_execution = authoritative_compile_execution
 
     for acceptance_contract in req_contracts:
         expected_id = (
@@ -702,7 +710,8 @@ def execute_reuse_proof(
     verified_subgraph_count = 0
 
     if (
-        compile_passed
+        authoritative_compile_execution
+        and compile_passed
         and donor_slice.closure_complete
         and not unresolved_mandatory_deps
     ):
@@ -738,11 +747,10 @@ def execute_reuse_proof(
             comp_files = {path: adapted_files[path] for path in component}
             comp_passed = False
             if callable(compile_checker):
-                comp_result = compile_checker(comp_files, target_context)
-                if isinstance(comp_result, Mapping):
-                    comp_passed = bool(comp_result.get("compile_passed"))
-                else:
-                    comp_passed = bool(comp_result)
+                # Caller-supplied checkers are diagnostic-only and cannot mint
+                # reusable subgraph proof. Avoid repeating the diagnostic per subgraph.
+                residual_art_list.extend(component)
+                continue
             else:
                 with tempfile.TemporaryDirectory(prefix="mmm_subgraph_") as sub_tmp:
                     sub_path = Path(sub_tmp)
@@ -805,7 +813,8 @@ def execute_reuse_proof(
     )
 
     if (
-        compile_passed
+        authoritative_compile_execution
+        and compile_passed
         and donor_slice.closure_complete
         and not unresolved_mandatory_deps
         and not dependency_injection_failed
@@ -813,7 +822,7 @@ def execute_reuse_proof(
         valid, _ = validate_proof_transition(
             current_level,
             ProofLevel.COMPILE_VERIFIED,
-            receipt={"compile_passed": True},
+            receipt={"compile_passed": True, "authoritative_compile": True},
         )
         if valid:
             current_level = ProofLevel.COMPILE_VERIFIED
@@ -844,9 +853,8 @@ def execute_reuse_proof(
         or not donor_slice.closure_complete
     ):
         subgraph_valid, _ = validate_proof_transition(
-            current_level,
-            ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
-            receipt={"verified_subgraphs": verified_subgraph_count},
+            current_level, ProofLevel.SUBGRAPH_COMPILE_VERIFIED,
+            receipt={"verified_subgraphs": verified_subgraph_count, "authoritative_compile": True},
         )
         if subgraph_valid:
             current_level = ProofLevel.SUBGRAPH_COMPILE_VERIFIED
@@ -871,7 +879,7 @@ def execute_reuse_proof(
     reused_classes = tuple(
         path
         for path in verified_artifacts
-        if path.endswith(".java") or path.endswith(".kt")
+        if path.endswith((".java", ".kt"))
     )
     missing_res = tuple(dict.fromkeys(missing_resources))
     unbound_registries = tuple(
@@ -986,6 +994,27 @@ def execute_reuse_proof(
         glue_contracts=glue_contracts,
     )
 
+    failure_scope = ""
+    failure_code = ""
+    failure_message = ""
+    if not current_level.allows_reuse():
+        if not authoritative_compile_execution:
+            failure_scope = "verification"
+            failure_code = "NON_AUTHORITATIVE_COMPILE_CHECKER"
+            failure_message = "Caller-supplied compile_checker is diagnostic-only."
+        elif dependency_injection_failed:
+            failure_scope = "dependency"
+            failure_code = "BUILD_MODEL_RENDER_FAILED"
+        elif unresolved_mandatory_deps:
+            failure_scope = "dependency"
+            failure_code = "DEPENDENCY_UNRESOLVED"
+        elif not adapted_files:
+            failure_scope = "donor"
+            failure_code = "NO_MATERIALIZED_ARTIFACTS"
+        elif not compile_passed:
+            failure_scope = "verification"
+            failure_code = "COMPILE_FAILED"
+
     return ReuseProofReceipt(
         candidate_id=candidate_id,
         capability=donor_slice.capability,
@@ -993,7 +1022,8 @@ def execute_reuse_proof(
         closure_hash=closure_hash,
         proof_level=current_level.value,
         compile_passed=(
-            compile_passed
+            authoritative_compile_execution
+            and compile_passed
             and donor_slice.closure_complete
             and not unresolved_mandatory_deps
             and not dependency_injection_failed
@@ -1004,6 +1034,10 @@ def execute_reuse_proof(
         adaptations_applied=tuple(all_receipts),
         verified_capabilities=verified_caps,
         residual_capabilities=residual_caps,
+        authoritative_compile=authoritative_compile_execution,
+        failure_scope=failure_scope,
+        failure_code=failure_code,
+        failure_message=failure_message,
         dependency_receipts=tuple(
             receipt.to_dict() for receipt in resolved_dependencies
         ),
@@ -1035,10 +1069,23 @@ def execute_candidate_fallback_loop(
 ) -> tuple[DonorSlice | None, tuple[ReuseProofReceipt, ...]]:
     """Try donor candidates until full proof or the best partial proof is found."""
 
+    requested_capability = str(capability or "").strip()
+    if not requested_capability:
+        raise ValueError("capability must be non-empty")
+
     receipts: list[ReuseProofReceipt] = []
     best_partial: tuple[tuple[int, int, int, int, int], DonorSlice] | None = None
 
     for candidate in candidates:
+        if str(candidate.capability or "").strip() != requested_capability:
+            receipts.append(_rejected_receipt(
+                candidate, candidate_id=f"{candidate.repository}@{candidate.commit_sha}",
+                closure_hash=_closure_sha256(candidate), failure_code="CAPABILITY_MISMATCH",
+                failure_message=(f"Candidate capability {candidate.capability!r} does not match "
+                                 f"requested capability {requested_capability!r}."),
+            ))
+            continue
+
         receipt = execute_reuse_proof(
             candidate,
             target_workspace=target_workspace,
