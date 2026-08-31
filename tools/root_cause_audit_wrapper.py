@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +17,49 @@ from minecraft_mod_ai.diagnostics import (
     render_failure_summary,
 )
 
+if __package__:
+    from .audit_stream_redactor import StreamingRedactor
+else:
+    from audit_stream_redactor import StreamingRedactor
+
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_DIR = ROOT / "audit"
 REPORT_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.json"
 RUNNER_LOG_PATH = AUDIT_DIR / "FULL_PROJECT_AUDIT.runner.log"
 _VALID_CHECK_STATUSES = frozenset({"PASS", "WARN", "FAIL", "SKIP"})
 _INTERNAL_CHECK_CATEGORY = "audit-internal"
+_OUTPUT_CHUNK_CHARS = 64 * 1024
+_DEFAULT_AUDIT_TIMEOUT_SECONDS = 45 * 60
+
+
+def _environment_secret_values() -> tuple[str, ...]:
+    values: list[str] = []
+    for name, secret in os.environ.items():
+        upper = name.upper()
+        if secret and any(
+            marker in upper
+            for marker in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "COOKIE")
+        ):
+            values.append(secret)
+    return tuple(dict.fromkeys(values))
+
+
+def _redact_stream(source: Path, destination: Path, *, secrets: Iterable[str] | None = None) -> None:
+    secret_values = _environment_secret_values() if secrets is None else tuple(secrets)
+    redactor = StreamingRedactor(secret_values)
+    with source.open("r", encoding="utf-8", errors="replace") as source_handle, destination.open(
+        "w", encoding="utf-8", errors="replace"
+    ) as destination_handle:
+        while True:
+            chunk = source_handle.read(_OUTPUT_CHUNK_CHARS)
+            if not chunk:
+                break
+            safe = redactor.feed(chunk)
+            if safe:
+                destination_handle.write(safe)
+        final = redactor.finish()
+        if final:
+            destination_handle.write(final)
 
 
 def normalize_report_semantics(report: dict[str, Any]) -> dict[str, Any]:
@@ -171,8 +210,8 @@ def _raw_log_fallback() -> str:
     try:
         relative = RUNNER_LOG_PATH.relative_to(ROOT)
     except ValueError:
-        return f"raw runner output target={RUNNER_LOG_PATH}"
-    return f"raw runner output target={relative}"
+        return f"redacted runner output target={RUNNER_LOG_PATH}"
+    return f"redacted runner output target={relative}"
 
 
 def _render_internal_report_error(exc: BaseException, operation: str) -> str:
@@ -189,16 +228,22 @@ def _render_internal_report_error(exc: BaseException, operation: str) -> str:
     return render_failure_summary(collector.groups())
 
 
-def _render_internal_event(cause_type: str, cause: str, operation: str) -> str:
+def _render_runner_event(
+    cause_type: str,
+    cause: str,
+    operation: str,
+    *,
+    category: FailureCategory = FailureCategory.INTERNAL,
+) -> str:
     collector = DiagnosticCollector()
     collector.record(
         FailureEvent(
             stage="full-debug:audit-runner",
             operation=operation,
-            category=FailureCategory.INTERNAL,
+            category=category,
             cause_type=cause_type,
             cause=cause,
-            retryable=False,
+            retryable=category is FailureCategory.TRANSIENT,
             final_status=FailureStatus.FAILED,
             fallback=_raw_log_fallback(),
         )
@@ -250,35 +295,88 @@ def _remove_stale_audit_artifacts() -> bool:
     return True
 
 
-def _run_audit() -> int | None:
+def _run_audit(*, timeout_seconds: int) -> int | None:
+    if timeout_seconds <= 0:
+        print(
+            _render_runner_event(
+                "InvalidAuditTimeout",
+                f"timeout_seconds must be positive, got {timeout_seconds}",
+                "validate audit timeout",
+                category=FailureCategory.INPUT,
+            )
+        )
+        return None
     if not _remove_stale_audit_artifacts():
         return None
 
+    temporary_path: Path | None = None
+    returncode: int | None = None
+    launch_failure: BaseException | None = None
+    cleanup_failure: OSError | None = None
     try:
-        with RUNNER_LOG_PATH.open("w", encoding="utf-8", errors="replace") as log_handle:
-            process = subprocess.run(
-                [sys.executable, str(ROOT / "tools/full_project_audit.py")],
-                cwd=ROOT,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
+        RUNNER_LOG_PATH.write_text("", encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            errors="replace",
+            dir=AUDIT_DIR,
+            prefix=".audit-runner-output-",
+            suffix=".log",
+            delete=False,
+        ) as raw_handle:
+            temporary_path = Path(raw_handle.name)
+            try:
+                process = subprocess.run(
+                    [sys.executable, str(ROOT / "tools/full_project_audit.py")],
+                    cwd=ROOT,
+                    stdout=raw_handle,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    timeout=timeout_seconds,
+                )
+                returncode = process.returncode
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                launch_failure = exc
+        _redact_stream(temporary_path, RUNNER_LOG_PATH)
     except OSError as exc:
-        print(_render_internal_report_error(exc, "launch audit runner"))
+        print(_render_internal_report_error(exc, "preserve redacted audit runner output"))
         return None
-    return process.returncode
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_failure = exc
+
+    if cleanup_failure is not None:
+        print(_render_internal_report_error(cleanup_failure, "remove temporary audit runner output"))
+        return None
+    if launch_failure is None:
+        return returncode
+    if isinstance(launch_failure, subprocess.TimeoutExpired):
+        print(
+            _render_runner_event(
+                "AuditTimeout",
+                f"full project audit exceeded timeout={timeout_seconds}s",
+                "run full project audit",
+                category=FailureCategory.TRANSIENT,
+            )
+        )
+        return None
+    print(_render_internal_report_error(launch_failure, "launch audit runner"))
+    return None
 
 
 def main() -> int:
     if not _prepare_audit_directory():
         return 1
-    process_returncode = _run_audit()
+    process_returncode = _run_audit(timeout_seconds=_DEFAULT_AUDIT_TIMEOUT_SECONDS)
     if process_returncode is None:
         return 1
 
     if not REPORT_PATH.is_file():
         print(
-            _render_internal_event(
+            _render_runner_event(
                 "MissingAuditReport",
                 f"{REPORT_PATH} was not produced by the current audit run",
                 "load audit report",
@@ -293,7 +391,7 @@ def main() -> int:
         return process_returncode or 1
     if not isinstance(report, dict):
         print(
-            _render_internal_event(
+            _render_runner_event(
                 "InvalidAuditReport",
                 "top-level report is not an object",
                 "parse audit report",
@@ -315,7 +413,7 @@ def main() -> int:
         print(render_report_summary(report))
         print()
         print(
-            _render_internal_event(
+            _render_runner_event(
                 "AuditExitMismatch",
                 (
                     f"audit process exit={process_returncode}; "
