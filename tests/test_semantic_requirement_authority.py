@@ -76,8 +76,8 @@ def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
     request = json.loads(router.calls[0]["messages"][1]["content"])
     assert len(request["host_owned_clauses"]) == 2
     assert "repair_diagnostics" not in request
-    assert router.calls[0]["kwargs"]["response_format"] == "json"
-    assert router.calls[0]["kwargs"]["response_schema"]["required"] == ["requirements"]
+    assert router.calls[0]["kwargs"]["response_format"] == "text"
+    assert router.calls[0]["kwargs"]["response_schema"] is None
     assert {item["capability"] for item in catalog["requirements"]} == {
         "resource.gathering",
         "world.travel",
@@ -190,7 +190,7 @@ def test_invalid_clause_rejects_atomic_batch_without_second_model_call():
 
     with pytest.raises(
         EvidencePlanError,
-        match="semantic compilation did not satisfy the host contract",
+        match="semantic requirement authority rejected invalid model output",
     ):
         build_approved_requirement_catalog(prompt, router)
 
@@ -208,7 +208,7 @@ def test_unrelated_anchor_is_rejected_without_repair_call():
 
     with pytest.raises(
         EvidencePlanError,
-        match="semantic compilation did not satisfy the host contract",
+        match="semantic requirement authority rejected invalid model output",
     ):
         build_approved_requirement_catalog(prompt, router)
 
@@ -226,7 +226,7 @@ def test_invalid_semantics_make_exactly_one_model_call():
 
     with pytest.raises(
         EvidencePlanError,
-        match="semantic compilation did not satisfy the host contract",
+        match="semantic requirement authority rejected invalid model output",
     ):
         build_approved_requirement_catalog(prompt, router)
 
