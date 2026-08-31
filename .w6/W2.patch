@@ -1,0 +1,467 @@
+diff --git a/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py b/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+--- a/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
++++ b/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+@@ -11,6 +11,7 @@ from __future__ import annotations
+ import hashlib
+ import json
+ import os
++import threading
+ from collections.abc import Mapping, Sequence
+ from dataclasses import replace
+ from typing import Any
+@@ -36,6 +37,8 @@ _REASONING_CONTINUATION = (
+ )
+ _PREFILL_CALIBRATION_SENTINEL = "MMM_ASSISTANT_PREFILL_CALIBRATION_V1"
+ _MAX_PREFILL_TEMPLATE_BYTES = 512
++_MAX_PREFILL_TEMPLATE_CACHE_ENTRIES = 8
++_PREFILL_TEMPLATE_CACHE_LOCK = threading.RLock()
+ 
+ 
+ class LlamaCppAdapter(ModelAdapter):
+@@ -369,6 +372,70 @@ def _calibrate_assistant_prefill_generation_prompt(
+     return content
+ 
+ 
++def _assistant_prefill_server_identity(server_url: str) -> str:
++    """Return a cache-safe identity only for MMM's live managed llama-server."""
++
++    try:
++        from ..llama_server_autotune import managed_server_generation_identity
++
++        return managed_server_generation_identity(server_url)
++    except Exception:
++        # Externally managed servers do not expose a process generation that lets us
++        # prove a cached Jinja prefix is still current. Recalibrate instead of risking
++        # stale template bytes after an unseen server restart.
++        return ""
++
++
++def _assistant_prefill_cache_key(
++    server_url: str,
++    original: Mapping[str, Any],
++) -> str:
++    server_identity = _assistant_prefill_server_identity(server_url)
++    if not server_identity:
++        return ""
++    try:
++        encoded = json.dumps(
++            _assistant_prefill_calibration_payload(original),
++            ensure_ascii=False,
++            sort_keys=True,
++            separators=(",", ":"),
++        ).encode("utf-8")
++    except (TypeError, ValueError, RecursionError):
++        return ""
++    return f"{server_identity}\0{hashlib.sha256(encoded).hexdigest()}"
++
++
++def _cached_assistant_prefill_generation_prompt(
++    adapter: LlamaCppAdapter,
++    server_url: str,
++    original: Mapping[str, Any],
++    *,
++    refresh: bool = False,
++) -> str:
++    cache_key = _assistant_prefill_cache_key(server_url, original)
++    if cache_key and not refresh:
++        with _PREFILL_TEMPLATE_CACHE_LOCK:
++            cache = getattr(adapter, "_prefill_template_prefix_cache", None)
++            if isinstance(cache, dict):
++                cached = cache.get(cache_key)
++                if isinstance(cached, str) and cached:
++                    return cached
++
++    calibrated = _calibrate_assistant_prefill_generation_prompt(server_url, original)
++    if not cache_key:
++        return calibrated
++
++    with _PREFILL_TEMPLATE_CACHE_LOCK:
++        cache = getattr(adapter, "_prefill_template_prefix_cache", None)
++        if not isinstance(cache, dict):
++            cache = {}
++            setattr(adapter, "_prefill_template_prefix_cache", cache)
++        cache[cache_key] = calibrated
++        while len(cache) > _MAX_PREFILL_TEMPLATE_CACHE_ENTRIES:
++            cache.pop(next(iter(cache)))
++    return calibrated
++
++
+ def _completion_message_with_prefill(
+     adapter: LlamaCppAdapter,
+     server_url: str,
+@@ -411,6 +502,33 @@ def _completion_message_with_prefill(
+     progress_bytes = 0
+     progress_sha256 = ""
+     calibrated_template_prefix = ""
++    prefill_refresh_used = False
++
++    def normalize_prefill_page(message: Mapping[str, Any]) -> dict[str, Any]:
++        nonlocal calibrated_template_prefix, prefill_refresh_used
++        try:
++            return _normalize_assistant_prefill_suffix(
++                message,
++                continuation_page=bool(accumulated),
++                template_prefix=calibrated_template_prefix,
++            )
++        except RuntimeError:
++            if (
++                not accumulated
++                or not qwen_nonthinking_page
++                or not calibrated_template_prefix
++                or prefill_refresh_used
++            ):
++                raise
++            prefill_refresh_used = True
++            calibrated_template_prefix = _cached_assistant_prefill_generation_prompt(
++                adapter, server_url, original_payload, refresh=True
++            )
++            return _normalize_assistant_prefill_suffix(
++                message,
++                continuation_page=True,
++                template_prefix=calibrated_template_prefix,
++            )
+ 
+     while True:
+         try:
+@@ -421,11 +533,7 @@ def _completion_message_with_prefill(
+             if boundary is None:
+                 raise
+             try:
+-                partial = _normalize_assistant_prefill_suffix(
+-                    boundary.partial_message,
+-                    continuation_page=bool(accumulated),
+-                    template_prefix=calibrated_template_prefix,
+-                )
++                partial = normalize_prefill_page(boundary.partial_message)
+             except RuntimeError as prefix_exc:
+                 if not accumulated:
+                     raise
+@@ -469,10 +577,9 @@ def _completion_message_with_prefill(
+             if qwen_nonthinking_page and not calibrated_template_prefix:
+                 try:
+                     calibrated_template_prefix = (
+-                        _calibrate_assistant_prefill_generation_prompt(
+-                            server_url,
+-                            original_payload,
+-                        )
++                        _cached_assistant_prefill_generation_prompt(
++                            adapter, server_url, original_payload
++                        )
+                     )
+                 except Exception as calibration_exc:
+                     raise LlamaCompletionBoundaryError(
+@@ -491,11 +598,7 @@ def _completion_message_with_prefill(
+             continue
+ 
+         try:
+-            normalized_final = _normalize_assistant_prefill_suffix(
+-                final_message,
+-                continuation_page=bool(accumulated),
+-                template_prefix=calibrated_template_prefix,
+-            )
++            normalized_final = normalize_prefill_page(final_message)
+         except RuntimeError as prefix_exc:
+             if not accumulated:
+                 raise
+diff --git a/minecraft_mod_ai/llama_server_autotune.py b/minecraft_mod_ai/llama_server_autotune.py
+--- a/minecraft_mod_ai/llama_server_autotune.py
++++ b/minecraft_mod_ai/llama_server_autotune.py
+@@ -711,7 +711,34 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
+             _release_recoverable_attempt(fingerprint, exc)
+             raise
+ 
+ 
++def managed_server_generation_identity(server_url: str) -> str:
++    """Identify the exact live managed process for correctness-safe warm caches."""
++
++    normalized = str(server_url or "").strip().rstrip("/")
++    if not normalized:
++        return ""
++    with _AUTOTUNE_LOCK:
++        process = _MANAGED_PROCESS
++        managed_url = str(_MANAGED_URL or "").strip().rstrip("/")
++        managed_key = str(_MANAGED_KEY or "").strip()
++        if (
++            not managed_url
++            or normalized != managed_url
++            or not managed_key
++            or process is None
++            or process.poll() is not None
++        ):
++            return ""
++        pid = int(getattr(process, "pid", 0) or 0)
++        if pid <= 0:
++            return ""
++        return (
++            f"{managed_url}\0{managed_key}\0pid={pid}"
++            f"\0process={id(process)}"
++        )
++
++
+ def _shutdown_managed_server() -> None:
+     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
+     with _AUTOTUNE_LOCK:
+@@ -742,6 +769,7 @@ __all__ = [
+     "_server_binary",
+     "_shutdown_managed_server",
+     "_variant_args",
+     "ensure_tuned_server",
+     "install",
++    "managed_server_generation_identity",
+ ]
+diff --git a/tests/test_llama_prefill_calibration_cache.py b/tests/test_llama_prefill_calibration_cache.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_llama_prefill_calibration_cache.py
+@@ -0,0 +1,251 @@
++from __future__ import annotations
++
++from minecraft_mod_ai.llama_finish_reason_contract import (
++    OUTPUT_EXHAUSTED,
++    LlamaCompletionBoundaryError,
++)
++from minecraft_mod_ai.model_adapters import llama_cpp_adapter as adapter_module
++from minecraft_mod_ai.model_adapters.base import AdapterConfig
++from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
++
++
++def _adapter(*, extra=None) -> LlamaCppAdapter:
++    return LlamaCppAdapter(
++        AdapterConfig(
++            role="coder",
++            adapter="llama_cpp",
++            model_id="test/model",
++            max_new_tokens=8192,
++            extra=extra or {},
++        )
++    )
++
++
++def _boundary(content: str) -> LlamaCompletionBoundaryError:
++    return LlamaCompletionBoundaryError(
++        "typed boundary",
++        kind=OUTPUT_EXHAUSTED,
++        partial_message={"role": "assistant", "content": content},
++        prompt_tokens=100,
++        completion_tokens=8192,
++        max_tokens=8192,
++    )
++
++
++def _qwen_nonthinking_extra() -> dict[str, object]:
++    return {
++        "runtime_contract": "qwen",
++        "qwen_family": "qwen3.5",
++        "qwen_tool_markup": "qwen3_coder_xml",
++        "qwen_action_thinking_control": "enable_thinking_false",
++        "qwen_preserve_thinking": False,
++        "qwen_reasoning_effort": False,
++        "qwen_assistant_prefill": True,
++    }
++
++
++def test_warm_repeated_prefill_reuses_one_managed_server_calibration(monkeypatch) -> None:
++    prefix = "<think>\n\n</think>\n\n"
++    calibration_calls = 0
++    outcomes = []
++    for _ in range(3):
++        outcomes.extend(
++            [
++                _boundary("A"),
++                {"role": "assistant", "content": prefix + "B"},
++            ]
++        )
++
++    def complete(_url, _payload):
++        outcome = outcomes.pop(0)
++        if isinstance(outcome, BaseException):
++            raise outcome
++        return outcome
++
++    def calibrate(_url, _payload):
++        nonlocal calibration_calls
++        calibration_calls += 1
++        return prefix
++
++    monkeypatch.setattr(adapter_module, "_completion_message", complete)
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: "managed:test-model:pid=123",
++    )
++
++    adapter = _adapter(extra=_qwen_nonthinking_extra())
++    payload = {
++        "model": "local",
++        "messages": [{"role": "user", "content": "go"}],
++        "max_tokens": 8192,
++        "chat_template_kwargs": {"enable_thinking": False},
++    }
++
++    results = [
++        adapter_module._completion_message_with_prefill(
++            adapter, "http://local", payload
++        )["content"]
++        for _ in range(3)
++    ]
++
++    assert results == ["AB", "AB", "AB"]
++    assert calibration_calls == 1
++    assert not outcomes
++
++
++def test_prefill_cache_is_scoped_to_wire_template_shape(monkeypatch) -> None:
++    calibration_calls = 0
++
++    def calibrate(_url, _payload):
++        nonlocal calibration_calls
++        calibration_calls += 1
++        return "prefix"
++
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: "managed:test-model:pid=123",
++    )
++    adapter = _adapter()
++    first = {"model": "local", "chat_template_kwargs": {"enable_thinking": False}}
++    second = {"model": "local", "chat_template_kwargs": {"enable_thinking": True}}
++
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://local", first
++    )
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://local", first
++    )
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://local", second
++    )
++
++    assert calibration_calls == 2
++
++
++def test_prefill_cache_is_scoped_to_managed_process_generation(monkeypatch) -> None:
++    calibration_calls = 0
++    identity = {"value": "managed:test-model:pid=123"}
++
++    def calibrate(_url, _payload):
++        nonlocal calibration_calls
++        calibration_calls += 1
++        return "prefix"
++
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: identity["value"],
++    )
++    adapter = _adapter()
++    payload = {"model": "local", "chat_template_kwargs": {"enable_thinking": False}}
++
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://local", payload
++    )
++    identity["value"] = "managed:test-model:pid=456"
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://local", payload
++    )
++
++    assert calibration_calls == 2
++
++
++def test_external_server_prefill_is_recalibrated_instead_of_cached(monkeypatch) -> None:
++    calibration_calls = 0
++
++    def calibrate(_url, _payload):
++        nonlocal calibration_calls
++        calibration_calls += 1
++        return "prefix"
++
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: "",
++    )
++    adapter = _adapter()
++    payload = {"model": "local", "chat_template_kwargs": {"enable_thinking": False}}
++
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://external", payload
++    )
++    adapter_module._cached_assistant_prefill_generation_prompt(
++        adapter, "http://external", payload
++    )
++
++    assert calibration_calls == 2
++
++
++def test_cached_prefix_mismatch_recalibrates_once_and_preserves_output(monkeypatch) -> None:
++    old_prefix = "<old-template>"
++    new_prefix = "<new-template>"
++    calibration_prefixes = [old_prefix, new_prefix]
++    outcomes = [
++        _boundary("A"),
++        {"role": "assistant", "content": old_prefix + "B"},
++        _boundary("C"),
++        {"role": "assistant", "content": new_prefix + "D"},
++    ]
++
++    def complete(_url, _payload):
++        outcome = outcomes.pop(0)
++        if isinstance(outcome, BaseException):
++            raise outcome
++        return outcome
++
++    def calibrate(_url, _payload):
++        return calibration_prefixes.pop(0)
++
++    monkeypatch.setattr(adapter_module, "_completion_message", complete)
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: "managed:test-model:pid=123",
++    )
++
++    adapter = _adapter(extra=_qwen_nonthinking_extra())
++    payload = {
++        "model": "local",
++        "messages": [{"role": "user", "content": "go"}],
++        "max_tokens": 8192,
++        "chat_template_kwargs": {"enable_thinking": False},
++    }
++
++    first = adapter_module._completion_message_with_prefill(
++        adapter, "http://local", payload
++    )
++    second = adapter_module._completion_message_with_prefill(
++        adapter, "http://local", payload
++    )
++
++    assert first["content"] == "AB"
++    assert second["content"] == "CD"
++    assert calibration_prefixes == []
++    assert outcomes == []

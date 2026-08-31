@@ -1,0 +1,116 @@
+name: W6 one-shot integration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: w6-one-shot-main
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      W6_BASE_SHA: ce9bd12f305a101a5b5fa2774ea0f442c3265b5d
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Configure integration committer
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Verify reviewed BASE and helper-only staging
+        run: |
+          test "$(git merge-base "$W6_BASE_SHA" HEAD)" = "$W6_BASE_SHA"
+          git diff --quiet "$W6_BASE_SHA" HEAD -- . ':(exclude).w6/**' ':(exclude).github/workflows/w6-integrate.yml'
+          for p in W1 W2 W3 W4 W5 W6; do test -s ".w6/${p}.patch"; done
+
+      - name: Install full test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev,ui]'
+
+      - name: Apply W1 and gate
+        run: |
+          git apply --check .w6/W1.patch
+          git apply .w6/W1.patch
+          python -m pytest -q tests/test_project_manifest_hash_efficiency_contract.py
+
+      - name: Apply W2 and gate
+        run: |
+          git apply --check .w6/W2.patch
+          git apply .w6/W2.patch
+          python -m pytest -q tests/test_llama_prefill_calibration_cache.py
+
+      - name: Apply W4 and gate
+        run: |
+          git apply --check .w6/W4.patch
+          git apply .w6/W4.patch
+          python -m pytest -q tests/test_project_context_read_cache.py
+
+      - name: Apply W3 and gate
+        run: |
+          git apply --check .w6/W3.patch
+          git apply .w6/W3.patch
+          python -m pytest -q \
+            tests/test_execution_feedback_replan_contract.py \
+            tests/test_repair_project_index_efficiency.py \
+            tests/test_small_model_adaptive_compute.py \
+            tests/test_work_graph_state_transition_contract.py \
+            tests/test_single_stream_repair_efficiency_contract.py
+
+      - name: Apply W5 and gate
+        run: |
+          git apply --check .w6/W5.patch
+          git apply .w6/W5.patch
+          python -m pytest -q tests/test_scalable_validator_policy_ownership.py
+
+      - name: Apply W6 shared wiring and gate
+        run: |
+          git apply --check .w6/W6.patch
+          git apply .w6/W6.patch
+          python -m pytest -q \
+            tests/test_llama_prefill_calibration_cache.py \
+            tests/test_project_context_read_cache.py
+
+      - name: Run repository static gates
+        run: |
+          python .github/scripts/debug_repo_audit.py
+          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -c 'import minecraft_mod_ai'
+          python tools/validate_colab_notebook.py
+
+      - name: Run full pytest suite
+        run: python -m pytest -q
+
+      - name: Commit integrated result and remove helper
+        run: |
+          git rm -r .w6 .github/workflows/w6-integrate.yml
+          git add -A
+          git diff --cached --check
+          git commit -m 'perf: integrate parallel optimization workers'
+          git push origin HEAD:main
+
+      - name: Cleanup helper if integration failed
+        if: ${{ failure() }}
+        run: |
+          git reset --hard HEAD
+          git clean -fd
+          git rm -r .w6 .github/workflows/w6-integrate.yml
+          git add -A
+          git commit -m 'chore: remove failed W6 integration helper' || true
+          git push origin HEAD:main || true
