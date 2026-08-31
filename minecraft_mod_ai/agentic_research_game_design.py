@@ -791,11 +791,6 @@ def _section_messages(
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-# deep_design_execution_contract previously wrapped this callable only to append production
-# depth instructions. Those instructions now live above, so prevent a second message owner.
-setattr(_section_messages, "__mmm_deep_design_section_prompt__", True)
-
-
 def _render_design_research(research: Mapping[str, Any]) -> str:
     compact = _compact_research_for_design(research)
     lines: list[str] = []
