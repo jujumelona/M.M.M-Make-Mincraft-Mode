@@ -256,7 +256,7 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
     assert raw == evidence
     assert document["page_count"] == len(pages)
     assert pages
-    assert document["model_projection"] == "lossless_ordered_utf8_fragments"
+    assert document["model_projection"] == "claim_bearing_source_bodies_only;raw_receipt_lossless"
     assert all(
         len(str(page.get("content", "")).encode("utf-8"))
         <= paged_rag._EVIDENCE_PAGE_CHARS
