@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-"""Repair the deep-design prompt wrapper after prose-first planning changed its API.
+"""Preserve the prose-first game-design section API through late runtime composition.
 
-The design model now emits Markdown/text and no longer has a model-repair loop.  The
-older deep-design execution wrapper still expected the retired ``prior_error`` and
-``prior_candidate`` arguments, which broke late runtime wrapper-integrity validation.
-This contract replaces that stale wrapper with an API-preserving four-argument wrapper
-while retaining the production-depth guidance.
+Game-design drafting now emits Markdown/text and is parsed by the host.  The older
+``deep_design_execution_contract`` wrapper predates that boundary and still requires the
+retired model-repair arguments ``prior_error`` and ``prior_candidate``.  Runtime wrapper
+integrity correctly rejects that API drift.  This contract arms the deep-design installer
+before late finalization and, immediately after that installer runs, replaces only the
+stale section-message wrapper with a four-argument wrapper that keeps the production-depth
+guidance.  No JSON response schema or model repair loop is reintroduced.
 """
 
 from collections.abc import Mapping, Sequence
@@ -32,22 +34,17 @@ _DEPTH_GUIDANCE = (
 )
 
 _INSTALLED = False
+_ARMED = False
+_INSTALLER_MARKER = "_mmm_prose_first_deep_design_compat_v1"
 
 
-def install() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    from . import agentic_research_game_design as agentic
-    from . import deep_design_execution_contract as deep
+def _repair_for(agentic: Any, deep: Any) -> bool:
+    """Replace exactly the stale six-argument wrapper; leave later owners untouched."""
 
     current = agentic._section_messages
     stale = deep._deep_section_messages
     if current is not stale:
-        # Another later owner already replaced the stale wrapper. Do not compete with it.
-        _INSTALLED = True
-        return
+        return False
 
     base = getattr(stale, "__wrapped__", None)
     if not callable(base):
@@ -76,7 +73,51 @@ def install() -> None:
     setattr(compatible_section_messages, deep._SECTION_MARKER, True)
     deep._deep_section_messages = compatible_section_messages
     agentic._section_messages = compatible_section_messages
+    return True
+
+
+def _repair() -> bool:
+    from . import agentic_research_game_design as agentic
+    from . import deep_design_execution_contract as deep
+
+    return _repair_for(agentic, deep)
+
+
+def install() -> None:
+    """Apply the post-deep-installer repair once in the current process."""
+
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    _repair()
     _INSTALLED = True
 
 
-__all__ = ["install"]
+def arm() -> None:
+    """Wrap the late deep-design installer so compatibility is repaired before checks."""
+
+    global _ARMED
+    if _ARMED:
+        return
+
+    from . import deep_design_execution_contract as deep
+
+    original_install = deep.install
+    if getattr(original_install, _INSTALLER_MARKER, False):
+        _ARMED = True
+        return
+
+    @wraps(original_install)
+    def install_with_prose_compat() -> None:
+        global _INSTALLED
+        original_install()
+        _INSTALLED = False
+        install()
+
+    setattr(install_with_prose_compat, _INSTALLER_MARKER, True)
+    install_with_prose_compat.__wrapped__ = original_install  # type: ignore[attr-defined]
+    deep.install = install_with_prose_compat
+    _ARMED = True
+
+
+__all__ = ["arm", "install"]
