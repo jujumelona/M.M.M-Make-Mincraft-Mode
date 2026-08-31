@@ -45,6 +45,7 @@ class BuildTargetSpec:
     gradle_version: str = "8.10.2"
     plugin_versions: Mapping[str, str] = field(default_factory=dict)
     mappings: str = "yarn"
+    mappings_kind: str = "yarn"
     loader_version: str = ""
     platform_api_version: str = ""
     platform_version: str = ""
@@ -57,6 +58,7 @@ class BuildTargetSpec:
             "gradle_version": self.gradle_version,
             "plugin_versions": dict(self.plugin_versions),
             "mappings": self.mappings,
+            "mappings_kind": self.mappings_kind,
             "loader_version": self.loader_version,
             "platform_api_version": self.platform_api_version,
             "platform_version": self.platform_version,
@@ -73,46 +75,27 @@ class BuildModel:
 
     @classmethod
     def for_target_context(cls, target_context: Mapping[str, Any]) -> BuildModel:
-        """Create a build model from the same verified target registry as scaffolding."""
+        """Create a build model from the exact provider receipt used by scaffolding."""
         from .verified_scaffold_registry import (
-            SUPPORTED_TARGET_SPECS,
-            UnsupportedTargetSpecificationError,
+            _adapter_from_target_context,
+            validate_scaffold_buildability,
         )
 
-        loader = str(target_context.get("loader") or "fabric").casefold().strip()
-        minecraft_version = str(
-            target_context.get("minecraft_version") or "1.21.1"
-        ).strip()
-        key = (loader, minecraft_version)
-        if key not in SUPPORTED_TARGET_SPECS:
-            raise UnsupportedTargetSpecificationError(
-                f"Target ({loader}@{minecraft_version}) has no verified build model"
-            )
-        verified = SUPPORTED_TARGET_SPECS[key]
+        adapter = _adapter_from_target_context(target_context)
+        validate_scaffold_buildability(adapter)
 
-        plugin_versions: dict[str, str] = {}
-        if loader == "fabric":
-            plugin_versions["fabric-loom"] = str(verified["loom_version"])
-        elif loader == "neoforge":
-            plugin_versions["neoforge-moddev"] = str(verified["moddev_version"])
-        elif loader == "forge":
-            plugin_versions["forgegradle"] = str(verified["forgegradle_version"])
-
+        plugin_versions = {"fabric-loom": str(adapter.fabric_loom)}
         return cls(
             target=BuildTargetSpec(
-                loader=loader,
-                minecraft_version=minecraft_version,
-                java_version=int(verified["java_release"]),
-                gradle_version=str(verified["gradle_version"]),
+                loader=adapter.loader,
+                minecraft_version=adapter.minecraft_version,
+                java_version=int(adapter.java_version),
+                gradle_version=adapter.gradle,
                 plugin_versions=plugin_versions,
-                mappings=str(verified.get("mappings") or "official"),
-                loader_version=str(verified.get("loader_version") or ""),
-                platform_api_version=str(verified.get("fabric_api") or ""),
-                platform_version=str(
-                    verified.get("neoforge_version")
-                    or verified.get("forge_version")
-                    or ""
-                ),
+                mappings=adapter.mappings_version,
+                mappings_kind=adapter.mappings_kind,
+                loader_version=adapter.fabric_loader,
+                platform_api_version=adapter.fabric_api,
             )
         )
 
@@ -138,22 +121,27 @@ class BuildModel:
                 )
             )
 
-    def render_gradle(self, *, modid: str = "generated_mod", version: str = "1.0.0") -> str:
-        """Render standard build.gradle from this authoritative build model."""
-        lines: list[str] = []
+    @staticmethod
+    def _unobfuscated_minecraft(version: str) -> bool:
+        major = str(version).strip().split(".", 1)[0]
+        return major.isdigit() and int(major) >= 26
 
-        # Plugins block
+    def render_gradle(self, *, modid: str = "generated_mod", version: str = "1.0.0") -> str:
+        """Render Gradle from the provider-bound target model."""
+        lines: list[str] = []
+        unobfuscated = self._unobfuscated_minecraft(self.target.minecraft_version)
+
         lines.append("plugins {")
         if self.target.loader == "fabric":
-            loom_ver = self.target.plugin_versions.get("fabric-loom", "1.9-SNAPSHOT")
-            lines.append(f'    id "fabric-loom" version "{loom_ver}"')
-        elif self.target.loader == "neoforge":
-            moddev_ver = self.target.plugin_versions.get("neoforge-moddev", "2.0.78")
-            lines.append(f'    id "net.neoforged.moddev" version "{moddev_ver}"')
-        elif self.target.loader == "forge":
-            forgegradle_ver = self.target.plugin_versions.get("forgegradle", "6.0.29")
-            lines.append(f'    id "net.minecraftforge.gradle" version "{forgegradle_ver}"')
+            loom_ver = self.target.plugin_versions["fabric-loom"]
+            loom_plugin = (
+                "net.fabricmc.fabric-loom"
+                if unobfuscated
+                else "net.fabricmc.fabric-loom-remap"
+            )
+            lines.append(f'    id "{loom_plugin}" version "{loom_ver}"')
         lines.append('    id "maven-publish"')
+        lines.append('    id "java"')
         lines.append("}")
         lines.append("")
 
@@ -162,47 +150,39 @@ class BuildModel:
         lines.append(f'base.archivesName = "{modid}"')
         lines.append("")
 
-        # Repositories block
         lines.append("repositories {")
         lines.append("    mavenCentral()")
         if self.target.loader == "fabric":
             lines.append('    maven { url = "https://maven.fabricmc.net/" }')
-        elif self.target.loader == "neoforge":
-            lines.append('    maven { url = "https://maven.neoforged.net/releases/" }')
-        elif self.target.loader == "forge":
-            lines.append('    maven { url = "https://maven.minecraftforge.net/" }')
         for repo in self.repositories:
             lines.append(f'    maven {{ url = "{repo.url}" }}')
         lines.append("}")
         lines.append("")
 
-        # Dependencies block
         lines.append("dependencies {")
         if self.target.loader == "fabric":
-            mappings = self.target.mappings
-            if ":" not in mappings:
-                mappings = f"net.fabricmc:yarn:{self.target.minecraft_version}+build.1:v2"
-            loader_version = self.target.loader_version or "0.16.9"
-            api_version = (
-                self.target.platform_api_version
-                or f"0.108.0+{self.target.minecraft_version}"
-            )
+            implementation = "implementation" if unobfuscated else "modImplementation"
             lines.append(
                 f'    minecraft "com.mojang:minecraft:{self.target.minecraft_version}"'
             )
-            lines.append(f'    mappings "{mappings}"')
+            if not unobfuscated:
+                if self.target.mappings_kind == "mojang":
+                    lines.append("    mappings loom.officialMojangMappings()")
+                elif self.target.mappings_kind == "yarn":
+                    lines.append(
+                        '    mappings '
+                        f'"net.fabricmc:yarn:{self.target.mappings}:v2"'
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported mappings kind: {self.target.mappings_kind!r}"
+                    )
             lines.append(
-                f'    modImplementation "net.fabricmc:fabric-loader:{loader_version}"'
+                f'    {implementation} "net.fabricmc:fabric-loader:{self.target.loader_version}"'
             )
             lines.append(
-                '    modImplementation '
-                f'"net.fabricmc.fabric-api:fabric-api:{api_version}"'
-            )
-        elif self.target.loader == "forge" and self.target.platform_version:
-            lines.append(
-                '    minecraft '
-                f'"net.minecraftforge:forge:{self.target.minecraft_version}-'
-                f'{self.target.platform_version}"'
+                f'    {implementation} '
+                f'"net.fabricmc.fabric-api:fabric-api:{self.target.platform_api_version}"'
             )
 
         for dep in self.dependencies:
@@ -212,20 +192,6 @@ class BuildModel:
         lines.append("}")
         lines.append("")
 
-        if self.target.loader == "neoforge" and self.target.platform_version:
-            lines.append("neoForge {")
-            lines.append(f'    version = "{self.target.platform_version}"')
-            lines.append("}")
-            lines.append("")
-        elif self.target.loader == "forge":
-            lines.append("minecraft {")
-            lines.append(
-                f'    mappings channel: "official", version: "{self.target.minecraft_version}"'
-            )
-            lines.append("}")
-            lines.append("")
-
-        # Java toolchain block
         lines.append("java {")
         lines.append(f"    sourceCompatibility = JavaVersion.VERSION_{self.target.java_version}")
         lines.append(f"    targetCompatibility = JavaVersion.VERSION_{self.target.java_version}")
