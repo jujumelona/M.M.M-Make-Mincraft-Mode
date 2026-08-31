@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from minecraft_mod_ai import model_router
 
@@ -10,6 +11,7 @@ from minecraft_mod_ai import model_router
 class _Call:
     name: str
     id: str
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 def test_mixed_tool_batch_runs_parallel_read_waves_around_serial_barrier(monkeypatch) -> None:
@@ -17,7 +19,7 @@ def test_mixed_tool_batch_runs_parallel_read_waves_around_serial_barrier(monkeyp
     calls = (
         _Call("search_code_rag", "a"),
         _Call("search_project_rag", "b"),
-        _Call("external_mcp_call", "barrier"),
+        _Call("external_mcp_call", "barrier", {"max_access": "write"}),
         _Call("inspect_existing_mod", "c"),
         _Call("quality_status", "d"),
     )
