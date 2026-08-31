@@ -3,7 +3,7 @@
 WORKER: 05
 ROLE: LLM Runtime + Context + Tool Calling
 STATUS: COMPLETE
-LAST_VERIFIED_MAIN_SHA: 9a95bbaa74e73e212ee050cee8508ecf0055b0ed
+LAST_VERIFIED_MAIN_SHA: 2f02fa85b9dfe7723c71d1630a2f0766d0eca23a
 FINAL_VERIFICATION_COMMIT: c0ff2010a59f2cb028447927b1bf545228598492
 FINAL_VERIFICATION_RUN: 33359005658
 
@@ -16,7 +16,8 @@ COMPLETED:
 - Canonicalized forced-tool capability handling with bounded cache TTL/cooldown behavior and per-key probe de-duplication while preserving termination/recovery contracts.
 - Canonicalized KV correctness/decode ownership and retained context-safety/tool-round regressions around it.
 - Canonicalized native hardware/prefill telemetry ownership; normal inference no longer requires auxiliary `/metrics` or `/slots` HTTP probes unless auxiliary telemetry is explicitly enabled.
-- Revalidated SSE/error handling, malformed/terminal tool-round behavior, context-window safety, forced-tool capability, KV correctness, liveness, and hardware telemetry together on current main.
+- Revalidated SSE/error handling, malformed/terminal tool-round behavior, context-window safety, forced-tool capability, KV correctness, liveness, and hardware telemetry together.
+- Reconciled the successful Worker 05 verification against current `main` at `2f02fa85b9dfe7723c71d1630a2f0766d0eca23a`: the 26 commits after `9a95bbaa74e73e212ee050cee8508ecf0055b0ed` changed no Worker 05 production-owned file in the ownership list below, so the successful focused gate remains applicable.
 
 ROOT_CAUSES_FIXED:
 - Healthy long prompt/generation work could previously look stalled because completion transport lacked sufficient semantic progress signaling and current llama.cpp decode progress was read from a stale slot field.
@@ -29,7 +30,8 @@ DECISIONS_AND_EVIDENCE:
 - Partial streamed tool content is not executable; execution waits for completed transport semantics.
 - Auxiliary hardware telemetry remains opt-in so default inference avoids extra metrics/slots probes.
 - Correctness-first context, tool termination/recovery, and KV contracts are kept in the final cross-surface regression rather than validated as isolated smoke tests only.
-- Worker 05 final verification intentionally uses a focused ownership gate so unrelated Worker 11/12 repository-wide CI failures cannot masquerade as Worker 05 runtime failures.
+- Worker 05 final verification intentionally uses a focused ownership gate so unrelated repository-wide failures cannot masquerade as Worker 05 runtime failures.
+- Current-main reconciliation used GitHub's compare file list rather than textual path mentions inside unrelated workflow/script diffs; none of the production ownership paths below appeared as changed files after the verified baseline.
 
 PRODUCTION_CHECKPOINTS:
 - 4d629b06772124fb7867ed040ab194001dfcf406 fix(llama): add progress-aware completion liveness
@@ -45,7 +47,8 @@ FINAL_VERIFICATION:
 - `.github/scripts/debug_repo_audit.py`: PASS.
 - Focused ruff checks over canonical Worker 05 owners: PASS.
 - Combined pytest regression: PASS for hardware/prefill telemetry, completion liveness, SSE error handling, tool-round policy, context safety/window accounting, forced-tool capability, and KV correctness.
-- After the successful gate, main advanced by three commits touching only Worker 6 workflow and audit-redactor files; comparison showed no Worker 05-owned file changes, so the Worker 05 verification remained applicable to `9a95bbaa74e73e212ee050cee8508ecf0055b0ed`.
+- Verification baseline `9a95bbaa74e73e212ee050cee8508ecf0055b0ed` is an ancestor of current main.
+- Current-main reconciliation to `2f02fa85b9dfe7723c71d1630a2f0766d0eca23a` covered 26 subsequent commits and found zero actual changes to Worker 05 production ownership paths, so no rerun was required to preserve applicability of the successful focused gate.
 
 FILES_CURRENTLY_RELEVANT:
 - minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
