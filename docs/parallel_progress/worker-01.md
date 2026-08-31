@@ -2,7 +2,7 @@
 
 WORKER: 01
 ROLE: Minecraft platform target + build scaffold authority
-STATUS: FINAL_VERIFYING
+STATUS: COMPLETE
 BASE_MAIN_SHA: 32b6b2ca92ce51fe060c23fb7a2c672c0e49f422
 IMPLEMENTATION_COMMIT: 2f02fa85b9dfe7723c71d1630a2f0766d0eca23a
 VERIFICATION_WORKFLOW_COMMIT: 11eb655267315a7814e20d1e711bac96fd8fd042
@@ -54,17 +54,23 @@ The removed static scaffold matrix topped out at Gradle 8.10.2, demonstrating th
 
 Executable production support remains Fabric-only because Fabric is the only registered executable provider. NeoForge/Forge must not be advertised until equivalent live metadata, generation, buildability, and validation providers exist.
 
-## Verification state
+## Verification result
 
-- Worker 01 implementation is present on current `main` ancestry.
-- The former repository static-audit blocker `.github/workflows/worker06-finalize-once.yml` was removed; the following global CI run confirmed `STATIC DEBUG AUDIT OK`.
-- Repository-wide CI still has a separate runtime-mutation-budget failure (`behavioral=424`, reviewed budget `413`) caused by concurrent repository changes outside Worker 01. Worker 01 adds no runtime rebinding and is being independently verified by `.github/workflows/worker01-final-verify.yml`.
+Dedicated Worker 01 workflow run `33369795186` on commit `08ebb4ac13e75f38e17e88adb70980aaab010207` completed successfully.
+
+- `python -m pytest -q tests/test_worker01_platform_scaffold_authority.py`: 10/10 passed.
+- `python -m compileall -q` on Worker 01 platform/scaffold modules and regression test: passed.
+- `python -m ruff check ... --select F,E7,E9`: passed (`All checks passed!`).
+- `python .github/scripts/debug_repo_audit.py`: passed (`STATIC DEBUG AUDIT OK: 375 package Python files and 17 workflows checked`).
+- The former repository static-audit blocker `.github/workflows/worker06-finalize-once.yml` was removed before final verification.
+
+Repository-wide CI separately reported a runtime-mutation-budget mismatch (`behavioral=424`, reviewed budget `413`) from concurrent repository changes outside Worker 01. Worker 01 adds no runtime rebinding; its scoped verification is green and does not bypass the repository's global gate.
 
 ## Residual limitations
 
 - First-time wrapper materialization requires network access unless a verified wrapper is already cached; failure is explicit and fail-closed.
 - Adding another loader requires a real executable provider plus equivalent scaffold/buildability validation, not static compatibility rows.
 
-FINAL_VERIFICATION_COMMIT: pending
-FINAL_VERIFICATION_RUN: pending
-UNRESOLVED: dedicated Worker 01 verification pending
+FINAL_VERIFICATION_COMMIT: 08ebb4ac13e75f38e17e88adb70980aaab010207
+FINAL_VERIFICATION_RUN: 33369795186
+UNRESOLVED: none in Worker 01 scope
