@@ -175,22 +175,40 @@ def install(work_graph_module: Any) -> None:
         artifact_hash = output_hash or receipt_hash
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT state FROM tasks WHERE node_id = ?", (node_id,)
+                """
+                SELECT state, output_hash, receipt_json, receipt_hash
+                FROM tasks WHERE node_id = ?
+                """,
+                (node_id,),
             ).fetchone()
             if row is None:
                 raise error_type(f"Unknown work node: {node_id}")
-            if row[0] not in {
-                work_graph_module.WorkState.RUNNING.value,
-                work_graph_module.WorkState.SUCCEEDED.value,
-            }:
-                raise error_type(f"Work node {node_id} is not running: {row[0]}")
-            connection.execute(
+
+            state = str(row[0])
+            if state == work_graph_module.WorkState.SUCCEEDED.value:
+                if (
+                    str(row[1] or "") == artifact_hash
+                    and str(row[2] or "") == receipt_json
+                    and str(row[3] or "") == receipt_hash
+                ):
+                    connection.commit()
+                    return self.task(node_id)
+                raise error_type(
+                    f"Work node {node_id} already succeeded with a different receipt."
+                )
+
+            if state != work_graph_module.WorkState.RUNNING.value:
+                raise error_type(
+                    f"Work node {node_id} cannot succeed from state {state}."
+                )
+
+            cursor = connection.execute(
                 """
                 UPDATE tasks
                 SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,
                     lease_owner = NULL, lease_until = NULL, error = NULL,
                     updated_at = ?
-                WHERE node_id = ?
+                WHERE node_id = ? AND state = ?
                 """,
                 (
                     work_graph_module.WorkState.SUCCEEDED.value,
@@ -199,8 +217,12 @@ def install(work_graph_module: Any) -> None:
                     receipt_hash,
                     time.time(),
                     node_id,
+                    work_graph_module.WorkState.RUNNING.value,
                 ),
             )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise error_type(f"Work node changed while succeeding: {node_id}")
             connection.commit()
         return self.task(node_id)
 
