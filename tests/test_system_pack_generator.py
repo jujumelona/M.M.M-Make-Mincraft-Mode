@@ -1,8 +1,11 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai import platform_specialized_generator_contract as specialized
 from minecraft_mod_ai.generator import FabricProjectGenerator
+from minecraft_mod_ai.platform_catalog import adapter_from_project
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 from minecraft_mod_ai.system_pack_generator import generate_system_pack
 from minecraft_mod_ai.system_pack_validation import validate_system_modules
@@ -28,11 +31,22 @@ def _project(root: Path) -> Path:
     return root
 
 
-def _system_module(
-    module_id: str,
-    kind: str,
-    config: dict,
-) -> dict:
+def _approve_specialized(
+    monkeypatch: pytest.MonkeyPatch,
+    project: Path,
+    *capabilities: str,
+) -> None:
+    adapter = adapter_from_project(project)
+    approved = replace(
+        adapter,
+        deterministic_module_kinds=frozenset(
+            {*adapter.deterministic_module_kinds, *capabilities}
+        ),
+    )
+    monkeypatch.setattr(specialized, "adapter_from_project", lambda _root: approved)
+
+
+def _system_module(module_id: str, kind: str, config: dict) -> dict:
     return {
         "module_id": module_id,
         "kind": kind,
@@ -44,11 +58,7 @@ def _system_module(
 
 def test_single_economy_manager_scales_shops_but_routes_extra_currency() -> None:
     modules = [
-        _system_module(
-            "credits",
-            "economy",
-            {"initial_balance": 0},
-        ),
+        _system_module("credits", "economy", {"initial_balance": 0}),
         *[
             _system_module(
                 f"shop_{index:04d}",
@@ -71,14 +81,7 @@ def test_single_economy_manager_scales_shops_but_routes_extra_currency() -> None
     with pytest.raises(ValueError, match="explicit instance namespace"):
         validate_system_modules(
             "economy-shop",
-            [
-                modules[0],
-                _system_module(
-                    "tokens",
-                    "economy",
-                    {"initial_balance": 0},
-                ),
-            ],
+            [modules[0], _system_module("tokens", "economy", {"initial_balance": 0})],
         )
 
 
@@ -103,8 +106,10 @@ def test_single_party_manager_has_unbounded_groups_but_routes_extra_manager() ->
 
 def test_system_pack_generates_real_fabric_binding_and_contract(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _project(tmp_path / "project")
+    _approve_specialized(monkeypatch, project, "quest", "system-pack:quest-system")
     result = generate_system_pack(
         project_root=project,
         pack_id="quest-system",
@@ -115,10 +120,7 @@ def test_system_pack_generates_real_fabric_binding_and_contract(
                 {
                     "module_id": "start",
                     "kind": "quest",
-                    "config": {
-                        "objective": "manual",
-                        "required": 1,
-                    },
+                    "config": {"objective": "manual", "required": 1},
                     "depends_on": [],
                     "required_gates": [],
                 }
@@ -128,9 +130,7 @@ def test_system_pack_generates_real_fabric_binding_and_contract(
     assert result["status"] == "fabric_binding_generated"
     paths = [Path(path) for path in result["files"]]
     assert all(path.is_file() for path in paths)
-    quest_java = next(
-        path for path in paths if path.name == "QuestSystem.java"
-    )
+    quest_java = next(path for path in paths if path.name == "QuestSystem.java")
     text = quest_java.read_text(encoding="utf-8")
     assert "CommandRegistrationCallback.EVENT.register" in text
     assert "MmmPersistentStore" in text
@@ -142,8 +142,16 @@ def test_system_pack_generates_real_fabric_binding_and_contract(
 
 def test_party_pack_generates_persistent_owner_controlled_lifecycle(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _project(tmp_path / "party-project")
+    _approve_specialized(
+        monkeypatch,
+        project,
+        "party",
+        "guild",
+        "system-pack:party-guild",
+    )
     result = generate_system_pack(
         project_root=project,
         pack_id="party-guild",
