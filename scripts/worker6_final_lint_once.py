@@ -12,6 +12,27 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def isolate_proof_test_from_scaffold(path: str) -> None:
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    if "def _worker6_isolate_scaffold(" in text:
+        return
+    anchor = "import minecraft_mod_ai.reuse_proof_executor as reuse_proof\n"
+    if text.count(anchor) != 1:
+        raise SystemExit(f"{path}: reuse_proof import anchor missing or ambiguous")
+    fixture = (
+        anchor
+        + "\n\n@pytest.fixture(autouse=True)\n"
+        + "def _worker6_isolate_scaffold(monkeypatch: pytest.MonkeyPatch) -> None:\n"
+        + "    monkeypatch.setattr(\n"
+        + "        reuse_proof,\n"
+        + "        \"scaffold_minimal_ephemeral_workspace\",\n"
+        + "        lambda *args, **kwargs: None,\n"
+        + "    )\n"
+    )
+    target.write_text(text.replace(anchor, fixture, 1), encoding="utf-8")
+
+
 replace_once(
     "minecraft_mod_ai/dependency_resolver.py",
     '''    payload = "\\n".join(\n        (\n            repository,\n            coordinate,\n            configuration,\n            target_loader.casefold(),\n            target_minecraft,\n        )\n    )\n''',
@@ -29,3 +50,10 @@ replace_once(
     '''        if path.endswith(".java") or path.endswith(".kt")\n''',
     '''        if path.endswith((".java", ".kt"))\n''',
 )
+
+for test_file in (
+    "tests/test_worker6_reuse_fail_closed.py",
+    "tests/test_worker6_reuse_hardening.py",
+    "tests/test_worker6_reuse_authority.py",
+):
+    isolate_proof_test_from_scaffold(test_file)
