@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-"""Make llama.cpp completion liveness depend on semantic model progress.
+"""Semantic-progress liveness and lifecycle ownership for llama.cpp SSE completions.
 
-The canonical completion client aggregates OpenAI-compatible SSE into one host-validated
-message. Long prompt/tool turns request prompt-progress events and bounded SSE comment
-pings, but transport pings are deliberately *not* model progress: a healthy TCP/server
-connection must not keep a stalled decode alive forever. A host watchdog therefore
-resets only on prompt processing, visible/reasoning/token/tool deltas, or terminal
-completion events. Current ``/slots`` decoding remains available for compatibility, but
-active completion liveness no longer polls ``/slots`` on the decode hot path.
-
-Every progress-aware request also owns a correlation id and emits a complete lifecycle:
-created -> accepted -> first semantic progress -> complete/failure -> finalized.  Failure
-records include the managed llama-server PID/exit status when MMM owns that process, so
-an accepted request can no longer disappear from the Python log without a boundary
-record while the Python process is still alive.
+Transport keepalive activity is not model progress. The watchdog is reset only by
+prompt processing, decode/tool deltas, or terminal completion events. Lifecycle logging
+must also distinguish a real request failure from Python's normal generator close after
+the consumer has already observed ``data: [DONE]``.
 """
 
 import json
@@ -75,13 +66,23 @@ def _managed_server_state() -> str:
         pid = getattr(process, "pid", None)
         try:
             returncode = process.poll()
-        except Exception as exc:  # noqa: BLE001 - diagnostic path must never mask failure
+        except Exception as exc:  # diagnostics must never mask the original failure
             return f"managed_pid={pid or 'unknown'} poll_error={type(exc).__name__}"
-        return (
+        state = (
             f"managed_pid={pid or 'unknown'} "
             f"managed_returncode={returncode if returncode is not None else 'running'}"
         )
-    except Exception as exc:  # noqa: BLE001 - diagnostic path must never mask failure
+        if returncode is not None:
+            stderr_tail = getattr(llama_server_autotune, "_server_stderr_tail", None)
+            if callable(stderr_tail):
+                try:
+                    tail = str(stderr_tail(process) or "").strip()
+                except Exception:
+                    tail = ""
+                if tail:
+                    state += f" stderr_tail={tail[:4096]}"
+        return state
+    except Exception as exc:  # diagnostics must never mask the original failure
         return f"managed_state_error={type(exc).__name__}"
 
 
@@ -145,7 +146,7 @@ def _semantic_progress_from_sse_line(
     *,
     last_prompt_processed: int | None,
 ) -> tuple[bool, int | None]:
-    """Return whether one SSE line proves model progress, excluding keepalive pings."""
+    """Return semantic progress for one SSE line, excluding transport pings."""
 
     if isinstance(raw_line, bytes):
         line = raw_line.decode("utf-8", errors="replace").strip()
@@ -307,7 +308,9 @@ class _ProgressCheckedResponse:
                 if _done_line(raw_line):
                     self._saw_done = True
                 yield raw_line
-        except BaseException as exc:
+        except Exception as exc:
+            # GeneratorExit is BaseException, not Exception. A consumer normally closes this
+            # generator immediately after observing [DONE]; that is completion, not failure.
             self._finalize(exc)
             raise
         finally:
@@ -335,7 +338,7 @@ class _ProgressCheckedStream:
     def __enter__(self) -> Any:
         try:
             response = self._stream.__enter__()
-        except BaseException as exc:
+        except Exception as exc:
             print(
                 "llama server: lifecycle connect failure",
                 f" request_id={self._request_id}",
@@ -375,7 +378,9 @@ class _ProgressCheckedStream:
         tb: TracebackType | None,
     ) -> Any:
         if self._checked_response is not None:
-            self._checked_response._finalize(exc)
+            # Do not convert normal generator cancellation/close into request failure.
+            reported_exc = exc if isinstance(exc, Exception) else None
+            self._checked_response._finalize(reported_exc)
         return self._stream.__exit__(exc_type, exc, tb)
 
 
@@ -491,7 +496,7 @@ def _install_stream_progress_payload(stream_module: Any) -> None:
 
 
 def _install_adapter_completion_transport(stream_module: Any, adapter_module: Any) -> None:
-    """Replace the blind heartbeat wrapper with the canonical SSE liveness owner."""
+    """Replace blind heartbeat wrapping with the canonical SSE liveness owner."""
 
     current = adapter_module._post_completion
     if getattr(current, _ADAPTER_MARKER, False):
