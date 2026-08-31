@@ -61,9 +61,6 @@ def finalize_runtime() -> None:
             small_model_max_agent_contract,
             work_graph,
         )
-        from .active_game_design_readiness_contract import (
-            install as install_active_game_design_readiness,
-        )
         from .agent_observation_determinism import (
             install as install_observation_determinism,
         )
@@ -203,7 +200,6 @@ def finalize_runtime() -> None:
         install_semantic_requirement_authority()
         install_planner_graph_integrity()
         install_planner_design_readiness()
-        install_active_game_design_readiness()
         # Graph expansion runs before retrieval. Rebind every design facet to explicit or
         # conservative authored requirement ownership before deep-design task compilation.
         install_planner_requirement_traceability()
@@ -218,9 +214,6 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        # Section generation remains owned by agentic_research_game_design, while the
-        # current host-owned GameDesignPlanner path is guarded by the readiness contract.
-        # Neither contract introduces a competing field/subtree generator.
         install_implementation_kind_boundary(
             complete_spec_module=complete_spec,
             support_module=complete_orchestrator_support,
@@ -235,8 +228,6 @@ def finalize_runtime() -> None:
         )
 
         # Validate the runtime only after every late installer has mutated its owner.
-        # Earlier checks observed an intermediate graph and could not detect breakage in
-        # deep-design, evidence, target-grounding, production, or feedback wrappers.
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
             external_mcp_router_module=external_mcp_router,
