@@ -38,8 +38,13 @@ class _SectionRouter:
                 "enable_tools": enable_tools,
             }
         )
-        request_payload = json.loads(messages[-1]["content"])
-        required = tuple(request_payload["required_fields"])
+        user_text = str(messages[-1]["content"])
+        required = tuple(
+            field
+            for _section_id, fields, _properties in agentic._SECTION_SPECS
+            for field in fields
+            if f"- ## {field}" in user_text
+        )
         values = {
             "title": "연구 기반 모드",
             "pitch": "검색 근거를 바탕으로 설계한다.",
@@ -52,10 +57,21 @@ class _SectionRouter:
             "acceptance_tests": ["요청한 핵심 루프가 게임 내에서 동작한다"],
             "art_direction": {},
         }
-        return json.dumps(
-            {"section": {field: values[field] for field in required}},
-            ensure_ascii=False,
-        )
+        blocks: list[str] = []
+        for field in required:
+            blocks.append(f"## {field}")
+            value = values[field]
+            if isinstance(value, str):
+                blocks.append(value)
+            elif field in {"modules", "assets"}:
+                blocks.append("- none")
+            elif isinstance(value, list):
+                blocks.extend(f"- {item}" for item in value)
+            elif isinstance(value, dict):
+                for key, items in value.items():
+                    blocks.append(f"### {key}")
+                    blocks.extend(f"- {item}" for item in items)
+        return "\n".join(blocks)
 
 
 class _ResearchRouter:
@@ -108,7 +124,7 @@ def _deterministic_research() -> dict[str, object]:
     }
 
 
-def test_sectioned_game_design_generates_each_section_once_with_exact_schema() -> None:
+def test_sectioned_game_design_generates_each_section_once_as_prose() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -130,15 +146,15 @@ def test_sectioned_game_design_generates_each_section_once_with_exact_schema() -
     ]
     assert len(router.calls) == len(expected_sections)
     assert all(call["role"] == "planner" for call in router.calls)
-    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(call["response_format"] == "text" for call in router.calls)
+    assert all(call["response_schema"] is None for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
     for fields, call in zip(expected_sections, router.calls, strict=True):
-        schema = call["response_schema"]
-        assert isinstance(schema, dict)
-        section_schema = schema["properties"]["section"]
-        assert list(section_schema["properties"]) == list(fields)
-        assert section_schema["required"] == list(fields)
-        assert section_schema["additionalProperties"] is False
+        system = str(call["messages"][0]["content"])
+        user = str(call["messages"][-1]["content"])
+        assert "not JSON" in system
+        for field in fields:
+            assert f"- ## {field}" in user
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
