@@ -108,6 +108,19 @@ def test_native_tool_turn_is_not_schema_clamped():
     assert structured_response_token_ceiling(request) is None
 
 
+def test_generic_json_turn_is_not_planner_section_clamped():
+    request = SimpleNamespace(
+        response_format="json",
+        response_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        tools=(),
+    )
+    assert structured_response_token_ceiling(request) is None
+
+
 def test_semantic_watchdog_ignores_ping_and_times_out_without_model_progress():
     clock = _Clock()
     watchdog = _SemanticProgressWatchdog(5.0, clock=clock)
@@ -143,6 +156,8 @@ def test_lifecycle_logs_first_progress_completion_and_finalization(capsys):
     )
     assert list(response.iter_lines())[-1] == "data: [DONE]"
     output = capsys.readouterr().out
-    assert "first semantic progress request_id=test-request" in output
-    assert "lifecycle complete request_id=test-request" in output
-    assert "lifecycle finalized request_id=test-request" in output
+    assert "first semantic progress" in output
+    assert "request_id=test-request" in output
+    assert "lifecycle complete" in output
+    assert "first_semantic_progress=yes" in output
+    assert "lifecycle finalized" in output
