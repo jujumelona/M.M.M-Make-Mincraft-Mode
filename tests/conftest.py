@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 
 import pytest
@@ -37,14 +38,23 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
         fabric_loader="test-loader",
         fabric_api="test-api",
         fabric_loom="test-loom",
-        gradle="test-gradle",
+        gradle="8.10.2",
         gradle_sha256="0" * 64,
         data_pack_version="1",
         resource_pack_version="1",
         resource_pack_format=1,
         release_metadata_url="https://www.minecraft.net/test-fixture/mmm-test-target",
         source_api_family="fabric_reviewed_test_template",
-        deterministic_module_kinds=MODULE_KINDS,
+        deterministic_module_kinds=frozenset((
+            *MODULE_KINDS,
+            "system-pack:quest-system",
+            "system-pack:class-skill-system",
+            "system-pack:economy-shop",
+            "system-pack:gui-networking",
+            "system-pack:party-guild",
+            "geckolib:entity",
+            "geckolib:version:4.8.2",
+        )),
     )
 
 
@@ -94,7 +104,7 @@ def _complete_partial_test_target(target):
     completed.setdefault("fabric_loader", "test-loader")
     completed.setdefault("fabric_api", "test-api")
     completed.setdefault("fabric_loom", "test-loom")
-    completed.setdefault("gradle", "test-gradle")
+    completed.setdefault("gradle", "8.10.2")
     completed.setdefault("gradle_sha256", "0" * 64)
     completed.setdefault("data_pack_version", "1")
     completed.setdefault("resource_pack_version", "1")
@@ -221,6 +231,7 @@ def _isolate_test_runtime_state(
 
     original_generate = FabricProjectGenerator.generate
 
+    @wraps(original_generate)
     def generate_with_explicit_test_target(self, spec, root):
         if spec.platform.is_unresolved():
             spec = replace(spec, platform=_platform_lock_from_adapter(synthetic_adapter))
