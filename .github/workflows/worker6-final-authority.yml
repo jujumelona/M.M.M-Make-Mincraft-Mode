@@ -1,5 +1,6 @@
 name: Worker6 final proof authority
 
+# Final retry uses proof-only test fixtures; scaffold provider validation is tested elsewhere.
 on:
   push:
     branches: [main]
