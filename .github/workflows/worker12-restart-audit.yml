@@ -37,6 +37,13 @@ jobs:
             minecraft_mod_ai/agentic_optimization_contract.py \
             tools/colab_runtime_setup.py \
             tests/test_worker12_shared_core.py \
+            --select F,E7,E9 --fix
+          git diff --check
+          python -m ruff check \
+            minecraft_mod_ai/trajectory_memory.py \
+            minecraft_mod_ai/agentic_optimization_contract.py \
+            tools/colab_runtime_setup.py \
+            tests/test_worker12_shared_core.py \
             --select F,E7,E9
           python tools/validate_colab_notebook.py
       - name: Worker 12 focused regression suite
