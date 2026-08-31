@@ -68,9 +68,9 @@ class RepairEngine:
     """Diagnostics -> indexed context -> exact patch -> rebuild loop.
 
     No file-count truncation is used. The whole project is indexed and relevant files
-    are selected within an explicit byte budget. By default repair is progress-driven:
-    it continues while validation produces a new normalized failure state and stops on
-    PASS or repeated machine evidence. ``max_attempts`` is only an explicit caller cap.
+    are selected within an explicit byte budget. Repair remains progress-sensitive, but
+    host control owns termination: one repair call may request at most two candidates.
+    ``max_attempts`` may lower that limit, but cannot raise the host hard cap.
     """
 
     def __init__(
@@ -104,6 +104,8 @@ class RepairEngine:
         ):
             raise RepairEngineError("max_attempts must be null or a positive integer.")
 
+        attempt_limit = min(max_attempts or 2, 2)
+
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
         # run state on the reusable RepairEngine instance.
@@ -112,6 +114,7 @@ class RepairEngine:
         try:
             receipts: list[dict[str, Any]] = []
             signatures: set[str] = set()
+            repair_attempts = 0
             while True:
                 attempt = len(receipts)
                 evidence = self._evidence(root, run_gametest=run_gametest)
@@ -137,17 +140,22 @@ class RepairEngine:
                     }
                 signatures.add(signature)
 
-                if max_attempts is not None and attempt >= max_attempts:
+                if repair_attempts >= attempt_limit:
                     return {
                         "schema_version": "mmm/repair-result-v2",
                         "status": "FAIL",
                         "attempts": attempt,
-                        "stop_reason": "explicit_max_attempts",
+                        "stop_reason": (
+                            "explicit_max_attempts"
+                            if max_attempts is not None and max_attempts <= 2
+                            else "hard_max_attempts"
+                        ),
                         "evidence": evidence,
                         "patch_receipts": receipts,
                     }
 
                 context = self._context(root, evidence)
+                repair_attempts += 1
                 try:
                     patch = self._request_patch(evidence, context)
                     if not patch:

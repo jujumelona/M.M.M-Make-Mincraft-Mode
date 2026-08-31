@@ -167,3 +167,47 @@ def test_failed_repair_reuses_last_evidence_without_extra_validation(
     assert result["status"] == "FAIL"
     assert calls == 2
     assert result["evidence"]["build"]["error"] == "compile failure 2"
+
+
+def _run_distinct_empty_repairs(tmp_path: Path, *, max_attempts=None):
+    engine = RepairEngine(router=object(), gradle_cache=tmp_path / "gradle-cache")
+    counts = {"evidence": 0, "patch": 0}
+
+    def evidence(_root: Path, *, run_gametest: bool) -> dict:
+        counts["evidence"] += 1
+        return _failed(
+            f"distinct compile failure {counts['evidence']}",
+            "src/main/java/example/Only.java",
+        )
+
+    def request_patch(_evidence: dict, _context: dict):
+        counts["patch"] += 1
+        return []
+
+    engine._evidence = evidence
+    engine._context = lambda _root, _evidence: {}
+    engine._request_patch = request_patch
+    kwargs = {} if max_attempts is None else {"max_attempts": max_attempts}
+    result = _base_repair_function()(
+        engine,
+        tmp_path,
+        run_gametest=False,
+        **kwargs,
+    )
+    return result, counts
+
+
+def test_default_repair_hard_cap_bounds_distinct_failure_states(tmp_path: Path) -> None:
+    result, counts = _run_distinct_empty_repairs(tmp_path)
+
+    assert result["status"] == "FAIL"
+    assert result["stop_reason"] == "hard_max_attempts"
+    assert counts == {"evidence": 3, "patch": 2}
+
+
+def test_explicit_large_repair_budget_cannot_raise_host_hard_cap(tmp_path: Path) -> None:
+    result, counts = _run_distinct_empty_repairs(tmp_path, max_attempts=8)
+
+    assert result["status"] == "FAIL"
+    assert result["stop_reason"] == "hard_max_attempts"
+    assert counts == {"evidence": 3, "patch": 2}

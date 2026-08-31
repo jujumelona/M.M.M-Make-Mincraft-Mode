@@ -143,6 +143,31 @@ def test_audit_metadata_does_not_invalidate_source_manifest_cache(tmp_path: Path
     assert orchestrator.calls == 1
 
 
+def test_metadata_signature_prunes_ignored_subtrees(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_source(tmp_path)
+    ignored = tmp_path / "build/generated"
+    ignored.mkdir(parents=True)
+    (ignored / "Ignored.java").write_text("class Ignored {}\n", encoding="utf-8")
+
+    real_stat = Path.stat
+
+    def guarded_stat(path: Path, *args, **kwargs):
+        relative = path.relative_to(tmp_path)
+        if "build" in relative.parts:
+            raise AssertionError("ignored build subtree must not be stat-scanned")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", guarded_stat)
+    _orchestrator_module, project_index_module = _modules()
+
+    signature = contract._metadata_signature(project_index_module, tmp_path)
+
+    assert len(signature) == 64
+
+
 def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
     source = (ROOT / "minecraft_mod_ai/complete_orchestrator.py").read_text(encoding="utf-8")
     tree = ast.parse(source)

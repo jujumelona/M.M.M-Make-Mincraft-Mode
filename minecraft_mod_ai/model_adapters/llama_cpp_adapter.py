@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -40,6 +41,8 @@ _REASONING_CONTINUATION = (
 )
 _PREFILL_CALIBRATION_SENTINEL = "MMM_ASSISTANT_PREFILL_CALIBRATION_V1"
 _MAX_PREFILL_TEMPLATE_BYTES = 512
+_MAX_PREFILL_TEMPLATE_CACHE_ENTRIES = 8
+_PREFILL_TEMPLATE_CACHE_LOCK = threading.RLock()
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -364,6 +367,70 @@ def _calibrate_assistant_prefill_generation_prompt(
     return content
 
 
+def _assistant_prefill_server_identity(server_url: str) -> str:
+    """Return a cache-safe identity only for MMM's live managed llama-server."""
+
+    try:
+        from ..llama_server_autotune import managed_server_generation_identity
+
+        return managed_server_generation_identity(server_url)
+    except Exception:
+        # Externally managed servers do not expose a process generation that lets us
+        # prove a cached Jinja prefix is still current. Recalibrate instead of risking
+        # stale template bytes after an unseen server restart.
+        return ""
+
+
+def _assistant_prefill_cache_key(
+    server_url: str,
+    original: Mapping[str, Any],
+) -> str:
+    server_identity = _assistant_prefill_server_identity(server_url)
+    if not server_identity:
+        return ""
+    try:
+        encoded = json.dumps(
+            _assistant_prefill_calibration_payload(original),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        return ""
+    return f"{server_identity}\0{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _cached_assistant_prefill_generation_prompt(
+    adapter: LlamaCppAdapter,
+    server_url: str,
+    original: Mapping[str, Any],
+    *,
+    refresh: bool = False,
+) -> str:
+    cache_key = _assistant_prefill_cache_key(server_url, original)
+    if not cache_key:
+        return _calibrate_assistant_prefill_generation_prompt(server_url, original)
+
+    # Managed-server calibration is single-flight. Holding this lock through the rare
+    # calibration request prevents parallel first-use callers from issuing duplicate
+    # apply-template requests for the same process/template identity.
+    with _PREFILL_TEMPLATE_CACHE_LOCK:
+        cache = getattr(adapter, "_prefill_template_prefix_cache", None)
+        if not refresh and isinstance(cache, dict):
+            cached = cache.get(cache_key)
+            if isinstance(cached, str) and cached:
+                return cached
+
+        calibrated = _calibrate_assistant_prefill_generation_prompt(server_url, original)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(adapter, "_prefill_template_prefix_cache", cache)
+        cache[cache_key] = calibrated
+        while len(cache) > _MAX_PREFILL_TEMPLATE_CACHE_ENTRIES:
+            cache.pop(next(iter(cache)))
+        return calibrated
+
+
 def _completion_message_with_prefill(
     adapter: LlamaCppAdapter,
     server_url: str,
@@ -404,6 +471,33 @@ def _completion_message_with_prefill(
     progress_bytes = 0
     progress_sha256 = ""
     calibrated_template_prefix = ""
+    prefill_refresh_used = False
+
+    def normalize_prefill_page(message: Mapping[str, Any]) -> dict[str, Any]:
+        nonlocal calibrated_template_prefix, prefill_refresh_used
+        try:
+            return _normalize_assistant_prefill_suffix(
+                message,
+                continuation_page=bool(accumulated),
+                template_prefix=calibrated_template_prefix,
+            )
+        except RuntimeError:
+            if (
+                not accumulated
+                or not qwen_nonthinking_page
+                or not calibrated_template_prefix
+                or prefill_refresh_used
+            ):
+                raise
+            prefill_refresh_used = True
+            calibrated_template_prefix = _cached_assistant_prefill_generation_prompt(
+                adapter, server_url, original_payload, refresh=True
+            )
+            return _normalize_assistant_prefill_suffix(
+                message,
+                continuation_page=True,
+                template_prefix=calibrated_template_prefix,
+            )
 
     while True:
         try:
@@ -413,11 +507,7 @@ def _completion_message_with_prefill(
             if boundary is None:
                 raise
             try:
-                partial = _normalize_assistant_prefill_suffix(
-                    boundary.partial_message,
-                    continuation_page=bool(accumulated),
-                    template_prefix=calibrated_template_prefix,
-                )
+                partial = normalize_prefill_page(boundary.partial_message)
             except RuntimeError as prefix_exc:
                 if not accumulated:
                     raise
@@ -467,9 +557,8 @@ def _completion_message_with_prefill(
             if qwen_nonthinking_page and not calibrated_template_prefix:
                 try:
                     calibrated_template_prefix = (
-                        _calibrate_assistant_prefill_generation_prompt(
-                            server_url,
-                            original_payload,
+                        _cached_assistant_prefill_generation_prompt(
+                            adapter, server_url, original_payload
                         )
                     )
                 except Exception as calibration_exc:
@@ -487,11 +576,7 @@ def _completion_message_with_prefill(
             continue
 
         try:
-            normalized_final = _normalize_assistant_prefill_suffix(
-                final_message,
-                continuation_page=bool(accumulated),
-                template_prefix=calibrated_template_prefix,
-            )
+            normalized_final = normalize_prefill_page(final_message)
         except RuntimeError as prefix_exc:
             if not accumulated:
                 raise

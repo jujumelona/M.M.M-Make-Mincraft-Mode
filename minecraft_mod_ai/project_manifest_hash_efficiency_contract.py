@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 from contextvars import ContextVar
 from functools import wraps
@@ -20,19 +21,36 @@ _SPECIAL_NAMES = frozenset(
 
 
 def _metadata_signature(project_index_module: Any, root: Path) -> str:
-    """Fingerprint source metadata without reading or tokenizing file contents."""
+    """Fingerprint source metadata without walking ignored build/cache subtrees."""
 
     digest = hashlib.sha256()
     root = root.resolve()
-    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-        if not path.is_file() or path.is_symlink():
-            continue
+    ignored_parts = project_index_module._IGNORED_PARTS
+    text_suffixes = project_index_module._TEXT_SUFFIXES
+    candidates: list[Path] = []
+
+    for current_root, dir_names, file_names in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+    ):
+        # rglob() discovers the full tree before the ignored-part filter runs. Large
+        # build/cache directories therefore made even a cache-hit check scale with
+        # generated output. Prune those directories before descent instead.
+        dir_names[:] = [name for name in dir_names if name not in ignored_parts]
+        current = Path(current_root)
+        for name in file_names:
+            path = current / name
+            if path.is_symlink():
+                continue
+            if path.suffix.lower() not in text_suffixes and name not in _SPECIAL_NAMES:
+                continue
+            candidates.append(path)
+
+    # Preserve the previous path ordering so unchanged source metadata produces the
+    # exact same signature after this host-side traversal optimization.
+    for path in sorted(candidates, key=lambda item: item.as_posix()):
         relative = path.relative_to(root)
-        if any(part in project_index_module._IGNORED_PARTS for part in relative.parts):
-            continue
-        suffix = path.suffix.lower()
-        if suffix not in project_index_module._TEXT_SUFFIXES and path.name not in _SPECIAL_NAMES:
-            continue
         stat = path.stat()
         record = (
             relative.as_posix(),

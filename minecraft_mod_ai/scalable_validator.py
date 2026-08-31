@@ -11,7 +11,6 @@ class ScalableProjectValidator:
 
     def __init__(self, *, policy: ScalePolicy | None = None) -> None:
         self.policy = policy or ScalePolicy.from_environment()
-        self.policy.validate()
         self.validator = ProjectValidator(policy=self.policy)
 
     def validate(self, root: Path, spec) -> ValidationReport:

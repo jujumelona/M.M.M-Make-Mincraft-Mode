@@ -620,15 +620,18 @@ def _install_run_context(orchestrator_module: Any) -> None:
 
     @wraps(current_execute)
     def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
-        # Termination is state based: an identical validation/ownership fingerprint is
-        # never replayed twice.  New evidence may continue the loop without imposing a
-        # tiny arbitrary retry count.
+        # Termination is bounded by both semantic progress and an absolute host cap:
+        # duplicate validation/ownership fingerprints never replay, and even distinct
+        # new evidence gets at most two repair re-entries for one execute() call.
         seen: set[str] = set()
+        repair_attempts = 0
         call_kwargs = dict(kwargs)
         while True:
             try:
                 return current_execute(self, *args, **call_kwargs)
             except orchestrator_module.CompleteProductionError:
+                if repair_attempts >= 2:
+                    raise
                 ledger = getattr(self, "_mmm_feedback_ledger", None)
                 if ledger is None or not hasattr(ledger, "invalidate_execution_feedback"):
                     raise
@@ -645,6 +648,7 @@ def _install_run_context(orchestrator_module: Any) -> None:
                 ):
                     raise
                 seen.add(fingerprint)
+                repair_attempts += 1
                 options = call_kwargs.get("options")
                 if options is None:
                     options = orchestrator_module.CompleteExecutionOptions(resume=True)

@@ -48,6 +48,8 @@ _IGNORED_PARTS = {
 }
 _MANIFEST_SHARD_SIZE = 256
 _RANK_CACHE_MAX_ENTRIES = 32
+_SOURCE_CACHE_MAX_ENTRIES = 32
+_SOURCE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 _PROJECT_CONTEXT_CURSOR = re.compile(
     r"^pc1:(?P<position>[0-9]+):(?P<offset>[0-9]+):(?P<page>[0-9]+):"
     r"(?P<fingerprint>[0-9a-f]{24})$"
@@ -65,6 +67,17 @@ class IndexedFile:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class _SourceCacheEntry:
+    device: int
+    inode: int
+    size_bytes: int
+    mtime_ns: int
+    ctime_ns: int
+    verified_sha256: str | None
+    content: bytes
 
 
 class ProjectIndex:
@@ -91,6 +104,8 @@ class ProjectIndex:
         ] = {}
         self._manifest_fast_receipts: set[tuple[str, str]] = set()
         self._manifest_shard_cache: dict[int, tuple[bytes, str]] = {}
+        self._source_cache: dict[str, _SourceCacheEntry] = {}
+        self._source_cache_bytes = 0
 
     def _scan(self) -> tuple[IndexedFile, ...]:
         indexed: list[IndexedFile] = []
@@ -190,6 +205,7 @@ class ProjectIndex:
             if resolved is None:
                 continue
             normalized, path = resolved
+            self._drop_source_cache(normalized)
             position, existed = self._find_position(files, normalized)
             before = files[position] if existed else None
             item = self._indexed_file(normalized, path)
@@ -238,6 +254,136 @@ class ProjectIndex:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         return "sha256:" + digest.hexdigest()
+
+    @staticmethod
+    def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int, int]:
+        return (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+            stat_result.st_ctime_ns,
+        )
+
+    def _drop_source_cache(self, normalized: str) -> None:
+        cached = self._source_cache.pop(normalized, None)
+        if cached is None:
+            return
+        self._source_cache_bytes = max(
+            0,
+            self._source_cache_bytes - len(cached.content),
+        )
+
+    def _remember_source_bytes(
+        self,
+        normalized: str,
+        *,
+        stat_result: os.stat_result,
+        verified_sha256: str | None,
+        raw: bytes,
+    ) -> None:
+        self._drop_source_cache(normalized)
+        if len(raw) > _SOURCE_CACHE_MAX_BYTES:
+            return
+        while self._source_cache and (
+            len(self._source_cache) >= _SOURCE_CACHE_MAX_ENTRIES
+            or self._source_cache_bytes + len(raw) > _SOURCE_CACHE_MAX_BYTES
+        ):
+            self._drop_source_cache(next(iter(self._source_cache)))
+        self._source_cache[normalized] = _SourceCacheEntry(
+            device=stat_result.st_dev,
+            inode=stat_result.st_ino,
+            size_bytes=stat_result.st_size,
+            mtime_ns=stat_result.st_mtime_ns,
+            ctime_ns=stat_result.st_ctime_ns,
+            verified_sha256=verified_sha256,
+            content=raw,
+        )
+        self._source_cache_bytes += len(raw)
+
+    def _read_indexed_bytes(
+        self,
+        item: IndexedFile,
+        *,
+        verify_sha256: bool = False,
+    ) -> bytes:
+        """Read an indexed text file once and safely reuse its immutable snapshot.
+
+        Cache hits are accepted only while the path still resolves to the same file
+        identity/size/mtime tuple. Paginated source reads additionally retain the
+        existing index SHA-256 guard so a stale cursor can never hide an edit.
+        """
+
+        path = self.root / item.path
+        try:
+            current_stat = path.stat()
+        except OSError:
+            self._drop_source_cache(item.path)
+            raise
+        current_signature = self._source_signature(current_stat)
+        cached = self._source_cache.get(item.path)
+        if cached is not None:
+            cached_signature = (
+                cached.device,
+                cached.inode,
+                cached.size_bytes,
+                cached.mtime_ns,
+                cached.ctime_ns,
+            )
+            if cached_signature == current_signature:
+                verified = cached.verified_sha256
+                if verify_sha256 and verified is None:
+                    verified = "sha256:" + hashlib.sha256(cached.content).hexdigest()
+                    if verified != item.sha256:
+                        self._drop_source_cache(item.path)
+                        raise ValueError(
+                            "Project source changed after its context index was built: "
+                            f"{item.path}"
+                        )
+                    cached = _SourceCacheEntry(
+                        device=cached.device,
+                        inode=cached.inode,
+                        size_bytes=cached.size_bytes,
+                        mtime_ns=cached.mtime_ns,
+                        ctime_ns=cached.ctime_ns,
+                        verified_sha256=verified,
+                        content=cached.content,
+                    )
+                elif verify_sha256 and verified != item.sha256:
+                    self._drop_source_cache(item.path)
+                    raise ValueError(
+                        "Project source changed after its context index was built: "
+                        f"{item.path}"
+                    )
+                self._source_cache.pop(item.path, None)
+                self._source_cache[item.path] = cached
+                return cached.content
+            self._drop_source_cache(item.path)
+
+        with path.open("rb") as stream:
+            opened_stat = os.fstat(stream.fileno())
+            raw = stream.read()
+        verified = None
+        if verify_sha256:
+            verified = "sha256:" + hashlib.sha256(raw).hexdigest()
+            if verified != item.sha256:
+                raise ValueError(
+                    "Project source changed after its context index was built: "
+                    f"{item.path}"
+                )
+
+        try:
+            after_stat = path.stat()
+        except OSError:
+            return raw
+        if self._source_signature(after_stat) == self._source_signature(opened_stat):
+            self._remember_source_bytes(
+                item.path,
+                stat_result=opened_stat,
+                verified_sha256=verified,
+                raw=raw,
+            )
+        return raw
 
     def manifest(self) -> dict[str, Any]:
         """Return the legacy expanded view for explicit compatibility callers.
@@ -324,8 +470,10 @@ class ProjectIndex:
                 break
             if item.size_bytes > self.policy.max_single_file_bytes:
                 continue
-            path = self.root / item.path
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = self._read_indexed_bytes(item).decode(
+                "utf-8", errors="replace"
+            )
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
             raw = text.encode("utf-8")
             truncated = False
             if len(raw) > remaining:
@@ -413,14 +561,7 @@ class ProjectIndex:
 
         while position < len(ranked):
             item = ranked[position]
-            path = self.root / item.path
-            current = path.read_bytes()
-            current_sha256 = "sha256:" + hashlib.sha256(current).hexdigest()
-            if current_sha256 != item.sha256:
-                raise ValueError(
-                    "Project source changed after its context index was built: "
-                    f"{item.path}"
-                )
+            current = self._read_indexed_bytes(item, verify_sha256=True)
             normalized = current.decode("utf-8", errors="replace").encode("utf-8")
             if offset > len(normalized):
                 raise ValueError("Project context cursor byte offset is invalid.")

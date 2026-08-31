@@ -712,6 +712,33 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
             raise
 
 
+def managed_server_generation_identity(server_url: str) -> str:
+    """Identify the exact live managed process for correctness-safe warm caches."""
+
+    normalized = str(server_url or "").strip().rstrip("/")
+    if not normalized:
+        return ""
+    with _AUTOTUNE_LOCK:
+        process = _MANAGED_PROCESS
+        managed_url = str(_MANAGED_URL or "").strip().rstrip("/")
+        managed_key = str(_MANAGED_KEY or "").strip()
+        if (
+            not managed_url
+            or normalized != managed_url
+            or not managed_key
+            or process is None
+            or process.poll() is not None
+        ):
+            return ""
+        pid = int(getattr(process, "pid", 0) or 0)
+        if pid <= 0:
+            return ""
+        return (
+            f"{managed_url}\0{managed_key}\0pid={pid}"
+            f"\0process={id(process)}"
+        )
+
+
 def _shutdown_managed_server() -> None:
     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
     with _AUTOTUNE_LOCK:
@@ -747,4 +774,5 @@ __all__ = [
     "_variant_args",
     "ensure_tuned_server",
     "install",
+    "managed_server_generation_identity",
 ]

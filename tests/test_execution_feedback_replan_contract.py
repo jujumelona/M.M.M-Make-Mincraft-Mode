@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
+
+import pytest
 
 from minecraft_mod_ai import execution_feedback_replan_contract as feedback
 from minecraft_mod_ai.execution_feedback_exception_scope_contract import (
@@ -143,3 +146,84 @@ def test_diagnostics_extract_path_from_gradle_message():
         item["path"].endswith("src/main/java/demo/Alpha.java")
         for item in diagnostics
     )
+
+
+
+class _FeedbackLoopError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class _FeedbackLoopOptions:
+    resume: bool = False
+
+
+class _FeedbackLoopLedger:
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate_execution_feedback(self, _feedback):
+        self.invalidations += 1
+        return {
+            "feedback_fingerprint": f"feedback-{self.invalidations}",
+            "global_replan_required": False,
+            "impacted_generation_node_ids": [f"generate-{self.invalidations}"],
+        }
+
+
+def _feedback_loop_module(*, failures_before_success: int | None):
+    class Orchestrator:
+        def __init__(self) -> None:
+            self.calls = 0
+            self._mmm_feedback_ledger = _FeedbackLoopLedger()
+
+        def _open_run(self, _run_name, _plan, *, resume):
+            return None, self._mmm_feedback_ledger, bool(resume)
+
+        def execute(self, *_args, **_kwargs):
+            self.calls += 1
+            if failures_before_success is None or self.calls <= failures_before_success:
+                raise _FeedbackLoopError(f"failure-{self.calls}")
+            return "done"
+
+    return SimpleNamespace(
+        CompleteProductionOrchestrator=Orchestrator,
+        CompleteProductionError=_FeedbackLoopError,
+        CompleteExecutionOptions=_FeedbackLoopOptions,
+    )
+
+
+def _install_feedback_loop(monkeypatch, *, failures_before_success: int | None):
+    feedback_rows = []
+
+    def latest_failed_feedback(_ledger):
+        feedback_rows.append(len(feedback_rows) + 1)
+        return {"checkpoint_id": "validate-source", "diagnostics": []}
+
+    monkeypatch.setattr(feedback, "_latest_failed_feedback", latest_failed_feedback)
+    module = _feedback_loop_module(failures_before_success=failures_before_success)
+    feedback._install_run_context(module)
+    return module.CompleteProductionOrchestrator(), feedback_rows
+
+
+def test_execution_feedback_repair_allows_two_distinct_reentries(monkeypatch):
+    orchestrator, feedback_rows = _install_feedback_loop(
+        monkeypatch, failures_before_success=2
+    )
+
+    assert orchestrator.execute() == "done"
+    assert orchestrator.calls == 3
+    assert orchestrator._mmm_feedback_ledger.invalidations == 2
+    assert len(feedback_rows) == 2
+
+
+def test_execution_feedback_repair_stops_before_third_reentry(monkeypatch):
+    orchestrator, feedback_rows = _install_feedback_loop(
+        monkeypatch, failures_before_success=None
+    )
+
+    with pytest.raises(_FeedbackLoopError, match="failure-3"):
+        orchestrator.execute()
+    assert orchestrator.calls == 3
+    assert orchestrator._mmm_feedback_ledger.invalidations == 2
+    assert len(feedback_rows) == 2
