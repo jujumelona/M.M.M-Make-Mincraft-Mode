@@ -13,11 +13,11 @@ concurrency:
 
 jobs:
   integrate:
-    if: ${{ github.event.head_commit.message == 'chore: stage W6 integration gate' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       PYTHONUTF8: '1'
+      W6_BASE_SHA: ce9bd12f305a101a5b5fa2774ea0f442c3265b5d
     steps:
       - uses: actions/checkout@v6
         with:
@@ -33,9 +33,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Verify helper parent is the reviewed BASE
+      - name: Verify reviewed BASE and helper-only staging
         run: |
-          test "$(git rev-parse HEAD^)" = 'ce9bd12f305a101a5b5fa2774ea0f442c3265b5d'
+          test "$(git merge-base "$W6_BASE_SHA" HEAD)" = "$W6_BASE_SHA"
+          git diff --quiet "$W6_BASE_SHA" HEAD -- . ':(exclude).w6/**' ':(exclude).github/workflows/w6-integrate.yml'
           for p in W1 W2 W3 W4 W5 W6; do test -s ".w6/${p}.patch"; done
 
       - name: Install test dependencies
