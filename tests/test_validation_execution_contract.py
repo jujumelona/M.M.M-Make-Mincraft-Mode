@@ -143,7 +143,8 @@ def test_exact_input_successful_build_is_reused_in_process(tmp_path: Path) -> No
 
 def test_gametest_resource_gate_detects_generated_namespace_errors(tmp_path: Path) -> None:
     root = _project(tmp_path / "project", mod_id="frost_works")
-    log = tmp_path / "gametest.log"
+    log = root / ".minecraft_ai/logs/gradle-gametest.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
         "\n".join(
             [
