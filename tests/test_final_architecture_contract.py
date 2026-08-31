@@ -23,7 +23,7 @@ from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrato
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.validation_diagnostic_contract import (
     diagnostic_errors,
-    flatten_diagnostics,
+    diagnostic_items,
 )
 from minecraft_mod_ai.repair_engine import RepairEngine
 
@@ -129,7 +129,7 @@ def test_jdt_mapping_is_flattened_and_only_errors_block() -> None:
             "file:///B.java": [{"severity": 3, "message": "info"}],
         }
     }
-    flattened = flatten_diagnostics(receipt)
+    flattened = diagnostic_items(receipt)
     assert [item["message"] for item in flattened] == [
         "cannot resolve symbol",
         "warning",
