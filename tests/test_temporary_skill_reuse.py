@@ -117,6 +117,7 @@ def test_host_context_merges_environment_and_reviewed_system_json(monkeypatch):
 def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
     module = SimpleNamespace()
     module._PARALLEL_READ_TOOLS = frozenset({"read"})
+    module._parallel_read_call = lambda call: call.name in module._PARALLEL_READ_TOOLS
 
     def original(calls, execute):
         return tuple(execute(call) for call in calls)
@@ -150,6 +151,7 @@ def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
 def test_read_wave_dedup_never_deduplicates_mutations():
     module = SimpleNamespace()
     module._PARALLEL_READ_TOOLS = frozenset({"read"})
+    module._parallel_read_call = lambda call: call.name in module._PARALLEL_READ_TOOLS
     module._execute_tool_waves = lambda calls, execute: tuple(execute(call) for call in calls)
     contract._install_read_wave_dedup(module)
 
