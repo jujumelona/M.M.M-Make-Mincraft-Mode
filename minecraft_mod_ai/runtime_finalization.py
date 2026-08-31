@@ -118,6 +118,9 @@ def finalize_runtime() -> None:
         from .planner_graph_integrity_contract import (
             install as install_planner_graph_integrity,
         )
+        from .planner_requirement_traceability_contract import (
+            install as install_planner_requirement_traceability,
+        )
         from .prefill_calibration_strictness_contract import (
             install as install_prefill_calibration_strictness,
         )
@@ -201,6 +204,9 @@ def finalize_runtime() -> None:
         install_planner_graph_integrity()
         install_planner_design_readiness()
         install_active_game_design_readiness()
+        # Graph expansion runs before retrieval. Rebind every design facet to explicit or
+        # conservative authored requirement ownership before deep-design task compilation.
+        install_planner_requirement_traceability()
         install_deep_design_execution()
         install_evidence_obligation_contract()
         # The approved graph is now frozen and the obligation DAG owner is installed.
