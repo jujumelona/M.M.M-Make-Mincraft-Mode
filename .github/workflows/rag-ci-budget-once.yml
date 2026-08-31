@@ -1,0 +1,37 @@
+name: One-shot RAG mutation budget
+
+on:
+  push:
+    paths:
+      - .github/workflows/rag-ci-budget-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply reviewed mutation budget
+        run: python tools/apply_rag_ci_budget.py
+      - name: Verify exact mutation count
+        run: |
+          python .github/scripts/audit_runtime_mutations.py --output /tmp/runtime-mutations.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/runtime-mutations.json').read_text())
+          assert int(payload['behavioral_count']) == 426, payload
+          print('runtime mutation surface verified at 426')
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add .github/workflows/ci.yml
+          git commit -m 'ci: review external RAG mutation owner'
+          git push origin HEAD:main
