@@ -55,11 +55,11 @@ jobs:
             echo 'No source changes to commit.'
             exit 0
           fi
-          git commit -m 'refactor(worker12): unify repair diagnostic authority'
+          git commit -m 'fix(worker12): harden bounded repair memory'
       - name: Rebase, re-test, and push main
         run: |
           set -euo pipefail
-          if ! git log -1 --pretty=%s | grep -q '^refactor(worker12): unify repair diagnostic authority$'; then
+          if ! git log -1 --pretty=%s | grep -q '^fix(worker12): harden bounded repair memory$'; then
             exit 0
           fi
           for attempt in 1 2 3 4; do
