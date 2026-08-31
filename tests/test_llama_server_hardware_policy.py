@@ -107,3 +107,36 @@ def test_auxiliary_native_telemetry_is_explicit_opt_in(monkeypatch) -> None:
     assert policy._auxiliary_native_telemetry_enabled() is False
     monkeypatch.setenv("MMM_LLAMA_AUXILIARY_TELEMETRY", "true")
     assert policy._auxiliary_native_telemetry_enabled() is True
+
+
+def test_hardware_launch_policy_does_not_enable_auxiliary_endpoints_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_AUXILIARY_TELEMETRY", raising=False)
+    args = ["llama-server", "--gpu-layers", "all"]
+
+    result = policy._apply_hardware_launch_policy(args)
+
+    assert result is args
+    assert result[result.index("--gpu-layers") + 1] == "auto"
+    assert result[result.index("--parallel") + 1] == "1"
+    assert "--metrics" not in result
+    assert "--slots" not in result
+
+
+def test_hardware_launch_policy_enables_auxiliary_endpoints_only_on_opt_in(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_AUXILIARY_TELEMETRY", "true")
+    args = ["llama-server", "--gpu-layers", "all"]
+
+    result = policy._apply_hardware_launch_policy(args)
+
+    assert result.count("--metrics") == 1
+    assert result.count("--slots") == 1
+
+
+def test_hardware_launch_policy_preserves_explicit_operator_telemetry_flags(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_AUXILIARY_TELEMETRY", raising=False)
+    args = ["llama-server", "--metrics", "--slots"]
+
+    result = policy._apply_hardware_launch_policy(args)
+
+    assert result.count("--metrics") == 1
+    assert result.count("--slots") == 1

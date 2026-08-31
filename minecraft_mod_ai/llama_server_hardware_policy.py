@@ -618,6 +618,24 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
         ) from exc
 
 
+def _apply_hardware_launch_policy(args: list[str]) -> list[str]:
+    """Apply managed llama-server launch policy without enabling unused endpoints."""
+
+    try:
+        index = args.index("--gpu-layers")
+        args[index + 1] = "auto"
+    except (ValueError, IndexError):
+        pass
+    if "--parallel" not in args and "-np" not in args:
+        args.extend(["--parallel", "1"])
+    if _auxiliary_native_telemetry_enabled():
+        if "--metrics" not in args:
+            args.append("--metrics")
+        if "--slots" not in args:
+            args.append("--slots")
+    return args
+
+
 def install(autotune_module: Any) -> None:
     """Bind local GGUF inference exclusively to managed native llama-server."""
 
@@ -644,22 +662,11 @@ def install(autotune_module: Any) -> None:
             port: int,
         ) -> list[str]:
             args = original_base(binary, model_path, config, port)
-            try:
-                index = args.index("--gpu-layers")
-                args[index + 1] = "auto"
-            except (ValueError, IndexError):
-                pass
-            if "--parallel" not in args and "-np" not in args:
-                args.extend(["--parallel", "1"])
-            if "--metrics" not in args:
-                args.append("--metrics")
-            if "--slots" not in args:
-                args.append("--slots")
-            return args
+            return _apply_hardware_launch_policy(args)
 
         adaptive_base_args._mmm_auto_gpu_layers = True  # type: ignore[attr-defined]
         adaptive_base_args._mmm_single_decode_slot = True  # type: ignore[attr-defined]
-        adaptive_base_args._mmm_native_telemetry_endpoints = True  # type: ignore[attr-defined]
+        adaptive_base_args._mmm_auxiliary_telemetry_opt_in = True  # type: ignore[attr-defined]
         autotune_module._base_args = adaptive_base_args
 
     original_variant = autotune_module._variant_args
