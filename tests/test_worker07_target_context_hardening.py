@@ -215,3 +215,162 @@ def test_target_hardening_has_no_late_monkey_patch_owner() -> None:
         "_mmm_fresh_owned_target_grounding",
         False,
     )
+
+
+def _worker07_tool_schema(name: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": name,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def test_mutation_target_guard_accepts_pinned_existing_path() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path="src/main/java/mod/TradeEngine.java",
+        target_symbol="TradeEngine#tick",
+        source_body="public void tick() { executeTrades(); }",
+        evidence_source="search_code_rag",
+    )
+    assert tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": "src/main/java/mod/TradeEngine.java",
+            "old": "executeTrades();",
+            "new": "executeValidatedTrades();",
+        },
+        context,
+    ) is None
+
+
+def test_mutation_target_guard_normalizes_supported_path_alias() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path="src/main/java/mod/TradeEngine.java",
+        target_symbol="TradeEngine#tick",
+        source_body="public void tick() { executeTrades(); }",
+        evidence_source="search_code_rag",
+    )
+    assert tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "target_path": "./src/main/java/mod/TradeEngine.java",
+            "old": "executeTrades();",
+            "new": "executeValidatedTrades();",
+        },
+        context,
+    ) is None
+
+
+def test_mutation_target_guard_rejects_cross_file_drift() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path="src/main/java/mod/TradeEngine.java",
+        target_symbol="TradeEngine#tick",
+        source_body="public void tick() { executeTrades(); }",
+        evidence_source="search_code_rag",
+    )
+    invented = "src/main/java/generated/generated_mod/mmmplan/Invented.java"
+    error = tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "create_java_type",
+            "path": invented,
+            "package_name": "generated.generated_mod.mmmplan",
+            "declaration": "public final class Invented",
+        },
+        context,
+    )
+    assert error is not None
+    assert "MUTATION_TARGET_DRIFT" in error
+    assert context.target_path in error
+    assert invented in error
+
+
+def test_mutation_target_guard_rejects_missing_body_existing_context() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path="src/main/java/mod/TradeEngine.java",
+        target_symbol="TradeEngine#tick",
+        evidence_source="java_workspace_symbols",
+    )
+    assert context.localization_stage == tool_loop.LocalizationStage.NEED_BODY
+    error = tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {"operation": "replace_exact", "path": context.target_path, "old": "x", "new": "y"},
+        context,
+    )
+    assert error is not None
+    assert "MUTATION_TARGET_UNBOUND" in error
+
+
+def test_mutation_target_guard_rejects_recreate_of_existing_target() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path="src/main/java/mod/TradeEngine.java",
+        target_symbol="TradeEngine",
+        source_body="public final class TradeEngine {}",
+        evidence_source="search_code_rag",
+    )
+    error = tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "create_java_type",
+            "path": context.target_path,
+            "package_name": "mod",
+            "declaration": "public final class TradeEngine",
+        },
+        context,
+    )
+    assert error is not None
+    assert "MUTATION_TARGET_CREATION_CONFLICT" in error
+
+
+def test_mutation_target_guard_allows_reserved_new_target_creation() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path=TARGET_PATH,
+        target_symbol=TARGET_SYMBOL,
+        is_new_file=True,
+        evidence_source="evidence_fresh_owned_anchor",
+    )
+    assert tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "create_java_type",
+            "path": TARGET_PATH,
+            "package_name": "generated.example.mmmplan",
+            "declaration": "public final class TaskFeature",
+        },
+        context,
+    ) is None
+
+
+def test_act_prefers_canonical_source_edit_when_multiple_mutators_exposed() -> None:
+    schemas = tuple(
+        _worker07_tool_schema(name)
+        for name in ("apply_source_edit", "apply_source_patch", "apply_java_operations", "repair_project")
+    )
+    selected = tool_loop._filter_tools_for_phase(
+        schemas,
+        tool_loop.LoopPhase.ACT,
+        "coder",
+    )
+    assert [schema["function"]["name"] for schema in selected] == ["apply_source_edit"]
+
+
+def test_act_preserves_legacy_fallback_when_source_edit_is_absent() -> None:
+    schemas = tuple(
+        _worker07_tool_schema(name)
+        for name in ("apply_source_patch", "repair_project")
+    )
+    selected = tool_loop._filter_tools_for_phase(
+        schemas,
+        tool_loop.LoopPhase.ACT,
+        "coder",
+    )
+    assert [schema["function"]["name"] for schema in selected] == [
+        "apply_source_patch",
+        "repair_project",
+    ]
+

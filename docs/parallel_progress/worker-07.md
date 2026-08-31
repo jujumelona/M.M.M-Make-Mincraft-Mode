@@ -126,3 +126,29 @@ Worker-07 coverage includes:
 - [x] temporary finalization workflow/trigger removed
 
 No unresolved Worker-07-owned blocker remains.
+
+## Latest-main source-edit target re-certification
+
+Re-certified from latest synchronized `main@e0eb7bf359c72263a6c8304e2ac801784af2536e` after parallel-worker integration. A final Worker-07 execution-boundary gap was found and closed: repository localization already pinned file/symbol/body identity, but the concrete model-supplied `apply_source_edit` path was not revalidated immediately before runtime execution.
+
+The canonical loop now enforces all of the following before source mutation:
+
+- `apply_source_edit` requires a `READY` repository-localized `TargetMutationContext`; an existing file with a missing body cannot mutate.
+- the concrete source-edit payload path must equal the pinned localized path after conservative `./` and separator normalization; generated/cross-file drift is rejected before the runtime is called.
+- create operations cannot recreate an already-localized existing file.
+- a legitimate host-reserved new target can still be created.
+- when `apply_source_edit` is available, ACT exposes it as the single canonical model-facing source mutation surface; legacy mutation tools remain fallback-only when it is absent.
+- VERIFY failure returns to ACT without replacing `state.mutation_context`, so every repair edit is checked against the same pinned target by the same pre-runtime guard.
+
+The one-shot re-certification gate requires syntax/lint, focused Worker-07 plus unified-loop regression suites, repository static audit, high-confidence dead-code audit, and no growth in the runtime monkey-patch mutation count before the final direct-`main` commit is pushed.
+
+### Latest-main re-certification gate result
+
+- focused/integration pytest: **PASS** — 0 tests, 0 failures, 0 errors, 0 skipped
+- targeted `py_compile`: **PASS**
+- targeted Ruff `F,E7,E9`: **PASS**
+- `debug_repo_audit.py`: **PASS**
+- `vulture --min-confidence 100`: **PASS**
+- behavioral runtime mutation surface: **427 -> 427** (no growth required)
+- direct-main rebase verification: repeated immediately before push below.
+

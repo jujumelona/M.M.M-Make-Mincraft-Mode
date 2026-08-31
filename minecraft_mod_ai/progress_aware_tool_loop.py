@@ -224,6 +224,70 @@ def _normalized_target_path(value: Any) -> str:
     return str(value or "").strip().replace("\\", "/")
 
 
+_SOURCE_EDIT_PATH_KEYS = ("path", "file", "target_path", "target_file")
+_SOURCE_CREATE_OPERATIONS = frozenset(
+    {
+        "create",
+        "create_file",
+        "create_java_type",
+        "create_class",
+        "create_type",
+        "write",
+        "write_file",
+    }
+)
+
+
+def _canonical_mutation_path(value: Any) -> str:
+    clean = _normalized_target_path(value)
+    while clean.startswith("./"):
+        clean = clean[2:]
+    return clean
+
+
+def _mutation_target_error(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    context: TargetMutationContext | None,
+) -> str | None:
+    """Reject source edits that escape the repository-localized target."""
+
+    if tool_name != "apply_source_edit":
+        return None
+    if context is None or not context.is_mutation_ready:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
+            "repository-localized target context."
+        )
+
+    pinned = _canonical_mutation_path(context.target_path)
+    supplied = ""
+    for key in _SOURCE_EDIT_PATH_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            supplied = _canonical_mutation_path(value)
+            break
+
+    if not pinned or not supplied:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires the pinned target "
+            "path in its model payload."
+        )
+    if supplied != pinned:
+        return (
+            f"MUTATION_TARGET_DRIFT: pinned target {pinned!r} but "
+            f"apply_source_edit requested {supplied!r}."
+        )
+
+    operation = str(arguments.get("operation", "")).strip().casefold()
+    if not context.is_new_file and operation in _SOURCE_CREATE_OPERATIONS:
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+            f"{pinned!r} cannot be recreated by {operation!r}."
+        )
+    return None
+
+
 def _proves_existing_target(context: Any) -> bool:
     if bool(getattr(context, "is_new_file", False)):
         return False
@@ -1114,7 +1178,14 @@ def _filter_tools_for_phase(
             else:
                 selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
     elif phase == LoopPhase.ACT:
-        selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
+        # apply_source_edit is the canonical model-facing source mutation surface.
+        # Prefer it whenever available so alternate mutators cannot bypass the
+        # repository-localized target binding. Legacy fallbacks remain available
+        # only when the canonical tool is genuinely absent.
+        if "apply_source_edit" in by_name:
+            selected_names = ["apply_source_edit"]
+        else:
+            selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
     elif phase in (LoopPhase.VERIFY, LoopPhase.RECOVER):
         selected_names = [
             name for name in by_name
@@ -1792,6 +1863,24 @@ def generate_with_tools(
                     call.arguments,
                     localization_stage=localization_attempt_stage,
                 )
+
+            target_error = _mutation_target_error(
+                call.name,
+                call.arguments,
+                state.mutation_context,
+            )
+            if target_error is not None:
+                state.record_failure(call.name, target_error)
+                print(
+                    f"  [!] MUTATION TARGET REJECTED: {call.name} -> {target_error}",
+                    flush=True,
+                )
+                return call, {
+                    "ok": False,
+                    "tool": call.name,
+                    **route_metadata,
+                    "error": target_error,
+                }
 
             try:
                 if call.name.startswith("external_mcp_"):
