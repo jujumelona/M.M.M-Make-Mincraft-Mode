@@ -31,8 +31,10 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Apply clean-code pass
-        run: python .github/scripts/worker05_clean_full_surface_v1.py
+      - name: Apply Worker05 final cleanup
+        run: |
+          python .github/scripts/worker05_clean_full_surface_v1.py
+          python .github/scripts/worker05_finish_v2.py
       - name: Verify full Worker05 surface
         shell: bash
         run: |
