@@ -21,7 +21,7 @@ from minecraft_mod_ai.clean_room_verification_contract import (
 )
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
-from minecraft_mod_ai.repair_diagnostics_contract import (
+from minecraft_mod_ai.validation_diagnostic_contract import (
     diagnostic_errors,
     flatten_diagnostics,
 )
