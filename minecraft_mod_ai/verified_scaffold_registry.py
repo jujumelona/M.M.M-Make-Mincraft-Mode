@@ -1,50 +1,52 @@
 from __future__ import annotations
 
-"""Verified Gradle scaffold registry for isolated reuse-proof sandboxes.
-
-The scaffold never fabricates a wrapper JAR. Each supported Gradle version is bound to
-its official distribution and wrapper SHA-256. M.M.M mirrors those official artifacts to
-an append-only GitHub Release cache and validates the wrapper again before materializing it.
-"""
+"""Provider-authoritative Gradle scaffolding for executable Minecraft targets."""
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import urllib.request
+import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from .platform_catalog import PlatformAdapter, adapter_for_target, executable_loaders
 
 GRADLE_CACHE_RELEASE_TAG = "gradle-runtime-cache-v1-immutable"
 GRADLE_CACHE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + GRADLE_CACHE_RELEASE_TAG
 )
-
-GRADLE_DISTRIBUTION_SHA256S: dict[str, str] = {
+# Artifact-integrity compatibility ledgers, never target-support authorities.
+GRADLE_DISTRIBUTION_SHA256S = {
     "7.6": "7ba68c54029790ab444b39d7e293d3236b2632631fb5f2e012bb28b4ff669e4b",
     "8.1": "a62c5f99585dd9e1f95dab7b9415a0e698fa9dd1e6c38537faa81ac078f4d23e",
     "8.5": "9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026",
     "8.8": "a4b4158601f8636cdeeab09bd76afb640030bb5b144aafe261a5e8af027dc612",
     "8.10.2": "31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26",
 }
-
-GRADLE_WRAPPER_SHA256S: dict[str, str] = {
+GRADLE_WRAPPER_SHA256S = {
     "7.6": "c5a643cf80162e665cc228f7b16f343fef868e47d3a4836f62e18b7e17ac018a",
     "8.1": "ed2c26eba7cfb93cc2b7785d05e534f07b5b48b5e7fc941921cd098628abca58",
     "8.5": "d3b261c2820e9e3d8d639ed084900f11f4a86050a8f83342ade7b6bc9b0d2bdd",
     "8.8": "cb0da6751c2b753a16ac168bb354870ebb1e162e9083f116729cec9c781156b8",
     "8.10.2": "2db75c40782f5e8ba1fc278a5574bab070adccb2d21ca5a6e5ed840888448046",
 }
-
-GRADLE_SOURCE_TAGS: dict[str, str] = {
+GRADLE_SOURCE_TAGS = {
     "7.6": "v7.6.0",
     "8.1": "v8.1.0",
     "8.5": "v8.5.0",
     "8.8": "v8.8.0",
     "8.10.2": "v8.10.2",
 }
+_FABRIC_WRAPPER_DIR = "scripts/src/lib/template/templates/gradle/wrapper/gradle/wrapper"
+_FABRIC_RAW = "https://raw.githubusercontent.com/FabricMC/fabricmc.net/main/"
+_FABRIC_API = "https://api.github.com/repos/FabricMC/fabricmc.net/contents/"
 
 
 @dataclass(frozen=True)
@@ -55,48 +57,14 @@ class VerifiedScaffoldTemplate:
     distribution_sha256: str
     build_gradle: str
     settings_gradle: str
-
-
-SUPPORTED_TARGET_SPECS: dict[tuple[str, str], dict[str, Any]] = {
-    ("fabric", "1.21.4"): {"gradle_version": "8.10.2", "loom_version": "1.9-SNAPSHOT", "loader_version": "0.16.9", "fabric_api": "0.110.0+1.21.4", "mappings": "net.fabricmc:yarn:1.21.4+build.1:v2", "java_release": 21},
-    ("fabric", "1.21.3"): {"gradle_version": "8.10.2", "loom_version": "1.8-SNAPSHOT", "loader_version": "0.16.7", "fabric_api": "0.108.0+1.21.3", "mappings": "net.fabricmc:yarn:1.21.3+build.1:v2", "java_release": 21},
-    ("fabric", "1.21.2"): {"gradle_version": "8.10.2", "loom_version": "1.8-SNAPSHOT", "loader_version": "0.16.7", "fabric_api": "0.107.0+1.21.2", "mappings": "net.fabricmc:yarn:1.21.2+build.1:v2", "java_release": 21},
-    ("fabric", "1.21.1"): {"gradle_version": "8.10.2", "loom_version": "1.7-SNAPSHOT", "loader_version": "0.16.5", "fabric_api": "0.104.0+1.21.1", "mappings": "net.fabricmc:yarn:1.21.1+build.1:v2", "java_release": 21},
-    ("fabric", "1.21.0"): {"gradle_version": "8.10.2", "loom_version": "1.7-SNAPSHOT", "loader_version": "0.16.0", "fabric_api": "0.100.0+1.21", "mappings": "net.fabricmc:yarn:1.21+build.9:v2", "java_release": 21},
-    ("fabric", "1.20.6"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.15.11", "fabric_api": "0.99.1+1.20.6", "mappings": "net.fabricmc:yarn:1.20.6+build.2:v2", "java_release": 21},
-    ("fabric", "1.20.5"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.15.11", "fabric_api": "0.97.8+1.20.5", "mappings": "net.fabricmc:yarn:1.20.5+build.1:v2", "java_release": 21},
-    ("fabric", "1.20.4"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.15.7", "fabric_api": "0.96.11+1.20.4", "mappings": "net.fabricmc:yarn:1.20.4+build.3:v2", "java_release": 17},
-    ("fabric", "1.20.2"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.15.0", "fabric_api": "0.91.6+1.20.2", "mappings": "net.fabricmc:yarn:1.20.2+build.4:v2", "java_release": 17},
-    ("fabric", "1.20.1"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.15.11", "fabric_api": "0.92.2+1.20.1", "mappings": "net.fabricmc:yarn:1.20.1+build.10:v2", "java_release": 17},
-    ("fabric", "1.20.0"): {"gradle_version": "8.8", "loom_version": "1.6-SNAPSHOT", "loader_version": "0.14.21", "fabric_api": "0.83.0+1.20", "mappings": "net.fabricmc:yarn:1.20+build.1:v2", "java_release": 17},
-    ("fabric", "1.19.4"): {"gradle_version": "8.5", "loom_version": "1.5-SNAPSHOT", "loader_version": "0.14.21", "fabric_api": "0.87.0+1.19.4", "mappings": "net.fabricmc:yarn:1.19.4+build.2:v2", "java_release": 17},
-    ("fabric", "1.19.2"): {"gradle_version": "8.5", "loom_version": "1.5-SNAPSHOT", "loader_version": "0.14.21", "fabric_api": "0.76.0+1.19.2", "mappings": "net.fabricmc:yarn:1.19.2+build.28:v2", "java_release": 17},
-    ("fabric", "1.18.2"): {"gradle_version": "8.1", "loom_version": "1.4-SNAPSHOT", "loader_version": "0.14.21", "fabric_api": "0.76.0+1.18.2", "mappings": "net.fabricmc:yarn:1.18.2+build.4:v2", "java_release": 17},
-    ("fabric", "1.16.5"): {"gradle_version": "7.6", "loom_version": "1.0-SNAPSHOT", "loader_version": "0.14.21", "fabric_api": "0.42.0+1.16", "mappings": "net.fabricmc:yarn:1.16.5+build.10:v2", "java_release": 8},
-    ("neoforge", "1.21.4"): {"gradle_version": "8.10.2", "moddev_version": "2.0.80", "neoforge_version": "21.4.0", "java_release": 21},
-    ("neoforge", "1.21.3"): {"gradle_version": "8.10.2", "moddev_version": "2.0.79", "neoforge_version": "21.3.0", "java_release": 21},
-    ("neoforge", "1.21.1"): {"gradle_version": "8.10.2", "moddev_version": "2.0.78", "neoforge_version": "1.21.1-21.1.0", "java_release": 21},
-    ("neoforge", "1.21.0"): {"gradle_version": "8.10.2", "moddev_version": "2.0.78", "neoforge_version": "21.0.167", "java_release": 21},
-    ("neoforge", "1.20.6"): {"gradle_version": "8.8", "moddev_version": "2.0.74", "neoforge_version": "20.6.119", "java_release": 21},
-    ("neoforge", "1.20.4"): {"gradle_version": "8.8", "moddev_version": "2.0.70", "neoforge_version": "20.4.237", "java_release": 17},
-    ("forge", "1.21.1"): {"gradle_version": "8.8", "forgegradle_version": "6.0.29", "forge_version": "51.0.8", "java_release": 21},
-    ("forge", "1.21.0"): {"gradle_version": "8.8", "forgegradle_version": "6.0.29", "forge_version": "51.0.0", "java_release": 21},
-    ("forge", "1.20.4"): {"gradle_version": "8.8", "forgegradle_version": "6.0.29", "forge_version": "49.0.38", "java_release": 17},
-    ("forge", "1.20.2"): {"gradle_version": "8.8", "forgegradle_version": "6.0.29", "forge_version": "48.1.0", "java_release": 17},
-    ("forge", "1.20.1"): {"gradle_version": "8.8", "forgegradle_version": "6.0.29", "forge_version": "47.3.0", "java_release": 17},
-    ("forge", "1.19.4"): {"gradle_version": "8.5", "forgegradle_version": "6.0.18", "forge_version": "45.2.0", "java_release": 17},
-    ("forge", "1.19.2"): {"gradle_version": "8.5", "forgegradle_version": "6.0.16", "forge_version": "43.3.0", "java_release": 17},
-    ("forge", "1.18.2"): {"gradle_version": "8.1", "forgegradle_version": "5.1.74", "forge_version": "40.2.0", "java_release": 17},
-    ("forge", "1.16.5"): {"gradle_version": "7.6", "forgegradle_version": "5.1.69", "forge_version": "36.2.39", "java_release": 8},
-}
+    adapter_id: str = ""
+    java_release: int = 0
+    loom_plugin_id: str = ""
+    distribution_url: str = ""
 
 
 class UnsupportedTargetSpecificationError(ValueError):
-    """Raised when a loader/Minecraft version is outside the verified matrix."""
-
-
-def is_target_supported(loader: str, minecraft_version: str) -> bool:
-    return (loader.lower().strip(), minecraft_version.strip()) in SUPPORTED_TARGET_SPECS
+    """The provider receipt cannot produce a safe executable scaffold."""
 
 
 def _sha256(path: Path) -> str:
@@ -107,130 +75,170 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _wrapper_cache_root() -> Path:
+def _git_blob_sha1(path: Path) -> str:
+    data = path.read_bytes()
+    digest = hashlib.sha1(usedforsecurity=False)
+    digest.update(f"blob {len(data)}\0".encode())
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _cache_root() -> Path:
     override = os.environ.get("MMM_GRADLE_WRAPPER_CACHE_DIR", "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
-    return (Path.home() / ".cache" / "mmm" / "gradle-wrapper").resolve()
-
-
-def _download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "M.M.M-verified-gradle-wrapper/1"},
+    return (
+        Path(override).expanduser().resolve()
+        if override
+        else (Path.home() / ".cache" / "mmm" / "gradle-wrapper").resolve()
     )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as out:
-        shutil.copyfileobj(response, out, length=1024 * 1024)
 
 
-def _ensure_verified_wrapper_jar(gradle_version: str) -> Path:
-    expected = GRADLE_WRAPPER_SHA256S.get(gradle_version)
-    source_tag = GRADLE_SOURCE_TAGS.get(gradle_version)
-    if not expected or not source_tag:
-        raise UnsupportedTargetSpecificationError(
-            f"No verified Gradle wrapper checksum for {gradle_version}"
-        )
+def _request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(url, headers={"User-Agent": "MMM-scaffold/2"})
 
-    target = _wrapper_cache_root() / gradle_version / "gradle-wrapper.jar"
-    if target.is_file() and not target.is_symlink() and _sha256(target) == expected:
+
+def _fetch_text(url: str, timeout: int = 30) -> str:
+    with urllib.request.urlopen(_request(url), timeout=timeout) as response:
+        return response.read().decode()
+
+
+def _download(url: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(_request(url), timeout=120) as response, path.open("wb") as out:
+        shutil.copyfileobj(response, out)
+
+
+def _validate_wrapper(path: Path) -> None:
+    if not path.is_file() or path.is_symlink():
+        raise RuntimeError("Gradle wrapper JAR is missing or unsafe")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            ok = "org/gradle/wrapper/GradleWrapperMain.class" in archive.namelist()
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError("Gradle wrapper JAR is invalid") from exc
+    if not ok:
+        raise RuntimeError("Gradle wrapper JAR lacks GradleWrapperMain")
+
+
+@lru_cache(maxsize=8)
+def _live_wrapper_pin(gradle: str) -> tuple[str, str, int]:
+    properties = _fetch_text(_FABRIC_RAW + _FABRIC_WRAPPER_DIR + "/gradle-wrapper.properties")
+    match = re.search(r"gradle-([0-9][0-9A-Za-z_.-]*)-bin\.zip", properties)
+    if not match or match.group(1) != gradle:
+        raise RuntimeError(f"Fabric wrapper does not match provider Gradle {gradle}")
+    rows = json.loads(_fetch_text(_FABRIC_API + _FABRIC_WRAPPER_DIR + "?ref=main"))
+    row = next((item for item in rows if item.get("name") == "gradle-wrapper.jar"), None)
+    if not isinstance(row, dict):
+        raise RuntimeError("Fabric template exposes no wrapper JAR")
+    url = str(row.get("download_url") or "")
+    sha = str(row.get("sha") or "").lower()
+    size = row.get("size")
+    if not url.startswith(_FABRIC_RAW) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError("Fabric wrapper metadata failed origin/integrity validation")
+    if type(size) is not int or size <= 0:
+        raise RuntimeError("Fabric wrapper metadata has invalid size")
+    return url, sha, size
+
+
+def _ensure_wrapper(adapter: PlatformAdapter) -> Path:
+    gradle = adapter.gradle
+    target = _cache_root() / gradle / "gradle-wrapper.jar"
+    known = GRADLE_WRAPPER_SHA256S.get(gradle)
+    if known and target.is_file() and not target.is_symlink() and _sha256(target) == known:
+        _validate_wrapper(target)
         return target
-
-    if target.exists() or target.is_symlink():
-        target.unlink()
+    if known:
+        tag = GRADLE_SOURCE_TAGS[gradle]
+        candidates = (
+            f"{GRADLE_CACHE_RELEASE_BASE}/gradle-{gradle}-wrapper.jar",
+            f"https://raw.githubusercontent.com/gradle/gradle/{tag}/gradle/wrapper/gradle-wrapper.jar",
+        )
+        live_pin = None
+    else:
+        live_pin = _live_wrapper_pin(gradle)
+        url, sha, size = live_pin
+        if target.is_file() and not target.is_symlink():
+            if target.stat().st_size == size and _git_blob_sha1(target) == sha:
+                _validate_wrapper(target)
+                return target
+        candidates = (url,)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_suffix(".jar.tmp")
-    urls = (
-        f"{GRADLE_CACHE_RELEASE_BASE}/gradle-{gradle_version}-wrapper.jar",
-        "https://raw.githubusercontent.com/gradle/gradle/"
-        f"{source_tag}/gradle/wrapper/gradle-wrapper.jar",
-    )
+    temporary = target.with_suffix(".tmp")
     errors: list[str] = []
-    for url in urls:
+    for url in candidates:
         try:
             if temporary.exists():
                 temporary.unlink()
             _download(url, temporary)
-            actual = _sha256(temporary)
-            if actual != expected:
-                raise RuntimeError(
-                    f"Gradle wrapper checksum mismatch for {gradle_version}: "
-                    f"expected {expected}, found {actual}"
-                )
+            if known and _sha256(temporary) != known:
+                raise RuntimeError("wrapper SHA-256 mismatch")
+            if live_pin:
+                _, sha, size = live_pin
+                if temporary.stat().st_size != size or _git_blob_sha1(temporary) != sha:
+                    raise RuntimeError("wrapper Git object mismatch")
+            _validate_wrapper(temporary)
             os.replace(temporary, target)
             return target
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(f"{url}: {type(exc).__name__}: {exc}")
-            if temporary.exists():
-                temporary.unlink()
-    raise RuntimeError(
-        f"Verified Gradle wrapper {gradle_version} is unavailable from GitHub cache/source: "
-        + " | ".join(errors)
-    )
+    raise RuntimeError(f"Verified Gradle wrapper {gradle} unavailable: " + " | ".join(errors))
 
 
-def _distribution_url(gradle_version: str) -> str:
-    return f"{GRADLE_CACHE_RELEASE_BASE}/gradle-{gradle_version}-bin.zip"
+def _distribution_url(gradle: str) -> str:
+    return f"https://services.gradle.org/distributions/gradle-{gradle}-bin.zip"
 
 
-def get_verified_scaffold_template(
-    loader: str = "fabric",
-    minecraft_version: str = "1.21.1",
-) -> VerifiedScaffoldTemplate:
-    norm_loader = loader.lower().strip()
-    norm_mc = minecraft_version.strip()
-    key = (norm_loader, norm_mc)
-    if key not in SUPPORTED_TARGET_SPECS:
-        raise UnsupportedTargetSpecificationError(
-            f"Target ({norm_loader}@{norm_mc}) is not in SUPPORTED_TARGET_SPECS: "
-            f"{sorted(SUPPORTED_TARGET_SPECS.keys())}"
-        )
-    spec = SUPPORTED_TARGET_SPECS[key]
-    gradle_ver = str(spec["gradle_version"])
-    distribution_sha256 = GRADLE_DISTRIBUTION_SHA256S.get(gradle_ver)
-    if not distribution_sha256:
-        raise UnsupportedTargetSpecificationError(
-            f"No verified Gradle distribution checksum for {gradle_ver}"
-        )
-    java_rel = int(spec["java_release"])
+def _unobfuscated(version: str) -> bool:
+    major = str(version).strip().split(".", 1)[0]
+    return major.isdigit() and int(major) >= 26
 
-    if norm_loader == "neoforge":
-        bg = f"""plugins {{
-    id 'net.neoforged.moddev' version '{spec['moddev_version']}'
-}}
 
-version = '1.0.0'
-group = 'ai.minecraft.generated'
+def _loom_plugin(version: str) -> str:
+    return "net.fabricmc.fabric-loom" + ("" if _unobfuscated(version) else "-remap")
 
-neoForge {{
-    version = '{spec['neoforge_version']}'
-}}
 
-tasks.withType(JavaCompile).configureEach {{
-    it.options.release = {java_rel}
-}}
-"""
-        settings = "pluginManagement {\n    repositories {\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n"
-    elif norm_loader == "forge":
-        bg = f"""plugins {{
-    id 'net.minecraftforge.gradle' version '{spec['forgegradle_version']}'
-}}
+def validate_scaffold_buildability(adapter: PlatformAdapter) -> None:
+    """Validate the exact provider receipt before accepting it as buildable."""
+    adapter.validate()
+    if adapter.loader not in executable_loaders():
+        raise UnsupportedTargetSpecificationError(f"No provider for loader={adapter.loader!r}")
+    if adapter.loader != "fabric":
+        raise UnsupportedTargetSpecificationError("Scaffold implementation is Fabric-only")
+    if not re.fullmatch(r"[0-9][0-9A-Za-z_.-]*", adapter.gradle):
+        raise UnsupportedTargetSpecificationError("Invalid Gradle version")
+    if not re.fullmatch(r"[0-9a-f]{64}", adapter.gradle_sha256):
+        raise UnsupportedTargetSpecificationError("Invalid Gradle SHA-256")
+    try:
+        java = int(adapter.java_version)
+    except ValueError as exc:
+        raise UnsupportedTargetSpecificationError("Invalid Java release") from exc
+    if java <= 0 or not adapter.fabric_loader or not adapter.fabric_api or not adapter.fabric_loom:
+        raise UnsupportedTargetSpecificationError("Incomplete Fabric build receipt")
+    if adapter.mappings_kind not in {"mojang", "yarn"}:
+        raise UnsupportedTargetSpecificationError("Unsupported mappings kind")
 
-version = '1.0.0'
-group = 'ai.minecraft.generated'
 
-minecraft {{
-    mappings channel: 'official', version: '{norm_mc}'
-}}
+def is_target_supported(loader: str, minecraft_version: str) -> bool:
+    try:
+        validate_scaffold_buildability(adapter_for_target(minecraft_version, loader))
+    except (ValueError, RuntimeError):
+        return False
+    return True
 
-tasks.withType(JavaCompile).configureEach {{
-    it.options.release = {java_rel}
-}}
-"""
-        settings = "pluginManagement {\n    repositories {\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n"
+
+def get_verified_scaffold_template_for_adapter(adapter: PlatformAdapter) -> VerifiedScaffoldTemplate:
+    validate_scaffold_buildability(adapter)
+    java = int(adapter.java_version)
+    unobfuscated = _unobfuscated(adapter.minecraft_version)
+    plugin = _loom_plugin(adapter.minecraft_version)
+    impl = "implementation" if unobfuscated else "modImplementation"
+    if unobfuscated:
+        mappings = ""
+    elif adapter.mappings_kind == "mojang":
+        mappings = "    mappings loom.officialMojangMappings()\n"
     else:
-        bg = f"""plugins {{
-    id 'fabric-loom' version '{spec['loom_version']}'
+        mappings = f"    mappings 'net.fabricmc:yarn:{adapter.mappings_version}:v2'\n"
+    build = f"""plugins {{
+    id '{plugin}' version '{adapter.fabric_loom}'
     id 'maven-publish'
     id 'java'
 }}
@@ -244,14 +252,22 @@ repositories {{
 }}
 
 dependencies {{
-    minecraft 'com.mojang:minecraft:{norm_mc}'
-    mappings '{spec['mappings']}'
-    modImplementation 'net.fabricmc:fabric-loader:{spec['loader_version']}'
-    modImplementation 'net.fabricmc.fabric-api:fabric-api:{spec['fabric_api']}'
+    minecraft 'com.mojang:minecraft:{adapter.minecraft_version}'
+{mappings}    {impl} 'net.fabricmc:fabric-loader:{adapter.fabric_loader}'
+    {impl} 'net.fabricmc.fabric-api:fabric-api:{adapter.fabric_api}'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
 }}
+
+tasks.withType(JavaCompile).configureEach {{
+    it.options.release = {java}
+}}
+
+java {{
+    sourceCompatibility = JavaVersion.VERSION_{java}
+    targetCompatibility = JavaVersion.VERSION_{java}
+}}
 """
-        settings = """pluginManagement {
+    settings = """pluginManagement {
     repositories {
         maven { url 'https://maven.fabricmc.net/' }
         mavenCentral()
@@ -259,109 +275,113 @@ dependencies {{
     }
 }
 """
-
     return VerifiedScaffoldTemplate(
-        loader=norm_loader,
-        minecraft_version=norm_mc,
-        gradle_version=gradle_ver,
-        distribution_sha256=distribution_sha256,
-        build_gradle=bg,
-        settings_gradle=settings,
+        adapter.loader,
+        adapter.minecraft_version,
+        adapter.gradle,
+        adapter.gradle_sha256,
+        build,
+        settings,
+        adapter.adapter_id,
+        java,
+        plugin,
+        _distribution_url(adapter.gradle),
     )
 
 
-def apply_verified_scaffold(
-    sandbox_path: Path,
-    target_context: Mapping[str, Any],
-) -> None:
-    """Materialize a checksum-bound Gradle scaffold into ``sandbox_path``."""
+def get_verified_scaffold_template(
+    loader: str = "fabric", minecraft_version: str = "1.21.1"
+) -> VerifiedScaffoldTemplate:
+    return get_verified_scaffold_template_for_adapter(adapter_for_target(minecraft_version, loader))
 
-    loader = str(target_context.get("loader") or "fabric")
-    mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
-    template = get_verified_scaffold_template(loader, mc_ver)
-    wrapper_source = _ensure_verified_wrapper_jar(template.gradle_version)
-    expected_wrapper_sha = GRADLE_WRAPPER_SHA256S[template.gradle_version]
 
+def _adapter_from_target_context(
+    context: Mapping[str, Any] | PlatformAdapter,
+) -> PlatformAdapter:
+    if isinstance(context, PlatformAdapter):
+        return context
+    embedded = context.get("platform_adapter")
+    if isinstance(embedded, PlatformAdapter):
+        loader = str(context.get("loader") or embedded.loader).strip().casefold()
+        version = str(context.get("minecraft_version") or embedded.minecraft_version).strip()
+        if loader != embedded.loader or version != embedded.minecraft_version:
+            raise UnsupportedTargetSpecificationError("Embedded adapter identity mismatch")
+        return embedded
+    return adapter_for_target(
+        str(context.get("minecraft_version") or "1.21.1"),
+        str(context.get("loader") or "fabric"),
+    )
+
+
+def apply_verified_scaffold_for_adapter(sandbox_path: Path, adapter: PlatformAdapter) -> None:
+    template = get_verified_scaffold_template_for_adapter(adapter)
+    wrapper = _ensure_wrapper(adapter)
     sandbox_path.mkdir(parents=True, exist_ok=True)
-
-    bg = sandbox_path / "build.gradle"
-    if not bg.exists() and not (sandbox_path / "build.gradle.kts").exists():
-        bg.write_text(template.build_gradle, encoding="utf-8")
-
+    build = sandbox_path / "build.gradle"
+    if not build.exists() and not (sandbox_path / "build.gradle.kts").exists():
+        build.write_text(template.build_gradle, encoding="utf-8")
     settings = sandbox_path / "settings.gradle"
     if not settings.exists() and not (sandbox_path / "settings.gradle.kts").exists():
         settings.write_text(template.settings_gradle, encoding="utf-8")
-
     gradle_props = sandbox_path / "gradle.properties"
     if not gradle_props.exists():
-        gradle_props.write_text("org.gradle.jvmargs=-Xmx2G\n", encoding="utf-8")
-
+        gradle_props.write_text(
+            "org.gradle.jvmargs=-Xmx2G\norg.gradle.parallel=true\n"
+            "org.gradle.configuration-cache=false\n",
+            encoding="utf-8",
+        )
     wrapper_dir = sandbox_path / "gradle" / "wrapper"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
-    props = wrapper_dir / "gradle-wrapper.properties"
-    distribution_url = _distribution_url(template.gradle_version).replace(":", "\\:", 1)
-    props.write_text(
-        "distributionBase=GRADLE_USER_HOME\n"
-        "distributionPath=wrapper/dists\n"
-        f"distributionUrl={distribution_url}\n"
-        f"distributionSha256Sum={template.distribution_sha256}\n"
-        "zipStoreBase=GRADLE_USER_HOME\n"
-        "zipStorePath=wrapper/dists\n",
+    url = template.distribution_url.replace(":", "\\:", 1)
+    (wrapper_dir / "gradle-wrapper.properties").write_text(
+        "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n"
+        f"distributionUrl={url}\ndistributionSha256Sum={template.distribution_sha256}\n"
+        "networkTimeout=10000\nvalidateDistributionUrl=true\n"
+        "zipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n",
         encoding="utf-8",
     )
-
     jar = wrapper_dir / "gradle-wrapper.jar"
-    if (
-        not jar.is_file()
-        or jar.is_symlink()
-        or _sha256(jar) != expected_wrapper_sha
-    ):
-        if jar.exists() or jar.is_symlink():
-            jar.unlink()
-        shutil.copy2(wrapper_source, jar)
-    if _sha256(jar) != expected_wrapper_sha:
-        raise RuntimeError("Materialized Gradle wrapper checksum verification failed")
-
-    gradlew_sh = sandbox_path / "gradlew"
-    if not gradlew_sh.exists():
-        gradlew_sh.write_text(
+    if jar.exists() or jar.is_symlink():
+        jar.unlink()
+    shutil.copy2(wrapper, jar)
+    _validate_wrapper(jar)
+    gradlew = sandbox_path / "gradlew"
+    if not gradlew.exists():
+        gradlew.write_text(
             "#!/bin/sh\n"
-            "APP_HOME=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd -P)\"\n"
-            "CLASSPATH=\"$APP_HOME/gradle/wrapper/gradle-wrapper.jar\"\n"
-            "if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"$JAVA_HOME/bin/java\" ]; then\n"
-            "    JAVACMD=\"$JAVA_HOME/bin/java\"\n"
-            "else\n"
-            "    JAVACMD=java\n"
-            "fi\n"
-            "exec \"$JAVACMD\" -classpath \"$CLASSPATH\" org.gradle.wrapper.GradleWrapperMain \"$@\"\n",
+            'APP_HOME="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"\n'
+            'CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"\n'
+            'JAVACMD="${JAVA_HOME:+$JAVA_HOME/bin/}java"\n'
+            'exec "$JAVACMD" -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"\n',
             encoding="utf-8",
         )
-        gradlew_sh.chmod(0o755)
+        gradlew.chmod(0o755)
+    bat = sandbox_path / "gradlew.bat"
+    if not bat.exists():
+        bat.write_text(
+            "@echo off\r\nset DIRNAME=%~dp0\r\nset CLASSPATH=%DIRNAME%gradle\\wrapper\\gradle-wrapper.jar\r\n"
+            "set JAVACMD=java.exe\r\nif defined JAVA_HOME set JAVACMD=%JAVA_HOME%\\bin\\java.exe\r\n"
+            '"%JAVACMD%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*\r\n',
+            encoding="utf-8",
+        )
 
-    gradlew_bat = sandbox_path / "gradlew.bat"
-    if not gradlew_bat.exists():
-        gradlew_bat.write_text(
-            "@if \"%DEBUG%\"==\"\" @echo off\r\n"
-            "setlocal\r\n"
-            "set DIRNAME=%~dp0\r\n"
-            "if \"%DIRNAME%\"==\"\" set DIRNAME=.\r\n"
-            "set APP_HOME=%DIRNAME%\r\n"
-            "set CLASSPATH=%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar\r\n"
-            "set JAVACMD=java.exe\r\n"
-            "if defined JAVA_HOME if exist \"%JAVA_HOME%\\bin\\java.exe\" set JAVACMD=%JAVA_HOME%\\bin\\java.exe\r\n"
-            "\"%JAVACMD%\" -classpath \"%CLASSPATH%\" org.gradle.wrapper.GradleWrapperMain %*\r\n",
-            encoding="utf-8",
-        )
+
+def apply_verified_scaffold(
+    sandbox_path: Path, target_context: Mapping[str, Any] | PlatformAdapter
+) -> None:
+    apply_verified_scaffold_for_adapter(sandbox_path, _adapter_from_target_context(target_context))
 
 
 __all__ = [
     "GRADLE_CACHE_RELEASE_TAG",
     "GRADLE_DISTRIBUTION_SHA256S",
     "GRADLE_WRAPPER_SHA256S",
-    "SUPPORTED_TARGET_SPECS",
     "UnsupportedTargetSpecificationError",
     "VerifiedScaffoldTemplate",
     "apply_verified_scaffold",
+    "apply_verified_scaffold_for_adapter",
     "get_verified_scaffold_template",
+    "get_verified_scaffold_template_for_adapter",
     "is_target_supported",
+    "validate_scaffold_buildability",
 ]
