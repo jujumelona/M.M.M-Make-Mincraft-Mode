@@ -18,6 +18,8 @@ from collections.abc import Mapping
 from functools import wraps
 from typing import Any
 
+from .llama_sse_protocol import LlamaSseServerError, sse_error_from_line
+
 _CLIENT_LOCK = threading.RLock()
 _CLIENTS: dict[str, Any] = {}
 _CLIENT_LIMIT = 4
@@ -25,9 +27,6 @@ _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS = 120.0
-_DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS = 15.0
-_DEFAULT_TOOL_STALL_WARNING_SECONDS = 60.0
-_DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 class LlamaToolLivenessTimeout(TimeoutError):
@@ -191,171 +190,6 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
     return progressed
 
 
-def _completion_origin(url: str) -> str:
-    value = url.rstrip("/")
-    for suffix in ("/v1/chat/completions", "/chat/completions"):
-        if value.endswith(suffix):
-            return value[: -len(suffix)]
-    return value
-
-
-def _coerce_progress_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return max(0, parsed)
-
-
-def _slot_progress_from_payload(payload: Any) -> dict[str, Any] | None:
-    if not isinstance(payload, list):
-        return None
-    processing = [
-        slot
-        for slot in payload
-        if isinstance(slot, Mapping) and slot.get("is_processing") is True
-    ]
-    decoded_values = [
-        value
-        for slot in processing
-        if (value := _coerce_progress_int(slot.get("n_decoded"))) is not None
-    ]
-    prompt_values: list[int] = []
-    for slot in processing:
-        value = _coerce_progress_int(slot.get("n_prompt_tokens_processed"))
-        if value is None:
-            value = _coerce_progress_int(slot.get("n_prompt_tokens"))
-        if value is not None:
-            prompt_values.append(value)
-    return {
-        "processing_slots": len(processing),
-        "decoded": sum(decoded_values) if decoded_values else None,
-        "prompt_processed": sum(prompt_values) if prompt_values else None,
-    }
-
-
-def _probe_native_tool_progress(client: Any, completion_url: str) -> dict[str, Any]:
-    origin = _completion_origin(completion_url)
-    timeout = _positive_env_float(
-        "MMM_LLAMA_TOOL_PROBE_TIMEOUT_SECONDS",
-        _DEFAULT_TOOL_PROBE_TIMEOUT_SECONDS,
-    )
-    slots_error = ""
-    try:
-        response = client.get(f"{origin}/slots", timeout=timeout)
-        if response.status_code == 200:
-            snapshot = _slot_progress_from_payload(response.json())
-            if snapshot is not None:
-                return {"state": "slots", **snapshot}
-    except Exception as exc:  # noqa: BLE001 - optional native observability boundary
-        slots_error = type(exc).__name__
-    try:
-        response = client.get(f"{origin}/health", timeout=timeout)
-        if response.status_code == 200:
-            result = {"state": "healthy-unobservable"}
-            if slots_error:
-                result["slots_error"] = slots_error
-            return result
-        result = {"state": f"health-http-{response.status_code}"}
-        if slots_error:
-            result["slots_error"] = slots_error
-        return result
-    except Exception as exc:  # noqa: BLE001 - optional native observability boundary
-        result = {"state": "probe-unavailable", "health_error": type(exc).__name__}
-        if slots_error:
-            result["slots_error"] = slots_error
-        return result
-
-
-def _needs_native_tool_liveness_reporter(payload: Mapping[str, Any]) -> bool:
-    """Use slot polling only as a fallback when semantic SSE progress is unavailable."""
-
-    return bool(payload.get("tools")) and payload.get("return_progress") is not True
-
-
-def _native_tool_liveness_reporter(
-    client: Any,
-    completion_url: str,
-    stop: threading.Event,
-    started: float,
-) -> None:
-    heartbeat = _positive_env_float(
-        "MMM_LLAMA_TOOL_LIVENESS_HEARTBEAT_SECONDS",
-        _DEFAULT_TOOL_LIVENESS_HEARTBEAT_SECONDS,
-    )
-    warning_after = min(
-        _positive_env_float(
-            "MMM_LLAMA_TOOL_STALL_WARNING_SECONDS",
-            _DEFAULT_TOOL_STALL_WARNING_SECONDS,
-        ),
-        _tool_idle_timeout_seconds(),
-    )
-    last_progress_at = started
-    last_decoded: int | None = None
-    last_prompt: int | None = None
-    warned = False
-
-    while not stop.wait(heartbeat):
-        now = time.monotonic()
-        snapshot = _probe_native_tool_progress(client, completion_url)
-        state = str(snapshot.get("state", "probe-unavailable"))
-        if state != "slots":
-            print(
-                "llama server: tool completion liveness",
-                f" state={state}",
-                " progress=unobservable",
-                f" elapsed={now - started:.1f}s",
-                f" read_deadline={_tool_idle_timeout_seconds():.0f}s",
-                sep="",
-                flush=True,
-            )
-            continue
-
-        processing = int(snapshot.get("processing_slots", 0) or 0)
-        decoded = snapshot.get("decoded")
-        prompt = snapshot.get("prompt_processed")
-        progressed = bool(
-            (isinstance(decoded, int) and (last_decoded is None or decoded > last_decoded))
-            or (isinstance(prompt, int) and (last_prompt is None or prompt > last_prompt))
-        )
-        if progressed:
-            last_progress_at = now
-            warned = False
-        if isinstance(decoded, int):
-            last_decoded = decoded
-        if isinstance(prompt, int):
-            last_prompt = prompt
-
-        idle_for = max(0.0, now - last_progress_at)
-        if processing <= 0:
-            phase = "no-processing-slot"
-        elif isinstance(decoded, int) and decoded > 0:
-            phase = "generating" if progressed else "processing-no-new-decode"
-        elif isinstance(prompt, int):
-            phase = "prompting" if progressed else "processing-no-new-prompt"
-        else:
-            phase = "processing-progress-counter-unavailable"
-        print(
-            "llama server: tool completion liveness",
-            f" state={phase}",
-            f" slots={processing}",
-            f" prompt_processed={prompt if isinstance(prompt, int) else 'unknown'}",
-            f" decoded={decoded if isinstance(decoded, int) else 'unknown'}",
-            f" no_counter_progress={idle_for:.1f}s",
-            f" elapsed={now - started:.1f}s",
-            f" read_deadline={_tool_idle_timeout_seconds():.0f}s",
-            sep="",
-            flush=True,
-        )
-        if processing > 0 and idle_for >= warning_after and not warned:
-            print(
-                "llama server: WARNING tool completion has no observed slot-counter progress",
-                f" for={idle_for:.1f}s",
-                " streamed_transport=true",
-                flush=True,
-            )
-            warned = True
-
 
 class _StreamingCompletionClient:
     """Reuse one HTTP client and aggregate every chat completion through SSE."""
@@ -429,17 +263,6 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
-        started = time.monotonic()
-        stop = threading.Event()
-        reporter: threading.Thread | None = None
-        if _needs_native_tool_liveness_reporter(streamed_payload):
-            reporter = threading.Thread(
-                target=_native_tool_liveness_reporter,
-                args=(self._client, url, stop, started),
-                name="mmm-llama-tool-liveness",
-                daemon=True,
-            )
-            reporter.start()
 
         timeout_exc = getattr(httpx, "TimeoutException", None)
         if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
@@ -455,6 +278,14 @@ class _StreamingCompletionClient:
                         request=request,
                     )
                 for raw_line in response.iter_lines():
+                    parsed_error = sse_error_from_line(raw_line)
+                    if parsed_error is not None:
+                        status, error = parsed_error
+                        return httpx.Response(
+                            status,
+                            json={"error": error},
+                            request=request,
+                        )
                     line = raw_line.strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
                         continue
@@ -491,6 +322,12 @@ class _StreamingCompletionClient:
                         delta = candidate if isinstance(candidate, Mapping) else None
                     if delta is not None:
                         _append_message_delta(message, delta)
+        except LlamaSseServerError as exc:
+            return httpx.Response(
+                exc.status_code,
+                json={"error": exc.error},
+                request=request,
+            )
         except timeout_exc as exc:
             if has_tools:
                 raise LlamaToolLivenessTimeout(
@@ -498,10 +335,6 @@ class _StreamingCompletionClient:
                     f"progress for {read_seconds:.0f}s; request aborted"
                 ) from exc
             raise
-        finally:
-            stop.set()
-            if reporter is not None:
-                reporter.join(timeout=0.2)
 
         if not saw_done:
             raise RuntimeError("llama server stream ended before the [DONE] marker")
@@ -678,6 +511,10 @@ def install(hardware_module: Any) -> None:
                     flush=True,
                 )
                 for raw_line in response.iter_lines():
+                    parsed_error = sse_error_from_line(raw_line)
+                    if parsed_error is not None:
+                        status, error = parsed_error
+                        raise LlamaSseServerError(status, error)
                     line = raw_line.strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
                         continue
@@ -779,9 +616,7 @@ __all__ = [
     "_bounded_timeout",
     "_client",
     "_native_timing_summary",
-    "_probe_native_tool_progress",
     "_report_server_connection",
-    "_slot_progress_from_payload",
     "_stream_idle_timeout_seconds",
     "_tool_idle_timeout_seconds",
     "install",

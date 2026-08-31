@@ -75,7 +75,6 @@ def _install_core_contracts() -> None:
 def _install_model_runtime_contracts() -> None:
     from . import (
         complete_orchestrator_services,
-        llama_completion_liveness_contract,
         llama_server_autotune,
         llama_server_hardware_policy,
         llama_server_runtime_tuning,
@@ -93,7 +92,6 @@ def _install_model_runtime_contracts() -> None:
     )
     from .llama_context_safety_contract import install as install_context_safety
     from .llama_generation_budget import install as install_llama_generation_budget
-    from .llama_sse_error_contract import install as install_sse_errors
     from .llama_stream_efficiency_contract import (
         install as install_llama_stream_efficiency,
     )
@@ -115,10 +113,6 @@ def _install_model_runtime_contracts() -> None:
     install_llama_generation_budget(llama_server_hardware_policy)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
-    install_sse_errors(
-        llama_completion_liveness_contract,
-        llama_stream_efficiency_contract,
-    )
     install_context_safety(model_context_budget)
     install_forced_tool_execution(
         openai_compatible_module=openai_compatible,

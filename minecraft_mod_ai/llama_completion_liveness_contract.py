@@ -18,6 +18,8 @@ from functools import wraps
 from types import TracebackType
 from typing import Any
 
+from .llama_sse_protocol import LlamaSseServerError, sse_error_from_line
+
 _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
 _ADAPTER_MARKER = "_mmm_single_progress_aware_completion_owner_v1"
@@ -35,42 +37,6 @@ def _coerce_nonnegative_int(value: Any) -> int | None:
         return None
     return max(0, parsed)
 
-
-def _slot_progress_from_payload(payload: Any) -> dict[str, Any] | None:
-    """Normalize current and older llama.cpp slot progress shapes."""
-
-    if not isinstance(payload, list):
-        return None
-    processing = [
-        slot
-        for slot in payload
-        if isinstance(slot, Mapping) and slot.get("is_processing") is True
-    ]
-    decoded_values: list[int] = []
-    prompt_values: list[int] = []
-    for slot in processing:
-        next_token = slot.get("next_token")
-        decoded = (
-            _coerce_nonnegative_int(next_token.get("n_decoded"))
-            if isinstance(next_token, Mapping)
-            else None
-        )
-        if decoded is None:
-            decoded = _coerce_nonnegative_int(slot.get("n_decoded"))
-        if decoded is not None:
-            decoded_values.append(decoded)
-
-        prompt = _coerce_nonnegative_int(slot.get("n_prompt_tokens_processed"))
-        if prompt is None:
-            prompt = _coerce_nonnegative_int(slot.get("n_prompt_tokens"))
-        if prompt is not None:
-            prompt_values.append(prompt)
-
-    return {
-        "processing_slots": len(processing),
-        "decoded": sum(decoded_values) if decoded_values else None,
-        "prompt_processed": sum(prompt_values) if prompt_values else None,
-    }
 
 
 def _ping_interval_seconds(stream_module: Any, payload: Mapping[str, Any]) -> int:
@@ -217,6 +183,10 @@ class _ProgressCheckedResponse:
     def iter_lines(self, *args: Any, **kwargs: Any):
         watchdog = _SemanticProgressWatchdog(self._idle_seconds)
         for raw_line in self._response.iter_lines(*args, **kwargs):
+            parsed_error = sse_error_from_line(raw_line)
+            if parsed_error is not None:
+                status, error = parsed_error
+                raise LlamaSseServerError(status, error)
             watchdog.observe(raw_line)
             yield raw_line
 
@@ -392,7 +362,6 @@ def _install_adapter_completion_transport(stream_module: Any, adapter_module: An
 def install(stream_module: Any, adapter_module: Any | None = None) -> None:
     """Install one SSE semantic-progress owner for plain and tool completions."""
 
-    stream_module._slot_progress_from_payload = _slot_progress_from_payload
     _install_raw_client_watchdog(stream_module)
     _install_stream_progress_payload(stream_module)
 
@@ -426,6 +395,5 @@ __all__ = [
     "_SemanticProgressWatchdog",
     "_progress_aware_payload",
     "_semantic_progress_from_sse_line",
-    "_slot_progress_from_payload",
     "install",
 ]
