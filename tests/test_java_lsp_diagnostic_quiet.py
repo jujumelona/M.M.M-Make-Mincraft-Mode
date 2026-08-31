@@ -4,7 +4,9 @@ import queue
 import time
 from types import SimpleNamespace
 
-from minecraft_mod_ai.java_lsp import _collect_diagnostics
+import pytest
+
+from minecraft_mod_ai.java_lsp import JDTLanguageServerError, _collect_diagnostics
 
 
 def _rpc_with_messages(*messages: dict[str, object]) -> SimpleNamespace:
@@ -14,7 +16,7 @@ def _rpc_with_messages(*messages: dict[str, object]) -> SimpleNamespace:
     return SimpleNamespace(messages=notifications)
 
 
-def test_diagnostic_collection_settles_when_clean_uri_never_publishes() -> None:
+def test_diagnostic_collection_fails_closed_when_one_opened_uri_never_publishes() -> None:
     rpc = _rpc_with_messages(
         {
             "method": "textDocument/publishDiagnostics",
@@ -26,37 +28,31 @@ def test_diagnostic_collection_settles_when_clean_uri_never_publishes() -> None:
     )
 
     started = time.monotonic()
-    result = _collect_diagnostics(
-        rpc,
-        expected_uris={
-            "file:///workspace/Broken.java",
-            "file:///workspace/Clean.java",
-        },
-        timeout_seconds=1.0,
-        quiet_seconds=0.02,
-    )
-
-    assert result == {
-        "file:///workspace/Broken.java": [
-            {"severity": 1, "message": "broken"}
-        ]
-    }
+    with pytest.raises(JDTLanguageServerError, match="missing=1"):
+        _collect_diagnostics(
+            rpc,
+            expected_uris={
+                "file:///workspace/Broken.java",
+                "file:///workspace/Clean.java",
+            },
+            timeout_seconds=0.05,
+            quiet_seconds=0.02,
+        )
     assert time.monotonic() - started < 0.5
 
 
-def test_diagnostic_collection_settles_when_no_uri_publishes() -> None:
+def test_diagnostic_collection_fails_closed_when_no_opened_uri_publishes() -> None:
     rpc = _rpc_with_messages()
 
     started = time.monotonic()
-    result = _collect_diagnostics(
-        rpc,
-        expected_uris={
-            "file:///workspace/CleanOne.java",
-            "file:///workspace/CleanTwo.java",
-        },
-        timeout_seconds=1.0,
-        quiet_seconds=0.02,
-    )
-
-    assert result == {}
+    with pytest.raises(JDTLanguageServerError, match="observed=0, expected=2, missing=2"):
+        _collect_diagnostics(
+            rpc,
+            expected_uris={
+                "file:///workspace/CleanOne.java",
+                "file:///workspace/CleanTwo.java",
+            },
+            timeout_seconds=0.05,
+            quiet_seconds=0.02,
+        )
     assert time.monotonic() - started < 0.5
