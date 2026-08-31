@@ -64,8 +64,9 @@ def test_compile_checker_can_never_self_attest_host_behavior() -> None:
         compile_checker=forged_checker,
     )
 
-    assert receipt.compile_passed is True
-    assert receipt.proof_level == ProofLevel.COMPILE_VERIFIED.value
+    assert receipt.authoritative_compile is False
+    assert receipt.compile_passed is False
+    assert receipt.proof_level != ProofLevel.COMPILE_VERIFIED.value
     assert receipt.tests_passed is False
     assert receipt.matched_capability_tests == ()
     assert all(item[3] is False for item in receipt.requirement_acceptance_map)
@@ -84,6 +85,14 @@ def test_compile_verified_requires_semantic_receipt_field() -> None:
         ProofLevel.CLOSURE_COMPLETE,
         ProofLevel.COMPILE_VERIFIED,
         receipt={"compile_passed": True},
+    )
+    assert valid is False
+    assert "authoritative compile" in reason
+
+    valid, reason = validate_proof_transition(
+        ProofLevel.CLOSURE_COMPLETE,
+        ProofLevel.COMPILE_VERIFIED,
+        receipt={"compile_passed": True, "authoritative_compile": True},
     )
     assert valid is True
     assert reason == "transition_valid"
