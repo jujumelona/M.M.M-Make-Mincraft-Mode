@@ -49,6 +49,7 @@ def test_complete_proposal_does_not_normalize_saved_module_identity() -> None:
 
 def test_base_proposal_list_fields_do_not_accept_string_iterables() -> None:
     install(spec, complete_spec)
+    digest = "sha256:" + "a" * 64
     payload = {
         "schema_version": "minecraft-mod-ai/proposal-v1",
         "proposal_version": 1,
@@ -69,9 +70,9 @@ def test_base_proposal_list_fields_do_not_accept_string_iterables() -> None:
         "deferred_requests": [],
         "acceptance_tests": ["works"],
         "evidence_sources": [],
-        "evidence_snapshot_hash": "",
-        "capability_manifest_hash": "",
-        "imported_source_snapshot_hash": "",
+        "evidence_snapshot_hash": digest,
+        "capability_manifest_hash": digest,
+        "imported_source_snapshot_hash": digest,
         "risk_approvals": [],
         "approval_hash": "",
     }
