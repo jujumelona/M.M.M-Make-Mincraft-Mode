@@ -48,44 +48,85 @@ def install(
 
 
 def usable_rag_result(value: Any) -> bool:
-    """Accept host-receipted evidence without discarding real unscored hits.
+    """Accept receipted evidence only when receipt and evidence share a result scope.
 
-    A receipt remains authoritative when present. A positive host result count may pair
-    with concrete evidence hits when optional reranker scores are unavailable; a zero
-    result receipt can never be rescued by stale hits. Observation metadata, truncation
-    previews, error text, or arbitrary non-empty dictionaries are not evidence.
+    A valid scored receipt is authoritative by itself. A positive receipt whose optional
+    reranker scores are absent may fall back to concrete legacy evidence, but only from
+    the same mapping subtree as that receipt. Evidence from a sibling result must never
+    rescue another result's receipt. If any receipt is present, unreceipted legacy hits
+    elsewhere cannot bypass it. Receipt-free legacy result packs remain compatible.
     """
 
     found_receipt = False
-    positive_receipt = False
-    usable_receipt = False
-    legacy_evidence = False
 
-    def visit(item: Any) -> None:
-        nonlocal found_receipt, positive_receipt, usable_receipt, legacy_evidence
+    def visit(item: Any) -> bool:
+        nonlocal found_receipt
         if isinstance(item, Mapping):
             receipt = item.get("receipt")
             if isinstance(receipt, Mapping):
                 found_receipt = True
-                if _positive_receipt(receipt):
-                    positive_receipt = True
                 if _usable_receipt(receipt):
-                    usable_receipt = True
-            for key, child in item.items():
-                if (
-                    str(key).strip().lower() in _LEGACY_EVIDENCE_KEYS
-                    and _nonempty_sequence(child)
-                ):
-                    legacy_evidence = True
-                visit(child)
-        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-            for child in item:
-                visit(child)
+                    return True
+                if _positive_receipt(receipt) and _mapping_has_legacy_evidence(item):
+                    return True
 
-    visit(value)
+            for child in item.values():
+                if visit(child):
+                    return True
+            return False
+
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(visit(child) for child in item)
+        return False
+
+    if visit(value):
+        return True
     if found_receipt:
-        return usable_receipt or (positive_receipt and legacy_evidence)
-    return legacy_evidence
+        return False
+    return _contains_legacy_evidence(value)
+
+
+def _mapping_has_legacy_evidence(value: Mapping[str, Any]) -> bool:
+    """Return whether one receipted result subtree contains concrete evidence."""
+
+    for key, child in value.items():
+        if str(key).strip().lower() == "receipt":
+            continue
+        if (
+            str(key).strip().lower() in _LEGACY_EVIDENCE_KEYS
+            and _nonempty_sequence(child)
+        ):
+            return True
+        if isinstance(child, Mapping):
+            # A nested receipt starts a new result scope and must be evaluated on its own.
+            if isinstance(child.get("receipt"), Mapping):
+                continue
+            if _mapping_has_legacy_evidence(child):
+                return True
+        elif isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
+            for nested in child:
+                if isinstance(nested, Mapping):
+                    if isinstance(nested.get("receipt"), Mapping):
+                        continue
+                    if _mapping_has_legacy_evidence(nested):
+                        return True
+    return False
+
+
+def _contains_legacy_evidence(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if (
+                str(key).strip().lower() in _LEGACY_EVIDENCE_KEYS
+                and _nonempty_sequence(child)
+            ):
+                return True
+            if _contains_legacy_evidence(child):
+                return True
+        return False
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_legacy_evidence(child) for child in value)
+    return False
 
 
 def _receipt_warning_set(receipt: Mapping[str, Any]) -> set[str]:
