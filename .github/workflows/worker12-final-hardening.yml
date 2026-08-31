@@ -29,6 +29,7 @@ jobs:
       - name: Apply exact worker 12 final patch
         run: |
           python .github/scripts/worker12_final_hardening.py
+          python .github/scripts/worker12_diagnostic_authority_fix.py
           python .github/scripts/worker12_final_fixture_fix.py
           python .github/scripts/worker12_agentic_compat_cleanup.py
       - name: Worker 12 static and architecture gates
