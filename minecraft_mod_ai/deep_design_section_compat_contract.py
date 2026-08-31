@@ -3,17 +3,20 @@ from __future__ import annotations
 """Preserve prose-first game-design planning through late runtime composition.
 
 Game-design drafting emits Markdown/text and is parsed by the host. Older late-runtime
-contracts still contain two JSON-era assumptions: the deep-design prompt wrapper expects
-retired repair arguments, and the requirement-readiness prompt wrapper tries to decode the
-Markdown user message as JSON. This compatibility owner removes both assumptions without
-restoring a model JSON schema or a model repair loop.
+contracts still contain JSON-era call assumptions, so this compatibility owner accepts
+retired repair-call keywords only as ignored compatibility input and bypasses the old
+JSON-mutating requirement-message wrapper. It never restores a model JSON schema or a
+model repair loop.
 
 Requirement traceability stays host-owned. When approved requirements are active, the
 model receives a plain-text ledger and writes traceability columns in ``## modules`` rows.
 A host parser converts those extra columns to ``requirement_refs`` and
-``implementation_obligations`` after generation.
+``implementation_obligations`` after generation. Stable JSON hashing remains available
+only as host accounting; it is not a model response format.
 """
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from functools import wraps
@@ -49,12 +52,26 @@ _TRACEABILITY_GUIDANCE = (
 
 _INSTALLED = False
 _ARMED = False
-_INSTALLER_MARKER = "_mmm_prose_first_deep_design_compat_v2"
+_INSTALLER_MARKER = "_mmm_prose_first_deep_design_compat_v3"
 _MODULE_ROWS_MARKER = "_mmm_prose_first_traceable_module_rows_v1"
+_ACCOUNTING_HASH_MARKER = "_mmm_host_accounting_json_sha256_v1"
 
 
 def _one_line(value: Any) -> str:
     return " ".join(str(value or "").split()).replace("|", "/").strip()
+
+
+def _json_sha256(value: Any) -> str:
+    """Stable host-only digest for research/accounting records."""
+
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _active_requirement_ledger(prompt: str) -> tuple[dict[str, Any], ...]:
@@ -115,7 +132,12 @@ def _repair_for(agentic: Any, deep: Any) -> bool:
         section_id: str,
         fields: Sequence[str],
         research: Mapping[str, Any],
+        prior_error: str | None = None,
+        prior_candidate: Mapping[str, Any] | None = None,
     ) -> list[dict[str, str]]:
+        # Legacy callers may still supply the retired repair keywords. They are
+        # intentionally ignored: prose-first design owns exactly one model draft.
+        del prior_error, prior_candidate
         messages = prose_base(
             prompt=prompt,
             section_id=section_id,
@@ -192,6 +214,16 @@ def _install_traceable_module_rows() -> None:
     agentic._module_rows = traceable_module_rows
 
 
+def _install_host_accounting_hash() -> None:
+    from . import agentic_research_game_design as agentic
+
+    current = getattr(agentic, "_json_sha256", None)
+    if callable(current) and getattr(current, _ACCOUNTING_HASH_MARKER, False):
+        return
+    setattr(_json_sha256, _ACCOUNTING_HASH_MARKER, True)
+    agentic._json_sha256 = _json_sha256
+
+
 def _repair() -> bool:
     from . import agentic_research_game_design as agentic
     from . import deep_design_execution_contract as deep
@@ -207,6 +239,7 @@ def install() -> None:
         return
     _repair()
     _install_traceable_module_rows()
+    _install_host_accounting_hash()
     _INSTALLED = True
 
 
