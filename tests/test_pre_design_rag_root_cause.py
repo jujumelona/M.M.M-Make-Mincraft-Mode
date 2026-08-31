@@ -17,22 +17,8 @@ def _domain_value(domain_id, value):
     return {}
 
 
-def test_target_neutral_official_rag_is_query_scoped_not_corpus_dump():
-    evidence = subject._target_neutral_official_evidence(
-        {
-            "domains": [
-                {
-                    "domain_id": "resource",
-                    "objective": "gather ore resources and harvesting progression",
-                    "queries": ["resource gathering harvesting ore progression"],
-                }
-            ]
-        }
-    )
-    documents = evidence["domains"][0]["documents"]
-    ids = {str(item.get("document_id", "")) for item in documents}
-    assert len(documents) < len(subject.BUILTIN_CORPUS)
-    assert "fabric-blockbench" not in ids
+def test_synthetic_target_neutral_official_evidence_owner_is_removed():
+    assert not hasattr(subject, "_target_neutral_official_evidence")
 
 
 def test_grounded_domain_evidence_drops_toc_metadata_and_keeps_source_content():
@@ -58,6 +44,7 @@ def test_grounded_domain_evidence_drops_toc_metadata_and_keeps_source_content():
                             "documents": [
                                 {
                                     "source_id": "github:owner/repo:src/Harvest.java",
+                                    "source_type": "github_source_code",
                                     "url": "https://github.com/owner/repo/blob/main/src/Harvest.java",
                                     "content": "public final class Harvest { void gatherResourceNode() { collectOre(); } }",
                                     "metadata": {"repository": "owner/repo"},
@@ -135,7 +122,6 @@ def test_pre_design_brief_defers_target_specific_obligations_until_freeze():
     assert "license" not in domain.get("evidence_kinds", [])
 
 
-
 def test_live_collect_design_research_uses_unified_grounded_owner(monkeypatch):
     calls = []
     brief = {
@@ -170,6 +156,7 @@ def test_live_collect_design_research_uses_unified_grounded_owner(monkeypatch):
                             "documents": [
                                 {
                                     "source_id": "github:owner/repo:src/Harvest.java",
+                                    "source_type": "github_source_code",
                                     "url": "https://github.com/owner/repo/blob/main/src/Harvest.java",
                                     "content": "public final class Harvest { void gatherResourceNode() { collectOre(); } }",
                                     "metadata": {"repository": "owner/repo"},
@@ -203,7 +190,7 @@ def test_live_collect_design_research_uses_unified_grounded_owner(monkeypatch):
             "domain_id": "resource",
             "research_failures": [],
             "sufficient": True,
-            "fixed_point": True,
+            "fixed_point": False,
             "checkpoint": {"status": "complete"},
         },
     )
