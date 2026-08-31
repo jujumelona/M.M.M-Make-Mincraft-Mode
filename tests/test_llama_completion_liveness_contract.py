@@ -45,7 +45,12 @@ def test_progress_response_raises_server_error_before_watchdog() -> None:
             ['data: {"error":{"code":400,"message":"context overflow"}}']
         )
     )
-    wrapped = contract._ProgressCheckedResponse(response, 0.001)
+    wrapped = contract._ProgressCheckedResponse(
+        response,
+        0.001,
+        request_id="test-server-error",
+        started_at=0.0,
+    )
 
     with pytest.raises(LlamaSseServerError, match="context overflow"):
         list(wrapped.iter_lines())
