@@ -3,11 +3,11 @@ from __future__ import annotations
 """Finite native llama.cpp generation budgeting.
 
 The backend-specific wrapper delegates general budget ownership to the transport-neutral
-``generation_output_budget`` policy. Tool-free structured JSON turns additionally receive
-a schema-derived ceiling at this boundary: a small planner section must not inherit the
-entire remaining model context as its decode allowance. Native tool actions retain the
-existing tool/output budget contract because source edits can legitimately carry large
-arguments even when their response schema itself is compact.
+``generation_output_budget`` policy. The staged game-design planner's tool-free
+``{"section": ...}`` JSON responses additionally receive a schema-derived ceiling: a
+small section must not inherit the entire remaining model context as its decode allowance.
+Generic structured requests and native tool actions retain the existing output-budget
+contract.
 """
 
 from collections.abc import Mapping, Sequence
@@ -98,17 +98,28 @@ def _schema_shape(value: Any, *, depth: int = 0) -> tuple[int, int, int, int, in
     return scalar, arrays, objects, required, max_depth
 
 
-def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]] | None:
-    """Derive a decode ceiling from a tool-free host-owned response schema.
+def _is_staged_planner_section_schema(schema: Mapping[str, Any]) -> bool:
+    """Recognize the game-design section envelope without coupling to a stage name."""
 
-    Native tool actions are deliberately excluded. A source-edit tool can require a
-    large argument payload even when its host response schema is tiny, and the existing
-    tool budget policy already owns that case.
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or set(properties) != {"section"}:
+        return False
+    section = properties.get("section")
+    if not isinstance(section, Mapping):
+        return False
+    return str(section.get("type", "") or "").strip().casefold() == "object"
+
+
+def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]] | None:
+    """Derive a decode ceiling only for staged game-design section JSON.
+
+    Generic JSON generation remains governed by the common runtime budget. Native tool
+    actions are also excluded because source edits can require large argument payloads.
 
     The coefficients represent serialization capacity, not a fixed stage clamp:
     scalars reserve 320 tokens, arrays 1280, objects 896, required fields 96, and
     each nesting level 256, plus a 768-token envelope for JSON syntax and natural
-    language values. Thus broader/deeper schemas automatically receive more room.
+    language values. Thus broader/deeper section schemas automatically receive more room.
     """
 
     if getattr(request, "tools", ()) or ():
@@ -117,6 +128,8 @@ def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]
         return None
     schema = getattr(request, "response_schema", None)
     if not isinstance(schema, Mapping) or not schema:
+        return None
+    if not _is_staged_planner_section_schema(schema):
         return None
     scalar, arrays, objects, required, depth = _schema_shape(schema)
     ceiling = (
@@ -160,7 +173,7 @@ def install(hardware_module: Any) -> None:
         effective = min(common_budget, structured_ceiling)
         bounded["max_tokens"] = max(1, effective)
         print(
-            "llama server: structured output budget",
+            "llama server: planner section output budget",
             f" requested={requested if requested > 0 else 'dynamic'}",
             f" common={common_budget}",
             f" schema_ceiling={structured_ceiling}",
