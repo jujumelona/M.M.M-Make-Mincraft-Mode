@@ -186,6 +186,37 @@ def test_output_path_collision_is_rejected_before_pytest(tmp_path: Path, monkeyp
     assert "OutputPathCollision" in capsys.readouterr().out
 
 
+def test_nonpositive_timeout_is_rejected_before_pytest(tmp_path: Path, monkeypatch, capsys) -> None:
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+    called = False
+
+    def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    assert (
+        pytest_diagnostics.main(
+            [
+                "--log",
+                str(log),
+                "--junit",
+                str(junit),
+                "--timeout-seconds",
+                "0",
+                "tests/test_anything.py",
+            ]
+        )
+        == 2
+    )
+    assert called is False
+    output = capsys.readouterr().out
+    assert "InvalidPytestTimeout" in output
+    assert "[INPUT]" in output
+
+
 def test_zero_durations_omits_pytest_all_durations_mode(tmp_path: Path, monkeypatch) -> None:
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
@@ -274,8 +305,14 @@ def test_main_redacts_pytest_log_and_junit_artifacts(
         assert leaked not in log_text
         assert leaked not in junit_text
     assert "token=<redacted>" in log_text
-    assert "token=<redacted>" in junit_text
+    assert "token=&lt;redacted&gt;" in junit_text
     assert "<redacted>" in console
+
+    analysis = analyze_junit(junit)
+    assert analysis.total == 1
+    assert analysis.failed == 1
+    assert analysis.errors == 0
+    assert analysis.groups[0].event.cause == "token=<redacted>"
 
 
 def test_timeout_returns_124_and_preserves_only_redacted_output(
