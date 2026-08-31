@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as rag
 import minecraft_mod_ai.pre_design_external_source_contract as external
+import minecraft_mod_ai.pre_design_rag_corrective as corrective
 
 
 def _grounded(body: str) -> dict[str, object]:
@@ -63,3 +66,63 @@ def test_repository_search_query_is_bounded_and_not_full_natural_language() -> N
     assert value == "gather resources minecraft"
     assert "environment" not in value
     assert "very long tail" not in value
+
+
+def test_one_recoverable_page_failure_does_not_poison_verified_domain(monkeypatch, tmp_path) -> None:
+    page_ref = "sha256:page#page=1/1"
+
+    def fake_read(*args, failures, **kwargs):
+        failures.append({"unit": "page:0:0", "error": "fixture parse failure on sibling fragment"})
+        pages = [{"page_ref": page_ref, "content": "verified body"}]
+        notes = [
+            {
+                "_host_page_ref": page_ref,
+                "domain_id": "request",
+                "claims": [
+                    {
+                        "claim": "Verified source-backed mechanic exists.",
+                        "evidence_refs": [page_ref],
+                        "support_quote": "verified body",
+                        "support_quote_sha256": "sha256:quote",
+                        "support_verification": "model_entailment+host_exact_quote",
+                    }
+                ],
+                "gaps": [],
+                "next_queries": [],
+                "procedures": [],
+                "sufficient": True,
+            }
+        ]
+        return pages, notes, 0
+
+    monkeypatch.setattr(corrective, "_read_and_verify_document", fake_read)
+    written: dict[str, object] = {}
+    project_rag = SimpleNamespace(
+        _domain_checkpoint_key=lambda *a, **k: "base",
+        _sha256=lambda value: "sha256:domain-key",
+        _domain_lock=lambda key: nullcontext(),
+        _read_complete_manifest=lambda *a, **k: None,
+        _materialize_claim_catalog=lambda *a, **k: {"claim_count": len(a[-1])},
+        _materialize_evidence_ledger=lambda *a, **k: {"page_count": len(a[-1])},
+        _prompt_document_receipt=lambda document: {"document_sha256": document.get("document_sha256")},
+        _manifest_path=lambda key: tmp_path / "manifest.json",
+        _checkpoint_dir=lambda key: tmp_path,
+        _write_manifest=lambda key, **kwargs: written.update(kwargs),
+    )
+    agentic = SimpleNamespace(_validate_sufficient_research=lambda *a, **k: None)
+    note = corrective._quality_research_document_domain(
+        SimpleNamespace(),
+        agentic,
+        project_rag,
+        SimpleNamespace(),
+        prompt="space mod",
+        domain={"domain_id": "request", "queries": ["space mod mechanics"]},
+        document={"document_sha256": "sha256:document"},
+        trace_metadata=None,
+    )
+    assert note["sufficient"] is True
+    assert note["fixed_point"] is False
+    assert note["quality_contract"]["fixed_point_reason"] == "verified_claims_sufficient"
+    assert "research_failures" not in note
+    assert note["research_warnings"]
+    assert written["status"] == "complete"
