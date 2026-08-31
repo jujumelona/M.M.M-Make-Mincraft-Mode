@@ -263,10 +263,11 @@ def _java_major_version() -> str:
 
 
 def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
+    from .platform_catalog import adapter_for_target
     from .verified_scaffold_registry import (
         GRADLE_DISTRIBUTION_SHA256S,
         GRADLE_WRAPPER_SHA256S,
-        SUPPORTED_TARGET_SPECS,
+        validate_scaffold_buildability,
     )
 
     props = workspace_root / "gradle" / "wrapper" / "gradle-wrapper.properties"
@@ -323,11 +324,18 @@ def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
         and distribution_sha256.casefold() == expected_distribution.casefold()
     )
 
-    target_spec = SUPPORTED_TARGET_SPECS.get((loader, minecraft_version))
+    provider_adapter = None
+    if loader and minecraft_version:
+        try:
+            provider_adapter = adapter_for_target(minecraft_version, loader)
+            validate_scaffold_buildability(provider_adapter)
+        except (ValueError, RuntimeError):
+            provider_adapter = None
     target_matrix_verified = bool(
-        target_spec
-        and str(target_spec.get("gradle_version") or "") == gradle_version
-        and str(target_spec.get("java_release") or "") == java_version
+        provider_adapter
+        and str(provider_adapter.gradle) == gradle_version
+        and str(provider_adapter.java_version) == java_version
+        and str(provider_adapter.gradle_sha256).casefold() == distribution_sha256
     )
 
     identity = "\n".join(

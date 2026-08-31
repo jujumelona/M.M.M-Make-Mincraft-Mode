@@ -172,47 +172,56 @@ def test_deterministic_adapters_pipeline() -> None:
     assert len(receipts) >= 2
 
 
-def test_reuse_proof_executor_fallback_loop() -> None:
-    # Candidate A: fails compile verification
+def test_reuse_proof_executor_fallback_loop(monkeypatch) -> None:
+    import hashlib
+
+    broken_code = b"package test; public class Broken {}"
+    clean_code = b"package test; public class Clean {}"
+    broken_blob = "1" * 40
+    clean_blob = "2" * 40
+
+    def fake_fetch(_client, _repo, blob_sha):
+        return broken_code if blob_sha == broken_blob else clean_code
+
+    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", fake_fetch)
+
     donor_a = source_transplant.DonorSlice(
         capability="combat.damage",
         repository="example/broken-mod",
-        commit_sha="1111111111111111111111111111111111111111",
+        commit_sha="1" * 40,
         license_id="MIT",
         source_url="https://github.com/example/broken-mod",
         target_compatibility="adapt",
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/Broken.java",
-                blob_sha="b1",
-                sha256="sha256:1111",
-                size_bytes=100,
+                blob_sha=broken_blob,
+                sha256="sha256:" + hashlib.sha256(broken_code).hexdigest(),
+                size_bytes=len(broken_code),
                 symbols=("Broken",),
             ),
         ),
         seed_files=("src/main/java/Broken.java",),
         source_symbols=("Broken",),
-        required_dependencies=("heavy_library",),
+        required_dependencies=(),
         donor_tests=(),
         confidence=0.95,
         adaptation_cost=45.0,
         closure_complete=True,
     )
-
-    # Candidate B: passes compile verification
     donor_b = source_transplant.DonorSlice(
         capability="combat.damage",
         repository="example/clean-mod",
-        commit_sha="2222222222222222222222222222222222222222",
+        commit_sha="2" * 40,
         license_id="MIT",
         source_url="https://github.com/example/clean-mod",
         target_compatibility="metadata_exact",
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/Clean.java",
-                blob_sha="b2",
-                sha256="sha256:2222",
-                size_bytes=80,
+                blob_sha=clean_blob,
+                sha256="sha256:" + hashlib.sha256(clean_code).hexdigest(),
+                size_bytes=len(clean_code),
                 symbols=("Clean",),
             ),
         ),
@@ -225,25 +234,28 @@ def test_reuse_proof_executor_fallback_loop() -> None:
         closure_complete=True,
     )
 
-    def mock_checker(files, context):
-        if any("Broken" in p for p in files):
+    def diagnostic_checker(files, _context):
+        if "src/main/java/Broken.java" in files:
             return {"compile_passed": False, "unresolved_symbols": ["MissingDep"]}
         return {"compile_passed": True}
 
     selected_donor, receipts = execute_candidate_fallback_loop(
         candidates=[donor_a, donor_b],
         capability="combat.damage",
-        target_workspace="/tmp/fake_ws",
+        target_workspace="",
         target_context={"target_package": "ai.test"},
-        compile_checker=mock_checker,
+        compile_checker=diagnostic_checker,
     )
 
-    assert selected_donor is not None
-    assert selected_donor.repository == "example/clean-mod"
+    assert selected_donor is None
     assert len(receipts) == 2
-    assert receipts[0].compile_passed is False
-    assert receipts[1].compile_passed is True
-    assert receipts[1].proof_level == "COMPILE_VERIFIED"
+    assert all(receipt.compile_passed is False for receipt in receipts)
+    assert all(receipt.authoritative_compile is False for receipt in receipts)
+    assert all(receipt.proof_level == "MATERIALIZED" for receipt in receipts)
+    assert all(
+        receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
+        for receipt in receipts
+    )
 
 
 def test_unpunctuated_multiroot_semantic_prompt_regression() -> None:
@@ -320,26 +332,28 @@ def test_package_prefix_relocation_preserves_subpackages() -> None:
 
 
 def test_strict_materialized_proof_level_without_compile(monkeypatch) -> None:
-    fake_code = b"package com.donor.mod;\npublic class Item {}"
     import hashlib
+
+    fake_code = b"package com.donor.mod;\npublic class Item {}"
     fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
 
-    def mock_fetch(client, repo, blob_sha):
-        return fake_code
-
-    monkeypatch.setattr(source_transplant, "_fetch_blob_bytes", mock_fetch)
+    monkeypatch.setattr(
+        source_transplant,
+        "_fetch_blob_bytes",
+        lambda _client, _repo, _blob_sha: fake_code,
+    )
 
     donor = source_transplant.DonorSlice(
         capability="item.equipment",
         repository="example/mod",
-        commit_sha="3333333333333333333333333333333333333333",
+        commit_sha="3" * 40,
         license_id="MIT",
         source_url="https://github.com/example/mod",
         target_compatibility="metadata_exact",
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/Item.java",
-                blob_sha="3333333333333333333333333333333333333333",
+                blob_sha="3" * 40,
                 sha256=fake_sha,
                 size_bytes=len(fake_code),
                 symbols=("Item",),
@@ -354,13 +368,21 @@ def test_strict_materialized_proof_level_without_compile(monkeypatch) -> None:
         closure_complete=True,
     )
 
-    # When materialization succeeds but no compiler is executed, proof level MUST be MATERIALIZED (no fake compile verification)
-    from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
-    receipt = execute_reuse_proof(donor, target_workspace="", target_context={})
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace="",
+        target_context={},
+        compile_checker=lambda _files, _context: {
+            "compile_passed": True,
+            "tests_passed": True,
+        },
+    )
 
     assert receipt.compile_passed is False
     assert receipt.tests_passed is False
+    assert receipt.authoritative_compile is False
     assert receipt.proof_level == "MATERIALIZED"
+    assert receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
 
 
 def test_real_blob_byte_materialization_and_sandbox_isolation(monkeypatch, tmp_path) -> None:
@@ -639,22 +661,28 @@ def test_residual_symbol_analyzer_extracts_symbols_honestly() -> None:
     assert residuals == ("CustomBossEntity", "SpecialWeaponItem")
 
 
-def test_closure_incomplete_capped_at_partial_reuse() -> None:
-    fake_code = b"package com.donor.mod;\npublic class Item {}"
+def test_closure_incomplete_capped_at_partial_reuse(monkeypatch) -> None:
     import hashlib
+
+    fake_code = b"package com.donor.mod;\npublic class Item {}"
     fake_sha = "sha256:" + hashlib.sha256(fake_code).hexdigest()
+    monkeypatch.setattr(
+        source_transplant,
+        "_fetch_blob_bytes",
+        lambda _client, _repo, _blob_sha: fake_code,
+    )
 
     donor = source_transplant.DonorSlice(
         capability="item.equipment",
         repository="example/mod",
-        commit_sha="3333333333333333333333333333333333333333",
+        commit_sha="3" * 40,
         license_id="MIT",
         source_url="https://github.com/example/mod",
         target_compatibility="metadata_exact",
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/Item.java",
-                blob_sha="3333333333333333333333333333333333333333",
+                blob_sha="3" * 40,
                 sha256=fake_sha,
                 size_bytes=len(fake_code),
                 symbols=("Item",),
@@ -666,50 +694,44 @@ def test_closure_incomplete_capped_at_partial_reuse() -> None:
         donor_tests=(),
         confidence=0.90,
         adaptation_cost=0.0,
-        closure_complete=False,  # INCOMPLETE CLOSURE (e.g. missing texture/model)
+        closure_complete=False,
     )
 
-    def mock_pass(files, context):
-        return {"compile_passed": True, "tests_passed": True}
-
-    from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
     receipt = execute_reuse_proof(
         donor,
         target_workspace="",
         target_context={},
-        compile_checker=mock_pass,
+        compile_checker=lambda _files, _context: {
+            "compile_passed": True,
+            "tests_passed": True,
+        },
     )
 
-    # Incomplete closure MUST NEVER be promoted to COMPILE_VERIFIED or BEHAVIOR_VERIFIED
-    assert receipt.proof_level == "PARTIAL_REUSE"
+    assert receipt.proof_level == "MATERIALIZED"
     assert receipt.compile_passed is False
+    assert receipt.authoritative_compile is False
+    assert receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
 
 
 def test_loader_aware_scaffold_neoforge_and_wrapper(tmp_path) -> None:
+    import pytest
+
     from minecraft_mod_ai.reuse_proof_executor import (
         scaffold_minimal_ephemeral_workspace,
     )
 
-    scaffold_minimal_ephemeral_workspace(
-        tmp_path,
-        target_context={
-            "loader": "neoforge",
-            "minecraft_version": "1.21.1",
-            "target_modid": "maple_mod",
-            "java_version": "21",
-        },
-    )
+    with pytest.raises(ValueError, match="No executable platform provider"):
+        scaffold_minimal_ephemeral_workspace(
+            tmp_path,
+            target_context={
+                "loader": "neoforge",
+                "minecraft_version": "1.21.1",
+                "target_modid": "maple_mod",
+                "java_version": "21",
+            },
+        )
 
-    assert (tmp_path / "build.gradle").exists()
-    assert (tmp_path / "settings.gradle").exists()
-    assert (tmp_path / "gradle.properties").exists()
-    assert (tmp_path / "gradlew").exists()
-    assert (tmp_path / "gradlew.bat").exists()
-    assert (tmp_path / "gradle" / "wrapper" / "gradle-wrapper.properties").exists()
-
-    bg_text = (tmp_path / "build.gradle").read_text(encoding="utf-8")
-    assert "net.neoforged.moddev" in bg_text
-    assert "1.21.1-21.1.0" in bg_text
+    assert not (tmp_path / "build.gradle").exists()
 
 
 def test_kotlin_dsl_dependency_injection() -> None:
@@ -794,34 +816,37 @@ def test_behavior_verified_requires_nonzero_tests_executed() -> None:
 
 
 def test_artifact_level_partial_reuse_slicing(monkeypatch, tmp_path) -> None:
+    import hashlib
+
     code_a = b"package com.donor.mod;\npublic class CleanClass {}"
     code_b = b"package com.donor.mod;\npublic class BrokenClass { MissingSymbol field; }"
-    import hashlib
+    blob_a = "a" * 40
+    blob_b = "b" * 40
 
     monkeypatch.setattr(
         source_transplant,
         "_fetch_blob_bytes",
-        lambda client, repo, sha: code_a if sha == "5a" else code_b,
+        lambda _client, _repo, sha: code_a if sha == blob_a else code_b,
     )
 
     donor = source_transplant.DonorSlice(
         capability="combat.damage",
         repository="example/slice",
-        commit_sha="5555555555555555555555555555555555555555",
+        commit_sha="5" * 40,
         license_id="MIT",
         source_url="https://github.com/example/slice",
         target_compatibility="adapt",
         files=(
             source_transplant.DonorFile(
                 path="src/main/java/CleanClass.java",
-                blob_sha="5a",
+                blob_sha=blob_a,
                 sha256="sha256:" + hashlib.sha256(code_a).hexdigest(),
                 size_bytes=len(code_a),
                 symbols=("CleanClass",),
             ),
             source_transplant.DonorFile(
                 path="src/main/java/BrokenClass.java",
-                blob_sha="5b",
+                blob_sha=blob_b,
                 sha256="sha256:" + hashlib.sha256(code_b).hexdigest(),
                 size_bytes=len(code_b),
                 symbols=("BrokenClass",),
@@ -836,45 +861,68 @@ def test_artifact_level_partial_reuse_slicing(monkeypatch, tmp_path) -> None:
         closure_complete=True,
     )
 
-    def mock_partial(files, context):
+    def diagnostic_partial(files, _context):
         if len(files) == 1 and "src/main/java/CleanClass.java" in files:
             return {"compile_passed": True, "tests_passed": False}
         return {"compile_passed": False, "unresolved_symbols": ["MissingSymbol"]}
 
     existing = tmp_path / "src/main/java/BrokenClass.java"
     existing.parent.mkdir(parents=True)
-    existing.write_text("package target; final class BrokenClass {}\n", encoding="utf-8")
+    existing.write_text(
+        "package target; final class BrokenClass {}\n",
+        encoding="utf-8",
+    )
     existing_sha256 = "sha256:" + hashlib.sha256(existing.read_bytes()).hexdigest()
 
     receipt = execute_reuse_proof(
         donor,
         target_workspace=tmp_path,
         target_context={},
-        compile_checker=mock_partial,
+        compile_checker=diagnostic_partial,
     )
 
-    assert receipt.proof_level == "PARTIAL_REUSE"
-    assert "src/main/java/CleanClass.java" in receipt.verified_artifacts
+    assert receipt.proof_level == "MATERIALIZED"
+    assert receipt.verified_artifacts == ()
+    assert "src/main/java/CleanClass.java" in receipt.residual_artifacts
     assert "src/main/java/BrokenClass.java" in receipt.residual_artifacts
-    assert "CleanClass" in receipt.verified_symbols
+    assert receipt.verified_symbols == ()
     assert "MissingSymbol" in receipt.residual_symbols
+    assert receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
     assert receipt.contract.allowed_write_paths == ("src/main/java/BrokenClass.java",)
     assert receipt.contract.expected_old_sha256 == {
         "src/main/java/BrokenClass.java": existing_sha256,
     }
+    assert "src/main/java/CleanClass.java" in receipt.contract.required_new_artifacts
     assert "src/main/java/BrokenClass.java" not in receipt.contract.required_new_artifacts
 
 
-def test_two_stage_compile_and_test_separation() -> None:
+def test_two_stage_compile_and_test_separation(monkeypatch) -> None:
+    import hashlib
+
+    code = b"package com.donor.mod;\npublic class BossEntity {}"
+    blob = "6" * 40
+    monkeypatch.setattr(
+        source_transplant,
+        "_fetch_blob_bytes",
+        lambda _client, _repo, _sha: code,
+    )
     donor = source_transplant.DonorSlice(
         capability="boss.entity",
         repository="example/boss",
-        commit_sha="6666666666666666666666666666666666666666",
+        commit_sha="6" * 40,
         license_id="MIT",
         source_url="https://github.com/example/boss",
         target_compatibility="metadata_exact",
-        files=(),
-        seed_files=(),
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/BossEntity.java",
+                blob_sha=blob,
+                sha256="sha256:" + hashlib.sha256(code).hexdigest(),
+                size_bytes=len(code),
+                symbols=("BossEntity",),
+            ),
+        ),
+        seed_files=("src/main/java/BossEntity.java",),
         source_symbols=("BossEntity",),
         required_dependencies=(),
         donor_tests=("BossEntityTest",),
@@ -883,20 +931,23 @@ def test_two_stage_compile_and_test_separation() -> None:
         closure_complete=True,
     )
 
-    # When compile passes but test fails: Must be COMPILE_VERIFIED (not rejected or error)
-    def mock_test_fail(files, context):
-        return {
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace="",
+        target_context={},
+        compile_checker=lambda _files, _context: {
             "compile_passed": True,
             "tests_passed": False,
             "tests_executed": 1,
             "tests_passed_count": 0,
             "executed_test_ids": ["BossEntityTest"],
-        }
+        },
+    )
 
-    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_test_fail)
-    assert receipt.compile_passed is True
+    assert receipt.compile_passed is False
     assert receipt.tests_passed is False
-    assert receipt.proof_level == "COMPILE_VERIFIED"
+    assert receipt.proof_level == "MATERIALIZED"
+    assert receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
 
 
 def test_capability_acceptance_test_matching() -> None:
@@ -965,38 +1016,59 @@ dependencies {
     assert "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/" in updated_bg
 
 
-def test_donor_without_tests_capped_at_compile_verified() -> None:
+def test_donor_without_tests_capped_at_compile_verified(monkeypatch) -> None:
+    import hashlib
+
+    code = b"package com.donor.mod;\npublic class OreFeature {}"
+    blob = "7" * 40
+    monkeypatch.setattr(
+        source_transplant,
+        "_fetch_blob_bytes",
+        lambda _client, _repo, _sha: code,
+    )
     donor = source_transplant.DonorSlice(
         capability="worldgen.ore",
         repository="example/ores",
-        commit_sha="7777777777777777777777777777777777777777",
+        commit_sha="7" * 40,
         license_id="MIT",
         source_url="https://github.com/example/ores",
         target_compatibility="metadata_exact",
-        files=(),
-        seed_files=(),
+        files=(
+            source_transplant.DonorFile(
+                path="src/main/java/OreFeature.java",
+                blob_sha=blob,
+                sha256="sha256:" + hashlib.sha256(code).hexdigest(),
+                size_bytes=len(code),
+                symbols=("OreFeature",),
+            ),
+        ),
+        seed_files=("src/main/java/OreFeature.java",),
         source_symbols=("OreFeature",),
         required_dependencies=(),
-        donor_tests=(),  # NO DECLARED ACCEPTANCE TESTS
+        donor_tests=(),
         confidence=0.9,
         adaptation_cost=0.0,
         closure_complete=True,
     )
 
-    def mock_all_pass(files, context):
-        return {
+    receipt = execute_reuse_proof(
+        donor,
+        target_workspace="",
+        target_context={},
+        compile_checker=lambda _files, _context: {
             "compile_passed": True,
             "tests_passed": True,
             "tests_executed": 3,
             "tests_passed_count": 3,
             "executed_test_ids": ["SomeTest", "OtherTest"],
-        }
+        },
+    )
 
-    receipt = execute_reuse_proof(donor, target_workspace="", target_context={}, compile_checker=mock_all_pass)
-    # A donor with no declared capability acceptance tests MUST be capped at COMPILE_VERIFIED!
-    assert receipt.proof_level == "COMPILE_VERIFIED"
-    assert receipt.compile_passed is True
+    assert receipt.proof_level == "MATERIALIZED"
+    assert receipt.compile_passed is False
     assert receipt.tests_passed is False
+    assert receipt.authoritative_compile is False
+    assert receipt.failure_code == "NON_AUTHORITATIVE_COMPILE_CHECKER"
 
 
 def test_requirement_acceptance_contract_mapping() -> None:
@@ -1340,15 +1412,21 @@ def test_multi_donor_joint_composition_solver_and_sbom() -> None:
 def test_proof_transition_validator_rules() -> None:
     from minecraft_mod_ai.proof_level import ProofLevel, validate_proof_transition
 
-    # Valid step with receipt
-    valid, msg = validate_proof_transition(
+    valid, _ = validate_proof_transition(
+        ProofLevel.MATERIALIZED,
+        ProofLevel.COMPILE_VERIFIED,
+        receipt={"compile_passed": True, "authoritative_compile": True},
+    )
+    assert valid is True
+
+    non_authoritative, non_authoritative_message = validate_proof_transition(
         ProofLevel.MATERIALIZED,
         ProofLevel.COMPILE_VERIFIED,
         receipt={"compile_passed": True},
     )
-    assert valid is True
+    assert non_authoritative is False
+    assert "authoritative compile" in non_authoritative_message
 
-    # Missing receipt on verified transition
     invalid_receipt, msg2 = validate_proof_transition(
         ProofLevel.MATERIALIZED,
         ProofLevel.COMPILE_VERIFIED,
@@ -1357,11 +1435,10 @@ def test_proof_transition_validator_rules() -> None:
     assert invalid_receipt is False
     assert "MISSING_RECEIPT" in msg2
 
-    # Illegal jump from DISCOVERED to COMPILE_VERIFIED
     illegal_jump, msg3 = validate_proof_transition(
         ProofLevel.DISCOVERED,
         ProofLevel.COMPILE_VERIFIED,
-        receipt={"compile_passed": True},
+        receipt={"compile_passed": True, "authoritative_compile": True},
     )
     assert illegal_jump is False
     assert "ILLEGAL_TRANSITION" in msg3
@@ -1727,11 +1804,11 @@ def test_reusable_artifact_bundle_and_repository_locator() -> None:
 def test_build_model_and_resource_merge_registry() -> None:
     import pytest
 
-    from minecraft_mod_ai.build_model import BuildModel, BuildTargetSpec
+    from minecraft_mod_ai.build_model import BuildModel
     from minecraft_mod_ai.resource_merge_registry import ResourceMergeRegistry
 
-    model = BuildModel(
-        target=BuildTargetSpec(loader="fabric", minecraft_version="1.21.1", java_version=21),
+    model = BuildModel.for_target_context(
+        {"loader": "fabric", "minecraft_version": "1.21.1"}
     )
     model.add_repository("https://maven.terraformersmc.com/releases/")
     model.add_dependency("com.terraformersmc:modmenu:11.0.0")
@@ -1741,16 +1818,19 @@ def test_build_model_and_resource_merge_registry() -> None:
     assert "https://maven.terraformersmc.com/releases/" in rendered
     assert "JavaVersion.VERSION_21" in rendered
 
-    # Test ResourceMergeRegistry
     tags_a = '{"values": ["mod:item1"]}'
     tags_b = '{"values": ["mod:item2"]}'
-    merged_tags, ok, _ = ResourceMergeRegistry.merge("data/mod/tags/items/tools.json", tags_a, tags_b)
+    merged_tags, ok, _ = ResourceMergeRegistry.merge(
+        "data/mod/tags/items/tools.json", tags_a, tags_b
+    )
     assert ok is True
     assert "mod:item1" in merged_tags and "mod:item2" in merged_tags
 
     lang_a = '{"item.mod.sword": "Iron Sword"}'
     lang_b = '{"item.mod.shield": "Iron Shield"}'
-    merged_lang, ok, _ = ResourceMergeRegistry.merge("assets/mod/lang/en_us.json", lang_a, lang_b)
+    merged_lang, ok, _ = ResourceMergeRegistry.merge(
+        "assets/mod/lang/en_us.json", lang_a, lang_b
+    )
     assert ok is True
     assert "Iron Sword" in merged_lang and "Iron Shield" in merged_lang
 
@@ -1758,9 +1838,5 @@ def test_build_model_and_resource_merge_registry() -> None:
         ResourceMergeRegistry.canonical_path(
             "../outside.json", target_modid="test_mod"
         )
-
-
-
-
 
 
