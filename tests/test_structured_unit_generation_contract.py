@@ -5,6 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai import agentic_research_game_design as design
+from minecraft_mod_ai.spec import SpecValidationError
 from minecraft_mod_ai.structured_output import (
     StructuredOutputValidationError,
     validate_structured_output,
@@ -52,7 +53,7 @@ def test_game_design_section_transport_leaves_recoverable_shape_to_owner() -> No
     ]
 
 
-def test_section_owner_normalizes_combat_list_without_second_generator() -> None:
+def test_section_owner_rejects_semantically_malformed_combat_shape() -> None:
     class Router:
         def __init__(self) -> None:
             self.calls = 0
@@ -71,19 +72,19 @@ def test_section_owner_normalizes_combat_list_without_second_generator() -> None
 
     router = Router()
     _section_id, fields, properties = design._SECTION_SPECS[1]
-    result = design._generate_section(
-        router,
-        prompt="우주 모드를 설계해줘",
-        section_id="systems_and_progression",
-        fields=fields,
-        properties=properties,
-        research={},
-        media_paths=(),
-        trace_metadata=None,
-    )
+    with pytest.raises(SpecValidationError, match="combat must be an object"):
+        design._generate_section(
+            router,
+            prompt="우주 모드를 설계해줘",
+            section_id="systems_and_progression",
+            fields=fields,
+            properties=properties,
+            research={},
+            media_paths=(),
+            trace_metadata=None,
+        )
 
-    assert router.calls == 1
-    assert result["combat"] == {"items": ["alien_combat", "colony_defense"]}
+    assert router.calls >= 1
 
 
 def test_unrelated_structured_schema_remains_strict() -> None:
