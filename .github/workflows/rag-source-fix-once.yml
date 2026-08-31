@@ -39,7 +39,10 @@ jobs:
         run: |
           git config user.name 'jujumelona'
           git config user.email 'qasdaa025@gmail.com'
-          git add minecraft_mod_ai/pre_design_rag_corrective.py minecraft_mod_ai/runtime_bootstrap.py
+          git add \
+            minecraft_mod_ai/pre_design_external_source_contract.py \
+            minecraft_mod_ai/pre_design_rag_corrective.py \
+            minecraft_mod_ai/runtime_bootstrap.py
           if git diff --cached --quiet; then
             echo 'No RAG integration changes to commit'
             exit 0
