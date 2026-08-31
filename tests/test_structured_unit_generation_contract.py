@@ -88,6 +88,64 @@ def test_design_section_owner_rejects_missing_required_markdown_heading_once() -
     assert router.kwargs["response_schema"] is None
 
 
+def test_modules_have_one_canonical_five_column_markdown_contract() -> None:
+    messages = design._section_messages(
+        prompt="우주 모드를 설계해줘",
+        section_id="modules_and_assets",
+        fields=("modules", "assets"),
+        research={},
+    )
+    assert "Write design content as Markdown, not JSON" in messages[0]["content"]
+    assert (
+        "plugin_id | status | reason | requirement_refs | implementation_obligations"
+        in messages[0]["content"]
+    )
+    assert "old three-column module format" in messages[0]["content"]
+
+    parsed = design._module_rows(
+        "- mining_core | planning | 광물 채굴 | req_mining, req_economy | "
+        "광물 상태 관리; 채굴 보상 계산"
+    )
+    assert parsed == [
+        {
+            "plugin_id": "mining_core",
+            "status": "planning",
+            "reason": "광물 채굴",
+            "requirement_refs": ["req_mining", "req_economy"],
+            "implementation_obligations": ["광물 상태 관리", "채굴 보상 계산"],
+        }
+    ]
+
+
+def test_old_three_column_module_contract_fails_at_parser_boundary() -> None:
+    with pytest.raises(SpecValidationError, match="exactly"):
+        design._module_rows(
+            "- mining_core | planning | 광물 채굴; requirement_refs: req_mining"
+        )
+
+
+def test_requirement_coverage_consumes_the_same_canonical_module_shape() -> None:
+    design_value = {
+        "modules": [
+            {
+                "plugin_id": "mining_core",
+                "status": "planning",
+                "reason": "광물 채굴",
+                "requirement_refs": ["req_mining"],
+                "implementation_obligations": ["광물 상태 관리"],
+            }
+        ]
+    }
+    result = design._validate_requirement_coverage(
+        design_value,
+        [{"requirement_id": "req_mining"}],
+    )
+    assert result["_requirement_design_bindings"]["requirement_ids"] == ["req_mining"]
+    assert result["_requirement_design_bindings"]["bindings"][0]["module_ids"] == [
+        "mining_core"
+    ]
+
+
 def test_unrelated_structured_schema_remains_strict() -> None:
     schema = {
         "type": "object",
