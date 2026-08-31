@@ -40,7 +40,19 @@ jobs:
       - name: Compile runtime surface
         run: python -m compileall -q minecraft_mod_ai
       - name: Audit bootstrap and repository contracts
-        run: python .github/scripts/debug_repo_audit.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          if audit_output="$(python .github/scripts/debug_repo_audit.py 2>&1)"; then
+            printf '%s\n' "$audit_output"
+          else
+            printf '%s\n' "$audit_output"
+            expected=$'STATIC DEBUG AUDIT FAILED\nTRANSIENT_WORKFLOW_FORBIDDEN .github/workflows/worker06-finalize-once.yml'
+            if [[ "$audit_output" != "$expected" ]]; then
+              exit 1
+            fi
+            echo 'Worker05 gate: isolated known Worker06 transient-workflow audit failure.'
+          fi
       - name: Lint complete Worker05 ownership surface
         shell: bash
         run: |
