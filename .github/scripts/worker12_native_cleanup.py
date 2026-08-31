@@ -6,8 +6,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
-    if new in text:
-        return text
+    if old not in text:
+        if new in text:
+            return text
+        raise SystemExit(f"{label}: old and new blocks are both missing")
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{label}: expected exactly one old block, found {count}")
@@ -74,13 +76,20 @@ text = replace_once(
     "diagnostic path authority",
 )
 
-text = replace_once(
-    text,
+old_local_import = (
     "        from .source_patch import TransactionalSourcePatcher\n"
-    "        from .validation_diagnostic_contract import diagnostic_errors, run_diagnostics\n",
-    "        from .source_patch import TransactionalSourcePatcher\n",
-    "remove verifier local diagnostic import",
+    "        from .validation_diagnostic_contract import diagnostic_errors, run_diagnostics\n"
 )
+if old_local_import in text:
+    if text.count(old_local_import) != 1:
+        raise SystemExit("remove verifier local diagnostic import: duplicate old block")
+    text = text.replace(
+        old_local_import,
+        "        from .source_patch import TransactionalSourcePatcher\n",
+        1,
+    )
+elif "        from .validation_diagnostic_contract import diagnostic_errors, run_diagnostics\n" in text:
+    raise SystemExit("remove verifier local diagnostic import: unexpected placement")
 
 path.write_text(text, encoding="utf-8")
 
