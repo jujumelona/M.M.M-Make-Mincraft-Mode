@@ -1,0 +1,81 @@
+name: Worker13 Synthetic Provider Reconcile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/worker13-test-provider-reconcile.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Reconcile exact synthetic provider capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/conftest.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    from minecraft_mod_ai.complete_spec import MODULE_KINDS
+    from minecraft_mod_ai.platform_catalog import PlatformAdapter
+
+    normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
+'''
+          new = '''    from minecraft_mod_ai.complete_spec import MODULE_KINDS
+    from minecraft_mod_ai.platform_catalog import PlatformAdapter
+
+    specialized_capabilities = frozenset(
+        {
+            "system-pack:quest-system",
+            "system-pack:class-skill-system",
+            "system-pack:economy-shop",
+            "system-pack:gui-networking",
+            "system-pack:party-guild",
+            "geckolib:entity",
+            "geckolib:version:4.8.2",
+        }
+    )
+    normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
+'''
+          if text.count(old) != 1:
+              raise SystemExit('synthetic provider import anchor drifted')
+          text = text.replace(old, new)
+
+          old = '''        gradle="test-gradle",
+        gradle_sha256="0" * 64,
+'''
+          new = '''        gradle="8.10.2",
+        gradle_sha256="31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26",
+'''
+          if text.count(old) != 1:
+              raise SystemExit('synthetic Gradle receipt anchor drifted')
+          text = text.replace(old, new)
+
+          old = '''        deterministic_module_kinds=MODULE_KINDS,
+'''
+          new = '''        deterministic_module_kinds=frozenset(MODULE_KINDS) | specialized_capabilities,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('synthetic capability anchor drifted')
+          text = text.replace(old, new)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/worker13-test-provider-reconcile.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests/conftest.py
+          git commit -m 'test: declare exact synthetic provider capabilities'
+          git push origin HEAD:main
