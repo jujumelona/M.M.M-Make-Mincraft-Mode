@@ -97,7 +97,7 @@ def test_pre_design_uses_single_grounded_owner_and_defers_target_radar(monkeypat
             "next_queries": [],
             "procedures": [],
             "sufficient": True,
-            "fixed_point": True,
+            "fixed_point": False,
             "checkpoint": {"status": "complete"},
         },
     )
