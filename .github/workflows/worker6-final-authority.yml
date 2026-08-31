@@ -34,6 +34,7 @@ jobs:
         run: |
           python scripts/worker6_final_authority_once.py
           python scripts/worker6_final_lint_once.py
+          python scripts/worker6_build_model_boundary_once.py
 
       - name: Apply safe lint fixes
         run: >-
