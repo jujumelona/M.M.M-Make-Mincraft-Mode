@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from minecraft_mod_ai import deep_design_execution_contract as deep
 from minecraft_mod_ai import evidence_first_planning as evidence
 
@@ -119,6 +117,7 @@ def test_concrete_module_facets_replace_duplicate_narrative_coder_facets() -> No
 
 def test_sharded_request_completes_all_research_before_any_design(monkeypatch) -> None:
     from minecraft_mod_ai import agentic_research_game_design as agentic
+    from minecraft_mod_ai import game_design
     from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 
     events: list[str] = []
@@ -138,27 +137,35 @@ def test_sharded_request_completes_all_research_before_any_design(monkeypatch) -
 
     monkeypatch.setattr(pipeline, "collect_design_research", collect)
 
-    def original(
-        self,
-        prompt,
+    def generate(
+        router,
         *,
-        request_pages,
+        authoritative_prompt,
         media_paths,
-        page_budget,
+        system_prompt,
+        fallback_prompt=None,
+        precollected_research=None,
     ):
-        del self, prompt, media_paths, page_budget
-        assert deep._PRECOLLECTED_PAGE_RESEARCH.get() is not None
-        for page_index, page in enumerate(request_pages):
-            events.append(f"design:{page_index}:{page}")
-            consumed = deep._PRECOLLECTED_PAGE_INDEX.get()
-            assert consumed == page_index
-            deep._PRECOLLECTED_PAGE_INDEX.set(consumed + 1)
-        return {"title": "merged"}
+        del router, authoritative_prompt, media_paths, system_prompt
+        page = str(fallback_prompt or "")
+        page_index = pages.index(page)
+        assert precollected_research["research_sha256"] == f"research-{page_index}"
+        events.append(f"design:{page_index}:{page}")
+        return {
+            "title": "merged",
+            "pitch": "bounded sharded design",
+            "core_loop": [f"loop {page_index}"],
+            "progression": [f"progress {page_index}"],
+            "combat": {},
+            "mod_context": {},
+            "modules": [],
+            "assets": [],
+            "acceptance_tests": [f"verify {page_index}"],
+        }
 
-    monkeypatch.setattr(deep._research_first_plan_sharded, "__wrapped__", original)
-    planner = SimpleNamespace(router=object())
-    result = deep._research_first_plan_sharded(
-        planner,
+    monkeypatch.setattr(game_design, "_generate_game_design_once", generate)
+    planner = game_design.GameDesignPlanner(object())
+    result = planner._plan_sharded_request(
         "".join(pages),
         request_pages=pages,
         media_paths=(),
@@ -184,17 +191,9 @@ def test_sharded_request_completes_all_research_before_any_design(monkeypatch) -
     ]
 
 
-def test_runtime_installs_research_first_design_generator_without_replacing_plan_owner() -> None:
+def test_runtime_uses_native_research_first_design_owner() -> None:
     from minecraft_mod_ai import game_design
 
-    assert getattr(
-        game_design._generate_game_design_once,
-        "__mmm_research_first_design_generator__",
-        False,
-    )
-    assert getattr(
-        game_design.GameDesignPlanner._plan_sharded_request,
-        "__mmm_research_first_sharded_barrier__",
-        False,
-    )
+    assert not hasattr(game_design._generate_game_design_once, "__wrapped__")
+    assert not hasattr(game_design.GameDesignPlanner._plan_sharded_request, "__wrapped__")
     assert getattr(game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False)
