@@ -44,6 +44,11 @@ def _environment_secret_values() -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def _sanitize_text(value: object) -> str:
+    redactor = StreamingRedactor(_environment_secret_values())
+    return redactor.feed(str(value)) + redactor.finish()
+
+
 def _redact_stream(source: Path, destination: Path, *, secrets: Iterable[str] | None = None) -> None:
     secret_values = _environment_secret_values() if secrets is None else tuple(secrets)
     redactor = StreamingRedactor(secret_values)
@@ -172,18 +177,19 @@ def failure_groups_from_report(report: dict[str, Any]):
     for check in checks:
         if not isinstance(check, dict) or str(check.get("status", "")).upper() != "FAIL":
             continue
+        raw_category = str(check.get("category") or "unknown")
         category = (
             FailureCategory.INTERNAL
-            if str(check.get("category") or "") == _INTERNAL_CHECK_CATEGORY
+            if raw_category == _INTERNAL_CHECK_CATEGORY
             else FailureCategory.VALIDATION
         )
         collector.record(
             FailureEvent(
-                stage=f"full-debug:{str(check.get('category') or 'unknown')}",
-                operation=str(check.get("name") or "unknown-check"),
+                stage=_sanitize_text(f"full-debug:{raw_category}"),
+                operation=_sanitize_text(str(check.get("name") or "unknown-check")),
                 category=category,
                 cause_type="AuditInternalFailure" if category is FailureCategory.INTERNAL else "AuditCheckFailure",
-                cause=str(check.get("detail") or "check failed"),
+                cause=_sanitize_text(str(check.get("detail") or "check failed")),
                 retryable=False,
                 final_status=FailureStatus.FAILED,
             )
@@ -219,11 +225,12 @@ def _render_internal_report_error(exc: BaseException, operation: str) -> str:
     collector.record_exception(
         exc,
         stage="full-debug:audit-runner",
-        operation=operation,
+        operation=_sanitize_text(operation),
         category=FailureCategory.INTERNAL,
         retryable=False,
         final_status=FailureStatus.FAILED,
-        fallback=_raw_log_fallback(),
+        fallback=_sanitize_text(_raw_log_fallback()),
+        sanitize=_sanitize_text,
     )
     return render_failure_summary(collector.groups())
 
@@ -239,13 +246,13 @@ def _render_runner_event(
     collector.record(
         FailureEvent(
             stage="full-debug:audit-runner",
-            operation=operation,
+            operation=_sanitize_text(operation),
             category=category,
-            cause_type=cause_type,
-            cause=cause,
+            cause_type=_sanitize_text(cause_type),
+            cause=_sanitize_text(cause),
             retryable=category is FailureCategory.TRANSIENT,
             final_status=FailureStatus.FAILED,
-            fallback=_raw_log_fallback(),
+            fallback=_sanitize_text(_raw_log_fallback()),
         )
     )
     return render_failure_summary(collector.groups())
