@@ -61,32 +61,42 @@ def test_forced_rag_builds_missing_index_without_unrouted_public_search(
     assert bundle["code_index_status"] == "available"
     assert bundle["local_index"]["status"] == "available"
     assert bundle["local_index"]["built"] is True
-    assert bundle["external_query_count"] == 0
-    assert bundle["external_source_count"] == 0
+    assert bundle["external_query_count"] == 3
+    assert bundle["external_source_count"] == 3
     queries = [item for domain in bundle["domains"] for item in domain["queries"]]
     assert len(queries) == 3
     assert all(item["project_rag"]["sources"] for item in queries)
     assert all(item["code_rag"]["status"] == "searched" for item in queries)
     assert all(item["code_rag"]["hits"] == [] for item in queries)
-    assert all("external_rag" not in item for item in queries)
+    assert all(item["external_rag"]["actual_source_document_count"] == 1 for item in queries)
+    assert all(item["external_rag"]["documents"] for item in queries)
 
 
 def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MMM_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("MMM_PROJECT_RAG_INDEX", raising=False)
-    monkeypatch.setattr(grounded_rag, "_external_retrieval", _fake_external)
+    external_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def _recording_external(query: str, versions) -> dict[str, object]:
+        external_calls.append((query, tuple(str(item) for item in versions)))
+        return _fake_external(query, versions)
+
+    monkeypatch.setattr(grounded_rag, "_external_retrieval", _recording_external)
     router = SimpleNamespace(_mmm_requested_minecraft_version="1.21.1")
 
     bundle = project_rag._forced_rag_bundle(router, _brief())
 
     assert bundle["versions"] == ["1.21.1"]
+    assert len(external_calls) == 3
+    assert all(versions == ("1.21.1",) for _query, versions in external_calls)
     for domain in bundle["domains"]:
         for query in domain["queries"]:
             sources = query["project_rag"]["sources"]
             assert sources
             assert all(source["matched_version"] == "1.21.1" for source in sources)
-            assert "external_rag" not in query
+            assert query["external_rag"]["actual_source_document_count"] == 1
+            assert query["external_rag"]["documents"]
 
 
 def test_legacy_pre_design_collector_is_not_runtime_owner() -> None:
