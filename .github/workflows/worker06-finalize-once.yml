@@ -1,0 +1,80 @@
+name: Worker 06 Final Reuse Proof Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/worker06-finalize-once.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: worker06-finalize-once
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Sync latest main
+        run: |
+          git pull --rebase origin main
+      - name: Apply final fail-closed planner proof classification
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          planner = Path('minecraft_mod_ai/reuse_planner.py')
+          text = planner.read_text(encoding='utf-8')
+          marker = '''REUSE_MODES = (\n    "same_project",\n    "mmm_verified",\n    "library",\n    "source_transplant",\n    "adapt",\n    "fresh",\n)\n'''
+          helper = marker + '''\n\ndef _external_donor_mode_from_proof_level(value: Any) -> str:\n    """Map donor proof to reuse mode without admitting pre-executable states."""\n\n    proof_state = ProofLevel.from_value(value)\n    if proof_state.is_verified():\n        return "source_transplant"\n    if proof_state.is_partial():\n        return "adapt"\n    return "fresh"\n'''
+          if '_external_donor_mode_from_proof_level' not in text:
+              if marker not in text:
+                  raise SystemExit('REUSE_MODES insertion marker not found')
+              text = text.replace(marker, helper, 1)
+
+          old = '''                if proof_lvl in {\n                    "COMPILE_VERIFIED",\n                    "BEHAVIOR_VERIFIED",\n                    "HOST_VERIFIED",\n                }:\n                    mode = "source_transplant"\n                elif proof_lvl in {\n                    "PARTIAL_REUSE",\n                    "SUBGRAPH_COMPILE_VERIFIED",\n                    "MATERIALIZED",\n                    "CLOSURE_COMPLETE",\n                }:\n                    mode = "adapt"\n                else:\n                    mode = "fresh"\n'''
+          new = '''                mode = _external_donor_mode_from_proof_level(proof_lvl)\n'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('planner proof classification block not found')
+          planner.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_worker6_reuse_fail_closed.py')
+          test_text = tests.read_text(encoding='utf-8')
+          test_name = 'test_planner_external_donor_proof_mode_is_fail_closed'
+          if test_name not in test_text:
+              test_text += '''\n\ndef test_planner_external_donor_proof_mode_is_fail_closed() -> None:\n    from minecraft_mod_ai.reuse_planner import _external_donor_mode_from_proof_level\n\n    for level in (\n        ProofLevel.COMPILE_VERIFIED,\n        ProofLevel.INTEGRATION_VERIFIED,\n        ProofLevel.RUNTIME_BOOT_VERIFIED,\n        ProofLevel.BEHAVIOR_VERIFIED,\n        ProofLevel.HOST_VERIFIED,\n    ):\n        assert _external_donor_mode_from_proof_level(level) == "source_transplant"\n\n    for level in (ProofLevel.PARTIAL_REUSE, ProofLevel.SUBGRAPH_COMPILE_VERIFIED):\n        assert _external_donor_mode_from_proof_level(level) == "adapt"\n\n    for level in (\n        ProofLevel.DISCOVERED,\n        ProofLevel.LICENSE_VERIFIED,\n        ProofLevel.PINNED,\n        ProofLevel.CLOSURE_COMPLETE,\n        ProofLevel.MATERIALIZED,\n        ProofLevel.UNVERIFIED,\n        ProofLevel.FRESH_REQUIRED,\n    ):\n        assert _external_donor_mode_from_proof_level(level) == "fresh"\n'''
+              tests.write_text(test_text, encoding='utf-8')
+          PY
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Worker 06 targeted regression
+        run: python -m pytest -q tests/test_worker6_reuse_fail_closed.py
+      - name: Worker 06 syntax and lint gate
+        run: |
+          python -m compileall -q minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_license.py tests/test_worker6_reuse_fail_closed.py
+          python -m ruff check minecraft_mod_ai/reuse_planner.py minecraft_mod_ai/reuse_artifacts.py minecraft_mod_ai/reuse_proof_executor.py minecraft_mod_ai/proof_level.py minecraft_mod_ai/reuse_license.py tests/test_worker6_reuse_fail_closed.py --select F,E7,E9
+      - name: Commit tested product changes and remove one-shot workflow
+        run: |
+          rm .github/workflows/worker06-finalize-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/reuse_planner.py tests/test_worker6_reuse_fail_closed.py .github/workflows/worker06-finalize-once.yml
+          git commit -m 'fix(reuse): close planner proof-level gap'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            git rebase --abort >/dev/null 2>&1 || true
+            sleep 2
+          done
+          exit 1
