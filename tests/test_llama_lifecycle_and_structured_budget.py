@@ -54,7 +54,11 @@ def _identity_schema():
 
 
 def test_identity_section_budget_is_schema_derived_and_bounded():
-    request = SimpleNamespace(response_format="json", response_schema=_identity_schema())
+    request = SimpleNamespace(
+        response_format="json",
+        response_schema=_identity_schema(),
+        tools=(),
+    )
     derived = structured_response_token_ceiling(request)
     assert derived is not None
     ceiling, metrics = derived
@@ -66,17 +70,42 @@ def test_identity_section_budget_is_schema_derived_and_bounded():
 
 
 def test_broader_schema_receives_more_output_capacity():
-    identity = SimpleNamespace(response_format="json", response_schema=_identity_schema())
+    identity = SimpleNamespace(
+        response_format="json",
+        response_schema=_identity_schema(),
+        tools=(),
+    )
     broad_schema = _identity_schema()
     broad_schema["properties"]["section"]["properties"]["progression"] = {
         "type": "array",
         "items": {"type": "string"},
     }
     broad_schema["properties"]["section"]["required"].append("progression")
-    broader = SimpleNamespace(response_format="json", response_schema=broad_schema)
+    broader = SimpleNamespace(
+        response_format="json",
+        response_schema=broad_schema,
+        tools=(),
+    )
     identity_ceiling, _ = structured_response_token_ceiling(identity)
     broader_ceiling, _ = structured_response_token_ceiling(broader)
     assert broader_ceiling > identity_ceiling
+
+
+def test_native_tool_turn_is_not_schema_clamped():
+    request = SimpleNamespace(
+        response_format="json",
+        response_schema=_identity_schema(),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ),
+    )
+    assert structured_response_token_ceiling(request) is None
 
 
 def test_semantic_watchdog_ignores_ping_and_times_out_without_model_progress():
