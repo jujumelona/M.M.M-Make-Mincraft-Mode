@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 
 import pytest
 
@@ -74,6 +75,20 @@ def _materialized_payload() -> dict[str, bytes]:
             b"package donor; public class BossEntity {}\n"
         )
     }
+
+
+def _authoritative_compile_receipt(
+    receipt: reuse_proof.ReuseProofReceipt,
+    donor: DonorSlice,
+) -> reuse_proof.ReuseProofReceipt:
+    return replace(
+        receipt,
+        proof_level=ProofLevel.COMPILE_VERIFIED.value,
+        compile_passed=True,
+        authoritative_compile=True,
+        verified_capabilities=(donor.capability,),
+        residual_capabilities=(),
+    )
 
 
 def test_license_verified_requires_discovery_admitted_license() -> None:
@@ -245,7 +260,7 @@ def test_dependency_resolution_receipt_replaces_donor_version_and_binds_bundle(
         lambda *args, **kwargs: _materialized_payload(),
     )
 
-    receipt = reuse_proof.execute_reuse_proof(
+    diagnostic_receipt = reuse_proof.execute_reuse_proof(
         donor,
         target_workspace=tmp_path,
         target_context={
@@ -258,10 +273,11 @@ def test_dependency_resolution_receipt_replaces_donor_version_and_binds_bundle(
         compile_checker=lambda *_: True,
     )
 
-    assert receipt.proof_level == ProofLevel.COMPILE_VERIFIED.value
-    assert receipt.compile_passed is True
-    assert len(receipt.dependency_receipts) == 1
-    dependency = receipt.dependency_receipts[0]
+    assert ProofLevel.from_value(diagnostic_receipt.proof_level).is_verified() is False
+    assert diagnostic_receipt.compile_passed is False
+    assert diagnostic_receipt.authoritative_compile is False
+    assert len(diagnostic_receipt.dependency_receipts) == 1
+    dependency = diagnostic_receipt.dependency_receipts[0]
     assert dependency["donor_declared_coordinate"].endswith(":0.0.1")
     assert dependency["resolved_coordinate"] == (
         "software.bernie.geckolib:geckolib-fabric:4.6.0"
@@ -270,14 +286,15 @@ def test_dependency_resolution_receipt_replaces_donor_version_and_binds_bundle(
     assert dependency["is_resolved"] is True
     assert dependency["resolution_fingerprint"].startswith("sha256:")
 
+    authoritative_receipt = _authoritative_compile_receipt(diagnostic_receipt, donor)
     bundle = ReusableArtifactBundle.from_donor_slice(
         donor,
-        proof_receipt=receipt,
-        protected_artifacts=receipt.contract.protected_artifacts,
+        proof_receipt=authoritative_receipt,
+        protected_artifacts=authoritative_receipt.contract.protected_artifacts,
     )
-    assert bundle.dependency_receipts == receipt.dependency_receipts
+    assert bundle.dependency_receipts == authoritative_receipt.dependency_receipts
     assert bundle.dependency_receipts != donor.required_dependencies
-    assert bundle_proof_allows_reuse(bundle, receipt) is True
+    assert bundle_proof_allows_reuse(bundle, authoritative_receipt) is True
 
 
 def test_dependency_receipt_tampering_invalidates_bundle_proof(
@@ -290,7 +307,7 @@ def test_dependency_receipt_tampering_invalidates_bundle_proof(
         "materialize_pinned_donor",
         lambda *args, **kwargs: _materialized_payload(),
     )
-    receipt = reuse_proof.execute_reuse_proof(
+    diagnostic_receipt = reuse_proof.execute_reuse_proof(
         donor,
         target_workspace=tmp_path,
         target_context={
@@ -302,20 +319,16 @@ def test_dependency_receipt_tampering_invalidates_bundle_proof(
         },
         compile_checker=lambda *_: True,
     )
+    authoritative_receipt = _authoritative_compile_receipt(diagnostic_receipt, donor)
     bundle = ReusableArtifactBundle.from_donor_slice(
         donor,
-        proof_receipt=receipt,
-        protected_artifacts=receipt.contract.protected_artifacts,
+        proof_receipt=authoritative_receipt,
+        protected_artifacts=authoritative_receipt.contract.protected_artifacts,
     )
-    assert bundle_proof_allows_reuse(bundle, receipt) is True
+    assert bundle_proof_allows_reuse(bundle, authoritative_receipt) is True
 
-    tampered = ReusableArtifactBundle(
-        **{
-            **bundle.__dict__,
-            "dependency_receipts": (),
-        }
-    )
-    assert bundle_proof_allows_reuse(tampered, receipt) is False
+    tampered = replace(bundle, dependency_receipts=())
+    assert bundle_proof_allows_reuse(tampered, authoritative_receipt) is False
 
 
 def test_unresolved_declared_dependency_cannot_become_verified_reuse(
