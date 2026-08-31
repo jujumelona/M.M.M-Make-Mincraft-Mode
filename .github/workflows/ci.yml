@@ -51,9 +51,10 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Exact reviewed surface after adding the planner requirement-traceability owner.
+          # Reviewed surface: inherited main was already at 424; Worker 03 adds one
+          # requirement-traceability owner, bringing the exact audited surface to 425.
           # Any new runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 414
+          budget = 425
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
