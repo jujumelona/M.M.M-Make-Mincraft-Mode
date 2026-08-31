@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai import implementation_kind_boundary_contract as boundary
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 
 
@@ -81,7 +80,7 @@ def _request(*, action: str = "fresh", include_incidental_source: bool = False) 
 
 
 def test_fresh_evidence_task_uses_host_reserved_symbol_as_new_file() -> None:
-    context = boundary._fresh_owned_symbol_context(_request(), tool_loop)
+    context = tool_loop._extract_mutation_context_from_payload(_request())
 
     assert context is not None
     assert context.target_path == TARGET_PATH
@@ -125,8 +124,5 @@ def test_output_continuation_can_recover_fresh_target_from_module_receipt_alone(
 
 
 def test_adapt_task_still_requires_existing_source_localization() -> None:
-    payload = _request(action="adapt")
-
-    assert boundary._fresh_owned_symbol_context(payload, tool_loop) is None
-    context = tool_loop._extract_mutation_context_from_payload(payload)
+    context = tool_loop._extract_mutation_context_from_payload(_request(action="adapt"))
     assert context is None or context.is_new_file is False
