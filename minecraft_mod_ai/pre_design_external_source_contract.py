@@ -373,11 +373,13 @@ def install(pre_design_rag_module: Any) -> None:
         return
 
     @wraps(current)
-    def forced_with_external_sources(router: Any, payload: dict[str, Any]) -> dict[str, Any]:
-        local_bundle = current(router, payload)
+    def forced_with_external_sources(
+        router: Any, research_brief: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        local_bundle = current(router, research_brief)
         if not isinstance(local_bundle, Mapping):
             return local_bundle
-        return _augment_bundle(payload, local_bundle)
+        return _augment_bundle(research_brief, local_bundle)
 
     forced_with_external_sources._mmm_external_source_body_v1 = True  # type: ignore[attr-defined]
     forced_with_external_sources.__wrapped__ = current  # type: ignore[attr-defined]

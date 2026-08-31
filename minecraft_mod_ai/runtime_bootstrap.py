@@ -411,6 +411,9 @@ def _install_post_bootstrap_contracts() -> None:
     from .minecraft_mcp_evidence_contract import (
         install as install_minecraft_mcp_evidence,
     )
+    from .pre_design_external_source_contract import (
+        install as install_pre_design_external_source,
+    )
     from .research_bottleneck_runtime import (
         install as install_research_bottleneck_runtime,
     )
@@ -432,6 +435,9 @@ def _install_post_bootstrap_contracts() -> None:
         install as install_unified_trajectory_memory,
     )
 
+    # The base pre-design retriever owns the approved query set and local evidence;
+    # this layer performs the missing bounded external search -> source-body acquisition.
+    install_pre_design_external_source(agentic_pre_design_rag)
     install_agent_security(
         pre_design_rag_module=agentic_pre_design_rag,
         agentic_research_module=agentic_research_game_design,

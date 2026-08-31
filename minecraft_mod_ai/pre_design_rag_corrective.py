@@ -72,18 +72,22 @@ def _generate_gap_queries(
     # Queries are the executable contract. Small diagnostic fields such as
     # ``sufficient``/``gaps`` are harmless model annotations and must not discard an
     # otherwise valid corrective search plan before the parser can extract it.
+    query_array_schema = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "items": {"type": "string", "minLength": 4, "maxLength": 180},
+        "uniqueItems": True,
+    }
     schema = {
         "type": "object",
         "properties": {
-            "queries": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 4,
-                "items": {"type": "string", "minLength": 4, "maxLength": 180},
-                "uniqueItems": True,
-            }
+            "queries": query_array_schema,
+            # Qwen commonly emits this semantically equivalent key. Accept it at the
+            # host parser boundary instead of discarding a valid retrieval plan before
+            # any external source request can run.
+            "search_queries": query_array_schema,
         },
-        "required": ["queries"],
         "additionalProperties": True,
     }
     messages = [
@@ -120,9 +124,11 @@ def _generate_gap_queries(
                 f"corrective query planner returned invalid JSON: {exc}"
             ) from exc
         queries = value.get("queries") if isinstance(value, Mapping) else None
+        if not isinstance(queries, list) and isinstance(value, Mapping):
+            queries = value.get("search_queries")
         if not isinstance(queries, list):
             raise agentic_module.SpecValidationError(
-                "corrective query planner omitted queries"
+                "corrective query planner omitted queries/search_queries"
             )
         result = _correction_queries(
             queries,
@@ -360,7 +366,13 @@ def _quality_research_document_domain(
                         raw_prompt=prompt,
                         progress_label=f"domain {domain_id} round {round_index}",
                     )
-                except Exception:
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "unit": f"corrective-query:{round_index}",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
                     unseen = []
             if not unseen:
                 fixed_point = (
