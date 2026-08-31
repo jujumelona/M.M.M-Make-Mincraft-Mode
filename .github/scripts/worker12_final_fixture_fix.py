@@ -9,7 +9,7 @@ new = '''    from minecraft_mod_ai import performance_final_contract, source_pat
 if old in text:
     text = text.replace(old, new, 1)
 old_call = '''    _score, verifier = agentic_optimization_contract._verify_repair_candidate(\n        engine, root, [], {}\n    )\n    assert calls == 1\n'''
-new_call = '''    verifier_impl = inspect.unwrap(agentic_optimization_contract._verify_repair_candidate)\n    _score, verifier = verifier_impl(engine, root, [], {})\n    assert calls == 1, verifier\n'''
+new_call = '''    verifier_impl = inspect.unwrap(agentic_optimization_contract._verify_repair_candidate)\n    _score, verifier = verifier_impl(engine, root, [], {})\n    assert calls == 1, verifier.get("verifier_error")\n'''
 if old_call in text:
     text = text.replace(old_call, new_call, 1)
 else:
