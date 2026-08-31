@@ -1,6 +1,7 @@
 name: Worker6 final proof authority
 
 # Temporary Worker 6 finalization gate; execute exactly once, then remove after product hardening lands.
+# Triggered for the final Worker 6 authority verification pass.
 on:
   push:
     paths:
