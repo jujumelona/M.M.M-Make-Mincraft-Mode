@@ -73,6 +73,8 @@ def test_game_design_model_fills_host_template_once() -> None:
             "plugin_id": "custom_weather",
             "status": "custom",
             "reason": "seasonal weather",
+            "requirement_refs": [],
+            "implementation_obligations": [],
         }
     ]
     assert design["assets"] == [
@@ -80,15 +82,13 @@ def test_game_design_model_fills_host_template_once() -> None:
     ]
 
 
-def test_malformed_model_output_uses_host_fallback_without_retry() -> None:
+def test_malformed_model_output_fails_readiness_without_retry() -> None:
     router = _Router("not json at all")
 
-    design = _once(router, "Add a copper lantern.")
+    with pytest.raises(SpecValidationError, match="design readiness failed"):
+        _once(router, "Add a copper lantern.")
 
     assert len(router.calls) == 1
-    assert design["title"]
-    assert design["pitch"]
-    assert design["acceptance_tests"]
 
 
 def test_host_merge_drops_unknown_and_invalid_nested_values() -> None:
@@ -97,6 +97,10 @@ def test_host_merge_drops_unknown_and_invalid_nested_values() -> None:
             {
                 "game_design": {
                     "title": "Sanitized",
+                    "pitch": "Sanitize nested values without losing a viable design.",
+                    "core_loop": ["collect", "craft"],
+                    "progression": ["unlock weather tools"],
+                    "acceptance_tests": ["valid nested entries remain"],
                     "unknown_control": "model must not own this",
                     "modules": [
                         "bad entry",
@@ -134,6 +138,8 @@ def test_host_merge_drops_unknown_and_invalid_nested_values() -> None:
             "plugin_id": "weather_system",
             "status": "custom",
             "reason": "requested weather",
+            "requirement_refs": [],
+            "implementation_obligations": [],
         }
     ]
     assert design["assets"] == [
