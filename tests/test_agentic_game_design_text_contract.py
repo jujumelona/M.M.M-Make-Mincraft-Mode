@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai.agentic_research_game_design import generate_sectioned_game_design
