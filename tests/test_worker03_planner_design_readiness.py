@@ -55,7 +55,15 @@ def _module_properties() -> dict[str, object]:
 
 def test_runtime_installs_worker03_design_readiness_contract() -> None:
     assert getattr(design._generate_section, "__mmm_requirement_design_context__", False)
-    assert getattr(design._section_messages, "__mmm_requirement_design_messages__", False)
+    # Deep-design execution is intentionally installed after Worker 03 and wraps the
+    # requirement-aware message owner. Verify both layers rather than requiring the
+    # outermost callable to duplicate the inner owner's marker.
+    assert getattr(design._section_messages, "__mmm_deep_design_section_prompt__", False)
+    assert getattr(
+        getattr(design._section_messages, "__wrapped__", None),
+        "__mmm_requirement_design_messages__",
+        False,
+    )
     assert getattr(
         design.generate_sectioned_game_design,
         "__mmm_requirement_design_coverage__",
