@@ -31,20 +31,103 @@ _REQUEST_INGESTION_SCHEMA = "mmm/authoritative-request-ingestion-v1"
 _REQUEST_PAGE_SCHEMA = "mmm/authoritative-request-page-v1"
 _ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment"})
 
+_MODULE_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "plugin_id": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "requirement_refs": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "implementation_obligations": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1},
+        },
+    },
+    "required": [
+        "plugin_id",
+        "status",
+        "reason",
+        "requirement_refs",
+        "implementation_obligations",
+    ],
+    "additionalProperties": False,
+}
+_ASSET_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "brief": {"type": "string", "minLength": 1},
+    },
+    "required": ["id", "kind", "brief"],
+    "additionalProperties": False,
+}
+_GAME_DESIGN_VALUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "pitch": {"type": "string", "minLength": 1},
+        "core_loop": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "progression": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "combat": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+        "mod_context": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+        "modules": {
+            "type": "array",
+            "minItems": 1,
+            "items": _MODULE_RESPONSE_SCHEMA,
+        },
+        "assets": {"type": "array", "items": _ASSET_RESPONSE_SCHEMA},
+        "acceptance_tests": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "art_direction": {"type": "object"},
+    },
+    "required": list(_GAME_DESIGN_FIELDS),
+    "additionalProperties": False,
+}
 _GAME_DESIGN_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"game_design": {"type": "object"}},
+    "properties": {"game_design": _GAME_DESIGN_VALUE_SCHEMA},
     "required": ["game_design"],
     "additionalProperties": False,
 }
 
 
 class GameDesignPlanner:
-    """Create game design with a host-owned schema and one model call per page.
+    """Create the frozen game design before retrieval and implementation planning.
 
-    The model may fill values but never controls required fields, paging receipts, or
-    validation flow. Malformed/partial output is merged into a deterministic skeleton;
-    there is no model repair/retry loop.
+    This module owns the execution path. ModelRouter uses research-first sectioned
+    Markdown design; non-agentic routers use the strict host-owned JSON fallback. Runtime
+    bootstrap must not replace either generator, readiness validation, or page merge.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -78,11 +161,12 @@ class GameDesignPlanner:
                 media_paths=media_paths,
                 page_budget=page_budget,
             )
+        design = _validate_ready_design(prompt, design)
 
         # Existing-project evidence is collected by the host before planning and
         # joined with the independently produced semantic design before any target
-        # or reuse decision.  It remains private host context (underscore-prefixed)
-        # and is never inferred or rewritten by the model.
+        # or reuse decision. It remains private host context and is never inferred
+        # or rewritten by the model.
         existing_report = getattr(self.router, "_mmm_existing_project_report", None)
         if isinstance(existing_report, Mapping):
             design = {**design, "_existing_project_report": dict(existing_report)}
@@ -110,9 +194,7 @@ class GameDesignPlanner:
         if isinstance(existing_inventory, Mapping):
             from .project_inventory import validate_project_inventory_payload
 
-            inventory_payload = validate_project_inventory_payload(
-                existing_inventory
-            )
+            inventory_payload = validate_project_inventory_payload(existing_inventory)
             self.router._mmm_existing_project_inventory = inventory_payload
             design = {
                 **design,
@@ -130,10 +212,7 @@ class GameDesignPlanner:
         request_catalog = active_authoritative_request_catalog(prompt)
         if request_catalog is None:
             request_catalog = build_request_catalog(prompt, design)
-        design = {
-            **design,
-            "_evidence_request_catalog": request_catalog,
-        }
+        design = {**design, "_evidence_request_catalog": request_catalog}
         pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
         design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
         print(
@@ -163,16 +242,40 @@ class GameDesignPlanner:
         media_paths: Sequence[str | Path],
         page_budget: int,
     ) -> dict[str, Any]:
+        from . import agentic_research_game_design as agentic
+
+        agentic_mode = agentic.supports_agentic_research_router(self.router)
+        page_research: tuple[Mapping[str, Any], ...] = ()
+        if agentic_mode:
+            from .pre_design_research_pipeline import collect_design_research
+
+            page_count = len(request_pages)
+            page_research = tuple(
+                collect_design_research(
+                    self.router,
+                    page_text,
+                    trace_metadata={
+                        "request_page_index": page_index,
+                        "request_page_count": page_count,
+                    },
+                )
+                for page_index, page_text in enumerate(request_pages)
+            )
+
         prompt_bytes = prompt.encode("utf-8")
         prompt_sha256 = hashlib.sha256(prompt_bytes).hexdigest()
         page_designs: list[dict[str, Any]] = []
         receipts: list[dict[str, Any]] = []
         byte_offset = 0
+        char_offset = 0
+        authority = _active_authority()
 
         for page_index, page_text in enumerate(request_pages):
             encoded_page = page_text.encode("utf-8")
             byte_start = byte_offset
             byte_offset += len(encoded_page)
+            char_start = char_offset
+            char_offset += len(page_text)
             receipt = {
                 "page_index": page_index,
                 "page_count": len(request_pages),
@@ -191,18 +294,30 @@ class GameDesignPlanner:
                 "page": receipt,
                 "authoritative_request_text": page_text,
             }
-            design = _generate_game_design_once(
-                self.router,
-                authoritative_prompt=json.dumps(
-                    request,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                media_paths=media_paths if page_index == 0 else (),
-                system_prompt=_sharded_design_system_prompt(),
-                fallback_prompt=page_text,
+            token = _activate_page_authority(
+                authority,
+                page_text=page_text,
+                char_start=char_start,
+                char_end=char_offset,
             )
+            try:
+                design = _generate_game_design_once(
+                    self.router,
+                    authoritative_prompt=json.dumps(
+                        request,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    media_paths=media_paths if page_index == 0 else (),
+                    system_prompt=_sharded_design_system_prompt(),
+                    fallback_prompt=page_text,
+                    precollected_research=(
+                        page_research[page_index] if page_research else None
+                    ),
+                )
+            finally:
+                _reset_page_authority(token)
             page_designs.append(design)
             receipts.append({**receipt, "design_sha256": _json_sha256(design)})
 
@@ -239,12 +354,16 @@ class GameDesignPlanner:
                 "execution_authority": False,
             },
         }
-        return {**merged, "_request_ingestion": ingestion}
+        result: dict[str, Any] = {**merged, "_request_ingestion": ingestion}
+        if page_research:
+            result["_pre_design_research"] = _sharded_research_ledger(
+                prompt,
+                request_pages,
+                page_research,
+            )
+        return result
 
 
-# Transitional marker: prevents the retired bind-time agentic wrapper from replacing
-# this host-owned implementation while bootstrap cleanup proceeds.
-GameDesignPlanner.plan._mmm_agentic_research_sectioned = True  # type: ignore[attr-defined]
 GameDesignPlanner.plan._mmm_host_owned_template = True  # type: ignore[attr-defined]
 
 
@@ -255,10 +374,43 @@ def _generate_game_design_once(
     media_paths: Sequence[str | Path],
     system_prompt: str,
     fallback_prompt: str | None = None,
+    precollected_research: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    fallback = _game_design_skeleton(fallback_prompt or authoritative_prompt)
+    """Single native generation entrypoint; runtime installers never replace it."""
+    from . import agentic_research_game_design as agentic
+
+    design_prompt = str(fallback_prompt or authoritative_prompt)
+    if agentic.supports_agentic_research_router(router):
+        from .pre_design_research_pipeline import collect_design_research
+
+        research = (
+            dict(precollected_research)
+            if isinstance(precollected_research, Mapping)
+            else collect_design_research(router, design_prompt)
+        )
+        design = agentic.generate_sectioned_game_design(
+            __import__(__name__, fromlist=["*"]),
+            router,
+            design_prompt,
+            media_paths=media_paths,
+            research=research,
+        )
+        canonical = _canonical_game_design(design)
+        result: dict[str, Any] = {
+            **canonical,
+            "_pre_design_research": research,
+            "_research_brief": dict(research.get("research_brief") or {}),
+        }
+        return _validate_ready_design(design_prompt, result)
+
+    authority = _active_authority()
+    effective_system_prompt = system_prompt
+    if authority is not None:
+        _authority_prompt, ledger = authority
+        effective_system_prompt = _augment_system_prompt(system_prompt, ledger)
+    fallback = _game_design_skeleton(design_prompt)
     messages = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": effective_system_prompt},
         {"role": "user", "content": authoritative_prompt},
     ]
     try:
@@ -270,10 +422,11 @@ def _generate_game_design_once(
             response_schema=_GAME_DESIGN_RESPONSE_SCHEMA,
             enable_tools=False,
         )
+        candidate = _extract_model_design(str(raw))
+        result = _merge_model_design(fallback, candidate)
     except (TypeError, ValueError, RuntimeError):
-        return fallback
-    candidate = _extract_model_design(str(raw))
-    return _merge_model_design(fallback, candidate)
+        result = fallback
+    return _validate_ready_design(design_prompt, result)
 
 
 def _generate_sharded_design_page(
@@ -291,6 +444,170 @@ def _generate_sharded_design_page(
         media_paths=media_paths,
         system_prompt=_sharded_design_system_prompt(),
     )
+
+
+def _active_authority() -> tuple[str, tuple[dict[str, Any], ...]] | None:
+    from . import evidence_request_guard as request_guard
+
+    active = request_guard._ACTIVE_REQUEST_CATALOG.get()
+    if active is None:
+        return None
+    prompt, catalog = active
+    raw_requirements = catalog.get("requirements", [])
+    if not isinstance(raw_requirements, list) or not raw_requirements:
+        return None
+    ledger: list[dict[str, Any]] = []
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            continue
+        requirement_id = str(raw.get("requirement_id") or "").strip()
+        if not requirement_id:
+            continue
+        span = raw.get("source_span")
+        authored_text = (
+            str(span.get("text") or "").strip()
+            if isinstance(span, Mapping)
+            else str(raw.get("statement") or "").strip()
+        )
+        ledger.append(
+            {
+                "requirement_id": requirement_id,
+                "capability": str(raw.get("capability") or "").strip(),
+                "authored_text": authored_text,
+                "semantic_statement": str(raw.get("semantic_statement") or "").strip(),
+                "acceptance": list(raw.get("acceptance") or []),
+                "source_span": dict(span) if isinstance(span, Mapping) else {},
+            }
+        )
+    return (prompt, tuple(ledger)) if ledger else None
+
+
+def _activate_page_authority(
+    authority: tuple[str, tuple[dict[str, Any], ...]] | None,
+    *,
+    page_text: str,
+    char_start: int,
+    char_end: int,
+) -> Any:
+    if authority is None:
+        return None
+    from . import evidence_request_guard as request_guard
+
+    _prompt, ledger = authority
+    selected = []
+    for item in ledger:
+        span = item.get("source_span")
+        start = span.get("char_start") if isinstance(span, Mapping) else None
+        end = span.get("char_end") if isinstance(span, Mapping) else None
+        if type(start) is int and type(end) is int and start < char_end and end > char_start:
+            selected.append(dict(item))
+    if not selected:
+        return None
+    return request_guard._ACTIVE_REQUEST_CATALOG.set(
+        (page_text, {"requirements": selected})
+    )
+
+
+def _reset_page_authority(token: Any) -> None:
+    if token is None:
+        return
+    from . import evidence_request_guard as request_guard
+
+    request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
+
+
+def _augment_system_prompt(
+    system_prompt: str,
+    ledger: Sequence[Mapping[str, Any]],
+) -> str:
+    compact = [
+        {
+            "requirement_id": item["requirement_id"],
+            "capability": item.get("capability", ""),
+            "authored_text": item.get("authored_text", ""),
+            "semantic_statement": item.get("semantic_statement", ""),
+            "acceptance": item.get("acceptance", []),
+        }
+        for item in ledger
+    ]
+    return system_prompt + (
+        "\n\nFROZEN REQUIREMENT AUTHORITY (host-owned; do not rewrite IDs):\n"
+        + json.dumps(compact, ensure_ascii=False, sort_keys=True)
+        + "\nEvery approved requirement must appear in at least one modules[].requirement_refs. "
+        "Each such module must contain concrete implementation_obligations. Preserve the "
+        "authored behavior; do not invent target versions, mappings, API signatures, or "
+        "unrequested mechanics. All required game-design fields must be substantively filled."
+    )
+
+
+def _assert_minimum_design_depth(design: Mapping[str, Any]) -> None:
+    for field in ("core_loop", "progression", "acceptance_tests"):
+        value = design.get(field)
+        if not isinstance(value, list) or not any(str(item).strip() for item in value):
+            raise SpecValidationError(
+                f"design readiness failed: {field} is empty after model normalization"
+            )
+    if _active_authority() is not None:
+        modules = design.get("modules")
+        if not isinstance(modules, list) or not modules:
+            raise SpecValidationError(
+                "design readiness failed: modules are empty after model normalization"
+            )
+
+
+def _validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(design, Mapping):
+        raise SpecValidationError("game design generation returned a non-object result")
+    result = dict(design)
+    _assert_minimum_design_depth(result)
+    authority = _active_authority()
+    if authority is None or authority[0] != prompt:
+        return result
+    from . import agentic_research_game_design as agentic
+
+    return agentic._validate_requirement_coverage(result, authority[1])
+
+
+def _sharded_research_ledger(
+    prompt: str,
+    request_pages: Sequence[str],
+    page_research: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    pages: list[dict[str, Any]] = []
+    for page_index, (page_text, research) in enumerate(
+        zip(request_pages, page_research, strict=True)
+    ):
+        pages.append(
+            {
+                "page_index": page_index,
+                "content_sha256": hashlib.sha256(page_text.encode("utf-8")).hexdigest(),
+                "research_sha256": str(research.get("research_sha256") or ""),
+                "model_view_sha256": str(research.get("model_view_sha256") or ""),
+                "research": dict(research),
+            }
+        )
+    ledger: dict[str, Any] = {
+        "schema_version": "mmm/agentic-pre-design-research-sharded-v1",
+        "request_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "page_count": len(pages),
+        "pages": pages,
+        "method": {
+            "ordering": "all page research completes before any page design",
+            "model_context": "each page design receives its own bounded research view",
+            "host_ledger": "all page research views retained for provenance",
+        },
+    }
+    rendered = json.dumps(
+        ledger,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    ledger["research_sha256"] = "sha256:" + hashlib.sha256(
+        rendered.encode("utf-8")
+    ).hexdigest()
+    return ledger
 
 
 def _game_design_skeleton(prompt: str) -> dict[str, Any]:
@@ -324,17 +641,14 @@ def _merge_model_design(
     candidate: Mapping[str, Any],
 ) -> dict[str, Any]:
     result = dict(skeleton)
-
     for field in ("title", "pitch"):
         value = candidate.get(field)
         if isinstance(value, str) and value.strip():
             result[field] = value.strip()
-
     for field in ("core_loop", "progression", "acceptance_tests"):
         values = _strings(candidate.get(field))
         if values:
             result[field] = values
-
     for field in ("combat", "mod_context"):
         value = candidate.get(field)
         if isinstance(value, Mapping):
@@ -343,24 +657,20 @@ def _merge_model_design(
                 for key, raw in value.items()
                 if (values := _strings(raw))
             }
-
     modules = _modules(candidate.get("modules"))
     if modules:
         result["modules"] = modules
-
     assets = _assets(candidate.get("assets"))
     if assets:
         result["assets"] = assets
-
     art = candidate.get("art_direction")
     if isinstance(art, Mapping) and art:
         result["art_direction"] = dict(art)
-
     _validate_design(result)
     return result
 
 
-def _modules(value: Any) -> list[dict[str, str]]:
+def _modules(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     catalog = {
@@ -368,7 +678,7 @@ def _modules(value: Any) -> list[dict[str, str]]:
         for item in _planner_plugin_manifest()["plugins"]
         if isinstance(item, Mapping) and str(item.get("plugin_id", "")).strip()
     }
-    output: list[dict[str, str]] = []
+    output: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in value:
         if not isinstance(raw, Mapping):
@@ -391,7 +701,15 @@ def _modules(value: Any) -> list[dict[str, str]]:
         if status not in {"implemented", "custom"}:
             status = catalog.get(plugin_id, "custom")
         output.append(
-            {"plugin_id": plugin_id, "status": status, "reason": reason}
+            {
+                "plugin_id": plugin_id,
+                "status": status,
+                "reason": reason,
+                "requirement_refs": _strings(raw.get("requirement_refs")),
+                "implementation_obligations": _strings(
+                    raw.get("implementation_obligations")
+                ),
+            }
         )
         seen.add(plugin_id)
     return output
@@ -440,18 +758,12 @@ def _merge_game_design_pages(pages: Sequence[Mapping[str, Any]]) -> dict[str, An
                         )
             result[field] = merged_map
         result["modules"] = _merge_identity_records(
-            result.get("modules"),
-            page.get("modules"),
-            "plugin_id",
+            result.get("modules"), page.get("modules"), "plugin_id"
         )
         result["assets"] = _merge_identity_records(
-            result.get("assets"),
-            page.get("assets"),
-            "id",
+            result.get("assets"), page.get("assets"), "id"
         )
-        if "art_direction" not in result and isinstance(
-            page.get("art_direction"), Mapping
-        ):
+        if "art_direction" not in result and isinstance(page.get("art_direction"), Mapping):
             result["art_direction"] = dict(page["art_direction"])
     _validate_design(result)
     return result
@@ -460,7 +772,10 @@ def _merge_game_design_pages(pages: Sequence[Mapping[str, Any]]) -> dict[str, An
 def _merge_identity_records(left: Any, right: Any, key: str) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in [*(left if isinstance(left, list) else []), *(right if isinstance(right, list) else [])]:
+    for raw in [
+        *(left if isinstance(left, list) else []),
+        *(right if isinstance(right, list) else []),
+    ]:
         if not isinstance(raw, Mapping):
             continue
         identity = str(raw.get(key) or "").strip()
@@ -576,21 +891,14 @@ def _planner_plugin_manifest() -> dict[str, Any]:
         "product_scope": manifest["product_scope"],
         "standalone_map_generation": manifest["standalone_map_generation"],
         "plugins": [
-            {
-                "plugin_id": plugin["plugin_id"],
-                "status": plugin["status"],
-            }
+            {"plugin_id": plugin["plugin_id"], "status": plugin["status"]}
             for plugin in manifest["plugins"]
         ],
     }
 
 
 def _canonical_game_design(design: Mapping[str, Any]) -> dict[str, Any]:
-    result = {
-        field: design[field]
-        for field in _GAME_DESIGN_FIELDS
-        if field in design
-    }
+    result = {field: design[field] for field in _GAME_DESIGN_FIELDS if field in design}
     for field in _OPTIONAL_GAME_DESIGN_FIELDS:
         if field in design:
             result[field] = design[field]
@@ -700,7 +1008,9 @@ def _strings(value: Any) -> list[str]:
 
 
 def _identifier(value: Any) -> str:
-    text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    text = re.sub(
+        r"[^a-z0-9_]+", "_", str(value or "").strip().lower()
+    ).strip("_")
     if not text:
         return ""
     if not text[0].isalpha():
