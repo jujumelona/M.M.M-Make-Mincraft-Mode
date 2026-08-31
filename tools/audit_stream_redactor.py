@@ -33,6 +33,9 @@ class StreamingRedactor:
     Exact configured secrets and labelled values are redacted across arbitrary
     chunk boundaries. Label parsing understands quoted mapping keys/values and
     balanced structured values without buffering the sensitive payload.
+
+    ``replacement`` lets callers choose a context-safe marker without duplicating
+    the redaction algorithm (for example an XML-escaped marker for JUnit files).
     """
 
     __slots__ = (
@@ -41,6 +44,7 @@ class StreamingRedactor:
         "_exact_pending",
         "_label_pending",
         "_max_secret_length",
+        "_replacement",
         "_secrets",
         "_state",
         "_structured_escape_next",
@@ -49,7 +53,10 @@ class StreamingRedactor:
         "_value_quote",
     )
 
-    def __init__(self, secrets: Iterable[str] = ()) -> None:
+    def __init__(self, secrets: Iterable[str] = (), *, replacement: str = _REDACTED) -> None:
+        if not isinstance(replacement, str) or not replacement:
+            raise ValueError("replacement must be a non-empty string")
+        self._replacement = replacement
         self._secrets = tuple(
             sorted(
                 {str(secret) for secret in secrets if str(secret)},
@@ -154,7 +161,7 @@ class StreamingRedactor:
                     self._value_quote = data[position]
                     self._escape_next = False
                     output.append(data[position])
-                    output.append(_REDACTED)
+                    output.append(self._replacement)
                     position += 1
                     self._state = "mask_quoted"
                     continue
@@ -162,11 +169,11 @@ class StreamingRedactor:
                     self._structured_stack = [_matching_bracket(data[position])]
                     self._structured_quote = None
                     self._structured_escape_next = False
-                    output.append(_REDACTED)
+                    output.append(self._replacement)
                     position += 1
                     self._state = "mask_structured"
                     continue
-                output.append(_REDACTED)
+                output.append(self._replacement)
                 self._state = "mask_value"
                 continue
 
@@ -285,13 +292,13 @@ class StreamingRedactor:
                 cursor = safe_cutoff
                 break
             output.append(data[cursor:start])
-            output.append(_REDACTED)
+            output.append(self._replacement)
             cursor = start + len(secret)
 
         if final and cursor < len(data):
             remainder = data[cursor:]
             for secret in self._secrets:
-                remainder = remainder.replace(secret, _REDACTED)
+                remainder = remainder.replace(secret, self._replacement)
             output.append(remainder)
             cursor = len(data)
 
