@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from minecraft_mod_ai import java_lsp
-from minecraft_mod_ai.java_lsp import JavaLanguageService
+from minecraft_mod_ai.java_lsp import JDTLanguageServerError, JavaLanguageService
 
 
 class _FakeJsonRpcProcess:
@@ -201,18 +201,18 @@ def test_empty_project_does_not_start_a_language_server(
     assert result["diagnostics"] == {}
 
 
-def test_each_page_quietly_settles_when_no_uri_publishes() -> None:
+def test_each_page_fails_closed_when_opened_uri_never_publishes() -> None:
     class _SilentRpc:
         def __init__(self) -> None:
             self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
 
-    result = java_lsp._collect_diagnostics(
-        _SilentRpc(),  # type: ignore[arg-type]
-        expected_uris={"file:///Silent.java"},
-        timeout_seconds=0.01,
-        quiet_seconds=1.0,
-    )
-    assert result == {}
+    with pytest.raises(JDTLanguageServerError, match="observed=0, expected=1, missing=1"):
+        java_lsp._collect_diagnostics(
+            _SilentRpc(),  # type: ignore[arg-type]
+            expected_uris={"file:///Silent.java"},
+            timeout_seconds=0.01,
+            quiet_seconds=1.0,
+        )
 
 
 def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
