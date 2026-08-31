@@ -364,9 +364,6 @@ def _validate_domain_provider_grounding(
             f"Pre-design retrieval gap for domain {domain_id!r}: retrieval returned only "
             "catalog/TOC/metadata or empty hits; no claim-bearing source content was retrieved."
         )
-    # ``providers`` lists eligible retrieval routes (OR semantics). A route may
-    # legitimately return zero hits when another route already supplied claim-bearing
-    # evidence. Only ``required_providers`` is fail-closed per provider.
     required_providers = {
         str(item).casefold()
         for item in domain.get("required_providers", [])
@@ -482,8 +479,6 @@ def _design_request_fits(
             section_id=section_id,
             fields=fields,
             research=research,
-            prior_error="",
-            prior_candidate=None,
         )
         prepared = _inject_system_context(
             messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT
@@ -773,8 +768,6 @@ def collect_design_research(
 
     target_frozen = _target_frozen(knowledge_plan)
     try:
-        # This is the only live pre-design retrieval owner. Runtime contracts wrap
-        # it with bounded external GitHub/Modrinth source retrieval plus local RAG.
         grounded_bundle = project_rag._forced_rag_bundle(router, research_brief)
         deterministic["grounded_rag"] = _grounded_rag_receipt(grounded_bundle)
         _emit_research_diagnostic(
@@ -807,7 +800,7 @@ def collect_design_research(
                 stage="technology_radar",
                 result=deterministic["technology_radar"],
             )
-        except Exception as exc:  # noqa: BLE001 - diagnostic boundary captures provider failures
+        except Exception as exc:
             diagnostic = _exception_payload(exc)
             _emit_research_diagnostic(
                 "deterministic_stage_failure",
