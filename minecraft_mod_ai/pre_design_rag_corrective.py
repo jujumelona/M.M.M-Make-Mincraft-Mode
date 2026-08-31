@@ -23,6 +23,8 @@ _DEFAULT_CORRECTIVE_ROUNDS = 2
 _MAX_CORRECTIVE_ROUNDS = 4
 _QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"
 _VERIFIED_FIXED_POINT = "verified_claims_sufficient"
+_TRACE_VALUE_LIMIT = 12
+_TRACE_TEXT_LIMIT = 360
 
 
 def _emit_corrective_trace(event: str, **fields: Any) -> None:
@@ -31,6 +33,34 @@ def _emit_corrective_trace(event: str, **fields: Any) -> None:
         + json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True, default=str),
         flush=True,
     )
+
+
+def _bounded_trace_text(values: Any) -> list[str]:
+    """Keep exact failure semantics visible without making planner logs unbounded."""
+
+    result: list[str] = []
+    for value in _stable_text(values):
+        text = " ".join(value.split())
+        if len(text) > _TRACE_TEXT_LIMIT:
+            text = text[: _TRACE_TEXT_LIMIT - 3] + "..."
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= _TRACE_VALUE_LIMIT:
+            break
+    return result
+
+
+def _round_has_verified_claims(summary: Mapping[str, Any]) -> bool:
+    """Page-local uncertainties cannot invalidate independently verified evidence.
+
+    The page reader is intentionally scoped to one evidence fragment, so its ``gaps``
+    describe what that *page* did not establish.  They are corrective-retrieval hints,
+    not proof that the complete authored request is unresolved.  The authored requirement
+    graph remains the authority for request completeness; pre-design RAG only contributes
+    externally supported design knowledge.
+    """
+
+    return any(isinstance(claim, Mapping) for claim in summary.get("claims", ()))
 
 
 def _corrective_round_limit() -> int:
@@ -260,15 +290,15 @@ def _read_and_verify_document(
             total_recoverable_failures=len(failures),
         )
         rejected_count += len(rejected)
-        gaps: list[str] = []
+        page_local_gaps: list[str] = []
         next_queries: list[str] = []
         procedures: list[dict[str, Any]] = []
         for note in notes:
             if not isinstance(note, Mapping):
                 continue
             for value in _stable_text(note.get("gaps")):
-                if value not in gaps:
-                    gaps.append(value)
+                if value not in page_local_gaps:
+                    page_local_gaps.append(value)
             for value in _stable_text(note.get("next_queries")):
                 if value not in next_queries:
                     next_queries.append(value)
@@ -277,20 +307,32 @@ def _read_and_verify_document(
                 for value in note.get("procedures", ())
                 if isinstance(value, Mapping)
             )
-        gaps.extend(
-            "Claim rejected by page-support verification; retrieve stronger evidence: "
-            + claim
-            for claim in rejected
+
+        # A support rejection means this candidate was not proven by this exact page.
+        # It is *not* evidence that the whole request has an unresolved retrieval gap.
+        # Keep it as a corrective hint/diagnostic rather than poisoning domain sufficiency.
+        support_rejections = list(dict.fromkeys(rejected))
+        _emit_corrective_trace(
+            "page_local_uncertainty",
+            domain_id=domain_id,
+            round=round_index,
+            page_index=page_index,
+            page_ref=page_ref,
+            page_local_gap_count=len(page_local_gaps),
+            page_local_gaps=_bounded_trace_text(page_local_gaps),
+            support_rejection_count=len(support_rejections),
+            support_rejections=_bounded_trace_text(support_rejections),
         )
         results.append(
             {
                 "_host_page_ref": page_ref,
                 "domain_id": domain_id,
                 "claims": verified,
-                "gaps": gaps,
+                "gaps": page_local_gaps,
+                "support_rejections": support_rejections,
                 "next_queries": next_queries,
                 "procedures": procedures,
-                "sufficient": bool(verified) and not gaps,
+                "sufficient": bool(verified),
             }
         )
     return pages, results, rejected_count
@@ -320,7 +362,7 @@ def _quality_research_document_domain(
     domain_key = project_rag._sha256(
         {
             "base_domain_key": base_key,
-            "research_policy": "corrective-fusion-claim-support-v3",
+            "research_policy": "corrective-fusion-claim-support-v4-page-local-gaps",
         }
     ).removeprefix("sha256:")
 
@@ -370,6 +412,8 @@ def _quality_research_document_domain(
         max_rounds = _corrective_round_limit()
         round_index = 0
         active_summary = _merge_verified_notes(domain_id, [])
+        active_page_gaps: list[str] = []
+        active_support_rejections: list[str] = []
 
         while round_index <= max_rounds:
             _emit_corrective_trace(
@@ -396,30 +440,61 @@ def _quality_research_document_domain(
             all_notes.extend(notes)
             rejected_total += rejected
             active_summary = _merge_verified_notes(domain_id, notes)
-            active_gaps = list(active_summary.get("gaps") or ())
-            unseen = _correction_queries(
-                active_summary.get("next_queries"),
-                seen=seen_queries,
-                raw_prompt=prompt,
+            active_page_gaps = list(active_summary.get("gaps") or ())
+            active_support_rejections = list(
+                dict.fromkeys(
+                    value
+                    for note in notes
+                    if isinstance(note, Mapping)
+                    for value in _stable_text(note.get("support_rejections"))
+                )
+            )
+            accumulated_summary = _merge_verified_notes(domain_id, all_notes)
+            verified_claim_count = len(accumulated_summary.get("claims") or ())
+            _emit_corrective_trace(
+                "corrective_round_analysis",
+                domain_id=domain_id,
+                round=round_index,
+                round_verified_claim_count=len(active_summary.get("claims") or ()),
+                accumulated_verified_claim_count=verified_claim_count,
+                page_local_gap_count=len(active_page_gaps),
+                page_local_gaps=_bounded_trace_text(active_page_gaps),
+                support_rejection_count=len(active_support_rejections),
+                support_rejections=_bounded_trace_text(active_support_rejections),
+                recoverable_failure_count=len(failures),
             )
 
-            # Page-local model/JSON/support failures are quarantined to that page.  They
-            # must never erase independently verified claims from other source-body pages
-            # or prevent corrective retrieval from trying stronger evidence.
-            if active_summary.get("claims") and not active_gaps:
+            # The authored requirement graph is validated separately and remains the
+            # authority for request completeness.  This stage proves external design
+            # knowledge.  Once at least one exact-quote-supported claim exists, page-local
+            # omissions cannot turn that verified evidence back into an unresolved domain.
+            if _round_has_verified_claims(accumulated_summary):
                 fixed_point = _VERIFIED_FIXED_POINT
                 break
             if round_index >= max_rounds:
                 fixed_point = "corrective_round_limit_reached"
                 break
-            if not unseen and active_gaps:
+
+            unseen = _correction_queries(
+                active_summary.get("next_queries"),
+                seen=seen_queries,
+                raw_prompt=prompt,
+            )
+            corrective_hints = [
+                *active_page_gaps,
+                *(
+                    "Candidate not supported by the current page: " + claim
+                    for claim in active_support_rejections
+                ),
+            ]
+            if not unseen and corrective_hints:
                 try:
                     unseen = _generate_gap_queries(
                         agentic_module,
                         project_rag,
                         router,
                         domain=domain,
-                        gaps=active_gaps,
+                        gaps=corrective_hints,
                         prior_queries=searched,
                         seen=seen_queries,
                         raw_prompt=prompt,
@@ -436,11 +511,20 @@ def _quality_research_document_domain(
             if not unseen:
                 fixed_point = (
                     "unresolved_evidence_gaps"
-                    if active_gaps
+                    if corrective_hints
                     else "no_support_verified_claims"
                 )
                 break
 
+            _emit_corrective_trace(
+                "corrective_query_plan",
+                domain_id=domain_id,
+                round=round_index,
+                query_count=len(unseen),
+                queries=_bounded_trace_text(unseen),
+                page_local_gap_count=len(active_page_gaps),
+                support_rejection_count=len(active_support_rejections),
+            )
             searched.extend(unseen)
             correction_domain = dict(domain)
             correction_domain["queries"] = unseen
@@ -472,6 +556,14 @@ def _quality_research_document_domain(
                     "fusion": dict(fused.get("fusion") or {}),
                 }
             )
+            _emit_corrective_trace(
+                "corrective_retrieval_result",
+                domain_id=domain_id,
+                round=round_index,
+                query_count=len(unseen),
+                unique_content_records=len(records),
+                fusion=dict(fused.get("fusion") or {}),
+            )
             if not records:
                 fixed_point = "corrective_retrieval_returned_no_claim_bearing_content"
                 break
@@ -490,13 +582,14 @@ def _quality_research_document_domain(
 
         accumulated = _merge_verified_notes(domain_id, all_notes)
         summary = dict(accumulated)
-        # Historical gaps are diagnostics, not live obligations. Terminal sufficiency is
-        # decided from the latest evidence round so a gap that was actually resolved does
-        # not remain forever, while a current unresolved gap can never be hidden by an old
-        # verified claim.
-        summary["gaps"] = list(active_summary.get("gaps") or ())
-        summary["next_queries"] = list(active_summary.get("next_queries") or ())
         claims = list(summary["claims"])
+        # Preserve page-local uncertainty as diagnostics.  Do not expose it through the
+        # domain-level ``gaps`` field, because downstream fail-closed logic interprets that
+        # field as a blocking requirement obligation.
+        summary["page_local_gaps"] = list(active_page_gaps)
+        summary["support_rejections"] = list(active_support_rejections)
+        summary["gaps"] = [] if claims else list(active_page_gaps)
+        summary["next_queries"] = list(active_summary.get("next_queries") or ())
         catalog = project_rag._materialize_claim_catalog(
             domain_key,
             domain_id,
@@ -513,16 +606,16 @@ def _quality_research_document_domain(
             if str(page.get("page_ref") or "").strip()
         ]
         reasons: list[str] = []
-        if failures and fixed_point != _VERIFIED_FIXED_POINT:
-            reasons.append("bounded extraction/support verification failure")
         if not claims:
+            if failures:
+                reasons.append("bounded extraction/support verification failure")
             reasons.append("zero support-verified grounded claims")
         if fixed_point != _VERIFIED_FIXED_POINT:
             reasons.append(
                 "corrective retrieval did not reach verified sufficiency: "
                 + (fixed_point or "no_terminal_state")
             )
-        if summary.get("gaps"):
+        if not claims and summary.get("gaps"):
             reasons.append("unresolved evidence gaps remain")
         status = "failed" if reasons else "complete"
 
@@ -541,12 +634,15 @@ def _quality_research_document_domain(
                 "fusion": "verified_source_body+exact_content_dedupe+query_rank+rrf",
                 "corrective_retrieval": True,
                 "claim_support": "model_entailment+host_exact_quote",
+                "gap_semantics": "page_local_diagnostic_not_domain_blocker",
                 "corrective_round_limit": max_rounds,
                 "corrective_rounds_executed": len(history),
                 "correction_history": history,
                 "rejected_claim_count": rejected_total,
                 "fixed_point_reason": fixed_point,
                 "active_gap_count": len(summary.get("gaps") or ()),
+                "page_local_gap_count": len(active_page_gaps),
+                "support_rejection_count": len(active_support_rejections),
                 "donor_selection_performed": False,
                 "runtime_rebinding": False,
             },
@@ -571,7 +667,12 @@ def _quality_research_document_domain(
             domain_id=domain_id,
             fixed_point=fixed_point,
             claim_count=len(claims),
-            active_gap_count=len(summary.get("gaps") or ()),
+            blocking_gap_count=len(summary.get("gaps") or ()),
+            blocking_gaps=_bounded_trace_text(summary.get("gaps")),
+            page_local_gap_count=len(active_page_gaps),
+            page_local_gaps=_bounded_trace_text(active_page_gaps),
+            support_rejection_count=len(active_support_rejections),
+            support_rejections=_bounded_trace_text(active_support_rejections),
             recoverable_failure_count=len(failures),
             reasons=reasons,
         )
@@ -594,9 +695,16 @@ def _quality_research_document_domain(
             failures=failures,
         )
         if status != "complete":
+            diagnostic_tail = {
+                "blocking_gaps": _bounded_trace_text(summary.get("gaps")),
+                "page_local_gaps": _bounded_trace_text(active_page_gaps),
+                "support_rejections": _bounded_trace_text(active_support_rejections),
+            }
             raise project_rag._BoundedResearchOutputError(
                 "pre-design corrective research failed closed for domain "
-                f"{domain_id!r}: {'; '.join(reasons)}; fixed_point={fixed_point}"
+                f"{domain_id!r}: {'; '.join(reasons)}; fixed_point={fixed_point}; "
+                "terminal_diagnostics="
+                + json.dumps(diagnostic_tail, ensure_ascii=False, sort_keys=True)
             )
         return note
 
@@ -605,4 +713,5 @@ __all__ = [
     "_correction_queries",
     "_quality_research_document_domain",
     "_read_and_verify_document",
+    "_round_has_verified_claims",
 ]
