@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -29,87 +29,18 @@ _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
-_SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
-    (
-        "identity_and_loop",
-        ("title", "pitch", "core_loop"),
-        {
-            "title": {"type": "string", "minLength": 1},
-            "pitch": {"type": "string", "minLength": 1},
-            "core_loop": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
-        },
-    ),
-    (
-        "systems_and_progression",
-        ("progression", "combat", "mod_context"),
-        {
-            "progression": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
-            "combat": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-            },
-            "mod_context": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-            },
-        },
-    ),
-    (
-        "modules_and_assets",
-        ("modules", "assets"),
-        {
-            "modules": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "plugin_id": {"type": "string", "minLength": 1},
-                        "status": {"type": "string", "minLength": 1},
-                        "reason": {"type": "string", "minLength": 1},
-                    },
-                    "required": ["plugin_id", "status", "reason"],
-                    "additionalProperties": False,
-                },
-            },
-            "assets": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "minLength": 1},
-                        "kind": {"type": "string", "minLength": 1},
-                        "brief": {"type": "string", "minLength": 1},
-                    },
-                    "required": ["id", "kind", "brief"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ),
-    (
-        "quality_and_art",
-        ("acceptance_tests", "art_direction"),
-        {
-            "acceptance_tests": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-            },
-            "art_direction": {"type": "object"},
-        },
-    ),
+# These are host-side type contracts. They are deliberately NOT sent to the model as a
+# response schema. Design drafting is prose/Markdown; structured values are produced by the
+# host only after generation.
+_SECTION_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("identity_and_loop", ("title", "pitch", "core_loop")),
+    ("systems_and_progression", ("progression", "combat", "mod_context")),
+    ("modules_and_assets", ("modules", "assets")),
+    ("quality_and_art", ("acceptance_tests", "art_direction")),
 )
+
+_LIST_FIELDS = frozenset({"core_loop", "progression", "acceptance_tests"})
+_MAP_FIELDS = frozenset({"combat", "mod_context", "art_direction"})
 
 
 def supports_agentic_research_router(router: Any) -> bool:
@@ -139,8 +70,6 @@ def _domain_source_value(domain_id: str, value: Any) -> Any:
 
 
 def _has_grounding_content(value: Any) -> bool:
-    """Return whether host evidence contains an actual retrievable observation."""
-
     if isinstance(value, Mapping):
         status = str(value.get("status", "")).strip().casefold()
         if status in {
@@ -174,8 +103,6 @@ def _domain_evidence_slice(
     domain_id: str,
     deterministic: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Expose bounded receipts plus host-issued refs for evidence with real content."""
-
     result: dict[str, Any] = {}
     for source, raw_value in deterministic.items():
         source_name = str(source)
@@ -234,11 +161,11 @@ def _validate_sufficient_research(
                 f"research_note.claims[{index}] must be a grounded claim object"
             )
         raw_refs = claim.get("evidence_refs", [])
-        refs = {
-            str(ref).strip()
-            for ref in raw_refs
-            if str(ref).strip()
-        } if isinstance(raw_refs, list) else set()
+        refs = (
+            {str(ref).strip() for ref in raw_refs if str(ref).strip()}
+            if isinstance(raw_refs, list)
+            else set()
+        )
         if not refs:
             raise SpecValidationError(
                 f"research_note.claims[{index}] has no host-issued evidence_ref"
@@ -259,7 +186,11 @@ def _research_domain_with_agent(
     deterministic: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Research one target-neutral domain and fail closed on ungrounded claims."""
+    """Research one target-neutral domain and fail closed on ungrounded claims.
+
+    Research notes remain structured because they are evidence/accounting records, not the
+    creative game-design drafting path.
+    """
 
     domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
     evidence = _domain_evidence_slice(domain_id, deterministic)
@@ -357,14 +288,18 @@ def generate_sectioned_game_design(
     research: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Generate design prose in bounded sections and structure it only on the host.
+
+    There is intentionally no model-side JSON schema and no model repair loop here.
+    """
+
     merged: dict[str, Any] = {}
-    for index, (section_id, fields, properties) in enumerate(_SECTION_SPECS):
+    for index, (section_id, fields) in enumerate(_SECTION_SPECS):
         section = _generate_section(
             router,
             prompt=prompt,
             section_id=section_id,
             fields=fields,
-            properties=properties,
             research=research,
             media_paths=media_paths if index == 0 else (),
             trace_metadata=trace_metadata,
@@ -383,100 +318,183 @@ def _generate_section(
     prompt: str,
     section_id: str,
     fields: Sequence[str],
-    properties: Mapping[str, Any],
     research: Mapping[str, Any],
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    schema = {
-        "type": "object",
-        "properties": {
-            "section": {
-                "type": "object",
-                "properties": dict(properties),
-                "required": list(fields),
-                "additionalProperties": False,
-            }
-        },
-        "required": ["section"],
-        "additionalProperties": False,
-    }
     trace = PlannerStageTrace(
         stage=f"game_design_{section_id}",
         prompt=prompt,
         media_paths=media_paths,
         metadata=dict(trace_metadata or {}),
     )
-    prior_error = ""
-    prior_candidate: dict[str, Any] | None = None
-    seen: set[str] = set()
-
-    while True:
-        raw = router.generate_text(
-            "planner",
-            _section_messages(
-                prompt=prompt,
-                section_id=section_id,
-                fields=fields,
-                research=research,
-                prior_error=prior_error,
-                prior_candidate=prior_candidate,
-            ),
-            media_paths=media_paths,
-            response_format="json",
-            response_schema=schema,
-            enable_tools=False,
+    raw = router.generate_text(
+        "planner",
+        _section_messages(
+            prompt=prompt,
+            section_id=section_id,
+            fields=fields,
+            research=research,
+        ),
+        media_paths=media_paths,
+        response_format="text",
+        response_schema=None,
+        enable_tools=False,
+    )
+    try:
+        section = _parse_markdown_section(raw, fields)
+    except SpecValidationError as exc:
+        trace.record_attempt(
+            raw_output=raw,
+            validation_error=str(exc),
+            candidate=None,
+            context={"section_id": section_id, "format": "markdown"},
         )
-        try:
-            payload = _extract_json_object(raw)
-            section = payload.get("section")
-            if not isinstance(section, dict):
-                section = {key: value for key, value in payload.items() if key in fields}
-            for field in fields:
-                if field not in section:
-                    section[field] = (
-                        []
-                        if field
-                        in {
-                            "core_loop",
-                            "progression",
-                            "acceptance_tests",
-                            "modules",
-                            "assets",
-                        }
-                        else (
-                            {}
-                            if field in {"combat", "mod_context", "art_direction"}
-                            else f"Generated {field}"
-                        )
-                    )
-            section = {field: section[field] for field in fields}
-            _validate_section_types(section, fields)
-            trace.record_attempt(
-                raw_output=raw,
-                validation_error=None,
-                candidate=section,
-                accepted=section,
-                context={"section_id": section_id},
+        raise
+
+    trace.record_attempt(
+        raw_output=raw,
+        validation_error=None,
+        candidate=section,
+        accepted=section,
+        context={"section_id": section_id, "format": "markdown"},
+    )
+    trace.record_success(section)
+    return section
+
+
+def _normalize_heading(value: str) -> str:
+    value = value.strip().strip("`").casefold()
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value
+
+
+def _parse_markdown_section(raw: str, fields: Sequence[str]) -> dict[str, Any]:
+    expected = {_normalize_heading(field): field for field in fields}
+    bodies: dict[str, list[str]] = {}
+    current: str | None = None
+
+    for line in str(raw or "").splitlines():
+        match = re.match(r"^\s*##\s+(.+?)\s*$", line)
+        if match:
+            heading = expected.get(_normalize_heading(match.group(1)))
+            current = heading
+            if current is not None:
+                bodies.setdefault(current, [])
+            continue
+        if current is not None:
+            bodies[current].append(line)
+
+    missing = [field for field in fields if field not in bodies]
+    if missing:
+        raise SpecValidationError(
+            "Planner prose omitted required Markdown heading(s): " + ", ".join(missing)
+        )
+
+    section: dict[str, Any] = {}
+    for field in fields:
+        body = "\n".join(bodies[field]).strip()
+        if field in {"title", "pitch"}:
+            value = _plain_text(body)
+            if not value:
+                raise SpecValidationError(f"Planner prose left ## {field} empty")
+            section[field] = value
+        elif field in _LIST_FIELDS:
+            values = _markdown_list(body)
+            if not values:
+                raise SpecValidationError(f"Planner prose left ## {field} empty")
+            section[field] = values
+        elif field in _MAP_FIELDS:
+            section[field] = _markdown_map(body)
+        elif field == "modules":
+            section[field] = _module_rows(body)
+        elif field == "assets":
+            section[field] = _asset_rows(body)
+        else:
+            raise SpecValidationError(f"Unsupported host design field: {field}")
+    return section
+
+
+def _plain_text(body: str) -> str:
+    lines: list[str] = []
+    for line in body.splitlines():
+        cleaned = _strip_list_marker(line)
+        if cleaned:
+            lines.append(cleaned)
+    return " ".join(lines).strip()
+
+
+def _strip_list_marker(line: str) -> str:
+    value = line.strip()
+    if not value:
+        return ""
+    return re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", value).strip()
+
+
+def _markdown_list(body: str) -> list[str]:
+    values: list[str] = []
+    for line in body.splitlines():
+        if line.lstrip().startswith("### "):
+            continue
+        value = _strip_list_marker(line)
+        if value:
+            values.append(value)
+    return values
+
+
+def _markdown_map(body: str) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    current = "summary"
+    for line in body.splitlines():
+        heading = re.match(r"^\s*###\s+(.+?)\s*$", line)
+        if heading:
+            current = _normalize_heading(heading.group(1)) or "summary"
+            result.setdefault(current, [])
+            continue
+        value = _strip_list_marker(line)
+        if value:
+            result.setdefault(current, []).append(value)
+    return {key: values for key, values in result.items() if values}
+
+
+def _module_rows(body: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in body.splitlines():
+        value = _strip_list_marker(line)
+        if not value or value.casefold() in {"none", "n/a", "없음"}:
+            continue
+        parts = [part.strip() for part in value.split("|")]
+        if len(parts) < 3 or not all(parts[:3]):
+            raise SpecValidationError(
+                "Each ## modules row must be: plugin_id | status | reason"
             )
-            trace.record_success(section)
-            return section
-        except SpecValidationError as exc:
-            candidate = _candidate_section(raw)
-            state = _json_sha256({"error": str(exc), "candidate": candidate})
-            trace.record_attempt(
-                raw_output=raw,
-                validation_error=str(exc),
-                candidate=candidate,
-                context={"section_id": section_id},
-            )
-            if state in seen:
-                raise SpecValidationError(
-                    f"{section_id} repair reached an exact no-progress cycle: {exc}"
-                ) from exc
-            seen.add(state)
-            prior_error = str(exc)
-            prior_candidate = candidate
+        rows.append(
+            {
+                "plugin_id": parts[0],
+                "status": parts[1],
+                "reason": " | ".join(parts[2:]),
+            }
+        )
+    return rows
+
+
+def _asset_rows(body: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in body.splitlines():
+        value = _strip_list_marker(line)
+        if not value or value.casefold() in {"none", "n/a", "없음"}:
+            continue
+        parts = [part.strip() for part in value.split("|")]
+        if len(parts) < 3 or not all(parts[:3]):
+            raise SpecValidationError("Each ## assets row must be: id | kind | brief")
+        rows.append(
+            {
+                "id": parts[0],
+                "kind": parts[1],
+                "brief": " | ".join(parts[2:]),
+            }
+        )
+    return rows
 
 
 def _research_messages(
@@ -525,31 +543,53 @@ def _section_messages(
     section_id: str,
     fields: Sequence[str],
     research: Mapping[str, Any],
-    prior_error: str,
-    prior_candidate: Mapping[str, Any] | None,
 ) -> list[dict[str, str]]:
     system = (
         "You are one bounded section worker in a Minecraft mod design planner. The research "
-        "phase already ran. Produce only the requested section JSON; do not repeat the whole "
-        "game design, do not emit analysis, and do not invent a feature merely to fill a "
-        "schema field. Keep user-facing text in the user's language and identifiers in English "
-        "snake_case. The host will merge and validate all sections."
+        "phase already ran. Write design content as Markdown, not JSON and not a code block. "
+        "Use exactly one level-2 heading for every requested field, spelled exactly as given, "
+        "and no other level-2 headings. Do not repeat the whole design and do not invent a "
+        "feature merely to fill a field. User-facing text stays in the user's language; "
+        "identifiers stay English snake_case. For combat/mod_context/art_direction, optional "
+        "level-3 subheadings are allowed. For modules use one bullet per row as "
+        "plugin_id | status | reason. For assets use id | kind | brief. Use 'none' when a "
+        "modules/assets list is intentionally empty."
     )
-    payload = {
-        "authoritative_request": prompt,
-        "section_id": section_id,
-        "required_fields": list(fields),
-        "research": _compact_research_for_design(research),
-        "validator_error": prior_error or None,
-        "previous_candidate": dict(prior_candidate) if prior_candidate else None,
-    }
+    research_text = _render_design_research(research)
+    requested = "\n".join(f"- ## {field}" for field in fields)
+    user = (
+        f"AUTHORITATIVE REQUEST\n{prompt}\n\n"
+        f"SECTION\n{section_id}\n\n"
+        f"REQUIRED HEADINGS\n{requested}\n\n"
+        f"RESEARCH CONTEXT\n{research_text}"
+    )
     return [
         {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": json.dumps(payload, ensure_ascii=False, sort_keys=True),
-        },
+        {"role": "user", "content": user},
     ]
+
+
+def _render_design_research(research: Mapping[str, Any]) -> str:
+    compact = _compact_research_for_design(research)
+    lines: list[str] = []
+    brief = compact.get("research_brief")
+    if brief:
+        lines.append(f"research_brief: {brief}")
+    notes = compact.get("domain_notes")
+    if isinstance(notes, list):
+        for index, note in enumerate(notes, 1):
+            lines.append(f"domain_note_{index}: {note}")
+    receipts = compact.get("deterministic_receipts")
+    if isinstance(receipts, Mapping):
+        for key, value in receipts.items():
+            lines.append(f"receipt {key}: {value}")
+    errors = compact.get("errors")
+    if errors:
+        lines.append(f"research_errors: {errors}")
+    skillbank = compact.get("procedural_skillbank")
+    if skillbank:
+        lines.append(f"procedural_skillbank: {skillbank}")
+    return "\n".join(lines) if lines else "No additional research context."
 
 
 def _compact_research_for_design(research: Mapping[str, Any]) -> dict[str, Any]:
@@ -624,11 +664,7 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
             ).strip()
             raw_refs = claim.get("evidence_refs", [])
             claim_refs = (
-                [
-                    str(ref).strip()
-                    for ref in raw_refs
-                    if str(ref).strip()
-                ]
+                [str(ref).strip() for ref in raw_refs if str(ref).strip()]
                 if isinstance(raw_refs, list)
                 else []
             )
@@ -643,9 +679,7 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
                     {"claim": claim_text, "evidence_refs": claim_refs}
                 )
         elif isinstance(claim, str) and claim.strip():
-            cleaned_claims.append(
-                {"claim": claim.strip(), "evidence_refs": []}
-            )
+            cleaned_claims.append({"claim": claim.strip(), "evidence_refs": []})
 
     procedures: list[dict[str, Any]] = []
     raw_procedures = note.get("procedures", [])
@@ -660,11 +694,7 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
     return {
         "domain_id": domain_id,
         "claims": cleaned_claims,
-        "gaps": [
-            str(gap).strip()
-            for gap in note.get("gaps", [])
-            if str(gap).strip()
-        ],
+        "gaps": [str(gap).strip() for gap in note.get("gaps", []) if str(gap).strip()],
         "next_queries": [
             str(query).strip()
             for query in note.get("next_queries", [])
@@ -673,71 +703,6 @@ def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
         "sufficient": bool(note.get("sufficient", False)),
         "procedures": procedures,
     }
-
-
-def _validate_section_types(
-    section: Mapping[str, Any],
-    fields: Sequence[str],
-) -> None:
-    for field in fields:
-        value = section.get(field)
-        if field in {"title", "pitch"}:
-            if not isinstance(value, str) or not value.strip():
-                section[field] = str(value or f"Generated {field}").strip()
-        elif field in {
-            "core_loop",
-            "progression",
-            "acceptance_tests",
-            "modules",
-            "assets",
-        }:
-            if not isinstance(value, list):
-                if isinstance(value, (str, int, float, bool)):
-                    section[field] = (
-                        [str(value).strip()] if str(value).strip() else []
-                    )
-                elif isinstance(value, dict):
-                    section[field] = [str(item) for item in value.values()]
-                else:
-                    section[field] = []
-        elif field in {"combat", "mod_context", "art_direction"}:
-            if not isinstance(value, dict):
-                if isinstance(value, str) and value.strip():
-                    section[field] = {"summary": [value.strip()]}
-                elif isinstance(value, list):
-                    section[field] = {
-                        "items": [str(item) for item in value if str(item).strip()]
-                    }
-                else:
-                    section[field] = {}
-
-    for field in ("combat", "mod_context"):
-        value = section.get(field)
-        if not isinstance(value, dict):
-            section[field] = {}
-            continue
-        cleaned_map: dict[str, list[str]] = {}
-        for key, items in list(value.items()):
-            key_text = str(key).strip() or "general"
-            if isinstance(items, list):
-                cleaned_items = [
-                    str(item).strip() for item in items if str(item).strip()
-                ]
-                cleaned_map[key_text] = cleaned_items if cleaned_items else [key_text]
-            elif isinstance(items, str) and items.strip():
-                cleaned_map[key_text] = [items.strip()]
-            else:
-                cleaned_map[key_text] = [str(items)]
-        section[field] = cleaned_map
-
-
-def _candidate_section(raw: str) -> dict[str, Any] | None:
-    try:
-        payload = _extract_json_object(raw)
-    except SpecValidationError:
-        return None
-    section = payload.get("section")
-    return dict(section) if isinstance(section, Mapping) else None
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -756,18 +721,6 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _error(stage: str, exc: BaseException) -> dict[str, str]:
     return {"stage": stage, "error": f"{type(exc).__name__}: {exc}"}
-
-
-def _json_sha256(value: Any) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 __all__ = ["generate_sectioned_game_design"]
