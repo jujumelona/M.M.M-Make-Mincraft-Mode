@@ -438,9 +438,7 @@ def test_each_page_reader_prompt_stays_bounded(monkeypatch, tmp_path: Path) -> N
         assert str(page["page_ref"]) in messages[1]["content"]
 
 
-def test_runtime_binding_marks_game_design_as_research_first() -> None:
-    assert getattr(
-        game_design.GameDesignPlanner.plan,
-        "_mmm_agentic_research_sectioned",
-        False,
-    )
+def test_runtime_binding_uses_native_research_first_owner() -> None:
+    assert getattr(game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False)
+    assert not hasattr(game_design._generate_game_design_once, "__wrapped__")
+    assert not hasattr(game_design.GameDesignPlanner._plan_sharded_request, "__wrapped__")
