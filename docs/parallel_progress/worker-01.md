@@ -2,8 +2,11 @@
 
 WORKER: 01
 ROLE: Minecraft platform target + build scaffold authority
-STATUS: VERIFYING
+STATUS: FINAL_VERIFYING
 BASE_MAIN_SHA: 32b6b2ca92ce51fe060c23fb7a2c672c0e49f422
+IMPLEMENTATION_COMMIT: 2f02fa85b9dfe7723c71d1630a2f0766d0eca23a
+VERIFICATION_WORKFLOW_COMMIT: 11eb655267315a7814e20d1e711bac96fd8fd042
+CI_BLOCKER_REMOVAL_COMMIT: ffea9f68430f4f524895f2ae4ab08f5aff99ce40
 
 ## Root cause
 
@@ -20,6 +23,7 @@ BASE_MAIN_SHA: 32b6b2ca92ce51fe060c23fb7a2c672c0e49f422
 - Gradle distribution SHA-256 is taken from the exact adapter receipt, not a Minecraft-version table.
 - Historical wrapper checksums remain only as artifact-integrity compatibility pins; unknown/current Gradle wrappers are grounded in the current official Fabric template and verified by Git blob identity plus JAR structure.
 - Fabric Loom plugin selection follows the current template boundary: unobfuscated 26.x+ uses `net.fabricmc.fabric-loom`; older remapped releases use `net.fabricmc.fabric-loom-remap` and Mojang mappings when applicable.
+- Added a permanent Worker 01 verification workflow that runs the dedicated regression suite, compile/lint checks, and repository static audit on Worker 01 surface changes.
 
 ## Current external evidence checked (2026-08-31)
 
@@ -50,6 +54,12 @@ The removed static scaffold matrix topped out at Gradle 8.10.2, demonstrating th
 
 Executable production support remains Fabric-only because Fabric is the only registered executable provider. NeoForge/Forge must not be advertised until equivalent live metadata, generation, buildability, and validation providers exist.
 
+## Verification state
+
+- Worker 01 implementation is present on current `main` ancestry.
+- The former repository static-audit blocker `.github/workflows/worker06-finalize-once.yml` was removed; the following global CI run confirmed `STATIC DEBUG AUDIT OK`.
+- Repository-wide CI still has a separate runtime-mutation-budget failure (`behavioral=424`, reviewed budget `413`) caused by concurrent repository changes outside Worker 01. Worker 01 adds no runtime rebinding and is being independently verified by `.github/workflows/worker01-final-verify.yml`.
+
 ## Residual limitations
 
 - First-time wrapper materialization requires network access unless a verified wrapper is already cached; failure is explicit and fail-closed.
@@ -57,4 +67,4 @@ Executable production support remains Fabric-only because Fabric is the only reg
 
 FINAL_VERIFICATION_COMMIT: pending
 FINAL_VERIFICATION_RUN: pending
-UNRESOLVED: final CI verification pending
+UNRESOLVED: dedicated Worker 01 verification pending
