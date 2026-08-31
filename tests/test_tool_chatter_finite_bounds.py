@@ -52,6 +52,7 @@ def test_forced_rag_finite_attempts_cap() -> None:
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = 16384
+    config.max_input_tokens = 0
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
