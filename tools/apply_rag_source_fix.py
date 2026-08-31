@@ -11,6 +11,13 @@ def replace_once(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+external = Path("minecraft_mod_ai/pre_design_external_source_contract.py")
+replace_once(
+    external,
+    '''    def forced_with_external_sources(router: Any, payload: dict[str, Any]) -> dict[str, Any]:\n        local_bundle = current(router, payload)\n        if not isinstance(local_bundle, Mapping):\n            return local_bundle\n        return _augment_bundle(payload, local_bundle)\n''',
+    '''    def forced_with_external_sources(\n        router: Any, research_brief: Mapping[str, Any]\n    ) -> dict[str, Any]:\n        local_bundle = current(router, research_brief)\n        if not isinstance(local_bundle, Mapping):\n            return local_bundle\n        return _augment_bundle(research_brief, local_bundle)\n''',
+)
+
 corrective = Path("minecraft_mod_ai/pre_design_rag_corrective.py")
 replace_once(
     corrective,
