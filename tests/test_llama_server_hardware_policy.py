@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_hardware_policy as policy
+from minecraft_mod_ai import llama_stream_efficiency_contract as stream
 
 
 class _FakeResponse:
@@ -52,21 +53,25 @@ class _FakeClient:
         self.closed = True
 
 
-def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics(monkeypatch) -> None:
+def test_strict_server_generate_reuses_shared_http_client_without_auxiliary_metrics(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_AUXILIARY_TELEMETRY", raising=False)
     client = _FakeClient()
-    created: list[_FakeClient] = []
+    requested_urls: list[str] = []
     fake_httpx = SimpleNamespace(
-        Client=lambda **_kwargs: created.append(client) or client,
         Timeout=lambda **_kwargs: object(),
-        Limits=lambda **_kwargs: object(),
     )
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    monkeypatch.setattr(
+        stream,
+        "_client",
+        lambda server_url: requested_urls.append(server_url) or client,
+    )
     monkeypatch.setattr(
         policy,
         "_TELEMETRY_TOTALS",
         {
             "prompt_tokens": 0,
+            "prompt_seconds": 0.0,
             "output_tokens": 0,
             "generation_seconds": 0.0,
             "requests": 0,
@@ -86,15 +91,14 @@ def test_strict_server_generate_reuses_one_http_client_without_auxiliary_metrics
         response_format="text",
         tools=(),
     )
+    server_url = "http://127.0.0.1:8080/v1"
 
-    result = policy._strict_server_generate(
-        Adapter(), request, "http://127.0.0.1:8080/v1"
-    )
+    assert policy._strict_server_generate(Adapter(), request, server_url) == "ok"
+    assert policy._strict_server_generate(Adapter(), request, server_url) == "ok"
 
-    assert result == "ok"
-    assert created == [client]
+    assert requested_urls == [server_url, server_url]
     assert client.metrics_gets == 0
-    assert client.stream_calls == 1
+    assert client.stream_calls == 2
     assert not client.closed
 
 

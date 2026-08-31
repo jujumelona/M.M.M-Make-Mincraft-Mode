@@ -386,7 +386,7 @@ def _reject_tool_stream_request(adapter: Any, request: Any) -> None:
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     """Stream one native text-only server turn with native token telemetry."""
 
-    from .llama_stream_efficiency_contract import _stream_idle_timeout_seconds
+    from .llama_stream_efficiency_contract import _client, _stream_idle_timeout_seconds
     from .model_adapters import ModelBackendError
 
     _reject_tool_stream_request(adapter, request)
@@ -397,7 +397,7 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     try:
         import httpx
 
-        client = httpx.Client()
+        client = _client(server_url)
         payload = _server_payload(adapter, request)
         payload["stream"] = True
         timeout = httpx.Timeout(
@@ -616,16 +616,6 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             model_id=adapter.config.model_id,
             cause=exc,
         ) from exc
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception as close_exc:  # noqa: BLE001 - transport cleanup boundary
-                print(
-                    "llama server: client close failed",
-                    f" error={type(close_exc).__name__}",
-                    flush=True,
-                )
 
 
 def install(autotune_module: Any) -> None:
