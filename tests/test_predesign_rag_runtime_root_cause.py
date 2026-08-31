@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from pathlib import Path
 from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as rag
