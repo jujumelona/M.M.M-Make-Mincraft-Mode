@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from .preference_training import PreferenceCandidate, PreferenceTraceStore
+from .validation_diagnostic_contract import (
+    diagnostic_errors,
+    diagnostic_items,
+    run_diagnostics,
+)
 
 _TOKEN = re.compile('[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}')
 _STRATEGIES = ('minimal_local_fix', 'api_contract_conservative_fix', 'dependency_and_version_conservative_fix')
@@ -41,14 +46,15 @@ def _sha(value: Any) -> str:
 def _tokens(value: str) -> set[str]:
     return {token.casefold() for token in _TOKEN.findall(value)}
 
+def _diagnostic_receipt(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, list):
+        return {'diagnostics': value}
+    return None
+
 def _compact_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        from .repair_diagnostics_contract import flatten_diagnostics
-        diagnostics = flatten_diagnostics(evidence.get('diagnostics'))
-    except Exception:
-        raw = evidence.get('diagnostics', {})
-        diagnostics = raw.get('diagnostics', []) if isinstance(raw, Mapping) else []
-        diagnostics = diagnostics if isinstance(diagnostics, list) else []
+    diagnostics = diagnostic_items(_diagnostic_receipt(evidence.get('diagnostics')))
     compact_diagnostics = []
     for item in diagnostics[:16]:
         if not isinstance(item, Mapping):
@@ -134,11 +140,7 @@ def _repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequ
     width = _env_int('MMM_REPAIR_SEARCH_WIDTH', 2, maximum=3)
     if mode == 'on':
         return width
-    try:
-        from .repair_diagnostics_contract import diagnostic_errors
-        errors = diagnostic_errors(evidence.get('diagnostics'))
-    except Exception:
-        errors = []
+    errors = diagnostic_errors(_diagnostic_receipt(evidence.get('diagnostics')))
     signature = self._signature(dict(evidence))
     counts = getattr(self, '_mmm_signature_counts', None)
     if not isinstance(counts, Counter):
@@ -159,11 +161,7 @@ def _repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequ
     return 1
 
 def _diagnostic_paths(evidence: Mapping[str, Any]) -> set[str]:
-    try:
-        from .repair_diagnostics_contract import flatten_diagnostics
-        values = flatten_diagnostics(evidence.get('diagnostics'))
-    except Exception:
-        values = []
+    values = diagnostic_items(_diagnostic_receipt(evidence.get('diagnostics')))
     result = set()
     for item in values:
         path = item.get('path') or item.get('uri')
@@ -191,7 +189,6 @@ def _verify_repair_candidate(self: Any, root: Path | None, operations: Sequence[
     try:
         from .performance_final_contract import _clone_source_snapshot
         from .source_patch import TransactionalSourcePatcher
-        from .validation_diagnostic_contract import diagnostic_errors, run_diagnostics
         stage = _clone_source_snapshot(root)
         TransactionalSourcePatcher(stage).apply([copy.deepcopy(dict(item)) for item in operations])
         java_paths = tuple(sorted(str(item.get('path', '')).replace('\\', '/') for item in operations if str(item.get('path', '')).lower().endswith('.java')))

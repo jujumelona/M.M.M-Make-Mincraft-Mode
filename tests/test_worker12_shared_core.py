@@ -136,6 +136,33 @@ def test_agentic_verifier_does_not_retry_programming_typeerror(
     assert "programmer defect" in verifier["verifier_error"]
 
 
+
+def test_agentic_diagnostics_use_canonical_authority_without_legacy_adapter() -> None:
+    source = inspect.getsource(agentic_optimization_contract)
+    assert "repair_diagnostics_contract" not in source
+    receipt = {
+        "status": "AVAILABLE",
+        "diagnostics": {
+            "file:///src/main/java/A.java": [
+                {"severity": 1, "message": "compile error", "code": "E1"}
+            ]
+        },
+    }
+    compact = agentic_optimization_contract._compact_evidence(
+        {"diagnostics": receipt, "build": {"status": "PASS"}}
+    )
+    assert compact["diagnostics"] == [
+        {
+            "path": "file:///src/main/java/A.java",
+            "message": "compile error",
+            "code": "E1",
+            "severity": 1,
+        }
+    ]
+    assert agentic_optimization_contract._diagnostic_paths(
+        {"diagnostics": receipt}
+    ) == {"file:///src/main/java/A.java", "A.java"}
+
 def test_colab_profile_switch_removes_stale_remote_credentials(monkeypatch) -> None:
     for name in colab_runtime_setup._REMOTE_PROFILE_ENV_NAMES:
         monkeypatch.setenv(name, "stale-secret")
