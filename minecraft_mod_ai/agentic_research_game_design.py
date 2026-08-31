@@ -29,14 +29,88 @@ _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
-# These are host-side type contracts. They are deliberately NOT sent to the model as a
-# response schema. Design drafting is prose/Markdown; structured values are produced by the
-# host only after generation.
-_SECTION_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("identity_and_loop", ("title", "pitch", "core_loop")),
-    ("systems_and_progression", ("progression", "combat", "mod_context")),
-    ("modules_and_assets", ("modules", "assets")),
-    ("quality_and_art", ("acceptance_tests", "art_direction")),
+# Host-side metadata only. Runtime contracts may extend/inspect this schema, but it is
+# never sent to the model as response_schema. Design drafting itself is prose/Markdown.
+_SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
+    (
+        "identity_and_loop",
+        ("title", "pitch", "core_loop"),
+        {
+            "title": {"type": "string", "minLength": 1},
+            "pitch": {"type": "string", "minLength": 1},
+            "core_loop": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+    ),
+    (
+        "systems_and_progression",
+        ("progression", "combat", "mod_context"),
+        {
+            "progression": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "combat": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+            },
+            "mod_context": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+    ),
+    (
+        "modules_and_assets",
+        ("modules", "assets"),
+        {
+            "modules": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "plugin_id": {"type": "string", "minLength": 1},
+                        "status": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["plugin_id", "status", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+            "assets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "kind": {"type": "string", "minLength": 1},
+                        "brief": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["id", "kind", "brief"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ),
+    (
+        "quality_and_art",
+        ("acceptance_tests", "art_direction"),
+        {
+            "acceptance_tests": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "art_direction": {"type": "object"},
+        },
+    ),
 )
 
 _LIST_FIELDS = frozenset({"core_loop", "progression", "acceptance_tests"})
@@ -288,13 +362,10 @@ def generate_sectioned_game_design(
     research: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate design prose in bounded sections and structure it only on the host.
-
-    There is intentionally no model-side JSON schema and no model repair loop here.
-    """
+    """Generate design prose in bounded sections and structure it only on the host."""
 
     merged: dict[str, Any] = {}
-    for index, (section_id, fields) in enumerate(_SECTION_SPECS):
+    for index, (section_id, fields, _host_properties) in enumerate(_SECTION_SPECS):
         section = _generate_section(
             router,
             prompt=prompt,
