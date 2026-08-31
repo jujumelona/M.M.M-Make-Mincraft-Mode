@@ -88,25 +88,35 @@ def test_design_section_owner_rejects_missing_required_markdown_heading_once() -
     assert router.kwargs["response_schema"] is None
 
 
-def test_modules_have_one_canonical_five_column_markdown_contract() -> None:
+def test_modules_use_one_semantic_contract_with_multiple_safe_markdown_encodings() -> None:
     messages = design._section_messages(
         prompt="우주 모드를 설계해줘",
         section_id="modules_and_assets",
         fields=("modules", "assets"),
         research={},
     )
-    assert "Write design content as Markdown, not JSON" in messages[0]["content"]
-    assert (
-        "plugin_id | status | reason | requirement_refs | implementation_obligations"
-        in messages[0]["content"]
-    )
-    assert "old three-column module format" in messages[0]["content"]
+    system = messages[0]["content"]
+    assert "Write design content as Markdown, not JSON" in system
+    assert "requirement_refs" in system
+    assert "implementation_obligations" in system
+    assert "prefer one Markdown record per module" in system
+    assert "legacy one-line pipe record is also accepted" in system
 
-    parsed = design._module_rows(
+    legacy = design._module_rows(
         "- mining_core | planning | 광물 채굴 | req_mining, req_economy | "
         "광물 상태 관리; 채굴 보상 계산"
     )
-    assert parsed == [
+    labeled = design._module_rows(
+        """### mining_core
+- status: planning
+- reason: 광물 채굴
+- requirement_refs: req_mining, req_economy
+- implementation_obligations:
+  - 광물 상태 관리
+  - 채굴 보상 계산
+"""
+    )
+    expected = [
         {
             "plugin_id": "mining_core",
             "status": "planning",
@@ -115,10 +125,12 @@ def test_modules_have_one_canonical_five_column_markdown_contract() -> None:
             "implementation_obligations": ["광물 상태 관리", "채굴 보상 계산"],
         }
     ]
+    assert legacy == expected
+    assert labeled == expected
 
 
-def test_old_three_column_module_contract_fails_at_parser_boundary() -> None:
-    with pytest.raises(SpecValidationError, match="exactly"):
+def test_old_three_column_module_contract_still_fails_on_missing_semantics() -> None:
+    with pytest.raises(SpecValidationError, match="Could not parse|implementation_obligations"):
         design._module_rows(
             "- mining_core | planning | 광물 채굴; requirement_refs: req_mining"
         )
