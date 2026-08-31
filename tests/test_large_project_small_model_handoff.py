@@ -59,6 +59,7 @@ def test_large_project_planner_researcher_coder_handoff_bounded(tmp_path: Path) 
     small_model_config = MagicMock()
     small_model_config.adapter = "llama_cpp"
     small_model_config.max_context = 32768
+    small_model_config.max_input_tokens = 0
     small_model_config.max_new_tokens = 8192
     small_model_config.extra = {
         "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
