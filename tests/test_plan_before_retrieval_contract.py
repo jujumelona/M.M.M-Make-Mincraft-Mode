@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai import evidence_request_guard as request_guard
 from minecraft_mod_ai import game_design
+from minecraft_mod_ai import planning_authority
 from minecraft_mod_ai import platform_central_ai_contract as platform_contract
 from minecraft_mod_ai import platform_live_discovery as live
 from minecraft_mod_ai import reuse_planner as reuse
@@ -83,12 +83,12 @@ def test_installed_platform_search_consumes_authoritative_plan_first(
     observed: dict[str, object] = {}
 
     monkeypatch.setattr(
-        request_guard,
+        planning_authority,
         "build_authoritative_request_catalog",
         lambda supplied, router=None: (
             authoritative
             if supplied == prompt
-            else pytest.fail("request guard received a different prompt")
+            else pytest.fail("native authority received a different prompt")
         ),
     )
     monkeypatch.setattr(
