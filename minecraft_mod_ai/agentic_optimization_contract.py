@@ -7,7 +7,7 @@ import os
 import re
 import shutil
 import time
-from collections import Counter, deque
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -67,23 +67,41 @@ def _compact_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
 def _memory_path(root: Path) -> Path:
     return root / '.minecraft_ai' / 'repair-experience.jsonl'
 
+def _recent_jsonl_rows(path: Path, *, max_rows: int = 256) -> list[dict[str, Any]]:
+    if max_rows <= 0 or not path.is_file() or path.is_symlink():
+        return []
+    chunks: list[bytes] = []
+    newline_count = 0
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            while position > 0 and newline_count <= max_rows:
+                size = min(64 * 1024, position)
+                position -= size
+                handle.seek(position)
+                chunk = handle.read(size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in b"".join(reversed(chunks)).splitlines()[-max_rows:]:
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
 def _read_memory(root: Path, signature: str, *, limit: int=4) -> list[dict[str, Any]]:
     path = _memory_path(root)
     if not path.is_file() or path.is_symlink():
         return []
     target = _tokens(signature)
-    rows: deque[dict[str, Any]] = deque(maxlen=256)
-    try:
-        with path.open('r', encoding='utf-8') as handle:
-            for raw in handle:
-                try:
-                    value = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(value, dict):
-                    rows.append(value)
-    except OSError:
-        return []
+    rows = _recent_jsonl_rows(path, max_rows=256)
     ranked: list[tuple[float, str, dict[str, Any]]] = []
     for row in rows:
         source = str(row.get('signature', ''))
@@ -115,7 +133,6 @@ def _write_memory(root: Path, trace: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {'schema_version': 'mmm/verified-repair-experience-v1', 'signature': trace.get('signature', ''), 'signature_sha256': _sha(str(trace.get('signature', ''))), 'evidence': trace.get('evidence', {}), 'repair_pattern': trace.get('repair_pattern', []), 'verifier': trace.get('winner_verifier', {})}
     body['experience_id'] = _sha(body)
-    existing: set[str] = set()
     if path.is_file():
         try:
             with path.open('r', encoding='utf-8') as handle:
@@ -124,12 +141,13 @@ def _write_memory(root: Path, trace: Mapping[str, Any]) -> None:
                         value = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
-                    if isinstance(value, dict):
-                        existing.add(str(value.get('experience_id', '')))
+                    if (
+                        isinstance(value, dict)
+                        and str(value.get('experience_id', '')) == body['experience_id']
+                    ):
+                        return
         except OSError:
             pass
-    if body['experience_id'] in existing:
-        return
     with path.open('a', encoding='utf-8', newline='\n') as handle:
         handle.write(json.dumps(body, ensure_ascii=False, sort_keys=True) + '\n')
 
@@ -231,7 +249,7 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
                 candidate_context['agentic_candidate'] = {'index': candidate_index, 'count': width, 'strategy': _STRATEGIES[candidate_index % len(_STRATEGIES)], 'rule': 'Produce an independent minimal repair; do not mention candidate search.'}
                 try:
                     operations = current_request(self, evidence, candidate_context)
-                except BaseException as exc:
+                except Exception as exc:
                     errors.append(exc)
                     continue
                 generated.append((candidate_index, operations))

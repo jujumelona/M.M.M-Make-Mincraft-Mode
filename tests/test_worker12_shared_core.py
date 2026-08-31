@@ -12,6 +12,7 @@ from minecraft_mod_ai import (
     complete_orchestrator,
     validation_checkpoint_policy,
     agentic_optimization_contract,
+    trajectory_memory,
     validation_diagnostic_contract,
     validation_execution_contract,
 )
@@ -249,3 +250,101 @@ def test_jdt_cache_fingerprint_tracks_canonical_diagnostic_policy() -> None:
     modules = validation_checkpoint_policy._validation_modules("validate-jdt")
     assert validation_diagnostic_contract in modules
     assert all(module.__name__ != "minecraft_mod_ai.orchestrator_jdt_gate_contract" for module in modules)
+
+
+def test_trajectory_fallback_dedupe_checks_full_log(tmp_path: Path) -> None:
+    path = trajectory_memory.memory_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = "".join(
+        f'{{"trajectory_id": "id-{index}"}}\n' for index in range(600)
+    )
+    path.write_text(original, encoding="utf-8")
+
+    assert (
+        trajectory_memory._append_jsonl_fallback(
+            tmp_path, {"trajectory_id": "id-1"}
+        )
+        is False
+    )
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_agentic_memory_tail_reader_is_bounded_to_recent_rows(tmp_path: Path) -> None:
+    path = tmp_path / "repair-experience.jsonl"
+    path.write_text(
+        "".join(f'{{"index": {index}}}\n' for index in range(400)),
+        encoding="utf-8",
+    )
+    rows = agentic_optimization_contract._recent_jsonl_rows(path, max_rows=256)
+    assert len(rows) == 256
+    assert rows[0]["index"] == 144
+    assert rows[-1]["index"] == 399
+
+
+def test_agentic_candidate_search_does_not_retry_keyboard_interrupt(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
+    monkeypatch.setenv("MMM_REPAIR_SEARCH_WIDTH", "3")
+    calls = 0
+
+    class Engine:
+        def _signature(self, _evidence):
+            return "signature"
+
+        def _request_patch(self, _evidence, _context):
+            nonlocal calls
+            calls += 1
+            raise KeyboardInterrupt("cancelled")
+
+        def repair(self, *_args, **_kwargs):
+            return {"status": "FAIL"}
+
+    module = SimpleNamespace(RepairEngine=Engine, RepairEngineError=RuntimeError)
+    agentic_optimization_contract._install_repair_search_and_memory(module)
+
+    with pytest.raises(KeyboardInterrupt, match="cancelled"):
+        Engine()._request_patch({}, {})
+    assert calls == 1
+
+
+def test_local_colab_fingerprint_ignores_remote_only_inputs(tmp_path: Path) -> None:
+    common = {
+        "repo_dir": tmp_path,
+        "used_commit": "abc123",
+        "model_profile": "local_gpu",
+        "save_to_google_drive": False,
+    }
+    clean = colab_runtime_setup.setup_request_fingerprint(**common)
+    noisy = colab_runtime_setup.setup_request_fingerprint(
+        **common,
+        remote_base_url="https://example.invalid:not-a-port/v1",
+        remote_text_model="unused-text",
+        remote_image_model="unused-image",
+        remote_speech_model="unused-speech",
+    )
+    assert noisy == clean
+
+
+def test_local_colab_receipt_does_not_parse_or_persist_remote_config(tmp_path: Path) -> None:
+    receipt = colab_runtime_setup._build_receipt(
+        repo_dir=tmp_path,
+        used_commit="abc123",
+        model_profile="local_gpu",
+        save_to_google_drive=False,
+        output_root=str(tmp_path),
+        remote_base_url="https://example.invalid:not-a-port/v1",
+        remote_text_model="unused-text",
+        remote_image_model="unused-image",
+        remote_speech_model="unused-speech",
+        setup_fingerprint="fingerprint",
+        torch=None,
+        llama_server_binary="",
+    )
+    assert receipt["remote"] == {
+        "base_url": "",
+        "text_model": "",
+        "image_model": "",
+        "speech_model": "",
+    }
+    assert colab_runtime_setup._safe_remote_url(
+        "https://example.invalid:not-a-port/v1"
+    ) == ""

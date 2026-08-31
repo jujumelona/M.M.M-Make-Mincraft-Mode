@@ -85,11 +85,15 @@ def _safe_remote_url(value: str) -> str:
     parsed = urlsplit(value.strip())
     if not parsed.scheme or not parsed.hostname:
         return ""
+    try:
+        port = parsed.port
+    except ValueError:
+        return ""
     host = parsed.hostname
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    if parsed.port is not None:
-        host = f"{host}:{parsed.port}"
+    if port is not None:
+        host = f"{host}:{port}"
     return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
 
 
@@ -127,19 +131,18 @@ def setup_request_fingerprint(
     remote_image_model: str = "",
     remote_speech_model: str = "",
 ) -> str:
+    local_profile = _is_local_profile(model_profile)
     request = {
         "setup_api_version": SETUP_API_VERSION,
         "repo_dir": str(Path(repo_dir).resolve()),
         "used_commit": used_commit.strip(),
         "model_profile": model_profile.strip(),
         "save_to_google_drive": bool(save_to_google_drive),
-        "remote_base_url": remote_base_url.strip(),
-        "remote_text_model": remote_text_model.strip(),
-        "remote_image_model": remote_image_model.strip(),
-        "remote_speech_model": remote_speech_model.strip(),
-        "llama_server_source_ref": (
-            LLAMA_SERVER_SOURCE_REF if _is_local_profile(model_profile) else ""
-        ),
+        "remote_base_url": "" if local_profile else remote_base_url.strip(),
+        "remote_text_model": "" if local_profile else remote_text_model.strip(),
+        "remote_image_model": "" if local_profile else remote_image_model.strip(),
+        "remote_speech_model": "" if local_profile else remote_speech_model.strip(),
+        "llama_server_source_ref": LLAMA_SERVER_SOURCE_REF if local_profile else "",
     }
     return hashlib.sha256(_canonical_json(request).encode("utf-8")).hexdigest()
 
@@ -798,6 +801,7 @@ def _build_receipt(
     llama_server_binary: str,
 ) -> dict[str, Any]:
     script_path = Path(__file__).resolve()
+    local_profile = _is_local_profile(model_profile)
     return {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "setup_api_version": SETUP_API_VERSION,
@@ -815,10 +819,18 @@ def _build_receipt(
             "binary": llama_server_binary,
         },
         "remote": {
-            "base_url": _safe_remote_url(remote_base_url),
-            "text_model": remote_text_model.strip(),
-            "image_model": remote_image_model.strip() or remote_text_model.strip(),
-            "speech_model": remote_speech_model.strip() or remote_text_model.strip(),
+            "base_url": "" if local_profile else _safe_remote_url(remote_base_url),
+            "text_model": "" if local_profile else remote_text_model.strip(),
+            "image_model": (
+                ""
+                if local_profile
+                else remote_image_model.strip() or remote_text_model.strip()
+            ),
+            "speech_model": (
+                ""
+                if local_profile
+                else remote_speech_model.strip() or remote_text_model.strip()
+            ),
         },
         "runtime": _runtime_details(torch),
         "packages": {

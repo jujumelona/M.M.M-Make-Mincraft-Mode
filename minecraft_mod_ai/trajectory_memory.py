@@ -656,7 +656,6 @@ def _append_jsonl_line(path: Path, rendered: str) -> None:
 def _append_jsonl_fallback(base: str | Path, row: Mapping[str, Any]) -> bool:
     path = memory_path(base)
     identity = str(row.get("trajectory_id", ""))
-    recent: deque[str] = deque(maxlen=512)
     if path.is_file() and not path.is_symlink():
         try:
             with path.open("r", encoding="utf-8") as handle:
@@ -665,12 +664,13 @@ def _append_jsonl_fallback(base: str | Path, row: Mapping[str, Any]) -> bool:
                         value = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
-                    if isinstance(value, Mapping):
-                        recent.append(str(value.get("trajectory_id", "")))
+                    if (
+                        isinstance(value, Mapping)
+                        and str(value.get("trajectory_id", "")) == identity
+                    ):
+                        return False
         except OSError:
             return False
-    if identity in recent:
-        return False
     path.parent.mkdir(parents=True, exist_ok=True)
     _append_jsonl_line(
         path,
