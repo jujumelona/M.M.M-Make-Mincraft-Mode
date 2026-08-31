@@ -9,6 +9,7 @@ the full log before each append or retrieval.
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -109,15 +110,26 @@ def _tokens(value: str) -> set[str]:
     return {item.casefold() for item in _TOKEN.findall(value)}
 
 
-def _memory_dir(base: str | Path) -> Path:
+def _state_path(
+    base: str | Path,
+    *parts: str,
+    leaf_file: bool = False,
+) -> Path:
+    """Build a state path without allowing any component to redirect outside root."""
+
     root = Path(base).expanduser().resolve()
     current = root
-    for part in (".minecraft_ai", "trajectory-memory"):
+    for index, part in enumerate(parts):
         current = current / part
+        is_leaf = index == len(parts) - 1
         if current.is_symlink():
             raise RuntimeError("Trajectory memory state must not traverse symbolic links.")
-        if current.exists() and not current.is_dir():
-            raise RuntimeError("Trajectory memory state parent is not a directory.")
+        if current.exists():
+            expect_file = bool(leaf_file and is_leaf)
+            valid_type = current.is_file() if expect_file else current.is_dir()
+            if not valid_type:
+                kind = "file" if expect_file else "directory"
+                raise RuntimeError(f"Trajectory memory state is not a {kind}: {current}")
         try:
             current.resolve(strict=False).relative_to(root)
         except (OSError, ValueError) as exc:
@@ -127,17 +139,40 @@ def _memory_dir(base: str | Path) -> Path:
     return current
 
 
+def _memory_dir(base: str | Path) -> Path:
+    return _state_path(base, ".minecraft_ai", "trajectory-memory")
+
+
 def memory_path(base: str | Path) -> Path:
-    return _memory_dir(base) / "verified-trajectories.jsonl"
+    return _state_path(
+        base,
+        ".minecraft_ai",
+        "trajectory-memory",
+        "verified-trajectories.jsonl",
+        leaf_file=True,
+    )
 
 
 def remote_cache_path(base: str | Path, task_class: str) -> Path:
     safe = re.sub(r"[^a-z0-9_-]+", "-", task_class.casefold()).strip("-") or "general"
-    return _memory_dir(base) / "remote-cache" / f"{safe}.jsonl"
+    return _state_path(
+        base,
+        ".minecraft_ai",
+        "trajectory-memory",
+        "remote-cache",
+        f"{safe}.jsonl",
+        leaf_file=True,
+    )
 
 
 def _index_path(base: str | Path) -> Path:
-    return _memory_dir(base) / "trajectory-index.sqlite3"
+    return _state_path(
+        base,
+        ".minecraft_ai",
+        "trajectory-memory",
+        "trajectory-index.sqlite3",
+        leaf_file=True,
+    )
 
 
 def task_class_for_stage(stage: str) -> str:
@@ -533,7 +568,10 @@ def _sync_source(
     *,
     kind: str,
 ) -> None:
-    source = source.expanduser().resolve()
+    source = source.expanduser()
+    if source.is_symlink():
+        raise RuntimeError("Trajectory source must not be a symbolic link.")
+    source = source.resolve()
     previous = connection.execute(
         """
         SELECT size_bytes, modified_ns, byte_offset, source_kind
@@ -599,6 +637,22 @@ def _sync_source(
     )
 
 
+def _append_jsonl_line(path: Path, rendered: str) -> None:
+    """Append without following a leaf symlink when the platform supports it."""
+
+    if path.is_symlink():
+        raise RuntimeError("Trajectory memory file must not be a symbolic link.")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8", newline="\n") as handle:
+            fd = -1
+            handle.write(rendered)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _append_jsonl_fallback(base: str | Path, row: Mapping[str, Any]) -> bool:
     path = memory_path(base)
     identity = str(row.get("trajectory_id", ""))
@@ -618,8 +672,10 @@ def _append_jsonl_fallback(base: str | Path, row: Mapping[str, Any]) -> bool:
     if identity in recent:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+    _append_jsonl_line(
+        path,
+        json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n",
+    )
     return True
 
 
@@ -645,8 +701,7 @@ def append_trajectory(base: str | Path, row: Mapping[str, Any]) -> bool:
 
             path.parent.mkdir(parents=True, exist_ok=True)
             rendered = json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n"
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(rendered)
+            _append_jsonl_line(path, rendered)
 
             order = _last_source_order(connection) + 1
             inserted = _index_row(connection, row, source=path, order=order)

@@ -190,16 +190,17 @@ def _verify_repair_candidate(self: Any, root: Path | None, operations: Sequence[
     stage: Path | None = None
     try:
         from .performance_final_contract import _clone_source_snapshot
-        from .repair_diagnostics_contract import diagnostic_errors
         from .source_patch import TransactionalSourcePatcher
+        from .validation_diagnostic_contract import diagnostic_errors, run_diagnostics
         stage = _clone_source_snapshot(root)
         TransactionalSourcePatcher(stage).apply([copy.deepcopy(dict(item)) for item in operations])
         java_paths = tuple(sorted(str(item.get('path', '')).replace('\\', '/') for item in operations if str(item.get('path', '')).lower().endswith('.java')))
-        service = self.diagnostics_factory()
-        try:
-            diagnostics = service.diagnostics(stage, relative_files=java_paths or None, timeout_seconds=60)
-        except TypeError:
-            diagnostics = service.diagnostics(stage, timeout_seconds=60)
+        diagnostics = run_diagnostics(
+            self.diagnostics_factory,
+            stage,
+            relative_files=java_paths or None,
+            timeout_seconds=60,
+        )
         status = str(diagnostics.get('status', '')) if isinstance(diagnostics, Mapping) else ''
         errors = diagnostic_errors(diagnostics if isinstance(diagnostics, Mapping) else {})
         verifier = {**verifier, 'jdt_status': status or 'AVAILABLE', 'jdt_error_count': len(errors)}
@@ -391,6 +392,9 @@ def install(*, complete_planner_module: Any, repair_module: Any, work_graph_modu
     Existing MTP, conditional semantic review, staged commits and fail-closed quality
     evidence remain authoritative and are intentionally not replaced here.
     """
+    # Kept as a keyword-only compatibility hook for the shared installer contract.
+    # This module intentionally does not mutate planner authority.
+    del complete_planner_module
     _install_repair_search_and_memory(repair_module)
     _install_balanced_work_claims(work_graph_module)
 __all__ = ['install']

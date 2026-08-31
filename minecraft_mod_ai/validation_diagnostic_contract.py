@@ -11,13 +11,31 @@ _DIAGNOSTIC_SUCCESS_STATUSES = {"PASS", "OK", "AVAILABLE"}
 _JDT_AVAILABILITY_ERRORS = (OSError, TimeoutError, JDTLanguageServerError)
 
 
+def _diagnostics_shape_error(raw: Any) -> str:
+    if isinstance(raw, Mapping):
+        for uri, group in raw.items():
+            if not isinstance(group, list):
+                return f"diagnostics group for {uri!r} is not a list"
+            if any(not isinstance(item, Mapping) for item in group):
+                return f"diagnostics group for {uri!r} contains a non-mapping item"
+        return ""
+    if isinstance(raw, list):
+        if any(not isinstance(item, Mapping) for item in raw):
+            return "diagnostics list contains a non-mapping item"
+        return ""
+    return "diagnostics payload is missing or malformed"
+
+
 def _availability_error(receipt: Mapping[str, Any]) -> dict[str, Any] | None:
     """Return a blocking diagnostic when a JDT receipt is not trustworthy."""
 
     status = str(receipt.get("status") or "").strip().upper()
     error = str(receipt.get("error") or "").strip()
-    raw = receipt.get("diagnostics")
-    malformed = "diagnostics" not in receipt or not isinstance(raw, (Mapping, list))
+    malformed = (
+        "diagnostics payload is missing or malformed"
+        if "diagnostics" not in receipt
+        else _diagnostics_shape_error(receipt.get("diagnostics"))
+    )
     failed_status = bool(status and status not in _DIAGNOSTIC_SUCCESS_STATUSES)
     if not (failed_status or error or malformed):
         return None
@@ -28,7 +46,7 @@ def _availability_error(receipt: Mapping[str, Any]) -> dict[str, Any] | None:
     if error:
         details.append(error)
     if malformed:
-        details.append("diagnostics payload is missing or malformed")
+        details.append(malformed)
     return {
         "severity": 1,
         "source": "jdtls",

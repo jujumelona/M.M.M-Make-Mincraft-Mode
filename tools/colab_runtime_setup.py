@@ -203,6 +203,14 @@ def _shutdown_loaded_managed_llama_server() -> bool:
     return True
 
 
+def _reset_inactive_profile_state(*, local_profile: bool) -> None:
+    """Quiesce runtime state owned by the profile being left."""
+
+    if not local_profile:
+        _shutdown_loaded_managed_llama_server()
+    _clear_inactive_profile_environment(local_profile=local_profile)
+
+
 def _validate_checkout(
     *,
     repo_dir: Path,
@@ -865,7 +873,7 @@ def setup_colab_runtime(
     os.chdir(checkout)
 
     local_profile = _is_local_profile(profile)
-    _clear_inactive_profile_environment(local_profile=local_profile)
+    _reset_inactive_profile_state(local_profile=local_profile)
     torch = None
     llama_server_binary = ""
     if local_profile:

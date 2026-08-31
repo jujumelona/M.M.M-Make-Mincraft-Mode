@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import inspect
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from minecraft_mod_ai import (
     complete_orchestrator,
     validation_checkpoint_policy,
+    agentic_optimization_contract,
     validation_diagnostic_contract,
     validation_execution_contract,
 )
@@ -45,6 +49,19 @@ def test_malformed_jdt_severity_fails_closed_instead_of_crashing() -> None:
     assert [item["message"] for item in errors] == ["bad receipt"]
 
 
+def test_malformed_nested_jdt_payload_fails_closed() -> None:
+    grouped = diagnostic_errors(
+        {"status": "AVAILABLE", "diagnostics": {"file:///A.java": "not-a-list"}}
+    )
+    listed = diagnostic_errors(
+        {"status": "AVAILABLE", "diagnostics": [{"severity": 2}, "bad-item"]}
+    )
+    assert grouped[-1]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert "not a list" in grouped[-1]["message"]
+    assert listed[-1]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert "non-mapping" in listed[-1]["message"]
+
+
 def test_jdt_operational_failure_becomes_unavailable_receipt() -> None:
     class Broken:
         def diagnostics(self, *_args, **_kwargs):
@@ -78,6 +95,47 @@ def test_legacy_jdt_double_without_relative_files_uses_signature_not_exception_p
     assert receipt["timeout"] == 7
 
 
+def test_agentic_verifier_does_not_retry_programming_typeerror(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    stage = tmp_path / "stage"
+    root.mkdir()
+    stage.mkdir()
+
+    from minecraft_mod_ai import performance_final_contract, source_patch
+
+    monkeypatch.setenv("MMM_REPAIR_CANDIDATE_JDT", "on")
+    monkeypatch.setattr(
+        performance_final_contract,
+        "_clone_source_snapshot",
+        lambda _root: stage,
+    )
+
+    class NoopPatcher:
+        def __init__(self, _stage):
+            pass
+
+        def apply(self, _operations):
+            return None
+
+    monkeypatch.setattr(source_patch, "TransactionalSourcePatcher", NoopPatcher)
+    calls = 0
+
+    class Service:
+        def diagnostics(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise TypeError("internal programmer defect")
+
+    engine = SimpleNamespace(diagnostics_factory=lambda: Service())
+    verifier_impl = inspect.unwrap(agentic_optimization_contract._verify_repair_candidate)
+    _score, verifier = verifier_impl(engine, root, [], {})
+    assert calls == 1, verifier.get("verifier_error")
+    assert verifier["jdt_status"] == "VERIFIER_ERROR"
+    assert "programmer defect" in verifier["verifier_error"]
+
+
 def test_colab_profile_switch_removes_stale_remote_credentials(monkeypatch) -> None:
     for name in colab_runtime_setup._REMOTE_PROFILE_ENV_NAMES:
         monkeypatch.setenv(name, "stale-secret")
@@ -85,6 +143,32 @@ def test_colab_profile_switch_removes_stale_remote_credentials(monkeypatch) -> N
     colab_runtime_setup._clear_inactive_profile_environment(local_profile=True)
     assert all(name not in os.environ for name in colab_runtime_setup._REMOTE_PROFILE_ENV_NAMES)
     assert os.environ["MMM_LLAMA_SERVER_BIN"] == "/content/llama-server"
+
+
+def test_colab_remote_transition_stops_stale_managed_server(monkeypatch) -> None:
+    stopped = 0
+
+    def shutdown() -> None:
+        nonlocal stopped
+        stopped += 1
+
+    module = SimpleNamespace(
+        _MANAGED_URL="http://127.0.0.1:8123",
+        _shutdown_managed_server=shutdown,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "minecraft_mod_ai.llama_server_autotune",
+        module,
+    )
+    monkeypatch.setenv("LLAMA_SERVER_URL", module._MANAGED_URL)
+    monkeypatch.setenv("MMM_LLAMA_SERVER_BIN", "/content/llama-server")
+
+    colab_runtime_setup._reset_inactive_profile_state(local_profile=False)
+
+    assert stopped == 1
+    assert "LLAMA_SERVER_URL" not in os.environ
+    assert "MMM_LLAMA_SERVER_BIN" not in os.environ
 
 
 def test_colab_remote_profile_removes_stale_local_server_routing(monkeypatch) -> None:
@@ -107,6 +191,29 @@ def test_trajectory_memory_rejects_symlinked_state_root(tmp_path: Path) -> None:
         pytest.skip(f"symlink creation unavailable: {exc}")
     with pytest.raises(RuntimeError, match="symbolic links"):
         memory_path(project)
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        remote_cache_path(project, "repair")
+
+
+def test_trajectory_memory_rejects_symlinked_leaf_and_remote_cache_dir(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    state = project / ".minecraft_ai" / "trajectory-memory"
+    outside = tmp_path / "outside"
+    state.mkdir(parents=True)
+    outside.mkdir()
+    leaf_target = outside / "verified-trajectories.jsonl"
+    leaf_target.write_text("sentinel\n", encoding="utf-8")
+    try:
+        (state / "verified-trajectories.jsonl").symlink_to(leaf_target)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        memory_path(project)
+
+    (state / "verified-trajectories.jsonl").unlink()
+    (state / "remote-cache").symlink_to(outside, target_is_directory=True)
     with pytest.raises(RuntimeError, match="symbolic links"):
         remote_cache_path(project, "repair")
 
