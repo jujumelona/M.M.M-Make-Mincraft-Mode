@@ -39,6 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # V2.1: semantic-SSE-only liveness tests; legacy /slots APIs must stay absent.
           python -m compileall -q minecraft_mod_ai
           ruff check \
             minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
