@@ -15,6 +15,7 @@ def _mock_config(max_context: int = 16384, max_new: int = 4096) -> MagicMock:
     config = MagicMock()
     config.adapter = "llama_cpp"
     config.max_context = max_context
+    config.max_input_tokens = 0
     config.max_new_tokens = max_new
     config.extra = {
         "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
