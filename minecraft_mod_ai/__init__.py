@@ -1,9 +1,11 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+from .deep_design_section_compat_contract import arm as arm_deep_design_section_compat
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 
 initialize_runtime()
+arm_deep_design_section_compat()
 finalize_runtime()
 
 from .api import (
