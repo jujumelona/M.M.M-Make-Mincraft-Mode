@@ -3,10 +3,11 @@ from __future__ import annotations
 """Finite native llama.cpp generation budgeting.
 
 The backend-specific wrapper delegates general budget ownership to the transport-neutral
-``generation_output_budget`` policy. Structured JSON turns additionally receive a
-schema-derived ceiling at this boundary: a three-field planner section must not inherit
-the entire remaining model context as its decode allowance. The ceiling is computed
-from schema shape and is always intersected with the common context-aware budget.
+``generation_output_budget`` policy. Tool-free structured JSON turns additionally receive
+a schema-derived ceiling at this boundary: a small planner section must not inherit the
+entire remaining model context as its decode allowance. Native tool actions retain the
+existing tool/output budget contract because source edits can legitimately carry large
+arguments even when their response schema itself is compact.
 """
 
 from collections.abc import Mapping, Sequence
@@ -20,7 +21,6 @@ from .generation_output_budget import (
 from .model_context_budget import tool_action_token_budget
 
 _MARKER = "_mmm_finite_generation_budget"
-
 
 
 def plain_action_token_budget(config: Any) -> int:
@@ -72,7 +72,9 @@ def _schema_shape(value: Any, *, depth: int = 0) -> tuple[int, int, int, int, in
     elif schema_type == "object" or isinstance(value.get("properties"), Mapping):
         objects += 1
         raw_required = value.get("required")
-        if isinstance(raw_required, Sequence) and not isinstance(raw_required, (str, bytes, bytearray)):
+        if isinstance(raw_required, Sequence) and not isinstance(
+            raw_required, (str, bytes, bytearray)
+        ):
             required += len(raw_required)
         properties = value.get("properties")
         if isinstance(properties, Mapping):
@@ -97,7 +99,11 @@ def _schema_shape(value: Any, *, depth: int = 0) -> tuple[int, int, int, int, in
 
 
 def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]] | None:
-    """Derive a decode ceiling from the host-owned response schema.
+    """Derive a decode ceiling from a tool-free host-owned response schema.
+
+    Native tool actions are deliberately excluded. A source-edit tool can require a
+    large argument payload even when its host response schema is tiny, and the existing
+    tool budget policy already owns that case.
 
     The coefficients represent serialization capacity, not a fixed stage clamp:
     scalars reserve 320 tokens, arrays 1280, objects 896, required fields 96, and
@@ -105,6 +111,8 @@ def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]
     language values. Thus broader/deeper schemas automatically receive more room.
     """
 
+    if getattr(request, "tools", ()) or ():
+        return None
     if str(getattr(request, "response_format", "") or "").strip().casefold() != "json":
         return None
     schema = getattr(request, "response_schema", None)
