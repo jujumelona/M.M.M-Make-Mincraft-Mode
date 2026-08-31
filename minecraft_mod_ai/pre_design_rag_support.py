@@ -11,6 +11,14 @@ from .pre_design_rag_fusion import _sha256_text, _stable_text
 _MIN_QUOTE_CHARS = 8
 
 
+def _emit_support_trace(event: str, **fields: Any) -> None:
+    print(
+        "PRE-DESIGN RAG TRACE: "
+        + json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
 def _support_schema(count: int) -> dict[str, Any]:
     """Keep structured generation permissive; the host performs the strict validation."""
 
@@ -173,6 +181,13 @@ def _verify_page_claims(
                 # validation below remains the authority.
                 supported = bool(quote.strip())
             if not supported:
+                _emit_support_trace(
+                    "claim_support_rejected",
+                    page_ref=page_ref,
+                    claim_index=index,
+                    claim=claim,
+                    reason="model_marked_unsupported",
+                )
                 rejected.append(claim)
                 continue
             if (
@@ -180,8 +195,30 @@ def _verify_page_claims(
                 or quote not in content
                 or len("".join(quote.split())) < _MIN_QUOTE_CHARS
             ):
+                _emit_support_trace(
+                    "claim_support_rejected",
+                    page_ref=page_ref,
+                    claim_index=index,
+                    claim=claim,
+                    reason=(
+                        "missing_quote"
+                        if not quote
+                        else "quote_not_exact_page_substring"
+                        if quote not in content
+                        else "quote_too_short"
+                    ),
+                    quote_chars=len(quote),
+                )
                 rejected.append(claim)
                 continue
+            _emit_support_trace(
+                "claim_support_accepted",
+                page_ref=page_ref,
+                claim_index=index,
+                claim=claim,
+                quote_chars=len(quote),
+                quote_sha256=_sha256_text(quote),
+            )
             accepted.append(
                 {
                     "claim": claim,

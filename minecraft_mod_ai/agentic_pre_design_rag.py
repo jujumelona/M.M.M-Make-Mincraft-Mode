@@ -79,6 +79,14 @@ def _emit_research_progress(event: str, **fields: Any) -> None:
             pass
 
 
+def _emit_rag_trace(event: str, **fields: Any) -> None:
+    print(
+        "PRE-DESIGN RAG TRACE: "
+        + json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
 def _research_page_messages(
     *,
     prompt: str,
@@ -1502,6 +1510,23 @@ def _materialize_domain_evidence_document(
     ) + "\n"
     _atomic_write_text(raw_path, raw_text)
     _atomic_write_text(pages_path, pages_text)
+    _emit_rag_trace(
+        "evidence_document_materialized",
+        domain_id=domain_id,
+        document_sha256=document_sha256,
+        raw_source_keys=sorted(str(key) for key in evidence),
+        model_unit_count=len(units),
+        page_count=page_count,
+        pages=[
+            {
+                "page_ref": str(page.get("page_ref") or ""),
+                "unit_id": str(page.get("unit_id") or ""),
+                "content_chars": len(str(page.get("content") or "")),
+                "content_sha256": _sha256_text(str(page.get("content") or "")),
+            }
+            for page in pages
+        ],
+    )
 
     return {
         "schema_version": _EVIDENCE_DOCUMENT_SCHEMA,
@@ -1513,7 +1538,7 @@ def _materialize_domain_evidence_document(
         "page_chars": _EVIDENCE_PAGE_CHARS,
         "page_bytes": _EVIDENCE_PAGE_CHARS,
         "source_keys": sorted(str(key) for key in evidence),
-        "model_projection": "lossless_ordered_utf8_fragments",
+        "model_projection": "claim_bearing_source_bodies_only;raw_receipt_lossless",
     }
 
 
@@ -1543,14 +1568,110 @@ def _split_utf8_text(value: str, max_bytes: int) -> list[str]:
 
 
 def _evidence_units(evidence: Mapping[str, Any]):
+    """Project claim-bearing source bodies to the model; keep diagnostics host-only.
+
+    The raw evidence receipt remains losslessly persisted by
+    ``_materialize_domain_evidence_document``.  The model projection must never serialize
+    query/provider/fusion envelopes as evidence pages because those diagnostics can bury a
+    real source body across many 1.8KB fragments and make the model reason over retrieval
+    traces instead of source text.
+    """
+
     for source_key, value in evidence.items():
-        if isinstance(value, Mapping):
+        if str(source_key) == "grounded_rag" and isinstance(value, Mapping):
             queries = value.get("queries")
             if isinstance(queries, list):
-                metadata = {key: item for key, item in value.items() if key != "queries"}
-                yield f"{source_key}:metadata", metadata
-                for index, query in enumerate(queries):
-                    yield f"{source_key}:query:{index}", query
+                admitted = 0
+                for query_index, raw_query in enumerate(queries):
+                    if not isinstance(raw_query, Mapping):
+                        _emit_rag_trace(
+                            "evidence_query_skipped",
+                            source=str(source_key),
+                            query_index=query_index,
+                            reason="query_not_mapping",
+                        )
+                        continue
+                    query = str(raw_query.get("query") or "").strip()
+                    records = raw_query.get("evidence_records")
+                    if not isinstance(records, list) or not records:
+                        _emit_rag_trace(
+                            "evidence_query_no_source_body_records",
+                            source=str(source_key),
+                            query_index=query_index,
+                            query=query,
+                            provider_status=str(raw_query.get("github_provider_status") or ""),
+                            saturation_reason=str(raw_query.get("github_saturation_reason") or ""),
+                        )
+                        continue
+                    for record_index, raw_record in enumerate(records):
+                        if not isinstance(raw_record, Mapping):
+                            _emit_rag_trace(
+                                "evidence_record_skipped",
+                                source=str(source_key),
+                                query=query,
+                                query_index=query_index,
+                                record_index=record_index,
+                                reason="record_not_mapping",
+                            )
+                            continue
+                        body = str(
+                            raw_record.get("content")
+                            or raw_record.get("body")
+                            or raw_record.get("text")
+                            or ""
+                        ).strip()
+                        source_id = str(raw_record.get("source_id") or "").strip()
+                        if not body:
+                            _emit_rag_trace(
+                                "evidence_record_skipped",
+                                source=str(source_key),
+                                query=query,
+                                query_index=query_index,
+                                record_index=record_index,
+                                source_id=source_id,
+                                reason="no_source_body",
+                            )
+                            continue
+                        digest = str(raw_record.get("content_sha256") or "").strip() or _sha256_text(body)
+                        metadata = raw_record.get("metadata")
+                        safe_metadata: dict[str, Any] = {}
+                        if isinstance(metadata, Mapping):
+                            for key in ("repository", "default_branch", "readme_path", "path", "file_path"):
+                                item = metadata.get(key)
+                                if item not in (None, ""):
+                                    safe_metadata[key] = item
+                        projected = {
+                            "query": query,
+                            "source_id": source_id,
+                            "source_type": str(raw_record.get("source_type") or ""),
+                            "source_locator": str(raw_record.get("source_locator") or ""),
+                            "url": str(raw_record.get("url") or ""),
+                            "title": str(raw_record.get("title") or ""),
+                            "content_sha256": digest,
+                            "content": body,
+                            "retrieval_section": str(raw_record.get("retrieval_section") or ""),
+                            "evidence_origin": str(raw_record.get("evidence_origin") or ""),
+                            "metadata": safe_metadata,
+                        }
+                        admitted += 1
+                        _emit_rag_trace(
+                            "evidence_record_admitted",
+                            source=str(source_key),
+                            query=query,
+                            query_index=query_index,
+                            record_index=record_index,
+                            source_id=source_id,
+                            body_chars=len(body),
+                            body_sha256=digest,
+                        )
+                        yield f"{source_key}:source:{query_index}:{record_index}", projected
+                _emit_rag_trace(
+                    "grounded_rag_model_projection_complete",
+                    source=str(source_key),
+                    query_count=len(queries),
+                    source_body_unit_count=admitted,
+                    diagnostic_envelopes_excluded=True,
+                )
                 continue
         yield str(source_key), value
 

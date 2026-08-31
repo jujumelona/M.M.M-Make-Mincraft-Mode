@@ -25,6 +25,14 @@ _QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"
 _VERIFIED_FIXED_POINT = "verified_claims_sufficient"
 
 
+def _emit_corrective_trace(event: str, **fields: Any) -> None:
+    print(
+        "PRE-DESIGN RAG TRACE: "
+        + json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
 def _corrective_round_limit() -> int:
     try:
         value = int(
@@ -170,6 +178,18 @@ def _read_and_verify_document(
 
     for page_index, page in enumerate(pages):
         page_ref = str(page.get("page_ref") or "").strip()
+        page_content = str(page.get("content") or "")
+        failure_count_before = len(failures)
+        _emit_corrective_trace(
+            "page_read_start",
+            domain_id=domain_id,
+            round=round_index,
+            page_index=page_index,
+            page_ref=page_ref,
+            unit_id=str(page.get("unit_id") or ""),
+            content_chars=len(page_content),
+            content_sha256=project_rag._sha256_text(page_content),
+        )
         notes = project_rag._read_page_losslessly(
             agentic_module,
             router,
@@ -186,6 +206,16 @@ def _read_and_verify_document(
         )
         candidates = _claim_candidates(
             [note for note in notes if isinstance(note, Mapping)]
+        )
+        _emit_corrective_trace(
+            "page_claim_candidates",
+            domain_id=domain_id,
+            round=round_index,
+            page_index=page_index,
+            page_ref=page_ref,
+            note_count=len(notes),
+            candidate_count=len(candidates),
+            new_page_failures=len(failures) - failure_count_before,
         )
         try:
             verified, rejected = _verify_page_claims(
@@ -207,8 +237,28 @@ def _read_and_verify_document(
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
+            _emit_corrective_trace(
+                "page_support_verifier_failure",
+                domain_id=domain_id,
+                round=round_index,
+                page_index=page_index,
+                page_ref=page_ref,
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+            )
             verified, rejected = [], candidates
 
+        _emit_corrective_trace(
+            "page_support_result",
+            domain_id=domain_id,
+            round=round_index,
+            page_index=page_index,
+            page_ref=page_ref,
+            candidate_count=len(candidates),
+            verified_count=len(verified),
+            rejected_count=len(rejected),
+            total_recoverable_failures=len(failures),
+        )
         rejected_count += len(rejected)
         gaps: list[str] = []
         next_queries: list[str] = []
@@ -322,6 +372,15 @@ def _quality_research_document_domain(
         active_summary = _merge_verified_notes(domain_id, [])
 
         while round_index <= max_rounds:
+            _emit_corrective_trace(
+                "corrective_round_start",
+                domain_id=domain_id,
+                round=round_index,
+                max_rounds=max_rounds,
+                document_sha256=str(documents[-1].get("document_sha256") or ""),
+                searched_query_count=len(searched),
+                recoverable_failure_count=len(failures),
+            )
             pages, notes, rejected = _read_and_verify_document(
                 agentic_module,
                 project_rag,
@@ -344,9 +403,9 @@ def _quality_research_document_domain(
                 raw_prompt=prompt,
             )
 
-            if failures:
-                fixed_point = "bounded_extraction_or_support_verification_failure"
-                break
+            # Page-local model/JSON/support failures are quarantined to that page.  They
+            # must never erase independently verified claims from other source-body pages
+            # or prevent corrective retrieval from trying stronger evidence.
             if active_summary.get("claims") and not active_gaps:
                 fixed_point = _VERIFIED_FIXED_POINT
                 break
@@ -454,7 +513,7 @@ def _quality_research_document_domain(
             if str(page.get("page_ref") or "").strip()
         ]
         reasons: list[str] = []
-        if failures:
+        if failures and fixed_point != _VERIFIED_FIXED_POINT:
             reasons.append("bounded extraction/support verification failure")
         if not claims:
             reasons.append("zero support-verified grounded claims")
@@ -499,12 +558,23 @@ def _quality_research_document_domain(
                 "checkpoint_dir": str(project_rag._checkpoint_dir(domain_key)),
             },
         }
-        if failures:
+        if failures and reasons:
             note["research_failures"] = list(failures)
             note["gaps"] = [
                 *list(note.get("gaps", ())),
                 *(f"{item['unit']}: {item['error']}" for item in failures),
             ]
+        elif failures:
+            note["research_warnings"] = list(failures)
+        _emit_corrective_trace(
+            "corrective_terminal_decision",
+            domain_id=domain_id,
+            fixed_point=fixed_point,
+            claim_count=len(claims),
+            active_gap_count=len(summary.get("gaps") or ()),
+            recoverable_failure_count=len(failures),
+            reasons=reasons,
+        )
         if reasons:
             note["sufficient"] = False
             note["fixed_point"] = True

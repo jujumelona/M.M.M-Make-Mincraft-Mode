@@ -9,6 +9,7 @@ bodies. Search metadata and snippets are never promoted to evidence.
 
 import base64
 import hashlib
+import json
 import math
 import os
 import re
@@ -34,17 +35,49 @@ _STOP = {
 }
 
 
+def _github_token() -> str:
+    return os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
+
+
 def _max_queries() -> int:
     raw = os.environ.get("MMM_PREDESIGN_EXTERNAL_SOURCE_QUERIES", "").strip()
     try:
         value = int(raw) if raw else _DEFAULT_MAX_QUERIES
     except ValueError:
         value = _DEFAULT_MAX_QUERIES
-    return max(1, min(value, _HARD_MAX_QUERIES))
+    # GitHub unauthenticated repository search is only 10 requests/minute.  Never
+    # configure the pre-design phase to deterministically exceed that ceiling itself;
+    # leave two requests of headroom for other process activity.
+    provider_cap = _HARD_MAX_QUERIES if _github_token() else 8
+    return max(1, min(value, _HARD_MAX_QUERIES, provider_cap))
 
 
 def _clean_query(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _emit_source_trace(event: str, **fields: Any) -> None:
+    print(
+        "PRE-DESIGN RAG TRACE: "
+        + json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True, default=str),
+        flush=True,
+    )
+
+
+def _repository_search_query(query: str) -> str:
+    # Repository search is AND-like.  Feeding the full natural-language retrieval query
+    # over-constrains discovery.  Keep only the first two domain-specific terms plus
+    # minecraft, while preserving the original query in every receipt.
+    ordered: list[str] = []
+    for token in _WORD.findall(query):
+        folded = token.casefold()
+        if len(folded) < 3 or folded in _STOP or folded in ordered:
+            continue
+        ordered.append(folded)
+    compact = ordered[:2]
+    if "minecraft" not in compact:
+        compact.append("minecraft")
+    return " ".join(compact) or "minecraft"
 
 
 def _query_terms(query: str) -> set[str]:
@@ -75,7 +108,7 @@ def _headers() -> dict[str, str]:
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "mmm-pre-design-source-rag",
     }
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    token = _github_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -116,17 +149,45 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
     errors: list[str] = []
     records: list[dict[str, Any]] = []
     headers = _headers()
+    search_query = _repository_search_query(query)
+    _emit_source_trace(
+        "github_query_start",
+        query=query,
+        repository_search_query=search_query,
+        authenticated=bool(_github_token()),
+        max_repository_candidates=_MAX_REPOSITORIES_PER_QUERY,
+    )
 
     try:
         with httpx.Client(timeout=20.0, follow_redirects=True, headers=headers) as client:
             search_requests += 1
             response = client.get(
                 f"{_GITHUB_API}/search/repositories",
-                params={"q": query, "per_page": _MAX_REPOSITORIES_PER_QUERY},
+                params={
+                    "q": search_query + " in:name,description,readme,topics",
+                    "per_page": _MAX_REPOSITORIES_PER_QUERY,
+                },
+            )
+            remaining = str(response.headers.get("x-ratelimit-remaining", ""))
+            reset = str(response.headers.get("x-ratelimit-reset", ""))
+            _emit_source_trace(
+                "github_search_response",
+                query=query,
+                repository_search_query=search_query,
+                http_status=response.status_code,
+                rate_remaining=remaining,
+                rate_reset=reset,
             )
             if response.status_code != 200:
-                errors.append(_status_error(response, operation="repository search"))
+                error = _status_error(response, operation="repository search")
+                errors.append(error)
                 status = "rate_limited" if response.status_code in {403, 429} else "unavailable"
+                _emit_source_trace(
+                    "github_search_failed",
+                    query=query,
+                    error=error,
+                    provider_status=status,
+                )
                 return {
                     "records": records,
                     "search_requests": search_requests,
@@ -138,7 +199,9 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
             try:
                 payload = response.json()
             except Exception as exc:
-                errors.append(f"github repository search JSON decode failed: {type(exc).__name__}: {exc}")
+                error = f"github repository search JSON decode failed: {type(exc).__name__}: {exc}"
+                errors.append(error)
+                _emit_source_trace("github_search_decode_failed", query=query, error=error)
                 return {
                     "records": records,
                     "search_requests": search_requests,
@@ -149,6 +212,13 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
                 }
             items = payload.get("items") if isinstance(payload, Mapping) else None
             repositories = [item for item in (items or ()) if isinstance(item, Mapping)]
+            _emit_source_trace(
+                "github_search_candidates",
+                query=query,
+                candidate_count=len(repositories),
+                total_count=(payload.get("total_count") if isinstance(payload, Mapping) else None),
+                candidates=[str(item.get("full_name") or "") for item in repositories[:_MAX_REPOSITORIES_PER_QUERY]],
+            )
             if not repositories:
                 return {
                     "records": records,
@@ -159,64 +229,108 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
                     "errors": errors,
                 }
 
-            for repository in repositories[:_MAX_REPOSITORIES_PER_QUERY]:
+            for candidate_index, repository in enumerate(repositories[:_MAX_REPOSITORIES_PER_QUERY]):
                 full_name = str(repository.get("full_name") or "").strip()
                 if not full_name or "/" not in full_name:
+                    _emit_source_trace(
+                        "github_repository_skipped",
+                        query=query,
+                        candidate_index=candidate_index,
+                        reason="invalid_full_name",
+                    )
                     continue
+                _emit_source_trace(
+                    "github_repository_selected_for_body",
+                    query=query,
+                    candidate_index=candidate_index,
+                    repository=full_name,
+                )
                 source_requests += 1
                 readme = client.get(f"{_GITHUB_API}/repos/{full_name}/readme")
+                _emit_source_trace(
+                    "github_readme_response",
+                    query=query,
+                    repository=full_name,
+                    http_status=readme.status_code,
+                    rate_remaining=str(readme.headers.get("x-ratelimit-remaining", "")),
+                    rate_reset=str(readme.headers.get("x-ratelimit-reset", "")),
+                )
                 if readme.status_code != 200:
-                    # A repository without a README is not a source-body success. Continue
-                    # to the next search result instead of promoting search metadata.
                     if readme.status_code not in {404}:
                         errors.append(_status_error(readme, operation=f"README fetch {full_name}"))
+                    _emit_source_trace(
+                        "github_readme_rejected",
+                        query=query,
+                        repository=full_name,
+                        reason="http_not_200",
+                        http_status=readme.status_code,
+                    )
                     continue
                 try:
                     readme_payload = readme.json()
                 except Exception as exc:
-                    errors.append(
-                        f"github README JSON decode failed for {full_name}: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
+                    error = f"github README JSON decode failed for {full_name}: {type(exc).__name__}: {exc}"
+                    errors.append(error)
+                    _emit_source_trace("github_readme_rejected", query=query, repository=full_name, reason="json_decode_failed", error=error)
                     continue
                 if not isinstance(readme_payload, Mapping):
+                    _emit_source_trace("github_readme_rejected", query=query, repository=full_name, reason="payload_not_mapping")
                     continue
                 body = _decode_readme(readme_payload)
-                if not body or not _body_relevant(query, body):
+                if not body:
+                    _emit_source_trace("github_readme_rejected", query=query, repository=full_name, reason="empty_or_too_short_body")
+                    continue
+                if not _body_relevant(query, body):
+                    _emit_source_trace(
+                        "github_readme_rejected",
+                        query=query,
+                        repository=full_name,
+                        reason="body_not_query_relevant",
+                        body_chars=len(body),
+                        body_sha256="sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    )
                     continue
                 locator = str(readme_payload.get("html_url") or repository.get("html_url") or "").strip()
                 if not locator:
+                    _emit_source_trace("github_readme_rejected", query=query, repository=full_name, reason="missing_locator")
                     continue
                 digest = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
-                records.append(
-                    {
-                        "source_id": "github:"
-                        + full_name
-                        + ":"
-                        + str(readme_payload.get("sha") or digest.removeprefix("sha256:")),
-                        "source_type": "github_source_body",
-                        "source_locator": locator,
-                        "url": locator,
-                        "title": full_name,
-                        "content": body,
-                        "content_sha256": digest,
+                record = {
+                    "source_id": "github:" + full_name + ":" + str(readme_payload.get("sha") or digest.removeprefix("sha256:")),
+                    "source_type": "github_source_body",
+                    "source_locator": locator,
+                    "url": locator,
+                    "title": full_name,
+                    "content": body,
+                    "content_sha256": digest,
+                    "body_retrieved": True,
+                    "metadata": {
+                        "repository": full_name,
+                        "default_branch": str(repository.get("default_branch") or ""),
+                        "readme_path": str(readme_payload.get("path") or "README"),
+                        "query": query,
+                    },
+                    "retrieval": {
+                        "provider": "github",
+                        "provider_status": "available",
                         "body_retrieved": True,
-                        "metadata": {
-                            "repository": full_name,
-                            "default_branch": str(repository.get("default_branch") or ""),
-                            "readme_path": str(readme_payload.get("path") or "README"),
-                            "query": query,
-                        },
-                        "retrieval": {
-                            "provider": "github",
-                            "provider_status": "available",
-                            "body_retrieved": True,
-                        },
-                    }
+                    },
+                }
+                records.append(record)
+                _emit_source_trace(
+                    "github_source_body_admitted",
+                    query=query,
+                    repository=full_name,
+                    source_id=record["source_id"],
+                    locator=locator,
+                    body_chars=len(body),
+                    body_sha256=digest,
                 )
                 break
     except Exception as exc:
-        errors.append(f"github source acquisition failed: {type(exc).__name__}: {exc}")
+        error = f"github source acquisition failed: {type(exc).__name__}: {exc}"
+        errors.append(error)
+        _emit_source_trace("github_transport_failure", query=query, error=error)
         return {
             "records": records,
             "search_requests": search_requests,
@@ -226,16 +340,22 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
             "errors": errors,
         }
 
+    saturation = "source_body_retrieved" if records else "repositories_found_no_claim_bearing_source_body"
+    _emit_source_trace(
+        "github_query_complete",
+        query=query,
+        search_requests=search_requests,
+        source_requests=source_requests,
+        source_body_count=len(records),
+        saturation_reason=saturation,
+        errors=errors,
+    )
     return {
         "records": records,
         "search_requests": search_requests,
         "source_requests": source_requests,
         "provider_status": "available",
-        "saturation_reason": (
-            "source_body_retrieved"
-            if records
-            else "repositories_found_no_claim_bearing_source_body"
-        ),
+        "saturation_reason": saturation,
         "errors": errors,
     }
 
@@ -343,9 +463,20 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
 
     limit = _max_queries()
     selected = _planned_requirement_query_keys(payload)
+    selection_origin = "approved_requirement_queries"
     if not selected:
         selected = _fallback_query_keys(bundle, limit)
+        selection_origin = "bounded_fallback_queries"
     selected = set(list(selected)[:limit])
+    provider_rate_limited = False
+    _emit_source_trace(
+        "external_query_plan",
+        selection_origin=selection_origin,
+        configured_limit=limit,
+        authenticated=bool(_github_token()),
+        selected_count=len(selected),
+        selected_queries=sorted(selected),
+    )
 
     augmented_domains: list[Any] = []
     for raw_domain in raw_domains:
@@ -362,7 +493,25 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
             row = dict(raw_row)
             query = _clean_query(row.get("query"))
             if query.casefold() in selected:
-                receipt = _retrieve_github_source_body(query)
+                if provider_rate_limited:
+                    receipt = {
+                        "records": [],
+                        "search_requests": 0,
+                        "source_requests": 0,
+                        "provider_status": "rate_limited",
+                        "saturation_reason": "skipped_after_provider_rate_limit",
+                        "errors": ["github provider already reported rate limit in this pre-design pass"],
+                    }
+                    _emit_source_trace(
+                        "external_query_skipped",
+                        query=query,
+                        reason="provider_already_rate_limited",
+                    )
+                else:
+                    _emit_source_trace("external_query_selected", query=query, reason=selection_origin)
+                    receipt = _retrieve_github_source_body(query)
+                    if str(receipt.get("provider_status") or "").casefold() == "rate_limited":
+                        provider_rate_limited = True
                 external = row.get("external_rag")
                 external_map = dict(external) if isinstance(external, Mapping) else {}
                 existing_records_raw = external_map.get("records")
@@ -430,6 +579,12 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
                 merged_errors.extend(str(item) for item in receipt.get("errors", ()) if str(item))
                 external_map["errors"] = merged_errors
                 row["external_rag"] = external_map
+            else:
+                _emit_source_trace(
+                    "external_query_skipped",
+                    query=query,
+                    reason="not_selected_by_bounded_query_plan",
+                )
             rows.append(row)
         domain["queries"] = rows
         augmented_domains.append(domain)
