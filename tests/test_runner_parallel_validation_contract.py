@@ -79,7 +79,7 @@ class _FakeGradleRunner:
                 f"distributionSha256Sum={sha256}\n",
                 encoding="utf-8",
             )
-        elif name == "build":
+        elif name == "clean_build":
             with self.counter_lock:
                 type(self).active_builds += 1
                 type(self).build_calls += 1
