@@ -5,9 +5,7 @@ import pytest
 from minecraft_mod_ai import agentic_research_game_design as design
 from minecraft_mod_ai import evidence_first_planning as evidence
 from minecraft_mod_ai import evidence_request_guard as request_guard
-from minecraft_mod_ai.planner_design_readiness_contract import (
-    _validate_design_coverage,
-)
+from minecraft_mod_ai.planner_design_readiness_contract import _validate_design_coverage
 from minecraft_mod_ai.spec import SpecValidationError
 
 
@@ -44,21 +42,15 @@ def _catalog(prompt: str, *requirement_ids: str) -> dict[str, object]:
     }
 
 
-def test_runtime_installs_worker03_design_readiness_contract() -> None:
-    assert getattr(design._generate_section, "__mmm_requirement_design_context__", False)
-    # Deep-design execution remains the outer prompt owner, while its wrapped owner keeps
-    # the requirement-readiness marker. The compatibility layer must preserve both markers.
-    assert getattr(design._section_messages, "__mmm_deep_design_section_prompt__", False)
-    assert getattr(
-        getattr(design._section_messages, "__wrapped__", None),
-        "__mmm_requirement_design_messages__",
-        False,
-    )
-    assert getattr(
+def test_runtime_uses_canonical_design_owner_without_readiness_wrappers() -> None:
+    assert not getattr(design._generate_section, "__mmm_requirement_design_context__", False)
+    assert not getattr(design._section_messages, "__mmm_requirement_design_messages__", False)
+    assert not getattr(
         design.generate_sectioned_game_design,
         "__mmm_requirement_design_coverage__",
         False,
     )
+    assert not hasattr(design._section_messages, "__wrapped__")
     assert getattr(evidence._semantic_spans, "__mmm_crlf_lossless__", False)
 
 
@@ -97,9 +89,13 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     assert kwargs["response_schema"] is None
     assert kwargs["enable_tools"] is False
     rendered = "\n".join(str(message["content"]) for message in call["messages"])
-    assert "APPROVED REQUIREMENTS (HOST AUTHORITY)" in rendered
+    assert "APPROVED REQUIREMENTS" in rendered
     assert requirement_id in rendered
     assert "requirement_refs" in rendered
+    assert (
+        "plugin_id | status | reason | requirement_refs | implementation_obligations"
+        in rendered
+    )
     assert section["modules"][0]["requirement_refs"] == [requirement_id]
     assert section["modules"][0]["implementation_obligations"] == [
         "수정 조각 수집 상태를 저장한다",
@@ -119,33 +115,32 @@ def test_missing_requirement_module_fails_closed_without_model_repair_loop() -> 
         (prompt, _catalog(prompt, requirement_id))
     )
     try:
-        section = design._generate_section(
-            router,
-            prompt=prompt,
-            section_id="modules_and_assets",
-            fields=("modules", "assets"),
-            research={},
-            media_paths=(),
-            trace_metadata={"test": "worker03-empty"},
-        )
-        with pytest.raises(SpecValidationError, match="modules are empty"):
-            _validate_design_coverage(section, _catalog(prompt, requirement_id)["requirements"])
+        with pytest.raises(SpecValidationError, match="modules must be non-empty"):
+            design._generate_section(
+                router,
+                prompt=prompt,
+                section_id="modules_and_assets",
+                fields=("modules", "assets"),
+                research={},
+                media_paths=(),
+                trace_metadata={"test": "worker03-empty"},
+            )
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
 
     assert len(router.calls) == 1
 
 
-def test_missing_required_design_field_is_not_silently_synthesized() -> None:
-    with pytest.raises(SpecValidationError, match="host fallback is not accepted"):
-        design._validate_section_types(
-            {"title": "Generated title", "pitch": "real pitch", "core_loop": ["loop"]},
-            ("title", "pitch", "core_loop"),
-        )
-
+def test_required_design_fields_fail_closed_without_host_synthesis() -> None:
     with pytest.raises(SpecValidationError, match="core_loop must be a non-empty list"):
         design._validate_section_types(
             {"title": "real title", "pitch": "real pitch", "core_loop": []},
+            ("title", "pitch", "core_loop"),
+        )
+
+    with pytest.raises(SpecValidationError, match="title must be a non-empty string"):
+        design._validate_section_types(
+            {"title": "", "pitch": "real pitch", "core_loop": ["loop"]},
             ("title", "pitch", "core_loop"),
         )
 
@@ -159,6 +154,8 @@ def test_every_approved_requirement_needs_an_implementation_bearing_design_modul
         "modules": [
             {
                 "plugin_id": "collection",
+                "status": "planning",
+                "reason": "collect fragments",
                 "requirement_refs": ["req_collect"],
                 "implementation_obligations": ["track collected fragments"],
             }
@@ -178,6 +175,8 @@ def test_requirement_design_binding_preserves_all_exact_ids_and_obligations() ->
         "modules": [
             {
                 "plugin_id": "progression_core",
+                "status": "planning",
+                "reason": "own authored progression",
                 "requirement_refs": ["req_collect", "req_portal"],
                 "implementation_obligations": [
                     "persist collected fragments",
