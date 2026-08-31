@@ -32,12 +32,13 @@ jobs:
           python .github/scripts/worker12_repair_memory_patch_v2.py
           python .github/scripts/worker12_final_fixture_fix.py
           python .github/scripts/worker12_agentic_compat_cleanup.py
+          python .github/scripts/worker12_rag_receipt_scope_patch.py
       - name: Static and architecture gates
         run: |
           git diff --check
           python -m compileall -q minecraft_mod_ai tests tools download_resources.py
-          python -m ruff check minecraft_mod_ai/validation_diagnostic_contract.py minecraft_mod_ai/trajectory_memory.py minecraft_mod_ai/agentic_optimization_contract.py tools/colab_runtime_setup.py tests/test_worker12_shared_core.py --select F,E7,E9
-          vulture minecraft_mod_ai/validation_diagnostic_contract.py minecraft_mod_ai/trajectory_memory.py minecraft_mod_ai/agentic_optimization_contract.py tools/colab_runtime_setup.py --min-confidence 100
+          python -m ruff check minecraft_mod_ai/validation_diagnostic_contract.py minecraft_mod_ai/trajectory_memory.py minecraft_mod_ai/agentic_optimization_contract.py minecraft_mod_ai/agent_security_contract.py tools/colab_runtime_setup.py tests/test_worker12_shared_core.py tests/test_agent_security_contract.py --select F,E7,E9
+          vulture minecraft_mod_ai/validation_diagnostic_contract.py minecraft_mod_ai/trajectory_memory.py minecraft_mod_ai/agentic_optimization_contract.py minecraft_mod_ai/agent_security_contract.py tools/colab_runtime_setup.py --min-confidence 100
           python .github/scripts/debug_repo_audit.py
           python .github/scripts/audit_runtime_mutations.py --output /tmp/worker12-runtime-mutations.json
           python tools/validate_colab_notebook.py
