@@ -125,9 +125,10 @@ _GAME_DESIGN_RESPONSE_SCHEMA: dict[str, Any] = {
 class GameDesignPlanner:
     """Create the frozen game design before retrieval and implementation planning.
 
-    This module owns the execution path. ModelRouter uses research-first sectioned
-    Markdown design; non-agentic routers use the strict host-owned JSON fallback. Runtime
-    bootstrap must not replace either generator, readiness validation, or page merge.
+    Request semantics and retrieval intent are compiled natively before design. ModelRouter
+    uses research-first sectioned Markdown design; non-agentic routers use the strict
+    host-owned fallback. Runtime bootstrap must not replace request authority, the design
+    generator, readiness validation, or page merge.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -142,88 +143,90 @@ class GameDesignPlanner:
         if not prompt.strip():
             raise SpecValidationError("프롬프트를 입력해 주세요.")
 
-        page_budget = _request_page_bytes(self.router)
-        request_pages = _lossless_request_pages(
-            prompt,
-            max_json_text_bytes=page_budget,
+        from .planning_authority import (
+            authoritative_request_scope,
+            build_authoritative_request_catalog,
         )
-        if len(request_pages) == 1:
-            design = _generate_game_design_once(
-                self.router,
-                authoritative_prompt=prompt,
-                media_paths=media_paths,
-                system_prompt=_system_prompt(),
-            )
-        else:
-            design = self._plan_sharded_request(
-                prompt,
-                request_pages=request_pages,
-                media_paths=media_paths,
-                page_budget=page_budget,
-            )
-        design = _validate_ready_design(prompt, design)
-
-        # Existing-project evidence is collected by the host before planning and
-        # joined with the independently produced semantic design before any target
-        # or reuse decision. It remains private host context and is never inferred
-        # or rewritten by the model.
-        existing_report = getattr(self.router, "_mmm_existing_project_report", None)
-        if isinstance(existing_report, Mapping):
-            design = {**design, "_existing_project_report": dict(existing_report)}
-        existing_inventory = getattr(
-            self.router, "_mmm_existing_project_inventory", None
-        )
-        inventory_future = getattr(
-            self.router, "_mmm_existing_project_inventory_future", None
-        )
-        if existing_inventory is None and hasattr(inventory_future, "result"):
-            inventory = inventory_future.result()
-            validate = getattr(inventory, "validate", None)
-            if not callable(validate):
-                raise SpecValidationError(
-                    "Existing-project inventory did not return a validated host object."
-                )
-            validate()
-            to_dict = getattr(inventory, "to_dict", None)
-            if not callable(to_dict):
-                raise SpecValidationError(
-                    "Existing-project inventory cannot be bound to planning."
-                )
-            existing_inventory = to_dict()
-            self.router._mmm_existing_project_inventory = existing_inventory
-        if isinstance(existing_inventory, Mapping):
-            from .project_inventory import validate_project_inventory_payload
-
-            inventory_payload = validate_project_inventory_payload(existing_inventory)
-            self.router._mmm_existing_project_inventory = inventory_payload
-            design = {
-                **design,
-                "_existing_project_inventory": inventory_payload,
-                "_existing_snapshot": inventory_payload,
-                "_component_catalog": dict(
-                    inventory_payload.get("component_catalog") or {}
-                ),
-            }
-
-        from .evidence_first_planning import build_request_catalog
-        from .evidence_request_guard import active_authoritative_request_catalog
         from .reuse_planner import compile_pre_retrieval_plan
 
-        request_catalog = active_authoritative_request_catalog(prompt)
-        if request_catalog is None:
-            request_catalog = build_request_catalog(prompt, design)
-        design = {**design, "_evidence_request_catalog": request_catalog}
-        pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
-        design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
-        print(
-            "planning: semantic plan ready before retrieval "
-            f"plan_sha256={pre_retrieval_plan['plan_sha256']} "
-            f"requirements={len(pre_retrieval_plan['planned_work'])}",
-            flush=True,
-        )
+        request_catalog = build_authoritative_request_catalog(prompt, self.router)
+        with authoritative_request_scope(prompt, request_catalog):
+            page_budget = _request_page_bytes(self.router)
+            request_pages = _lossless_request_pages(
+                prompt,
+                max_json_text_bytes=page_budget,
+            )
+            if len(request_pages) == 1:
+                design = _generate_game_design_once(
+                    self.router,
+                    authoritative_prompt=prompt,
+                    media_paths=media_paths,
+                    system_prompt=_system_prompt(),
+                )
+            else:
+                design = self._plan_sharded_request(
+                    prompt,
+                    request_pages=request_pages,
+                    media_paths=media_paths,
+                    page_budget=page_budget,
+                )
+            design = _validate_ready_design(prompt, design)
 
-        research_brief = normalize_research_brief(prompt, design)
-        design = {**design, "_research_brief": research_brief}
+            # Existing-project evidence is collected by the host before planning and
+            # joined with the independently produced semantic design before any target
+            # or reuse decision. It remains private host context and is never inferred
+            # or rewritten by the model.
+            existing_report = getattr(self.router, "_mmm_existing_project_report", None)
+            if isinstance(existing_report, Mapping):
+                design = {**design, "_existing_project_report": dict(existing_report)}
+            existing_inventory = getattr(
+                self.router, "_mmm_existing_project_inventory", None
+            )
+            inventory_future = getattr(
+                self.router, "_mmm_existing_project_inventory_future", None
+            )
+            if existing_inventory is None and hasattr(inventory_future, "result"):
+                inventory = inventory_future.result()
+                validate = getattr(inventory, "validate", None)
+                if not callable(validate):
+                    raise SpecValidationError(
+                        "Existing-project inventory did not return a validated host object."
+                    )
+                validate()
+                to_dict = getattr(inventory, "to_dict", None)
+                if not callable(to_dict):
+                    raise SpecValidationError(
+                        "Existing-project inventory cannot be bound to planning."
+                    )
+                existing_inventory = to_dict()
+                self.router._mmm_existing_project_inventory = existing_inventory
+            if isinstance(existing_inventory, Mapping):
+                from .project_inventory import validate_project_inventory_payload
+
+                inventory_payload = validate_project_inventory_payload(existing_inventory)
+                self.router._mmm_existing_project_inventory = inventory_payload
+                design = {
+                    **design,
+                    "_existing_project_inventory": inventory_payload,
+                    "_existing_snapshot": inventory_payload,
+                    "_component_catalog": dict(
+                        inventory_payload.get("component_catalog") or {}
+                    ),
+                }
+
+            design = {**design, "_evidence_request_catalog": request_catalog}
+            pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
+            design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
+            print(
+                "planning: semantic plan ready before retrieval "
+                f"plan_sha256={pre_retrieval_plan['plan_sha256']} "
+                f"requirements={len(pre_retrieval_plan['planned_work'])}",
+                flush=True,
+            )
+
+            research_brief = normalize_research_brief(prompt, design)
+            design = {**design, "_research_brief": research_brief}
+
         build_slice = _deterministic_bootstrap(prompt, design)
         proposal = _proposal_from_model_data(prompt, build_slice)
         if proposal.requested_prompt != prompt:
