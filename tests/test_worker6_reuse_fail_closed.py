@@ -81,6 +81,11 @@ def _authoritative_compile_receipt(
     receipt: reuse_proof.ReuseProofReceipt,
     donor: DonorSlice,
 ) -> reuse_proof.ReuseProofReceipt:
+    protected_path = "src/main/java/ai/minecraft/generated/mod/BossEntity.java"
+    adapted_payload = b"package ai.minecraft.generated.mod; public class BossEntity {}\n"
+    protected_artifacts = {
+        protected_path: "sha256:" + hashlib.sha256(adapted_payload).hexdigest()
+    }
     return replace(
         receipt,
         proof_level=ProofLevel.COMPILE_VERIFIED.value,
@@ -88,6 +93,9 @@ def _authoritative_compile_receipt(
         authoritative_compile=True,
         verified_capabilities=(donor.capability,),
         residual_capabilities=(),
+        verified_artifacts=(protected_path,),
+        verified_symbols=("BossEntity",),
+        contract={"protected_artifacts": protected_artifacts},
     )
 
 
@@ -287,10 +295,11 @@ def test_dependency_resolution_receipt_replaces_donor_version_and_binds_bundle(
     assert dependency["resolution_fingerprint"].startswith("sha256:")
 
     authoritative_receipt = _authoritative_compile_receipt(diagnostic_receipt, donor)
+    protected_artifacts = authoritative_receipt.contract["protected_artifacts"]
     bundle = ReusableArtifactBundle.from_donor_slice(
         donor,
         proof_receipt=authoritative_receipt,
-        protected_artifacts=authoritative_receipt.contract.protected_artifacts,
+        protected_artifacts=protected_artifacts,
     )
     assert bundle.dependency_receipts == authoritative_receipt.dependency_receipts
     assert bundle.dependency_receipts != donor.required_dependencies
@@ -320,10 +329,11 @@ def test_dependency_receipt_tampering_invalidates_bundle_proof(
         compile_checker=lambda *_: True,
     )
     authoritative_receipt = _authoritative_compile_receipt(diagnostic_receipt, donor)
+    protected_artifacts = authoritative_receipt.contract["protected_artifacts"]
     bundle = ReusableArtifactBundle.from_donor_slice(
         donor,
         proof_receipt=authoritative_receipt,
-        protected_artifacts=authoritative_receipt.contract.protected_artifacts,
+        protected_artifacts=protected_artifacts,
     )
     assert bundle_proof_allows_reuse(bundle, authoritative_receipt) is True
 
