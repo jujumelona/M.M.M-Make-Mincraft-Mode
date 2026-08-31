@@ -74,7 +74,15 @@ def test_generation_task_reads_are_exact_without_snapshot(tmp_path) -> None:
             (work_graph.WorkState.SUCCEEDED.value, "generate-a"),
         )
         connection.commit()
-    assert ledger.task("generate-a")["state"] == "succeeded"
+        assert connection.execute(
+            "SELECT state FROM tasks WHERE node_id = ?", ("generate-a",)
+        ).fetchone()[0] == "succeeded"
+
+    # A raw state flip is not an authoritative success: the final receipt-integrity
+    # owner must observe it immediately, reject the missing receipt/hash, and return
+    # the task to pending. This still proves the read path is exact rather than a stale
+    # scheduler snapshot.
+    assert ledger.task("generate-a")["state"] == "pending"
     assert not hasattr(ledger, "_mmm_generation_poll_snapshot")
 
 
