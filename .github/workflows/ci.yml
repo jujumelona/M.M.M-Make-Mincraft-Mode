@@ -54,10 +54,11 @@ jobs:
           # Reviewed surface: inherited main was already at 424; Worker 03 adds one
           # requirement-traceability owner, pre-design external source acquisition adds
           # one explicit _forced_rag_bundle owner, prose-first deep-design compatibility
-          # adds one installer owner, and prose requirement traceability adds one host-only
-          # module-row parser owner. The audited surface is therefore 428.
+          # adds one installer owner, prose requirement traceability adds one host-only
+          # module-row parser owner, and one host-only stable accounting hash owner bridges
+          # research receipts without changing the model response format. Total: 429.
           # Any further runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 428
+          budget = 429
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
