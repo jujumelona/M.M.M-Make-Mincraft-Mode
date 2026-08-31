@@ -309,6 +309,32 @@ def _fallback_query_keys(bundle: Mapping[str, Any], limit: int) -> set[str]:
     return {query.casefold() for query in chosen}
 
 
+def _safe_count(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_identity(record: Mapping[str, Any]) -> tuple[str, str]:
+    for key in ("source_id", "content_sha256", "source_locator", "url"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            return key, value
+    return "content", hashlib.sha256(
+        str(record.get("content") or "").encode("utf-8")
+    ).hexdigest()
+
+
+def _repository_identity(record: Mapping[str, Any]) -> str:
+    metadata = record.get("metadata")
+    if isinstance(metadata, Mapping):
+        repository = str(metadata.get("repository") or "").strip()
+        if repository:
+            return repository
+    return str(record.get("title") or record.get("source_locator") or "").strip()
+
+
 def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(bundle)
     raw_domains = bundle.get("domains")
@@ -339,14 +365,60 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
                 receipt = _retrieve_github_source_body(query)
                 external = row.get("external_rag")
                 external_map = dict(external) if isinstance(external, Mapping) else {}
-                existing_records = external_map.get("records")
-                records = list(existing_records) if isinstance(existing_records, list) else []
-                records.extend(
-                    record
-                    for record in receipt.get("records", ())
+                existing_records_raw = external_map.get("records")
+                existing_records = [
+                    dict(record)
+                    for record in (
+                        existing_records_raw if isinstance(existing_records_raw, list) else ()
+                    )
                     if isinstance(record, Mapping)
-                )
+                ]
+                records = list(existing_records)
+                seen = {_record_identity(record) for record in records}
+                added_records: list[dict[str, Any]] = []
+                for raw_record in receipt.get("records", ()):
+                    if not isinstance(raw_record, Mapping):
+                        continue
+                    record = dict(raw_record)
+                    identity = _record_identity(record)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    records.append(record)
+                    added_records.append(record)
+
+                added_count = len(added_records)
                 external_map["records"] = records
+                existing_actual = _safe_count(external_map.get("actual_source_document_count"))
+                existing_documents = _safe_count(external_map.get("document_count"))
+                baseline_records = len(existing_records)
+                external_map["actual_source_document_count"] = (
+                    max(existing_actual, baseline_records) + added_count
+                )
+                external_map["document_count"] = (
+                    max(existing_documents, baseline_records) + added_count
+                )
+                repositories = {
+                    identity
+                    for identity in (_repository_identity(record) for record in records)
+                    if identity
+                }
+                external_map["source_repository_count"] = max(
+                    _safe_count(external_map.get("source_repository_count")),
+                    len(repositories),
+                )
+                raw_providers = external_map.get("providers")
+                providers = _stable_queries(raw_providers)
+                if "github" not in {provider.casefold() for provider in providers}:
+                    providers.append("github")
+                external_map["providers"] = providers
+                if added_count:
+                    external_map["status"] = "available"
+                    external_map.setdefault("credentials_required", False)
+                elif not str(external_map.get("status") or "").strip():
+                    external_map["status"] = str(
+                        receipt.get("provider_status") or "unavailable"
+                    )
                 external_map["github_retrieval"] = {
                     "provider_status": str(receipt.get("provider_status") or "unavailable"),
                     "saturation_reason": str(receipt.get("saturation_reason") or ""),
