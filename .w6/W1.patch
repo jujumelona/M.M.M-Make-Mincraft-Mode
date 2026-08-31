@@ -1,0 +1,94 @@
+diff --git a/minecraft_mod_ai/project_manifest_hash_efficiency_contract.py b/minecraft_mod_ai/project_manifest_hash_efficiency_contract.py
+index 3ca0832..82ac834 100644
+--- a/minecraft_mod_ai/project_manifest_hash_efficiency_contract.py
++++ b/minecraft_mod_ai/project_manifest_hash_efficiency_contract.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import hashlib
++import os
+ import threading
+ from contextvars import ContextVar
+ from functools import wraps
+@@ -20,19 +21,36 @@
+ 
+ 
+ def _metadata_signature(project_index_module: Any, root: Path) -> str:
+-    """Fingerprint source metadata without reading or tokenizing file contents."""
++    """Fingerprint source metadata without walking ignored build/cache subtrees."""
+ 
+     digest = hashlib.sha256()
+     root = root.resolve()
+-    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+-        if not path.is_file() or path.is_symlink():
+-            continue
++    ignored_parts = project_index_module._IGNORED_PARTS
++    text_suffixes = project_index_module._TEXT_SUFFIXES
++    candidates: list[Path] = []
++
++    for current_root, dir_names, file_names in os.walk(
++        root,
++        topdown=True,
++        followlinks=False,
++    ):
++        # rglob() discovers the full tree before the ignored-part filter runs. Large
++        # build/cache directories therefore made even a cache-hit check scale with
++        # generated output. Prune those directories before descent instead.
++        dir_names[:] = [name for name in dir_names if name not in ignored_parts]
++        current = Path(current_root)
++        for name in file_names:
++            path = current / name
++            if path.is_symlink():
++                continue
++            if path.suffix.lower() not in text_suffixes and name not in _SPECIAL_NAMES:
++                continue
++            candidates.append(path)
++
++    # Preserve the previous path ordering so unchanged source metadata produces the
++    # exact same signature after this host-side traversal optimization.
++    for path in sorted(candidates, key=lambda item: item.as_posix()):
+         relative = path.relative_to(root)
+-        if any(part in project_index_module._IGNORED_PARTS for part in relative.parts):
+-            continue
+-        suffix = path.suffix.lower()
+-        if suffix not in project_index_module._TEXT_SUFFIXES and path.name not in _SPECIAL_NAMES:
+-            continue
+         stat = path.stat()
+         record = (
+             relative.as_posix(),
+diff --git a/tests/test_project_manifest_hash_efficiency_contract.py b/tests/test_project_manifest_hash_efficiency_contract.py
+index 14f3056..9af0081 100644
+--- a/tests/test_project_manifest_hash_efficiency_contract.py
++++ b/tests/test_project_manifest_hash_efficiency_contract.py
+@@ -143,6 +143,31 @@
+     assert orchestrator.calls == 1
+ 
+ 
++def test_metadata_signature_prunes_ignored_subtrees(
++    monkeypatch,
++    tmp_path: Path,
++) -> None:
++    _write_source(tmp_path)
++    ignored = tmp_path / "build/generated"
++    ignored.mkdir(parents=True)
++    (ignored / "Ignored.java").write_text("class Ignored {}\n", encoding="utf-8")
++
++    real_stat = Path.stat
++
++    def guarded_stat(path: Path, *args, **kwargs):
++        relative = path.relative_to(tmp_path)
++        if "build" in relative.parts:
++            raise AssertionError("ignored build subtree must not be stat-scanned")
++        return real_stat(path, *args, **kwargs)
++
++    monkeypatch.setattr(Path, "stat", guarded_stat)
++    _orchestrator_module, project_index_module = _modules()
++
++    signature = contract._metadata_signature(project_index_module, tmp_path)
++
++    assert len(signature) == 64
++
++
+ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
+     source = (ROOT / "minecraft_mod_ai/complete_orchestrator.py").read_text(encoding="utf-8")
+     tree = ast.parse(source)

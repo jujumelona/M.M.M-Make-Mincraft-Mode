@@ -1,0 +1,179 @@
+diff --git a/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py b/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+index 4f2e880..b659c3e 100644
+--- a/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
++++ b/minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+@@ -413,27 +413,27 @@ def _cached_assistant_prefill_generation_prompt(
+     refresh: bool = False,
+ ) -> str:
+     cache_key = _assistant_prefill_cache_key(server_url, original)
+-    if cache_key and not refresh:
+-        with _PREFILL_TEMPLATE_CACHE_LOCK:
+-            cache = getattr(adapter, "_prefill_template_prefix_cache", None)
+-            if isinstance(cache, dict):
+-                cached = cache.get(cache_key)
+-                if isinstance(cached, str) and cached:
+-                    return cached
+-
+-    calibrated = _calibrate_assistant_prefill_generation_prompt(server_url, original)
+     if not cache_key:
+-        return calibrated
++        return _calibrate_assistant_prefill_generation_prompt(server_url, original)
+ 
++    # Managed-server calibration is single-flight. Holding this lock through the rare
++    # calibration request prevents parallel first-use callers from issuing duplicate
++    # apply-template requests for the same process/template identity.
+     with _PREFILL_TEMPLATE_CACHE_LOCK:
+         cache = getattr(adapter, "_prefill_template_prefix_cache", None)
++        if not refresh and isinstance(cache, dict):
++            cached = cache.get(cache_key)
++            if isinstance(cached, str) and cached:
++                return cached
++
++        calibrated = _calibrate_assistant_prefill_generation_prompt(server_url, original)
+         if not isinstance(cache, dict):
+             cache = {}
+             setattr(adapter, "_prefill_template_prefix_cache", cache)
+         cache[cache_key] = calibrated
+         while len(cache) > _MAX_PREFILL_TEMPLATE_CACHE_ENTRIES:
+             cache.pop(next(iter(cache)))
+-    return calibrated
++        return calibrated
+ 
+ 
+ def _completion_message_with_prefill(
+diff --git a/minecraft_mod_ai/project_index.py b/minecraft_mod_ai/project_index.py
+index 3d9f554..0c2cd05 100644
+--- a/minecraft_mod_ai/project_index.py
++++ b/minecraft_mod_ai/project_index.py
+@@ -74,6 +74,7 @@ class _SourceCacheEntry:
+     inode: int
+     size_bytes: int
+     mtime_ns: int
++    ctime_ns: int
+     verified_sha256: str | None
+     content: bytes
+ 
+@@ -253,12 +254,13 @@ class ProjectIndex:
+         return "sha256:" + digest.hexdigest()
+ 
+     @staticmethod
+-    def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
++    def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int, int]:
+         return (
+             stat_result.st_dev,
+             stat_result.st_ino,
+             stat_result.st_size,
+             stat_result.st_mtime_ns,
++            stat_result.st_ctime_ns,
+         )
+ 
+     def _drop_source_cache(self, normalized: str) -> None:
+@@ -291,6 +293,7 @@ class ProjectIndex:
+             inode=stat_result.st_ino,
+             size_bytes=stat_result.st_size,
+             mtime_ns=stat_result.st_mtime_ns,
++            ctime_ns=stat_result.st_ctime_ns,
+             verified_sha256=verified_sha256,
+             content=raw,
+         )
+@@ -323,6 +326,7 @@ class ProjectIndex:
+                 cached.inode,
+                 cached.size_bytes,
+                 cached.mtime_ns,
++                cached.ctime_ns,
+             )
+             if cached_signature == current_signature:
+                 verified = cached.verified_sha256
+@@ -339,6 +343,7 @@ class ProjectIndex:
+                         inode=cached.inode,
+                         size_bytes=cached.size_bytes,
+                         mtime_ns=cached.mtime_ns,
++                        ctime_ns=cached.ctime_ns,
+                         verified_sha256=verified,
+                         content=cached.content,
+                     )
+diff --git a/tests/test_llama_prefill_calibration_cache.py b/tests/test_llama_prefill_calibration_cache.py
+index d1be20c..10f716c 100644
+--- a/tests/test_llama_prefill_calibration_cache.py
++++ b/tests/test_llama_prefill_calibration_cache.py
+@@ -249,3 +249,43 @@ def test_cached_prefix_mismatch_recalibrates_once_and_preserves_output(monkeypat
+     assert second["content"] == "CD"
+     assert calibration_prefixes == []
+     assert outcomes == []
++
++
++def test_concurrent_managed_prefill_calibration_is_single_flight(monkeypatch) -> None:
++    import threading
++    import time
++    from concurrent.futures import ThreadPoolExecutor
++
++    calibration_calls = 0
++    start = threading.Barrier(8)
++
++    def calibrate(_url, _payload):
++        nonlocal calibration_calls
++        calibration_calls += 1
++        time.sleep(0.02)
++        return "prefix"
++
++    monkeypatch.setattr(
++        adapter_module,
++        "_calibrate_assistant_prefill_generation_prompt",
++        calibrate,
++    )
++    monkeypatch.setattr(
++        adapter_module,
++        "_assistant_prefill_server_identity",
++        lambda _url: "managed:test-model:pid=123",
++    )
++    adapter = _adapter()
++    payload = {"model": "local", "chat_template_kwargs": {"enable_thinking": False}}
++
++    def invoke(_index):
++        start.wait()
++        return adapter_module._cached_assistant_prefill_generation_prompt(
++            adapter, "http://local", payload
++        )
++
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        results = list(pool.map(invoke, range(8)))
++
++    assert results == ["prefix"] * 8
++    assert calibration_calls == 1
+diff --git a/tests/test_project_context_read_cache.py b/tests/test_project_context_read_cache.py
+index 589468e..8617e5e 100644
+--- a/tests/test_project_context_read_cache.py
++++ b/tests/test_project_context_read_cache.py
+@@ -126,3 +126,32 @@ def test_paginated_context_cache_does_not_hide_stale_source(
+             byte_budget=1400,
+             cursor=first["next_cursor"],
+         )
++
++
++def test_cached_source_identity_detects_same_size_edit_with_restored_mtime(
++    tmp_path: Path,
++) -> None:
++    source = tmp_path / "src/main/java/example/SameSize.java"
++    source.parent.mkdir(parents=True)
++    original = "package example; final class SameSize { int value = 1; }\n"
++    changed = "package example; final class SameSize { int value = 2; }\n"
++    assert len(original.encode("utf-8")) == len(changed.encode("utf-8"))
++    source.write_text(original, encoding="utf-8")
++
++    index = ProjectIndex(tmp_path)
++    first = index.select_page(query="SameSize", byte_budget=4096)
++    before = source.stat()
++
++    source.write_text(changed, encoding="utf-8")
++    import os
++    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
++
++    with pytest.raises(
++        ValueError,
++        match="Project source changed after its context index was built",
++    ):
++        index.select_page(
++            query="SameSize",
++            byte_budget=4096,
++            cursor=first["next_cursor"] or "",
++        )
