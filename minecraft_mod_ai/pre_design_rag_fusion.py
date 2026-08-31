@@ -94,6 +94,14 @@ def _tokens(value: Any) -> set[str]:
     }
 
 
+def _query_relevance_tokens(query: str) -> set[str]:
+    """Return claim-bearing query terms instead of generic retrieval scaffolding."""
+
+    all_tokens = _tokens(query)
+    distinctive = all_tokens - _GENERIC_QUERY_TERMS
+    return distinctive or all_tokens
+
+
 def _record_content(record: Mapping[str, Any]) -> str:
     """Return source-body text only; snippets/excerpts are never evidence bodies."""
 
@@ -135,7 +143,7 @@ def _provider_family(record: Mapping[str, Any]) -> str:
 
 
 def _relevance(query: str, record: Mapping[str, Any]) -> float:
-    wanted = _tokens(query)
+    wanted = _query_relevance_tokens(query)
     if not wanted:
         return 0.0
     searchable = " ".join(
@@ -147,6 +155,17 @@ def _relevance(query: str, record: Mapping[str, Any]) -> float:
         )
     )
     return len(wanted & _tokens(searchable)) / max(1, len(wanted))
+
+
+def _record_is_query_relevant(query: str, record: Mapping[str, Any]) -> bool:
+    """Require at least one non-generic query term before a page can enter fusion.
+
+    Ranking can order weak records, but breadth preservation must never resurrect a
+    record whose title/url/body shares no claim-bearing term with the retrieval query.
+    This is a zero-relevance rejection, not a fixed score threshold.
+    """
+
+    return _relevance(query, record) > 0.0
 
 
 def _evidence_excerpt(content: str, queries: list[str]) -> str:
@@ -235,6 +254,8 @@ def _bounded_records(
         return True
 
     # First preserve breadth: one strongest relevant record for each research question.
+    # Zero-relevance records have already been removed and therefore cannot be revived
+    # simply because a noisy provider returned something for that query.
     for query in source_queries:
         if query in covered_queries:
             continue
@@ -253,21 +274,24 @@ def fuse_grounded_domain_evidence(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Dedupe/rank evidence, preserve query coverage, then recompose under a byte budget."""
+    """Dedupe/rank evidence, reject zero relevance, then recompose under a byte budget."""
 
     del domain
     rows = [row for row in grounded.get("queries", ()) if isinstance(row, Mapping)]
     merged: dict[str, dict[str, Any]] = {}
     trace: list[dict[str, Any]] = []
     duplicates = 0
+    zero_relevance_dropped = 0
 
     for row in rows:
         query = str(row.get("query") or "").strip()
-        raw = [
+        raw_all = [
             record
             for record in row.get("evidence_records", ())
             if isinstance(record, Mapping) and _record_content(record)
         ]
+        raw = [record for record in raw_all if _record_is_query_relevant(query, record)]
+        zero_relevance_dropped += len(raw_all) - len(raw)
         unique: dict[str, tuple[int, Mapping[str, Any]]] = {}
         for input_rank, record in enumerate(raw, 1):
             key = _record_key(record)
@@ -287,7 +311,8 @@ def fuse_grounded_domain_evidence(
             {
                 "query": query,
                 "query_sha256": str(row.get("query_sha256") or _sha256_text(query)),
-                "input_record_count": len(raw),
+                "input_record_count": len(raw_all),
+                "zero_relevance_dropped": len(raw_all) - len(raw),
                 "unique_record_count": len(ranked),
                 "github_provider_status": str(
                     row.get("github_provider_status") or "not_requested"
@@ -382,8 +407,8 @@ def fuse_grounded_domain_evidence(
     ]
     result["retrieval_trace"] = trace
     result["fusion"] = {
-        "schema_version": "mmm/pre-design-evidence-fusion-v3",
-        "algorithm": "source_body_only+exact_dedupe+query_rank+rrf+coverage_first_byte_budget",
+        "schema_version": "mmm/pre-design-evidence-fusion-v4",
+        "algorithm": "source_body_only+zero_relevance_gate+exact_dedupe+query_rank+rrf+coverage_first_byte_budget",
         "query_count": len(rows),
         "queries_with_content": sum(1 for row in trace if row["unique_record_count"]),
         "query_coverage_ratio": (
@@ -397,6 +422,7 @@ def fuse_grounded_domain_evidence(
         "unique_record_count": len(ranked_records),
         "selected_record_count": len(records),
         "dropped_record_count": max(0, len(ranked_records) - len(records)),
+        "zero_relevance_dropped_record_count": zero_relevance_dropped,
         "selected_content_bytes": selected_bytes,
         "evidence_byte_budget": _evidence_byte_budget(),
         "duplicate_record_count": duplicates,
@@ -415,6 +441,8 @@ def fuse_grounded_domain_evidence(
 __all__ = [
     "_is_retrieval_query",
     "_record_content",
+    "_record_is_query_relevant",
+    "_relevance",
     "_sha256_text",
     "_stable_text",
     "fuse_grounded_domain_evidence",
