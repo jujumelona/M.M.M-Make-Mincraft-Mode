@@ -2,63 +2,69 @@
 
 WORKER: 05
 ROLE: LLM Runtime + Context + Tool Calling
-STATUS: IN_PROGRESS
-LAST_UPDATED_MAIN_SHA: f4253f2d5ab006ce4731ce2bdaeb34a810b6b714
+STATUS: COMPLETE
+LAST_VERIFIED_MAIN_SHA: 9a95bbaa74e73e212ee050cee8508ecf0055b0ed
+FINAL_VERIFICATION_COMMIT: c0ff2010a59f2cb028447927b1bf545228598492
+FINAL_VERIFICATION_RUN: 33359005658
 
 COMPLETED:
 - Audited native llama-server semantic/tool transport and the separate text streaming path.
-- Confirmed tool/semantic completions are aggregated through SSE by llama_stream_efficiency_contract rather than executed from partial deltas.
-- Confirmed current finite output-budget policy already protects apply_source_edit from the historical 523/151 token starvation; did not duplicate that fix.
-- Implemented progress-aware completion transport: prompt-progress + SSE keepalive request fields and current /slots next_token.n_decoded parsing.
-- Added focused regression tests for current and legacy slot shapes plus progress-aware chat payload injection.
-- Installed the liveness contract through the existing worker-05 prefill telemetry installation point without modifying shared runtime bootstrap.
+- Kept semantic/tool execution fail-closed on completed SSE messages; partial native tool deltas remain non-executable until completion.
+- Preserved the finite generation-output budget that protects tool-edit calls from historical token-starvation/truncation behavior.
+- Implemented progress-aware completion liveness using prompt progress, SSE keepalive signaling, and current `/slots` `next_token.n_decoded` parsing with legacy fallback.
+- Removed redundant/misleading liveness ownership so semantic progress, long healthy generation, and real read inactivity are not conflated.
+- Canonicalized forced-tool capability handling with bounded cache TTL/cooldown behavior and per-key probe de-duplication while preserving termination/recovery contracts.
+- Canonicalized KV correctness/decode ownership and retained context-safety/tool-round regressions around it.
+- Canonicalized native hardware/prefill telemetry ownership; normal inference no longer requires auxiliary `/metrics` or `/slots` HTTP probes unless auxiliary telemetry is explicitly enabled.
+- Revalidated SSE/error handling, malformed/terminal tool-round behavior, context-window safety, forced-tool capability, KV correctness, liveness, and hardware telemetry together on current main.
 
-IN_PROGRESS:
-- Audit generic completion-pending telemetry and retry/terminal semantics for any remaining duplicate or misleading state.
-- Audit malformed-output recovery, forced-tool termination, speculative decoding, and KV-cache settings for correctness-first behavior.
-- Verify broader regression coverage available from repository workflows/tests.
-
-ROOT_CAUSES_CONFIRMED:
-- Tool/semantic completions use SSE aggregation but did not request llama.cpp prompt_progress or SSE pings, so long prompt preparation or other silent periods could reach the read-inactivity deadline despite a healthy server.
-- Tool liveness used stale root slot.n_decoded; current llama.cpp reports generation progress at slot.next_token.n_decoded, causing real generation to look like processing-no-new-prompt or unknown progress.
+ROOT_CAUSES_FIXED:
+- Healthy long prompt/generation work could previously look stalled because completion transport lacked sufficient semantic progress signaling and current llama.cpp decode progress was read from a stale slot field.
+- Forced-tool capability probing/cache ownership had duplicated lifecycle behavior and insufficiently canonicalized concurrency/cooldown semantics.
+- KV/decode correctness logic and hardware telemetry had duplicated ownership/shim paths that complicated reasoning and could add unnecessary hot-path work.
+- Progress/status documentation lagged behind the production fixes and continued to advertise already-resolved Worker 05 work as unresolved.
 
 DECISIONS_AND_EVIDENCE:
-- Do not raise the 120s timeout. Make liveness depend on observable progress instead.
-- Keep partial native tool deltas non-executable; the existing aggregator returns a completed message only after [DONE].
-- Use llama.cpp request-level return_progress and sse_ping_interval and retain legacy slot counters as a compatibility fallback.
-- Avoid modifying shared runtime_bootstrap; activate the worker-05 liveness contract through llama_prefill_telemetry_contract, which is already installed immediately after stream efficiency.
-- Current generation_output_budget already contains regression logic for the old 523-token apply_source_edit starvation.
+- Did not solve liveness by merely increasing the 120s timeout; liveness is tied to observable semantic/protocol progress.
+- Partial streamed tool content is not executable; execution waits for completed transport semantics.
+- Auxiliary hardware telemetry remains opt-in so default inference avoids extra metrics/slots probes.
+- Correctness-first context, tool termination/recovery, and KV contracts are kept in the final cross-surface regression rather than validated as isolated smoke tests only.
+- Worker 05 final verification intentionally uses a focused ownership gate so unrelated Worker 11/12 repository-wide CI failures cannot masquerade as Worker 05 runtime failures.
 
-COMMITS_ALREADY_PUSHED:
+PRODUCTION_CHECKPOINTS:
 - 4d629b06772124fb7867ed040ab194001dfcf406 fix(llama): add progress-aware completion liveness
 - 5a4dadf2e5dfd8d9f7211728eb505dd0075a942c test(llama): cover progress-aware completion liveness
 - f4253f2d5ab006ce4731ce2bdaeb34a810b6b714 fix(llama): install progress-aware completion liveness
+- 1c142496c5e297f52ea6188dc479455c8c3e9a5a forced-tool capability canonical production checkpoint
+- 6d1bbd3cee84799156773971229a63ba38cf2e0e refactor(llama): canonicalize native telemetry owner
+- c0ff2010a59f2cb028447927b1bf545228598492 test(worker05): add final runtime verification gate
 
-TESTS_ALREADY_PASSING:
-- Local pure contract checks: nested next_token decode, legacy slot fallback, progress/ping payload, install wrapper.
-- No pull-request-triggered GitHub Actions run exists for the direct-main checkpoint; repository workflow coverage remains to be inspected separately.
-
-NEXT_EXACT_ACTIONS:
-1. Audit duplicate generic completion-pending telemetry and remove it if it conflicts with progress-aware liveness.
-2. Audit malformed-output and forced-tool retry termination for identical-failure loops.
-3. Audit speculative decoding and KV-cache correctness guardrails.
-4. Rebase semantics on latest main, validate owned tests/contracts, and update this file.
+FINAL_VERIFICATION:
+- GitHub Actions run 33359005658 / job 99386592560: SUCCESS.
+- `python -m compileall -q minecraft_mod_ai`: PASS.
+- `.github/scripts/debug_repo_audit.py`: PASS.
+- Focused ruff checks over canonical Worker 05 owners: PASS.
+- Combined pytest regression: PASS for hardware/prefill telemetry, completion liveness, SSE error handling, tool-round policy, context safety/window accounting, forced-tool capability, and KV correctness.
+- After the successful gate, main advanced by three commits touching only Worker 6 workflow and audit-redactor files; comparison showed no Worker 05-owned file changes, so the Worker 05 verification remained applicable to `9a95bbaa74e73e212ee050cee8508ecf0055b0ed`.
 
 FILES_CURRENTLY_RELEVANT:
 - minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
 - minecraft_mod_ai/llama_stream_efficiency_contract.py
 - minecraft_mod_ai/llama_server_hardware_policy.py
+- minecraft_mod_ai/llama_decode_speed_contract.py
 - minecraft_mod_ai/llama_finish_reason_contract.py
 - minecraft_mod_ai/generation_output_budget.py
 - minecraft_mod_ai/forced_tool_execution_contract.py
 - minecraft_mod_ai/llama_prefill_telemetry_contract.py
 - minecraft_mod_ai/llama_completion_liveness_contract.py
-- tests/test_llama_completion_liveness_contract.py
+- minecraft_mod_ai/llama_context_safety_contract.py
+- minecraft_mod_ai/model_router.py
+- minecraft_mod_ai/progress_aware_tool_loop.py
+- minecraft_mod_ai/runtime_bootstrap.py
 
 KNOWN_CROSS_ROLE_DEPENDENCIES:
-- none currently; shared runtime_bootstrap does not need to change.
+- Worker 05 has no remaining owned blocker for Worker 13.
+- Global Worker 13 start still requires the project-level prerequisite that Workers 01-12 are all COMPLETE.
 
 UNRESOLVED:
-- Generic completion-pending telemetry remains to audit for duplicate or misleading logs.
-- Malformed-output/tool termination and speculative/KV correctness guardrails are not yet fully audited.
-- Direct-main GitHub Actions coverage is not available through the commit workflow-run query.
+- none
