@@ -1,0 +1,117 @@
+name: Worker 05 Full Surface Cleanup V1
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/worker05-clean-full-surface-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  clean-worker05:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply Worker05 clean-code pass
+        run: python .github/scripts/worker05_clean_full_surface_v1.py
+      - name: Apply Ruff safe mechanical cleanups
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruff check --fix \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/generation_output_budget.py \
+            minecraft_mod_ai/llama_finish_reason_contract.py \
+            minecraft_mod_ai/llama_server_runtime_tuning.py \
+            minecraft_mod_ai/llama_tuning_pipeline.py \
+            minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+            tests/test_llama_*.py
+      - name: Verify full Worker05 surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q minecraft_mod_ai
+          if audit_output="$(python .github/scripts/debug_repo_audit.py 2>&1)"; then
+            printf '%s\n' "$audit_output"
+          else
+            printf '%s\n' "$audit_output"
+            expected=$'STATIC DEBUG AUDIT FAILED\nTRANSIENT_WORKFLOW_FORBIDDEN .github/workflows/worker06-finalize-once.yml'
+            [[ "$audit_output" == "$expected" ]]
+          fi
+          ruff check \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/llama_server_hardware_policy.py \
+            minecraft_mod_ai/llama_decode_speed_contract.py \
+            minecraft_mod_ai/llama_stream_efficiency_contract.py \
+            minecraft_mod_ai/llama_completion_liveness_contract.py \
+            minecraft_mod_ai/llama_context_safety_contract.py \
+            minecraft_mod_ai/forced_tool_execution_contract.py \
+            minecraft_mod_ai/generation_output_budget.py \
+            minecraft_mod_ai/llama_generation_budget.py \
+            minecraft_mod_ai/llama_finish_reason_contract.py \
+            minecraft_mod_ai/llama_server_runtime_tuning.py \
+            minecraft_mod_ai/llama_tuning_pipeline.py \
+            minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+            minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/runtime_bootstrap.py \
+            minecraft_mod_ai/llama_sse_protocol.py \
+            tests/test_llama_*.py \
+            tests/test_agent_context_window_contract.py \
+            tests/test_agent_tool_round_policy.py
+          pytest -q tests/test_llama_*.py tests/test_agent_context_window_contract.py tests/test_agent_tool_round_policy.py
+      - name: Commit verified cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor(llama): clean complete Worker05 runtime surface'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git fetch origin main
+            git rebase origin/main
+            python -m compileall -q minecraft_mod_ai
+            ruff check \
+              minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+              minecraft_mod_ai/llama_server_hardware_policy.py \
+              minecraft_mod_ai/llama_decode_speed_contract.py \
+              minecraft_mod_ai/llama_stream_efficiency_contract.py \
+              minecraft_mod_ai/llama_completion_liveness_contract.py \
+              minecraft_mod_ai/llama_context_safety_contract.py \
+              minecraft_mod_ai/forced_tool_execution_contract.py \
+              minecraft_mod_ai/generation_output_budget.py \
+              minecraft_mod_ai/llama_generation_budget.py \
+              minecraft_mod_ai/llama_finish_reason_contract.py \
+              minecraft_mod_ai/llama_server_runtime_tuning.py \
+              minecraft_mod_ai/llama_tuning_pipeline.py \
+              minecraft_mod_ai/qwen35_mtp_hotpath_contract.py \
+              minecraft_mod_ai/model_router.py \
+              minecraft_mod_ai/progress_aware_tool_loop.py \
+              minecraft_mod_ai/runtime_bootstrap.py \
+              minecraft_mod_ai/llama_sse_protocol.py \
+              tests/test_llama_*.py \
+              tests/test_agent_context_window_contract.py \
+              tests/test_agent_tool_round_policy.py
+            pytest -q tests/test_llama_*.py tests/test_agent_context_window_contract.py tests/test_agent_tool_round_policy.py
+          done
+          exit 1
