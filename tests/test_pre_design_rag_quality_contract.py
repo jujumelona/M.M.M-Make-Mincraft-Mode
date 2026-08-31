@@ -49,18 +49,18 @@ def test_fusion_deduplicates_across_queries_and_rewards_multi_query_support():
     fused = quality.fuse_grounded_domain_evidence({}, grounded)
     records = fused["queries"][0]["evidence_records"]
 
-    assert len(records) == 2
+    assert len(records) == 1
     assert fused["fusion"]["duplicate_record_count"] == 1
+    assert fused["fusion"]["zero_relevance_dropped_record_count"] == 1
+    assert fused["retrieval_trace"][0]["zero_relevance_dropped"] == 1
     assert fused["fusion"]["query_coverage_ratio"] == 1.0
-    shared = next(
-        item for item in records if item["content_sha256"] == "sha256:shared"
-    )
+    shared = records[0]
+    assert shared["content_sha256"] == "sha256:shared"
     assert shared["retrieval_fusion"]["query_hits"] == 2
     assert shared["retrieval_fusion"]["matched_queries"] == [
         "minecraft colony progression",
         "colony settlement mod source",
     ]
-    assert records[0]["content_sha256"] == "sha256:shared"
 
 
 def test_retrieval_query_filter_rejects_raw_prompt_and_non_ascii():
@@ -108,209 +108,138 @@ class _FakeBoundedRag:
 def test_claim_support_requires_exact_host_quote():
     page = {
         "page_ref": "sha256:doc#page=1/1",
-        "content": (
-            "The implementation stores colony state, and colonies persist their population "
-            "between server restarts."
-        ),
+        "content": "The source says colonies persist their population across saves.",
+        "content_sha256": "sha256:doc",
     }
-    accepted, rejected = quality._verify_page_claims(
+    claims = [
+        {"claim": "colonies persist", "evidence_refs": [page["page_ref"]]},
+        {"claim": "weather exists", "evidence_refs": [page["page_ref"]]},
+    ]
+    supported, unresolved = corrective._verify_claim_support(
         _FakeAgentic,
         _FakeBoundedRag,
         router=object(),
         domain_id="req_colony",
-        page=page,
-        claims=[
-            "Colony population persists across restarts.",
-            "Colonies automatically build rockets.",
-        ],
-        progress_label="test",
+        claims=claims,
+        pages=[page],
     )
 
-    assert [item["claim"] for item in accepted] == [
-        "Colony population persists across restarts."
-    ]
-    assert accepted[0]["support_quote"] == "colonies persist their population"
-    assert accepted[0]["evidence_refs"] == ["sha256:doc#page=1/1"]
-    assert rejected == ["Colonies automatically build rockets."]
+    assert supported[0]["supported"] is True
+    assert supported[0]["support_quote"] == "colonies persist their population"
+    assert supported[1]["supported"] is False
+    assert unresolved == ["weather exists"]
 
 
-def test_corrective_query_filter_uses_only_new_executable_queries():
-    seen = {"minecraft colony progression"}
-    result = quality._correction_queries(
-        [
-            "minecraft colony progression",
-            "마인크래프트 식민지",
-            "colony persistence saved state source",
-            "colony persistence saved state source",
-        ],
-        seen=seen,
-        raw_prompt="식민지를 만들어줘",
+def test_minecraft_route_requires_verified_evidence_not_metadata_only():
+    record = {
+        "source_id": "github:example/repo",
+        "url": "https://github.com/example/repo",
+        "content": "A README about unrelated tooling.",
+        "content_sha256": "sha256:body",
+        "source_type": "github_source",
+    }
+    route = corrective._minecraft_knowledge_route_receipt(
+        domain={"id": "req_colony", "summary": "colony settlements"},
+        evidence_records=[record],
+        verified_records=[],
     )
-    assert result == ["colony persistence saved state source"]
+    assert route["status"] == "BLOCKED"
+    assert route["verified_evidence_count"] == 0
 
 
-def test_corrective_loop_retrieves_next_query_before_fixed_point(monkeypatch, tmp_path):
-    calls = {"forced": 0, "writes": []}
-
-    def fake_read_and_verify(
-        agentic_module,
-        project_rag,
-        router,
-        *,
-        prompt,
-        domain,
-        document,
-        domain_key,
-        failures,
-        round_index,
-    ):
-        del agentic_module, project_rag, router, prompt, domain, domain_key, failures
-        page = {
-            "page_ref": f"{document['document_sha256']}#page=1/1",
-            "content": "host evidence",
-        }
-        if round_index == 0:
-            note = {
-                "_host_page_ref": page["page_ref"],
-                "domain_id": "req_colony",
-                "claims": [],
-                "gaps": ["Need persistent colony-state evidence."],
-                "next_queries": ["minecraft colony persistent state source"],
-                "procedures": [],
-                "sufficient": False,
-            }
-        else:
-            note = {
-                "_host_page_ref": page["page_ref"],
-                "domain_id": "req_colony",
-                "claims": [
+def test_corrective_pipeline_keeps_page_local_gaps_out_of_domain_blockers(monkeypatch):
+    domain = {
+        "id": "req_colony",
+        "summary": "persistent colony population and buildings",
+        "research_questions": ["minecraft colony persistence source"],
+    }
+    evidence = {
+        "queries": [
+            {
+                "query": "domain fused evidence",
+                "source_queries": ["minecraft colony persistence source"],
+                "evidence_records": [
                     {
-                        "claim": "Colony state can be persisted.",
-                        "evidence_refs": [page["page_ref"]],
-                        "support_quote": "host evidence",
-                        "support_quote_sha256": "sha256:q",
-                        "support_verification": "model_entailment+host_exact_quote",
-                    }
-                ],
-                "gaps": [],
-                "next_queries": [],
-                "procedures": [],
-                "sufficient": True,
-            }
-        return [page], [note], 0
-
-    monkeypatch.setattr(corrective, "_read_and_verify_document", fake_read_and_verify)
-
-    class FakeRag:
-        _BoundedResearchOutputError = RuntimeError
-
-        @staticmethod
-        def _domain_checkpoint_key(router, *, prompt, domain, document):
-            return "base"
-
-        @staticmethod
-        def _sha256(value):
-            return "sha256:quality-key"
-
-        @staticmethod
-        def _domain_lock(key):
-            return nullcontext()
-
-        @staticmethod
-        def _read_complete_manifest(agentic, key, domain_id):
-            return None
-
-        @staticmethod
-        def _checkpoint_dir(key):
-            return tmp_path
-
-        @staticmethod
-        def _manifest_path(key):
-            return tmp_path / "manifest.json"
-
-        @staticmethod
-        def _prompt_document_receipt(document):
-            return {
-                "document_sha256": document["document_sha256"],
-                "page_count": document.get("page_count", 1),
-            }
-
-        @staticmethod
-        def _forced_rag_bundle(router, brief):
-            calls["forced"] += 1
-            assert brief["domains"][0]["queries"] == [
-                "minecraft colony persistent state source"
-            ]
-            return {"domains": [{"domain_id": "req_colony", "queries": []}]}
-
-        @staticmethod
-        def _materialize_domain_evidence_document(domain_id, evidence):
-            assert evidence["grounded_rag"]["queries"][0]["evidence_records"]
-            return {"document_sha256": "corrected", "page_count": 1}
-
-        @staticmethod
-        def _materialize_claim_catalog(key, domain_id, claims):
-            return {"claim_count": len(claims)}
-
-        @staticmethod
-        def _materialize_evidence_ledger(key, domain_id, pages):
-            return {"record_count": len(pages)}
-
-        @staticmethod
-        def _write_manifest(key, *, status, note, failures):
-            calls["writes"].append((status, note, failures))
-
-    class FakePipeline:
-        @staticmethod
-        def _grounded_domain_evidence(agentic, domain_id, bundle):
-            return {
-                "domain_id": domain_id,
-                "queries": [
-                    {
-                        "query": "minecraft colony persistent state source",
-                        "query_sha256": "q",
-                        "evidence_records": [
-                            {
-                                "source_id": "github:colony",
-                                "source_type": "github_source",
-                                "content": "persistent colony saved state implementation",
-                                "content_sha256": "sha256:new",
-                            }
-                        ],
-                        "github_provider_status": "available",
+                        "source_id": "github:example/colony",
+                        "url": "https://github.com/example/colony",
+                        "content": "Colonies persist their population and buildings across saves.",
+                        "content_sha256": "sha256:colony",
+                        "source_type": "github_source",
                     }
                 ],
             }
+        ],
+        "fusion": {"query_coverage_ratio": 1.0},
+    }
 
-    class FakeAgentic:
-        class SpecValidationError(ValueError):
-            pass
-
-        @staticmethod
-        def _validate_sufficient_research(note, *, allowed_refs):
-            assert note["claims"]
-            assert all(
-                ref in allowed_refs
-                for claim in note["claims"]
-                for ref in claim["evidence_refs"]
-            )
-
-    note = quality._quality_research_document_domain(
-        FakePipeline,
-        FakeAgentic,
-        FakeRag,
-        router=object(),
-        prompt="식민지를 만들어줘",
-        domain={
-            "domain_id": "req_colony",
-            "queries": ["minecraft colony progression"],
+    monkeypatch.setattr(
+        corrective,
+        "_materialize_evidence_pages",
+        lambda *args, **kwargs: (
+            [
+                {
+                    "page_ref": "sha256:colony#page=1/1",
+                    "content": "Colonies persist their population and buildings across saves.",
+                    "content_sha256": "sha256:colony",
+                }
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        corrective,
+        "_generate_claims",
+        lambda *args, **kwargs: [
+            {
+                "claim": "colonies persist population",
+                "evidence_refs": ["sha256:colony#page=1/1"],
+            },
+            {
+                "claim": "unverified economy behavior",
+                "evidence_refs": ["sha256:colony#page=1/1"],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        corrective,
+        "_verify_claim_support",
+        lambda *args, **kwargs: (
+            [
+                {
+                    "claim": "colonies persist population",
+                    "supported": True,
+                    "support_quote": "Colonies persist their population",
+                    "evidence_refs": ["sha256:colony#page=1/1"],
+                },
+                {
+                    "claim": "unverified economy behavior",
+                    "supported": False,
+                    "support_quote": "",
+                    "evidence_refs": ["sha256:colony#page=1/1"],
+                },
+            ],
+            ["unverified economy behavior"],
+        ),
+    )
+    monkeypatch.setattr(
+        corrective,
+        "_minecraft_knowledge_route_receipt",
+        lambda **kwargs: {
+            "status": "PASS",
+            "verified_evidence_count": 1,
+            "target_frozen": False,
         },
-        document={"document_sha256": "base-doc", "page_count": 1},
-        trace_metadata=None,
     )
 
-    assert calls["forced"] == 1
-    assert note["sufficient"] is True
-    assert note["quality_contract"]["corrective_rounds_executed"] == 1
-    assert note["quality_contract"]["donor_selection_performed"] is False
-    assert note["claims"][0]["claim"] == "Colony state can be persisted."
+    result = corrective.run_corrective_research(
+        _FakeAgentic,
+        _FakeBoundedRag,
+        router=object(),
+        domain=domain,
+        evidence=evidence,
+        minecraft_target={"version": "1.21.8"},
+    )
+
+    assert result["complete"] is True
+    assert result["domain_blocking_gaps"] == []
+    assert result["unresolved_gaps"] == ["unverified economy behavior"]
