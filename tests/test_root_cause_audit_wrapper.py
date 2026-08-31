@@ -147,6 +147,39 @@ def test_report_consistency_rejects_status_index_mismatch() -> None:
         validate_report_consistency(report)
 
 
+def test_report_failure_detail_is_redacted_before_console_render(monkeypatch) -> None:
+    exact_secret = "poisoned-report-secret-value"
+    monkeypatch.setenv("MMM_TEST_SECRET", exact_secret)
+    report = {
+        "summary": {"passed": 0, "warned": 0, "failed": 1, "skipped": 0},
+        "checks": [
+            {
+                "name": "provider",
+                "category": "network",
+                "status": "FAIL",
+                "detail": f"token=label-secret {exact_secret}",
+            }
+        ],
+    }
+    rendered = render_report_summary(report)
+    assert "label-secret" not in rendered
+    assert exact_secret not in rendered
+    assert "token=<redacted>" in rendered
+
+
+def test_internal_exception_message_is_redacted_before_console_render(monkeypatch) -> None:
+    exact_secret = "internal-exception-secret-value"
+    monkeypatch.setenv("MMM_TEST_TOKEN", exact_secret)
+    rendered = audit_wrapper._render_internal_report_error(
+        RuntimeError(f"password=label-secret {exact_secret}"),
+        "parse audit report",
+    )
+    assert "label-secret" not in rendered
+    assert exact_secret not in rendered
+    assert "password=<redacted>" in rendered
+    assert "Traceback" not in rendered
+
+
 def test_main_never_reuses_stale_report_or_runner_log(tmp_path, monkeypatch, capsys) -> None:
     audit_dir, report_path, runner_log = _redirect_wrapper_paths(tmp_path, monkeypatch)
     report_path.write_text(json.dumps(_complete_report()), encoding="utf-8")
