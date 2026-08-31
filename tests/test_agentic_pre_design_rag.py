@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_pre_design_rag as project_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
-import minecraft_mod_ai.research_grounded_rag_contract as grounded_rag
+import minecraft_mod_ai.pre_design_external_source_contract as external_source
 
 
 def _brief():
@@ -17,29 +17,25 @@ def _brief():
     }
 
 
-def _fake_external(query: str, versions) -> dict[str, object]:
-    del versions
+def _fake_source_receipt(query: str) -> dict[str, object]:
     return {
-        "schema_version": "mmm/external-grounded-rag-v1",
-        "status": "available",
-        "query": query,
-        "providers": ["fixture"],
-        "credentials_required": False,
-        "corrective_search_used": False,
-        "project_count": 1,
-        "source_repository_count": 1,
-        "document_count": 1,
-        "actual_source_document_count": 1,
-        "coverage_score": 1.0,
-        "projects": [],
-        "documents": [
+        "records": [
             {
-                "source_id": f"fixture:{query}",
-                "source_type": "github_source",
+                "source_id": f"github:fixture/source:{query}",
+                "source_type": "github_source_body",
+                "source_locator": "https://example.invalid/source",
                 "url": "https://example.invalid/source",
-                "content": "grounded source fixture",
+                "title": "fixture/source",
+                "content": f"grounded source fixture for {query}",
+                "content_sha256": "sha256:fixture",
+                "body_retrieved": True,
+                "metadata": {"repository": "fixture/source", "query": query},
             }
         ],
+        "search_requests": 1,
+        "source_requests": 1,
+        "provider_status": "available",
+        "saturation_reason": "source_body_retrieved",
         "errors": [],
     }
 
@@ -50,7 +46,13 @@ def test_forced_rag_builds_missing_index_without_unrouted_public_search(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MMM_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("MMM_PROJECT_RAG_INDEX", raising=False)
-    monkeypatch.setattr(grounded_rag, "_external_retrieval", _fake_external)
+    source_calls: list[str] = []
+
+    def _recording_source(query: str) -> dict[str, object]:
+        source_calls.append(query)
+        return _fake_source_receipt(query)
+
+    monkeypatch.setattr(external_source, "_retrieve_github_source_body", _recording_source)
     router = SimpleNamespace()
 
     bundle = project_rag._forced_rag_bundle(router, _brief())
@@ -63,40 +65,46 @@ def test_forced_rag_builds_missing_index_without_unrouted_public_search(
     assert bundle["local_index"]["built"] is True
     assert bundle["external_query_count"] == 3
     assert bundle["external_source_count"] == 3
+    assert len(source_calls) == 3
     queries = [item for domain in bundle["domains"] for item in domain["queries"]]
     assert len(queries) == 3
     assert all(item["project_rag"]["sources"] for item in queries)
     assert all(item["code_rag"]["status"] == "searched" for item in queries)
     assert all(item["code_rag"]["hits"] == [] for item in queries)
     assert all(item["external_rag"]["actual_source_document_count"] == 1 for item in queries)
-    assert all(item["external_rag"]["documents"] for item in queries)
+    assert all(item["external_rag"]["document_count"] == 1 for item in queries)
+    assert all(item["external_rag"]["records"] for item in queries)
+    assert all(
+        item["external_rag"]["github_retrieval"]["search_requests"] == 1
+        for item in queries
+    )
 
 
 def test_explicit_target_limits_pre_design_rag_scope(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MMM_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("MMM_PROJECT_RAG_INDEX", raising=False)
-    external_calls: list[tuple[str, tuple[str, ...]]] = []
+    source_calls: list[str] = []
 
-    def _recording_external(query: str, versions) -> dict[str, object]:
-        external_calls.append((query, tuple(str(item) for item in versions)))
-        return _fake_external(query, versions)
+    def _recording_source(query: str) -> dict[str, object]:
+        source_calls.append(query)
+        return _fake_source_receipt(query)
 
-    monkeypatch.setattr(grounded_rag, "_external_retrieval", _recording_external)
+    monkeypatch.setattr(external_source, "_retrieve_github_source_body", _recording_source)
     router = SimpleNamespace(_mmm_requested_minecraft_version="1.21.1")
 
     bundle = project_rag._forced_rag_bundle(router, _brief())
 
     assert bundle["versions"] == ["1.21.1"]
-    assert len(external_calls) == 3
-    assert all(versions == ("1.21.1",) for _query, versions in external_calls)
+    assert len(source_calls) == 3
     for domain in bundle["domains"]:
         for query in domain["queries"]:
             sources = query["project_rag"]["sources"]
             assert sources
             assert all(source["matched_version"] == "1.21.1" for source in sources)
             assert query["external_rag"]["actual_source_document_count"] == 1
-            assert query["external_rag"]["documents"]
+            assert query["external_rag"]["document_count"] == 1
+            assert query["external_rag"]["records"]
 
 
 def test_legacy_pre_design_collector_is_not_runtime_owner() -> None:
