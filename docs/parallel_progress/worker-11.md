@@ -1,7 +1,7 @@
 WORKER: 11
 ROLE: Errors + Observability + Diagnostics + CI
-STATUS: IN_PROGRESS
-LAST_UPDATED_MAIN_SHA: 4e8713b495f056449f3be71c26cb65ee84ee2d71
+STATUS: COMPLETE
+LAST_UPDATED_MAIN_SHA: 9a95bbaa74e73e212ee050cee8508ecf0055b0ed
 
 COMPLETED_BASELINE:
 - Canonical failure taxonomy, causal fingerprinting, retry/final status, compact rendering, traceback retention, and sanitization.
@@ -12,37 +12,61 @@ COMPLETED_BASELINE:
 - Removed the unreferenced duplicate `annotate_pytest_failures.py` path.
 - Worker12 handoff exists for the shared JDT/CLI broad-exception boundary.
 
-CURRENT_HARDENING_PASS:
-- Reopened after the user required clean-code/dead-code/bottleneck/optimization verification beyond the first completion boundary.
-- Hardened `minecraft_mod_ai/diagnostics.py`: bounded root rendering, bounded fallback rendering, newline/oversize compaction, explicit deduplication keys, and latest-attempt terminal state.
-- Added regression coverage for bounded rendering, explicit retry deduplication, sanitization, and invalid render limits.
-- Hardened `tools/root_cause_audit_wrapper.py`: remove stale report before each run, stream raw child output to artifact, validate report/check/summary/index consistency, atomically rewrite normalized report, and reject process/report exit disagreement.
-- Hardened `tools/pytest_diagnostics.py`: remove stale JUnit before each run, stream pytest output to artifact, iterparse JUnit, reject missing/empty/contradictory JUnit evidence, reject output-path collisions, and bound affected-test rendering.
-- Added failure-injection tests for stale artifacts, process/report contradictions, malformed evidence, namespace-aware JUnit parsing, and zero-evidence success.
+FINAL_HARDENING_COMPLETED:
+- `minecraft_mod_ai/diagnostics.py`: bounded root/fallback rendering, oversize/newline compaction, explicit deduplication keys, latest-attempt terminal state, traceback retained only as debug evidence, and sanitizer support at the canonical exception boundary.
+- `tools/full_project_audit.py`: subprocess output is drained through bounded temporary-file streaming rather than an unbounded PIPE/full-memory copy; only a bounded redacted tail is retained in check detail while full redacted evidence is kept in the audit log.
+- `tools/full_project_audit.py::Check.passed`: PASS is the only successful state; WARN/SKIP are explicitly non-blocking rather than semantically passed.
+- `tools/root_cause_audit_wrapper.py`: stale report/log removal, atomic normalized report rewrite, report/check/summary/index consistency validation, process/report exit agreement, explicit filesystem-failure handling, a 45-minute hard audit timeout, bounded temporary raw-output capture, and redacted persisted runner output.
+- Full Debug console boundary: failed report details, category/name fields, internal exception messages, fallback text, and runner events are passed through the same streaming secret sanitizer before rendering.
+- `tools/pytest_diagnostics.py`: stale output removal, bounded raw pytest capture, positive timeout enforcement, namespace-aware streaming JUnit parsing, missing/empty/contradictory evidence rejection, bounded affected-test rendering, and sanitized console/raw evidence.
+- JUnit redaction is context-safe: persisted XML uses `&lt;redacted&gt;`, remains valid XML, and parses back to the logical `<redacted>` diagnostic marker.
+- `tools/audit_stream_redactor.py`: one streaming redaction engine is used across audit/pytest boundaries; supports exact environment secrets, quoted JSON values, structured values, header-like values, arbitrary chunk boundaries, caller-provided context-safe replacement markers, and fully redacts unquoted multiword sensitive values through the next structural delimiter/line boundary.
+- `tools/ci_test_shard.py`: remaining-test shard ownership is stable SHA-256 based rather than pre-filter positional indexing, preventing unrelated dedicated-test changes from reshuffling shards.
+- Observability gate now compile-checks, targeted-ruffs, and failure-injects diagnostics, streaming redaction, Full Debug wrapper, pytest diagnostics, filesystem failures, full-project observability, and stable sharding.
 
-COMMITS_THIS_PASS:
-- be1c0f25bbf74d81eb16a7d0029764c589673833 refactor: harden compact diagnostics
-- be2a5a6bab0c99a681022b8bf519ea5096499538 test: cover bounded diagnostic rendering
-- 9732bb8fa3d28f0acb189d5dcb6894c6db91242d fix: fail closed on stale audit evidence
-- baad4afa6d09d3e238427d0174d43f211710d598 fix: make pytest diagnostics fail closed
-- 496e74f304b2b2f1ddd2e2247aa66142b1c8c56e test: cover stale audit and exit mismatch
-- 7d85ddb94e92ea1916004211ae232d3e2dc260dc test: cover fail-closed pytest evidence
+FAILURE-INJECTION / REGRESSION COVERAGE:
+- repeated identical failures collapse to one causal root with an ATTEMPTS count;
+- INTERNAL programming failures retain debug traceback but compact user rendering excludes traceback spam;
+- sanitizer removes exact and labelled secrets from message and traceback paths;
+- WARN/SKIP cannot be mislabeled PASS and unknown status fails closed;
+- stale Full Debug report/JUnit/log evidence cannot be reused;
+- audit process/report contradictions fail closed;
+- missing/empty/contradictory JUnit evidence fails closed;
+- Full Debug timeout is canonical TRANSIENT and preserves only redacted output;
+- pytest non-positive timeout is rejected before launch;
+- raw pytest log and JUnit artifacts cannot retain injected exact/labelled secrets;
+- XML-safe redaction remains valid through JUnit parsing;
+- custom replacement markers survive chunk widths down to one character;
+- unquoted multiword `token/password/secret/api-key` values are fully redacted instead of leaking the tail after whitespace;
+- stable CI shard assignment is deterministic under input reordering and dedicated-test filtering changes.
 
-ROOT_CAUSES_STILL_BEING CLOSED:
-- `tools/full_project_audit.py` still captures command stdout through PIPE and duplicates full text into `LOGS`, causing avoidable memory amplification on large pytest/build output.
-- `tools/full_project_audit.py::Check.passed` still reports WARN/SKIP as passed before wrapper normalization, leaving two semantic authorities.
-- Worker11 wrappers still need explicit directory-creation failure handling so filesystem failure never falls through as an unstructured traceback.
-- `remaining-tests` CI sharding still uses a pre-filter positional index, so dedicated-test additions/removals can perturb unrelated shard assignment.
+COMMITS_FROM_FINAL_HARDENING:
+- e1fc8b48276128a56bb0003d669d7ff89ba2cae4 `fix: bound and redact full debug runner`
+- 0d71da4b26804928b35c692e27a07aaace9b288b `test: cover full debug timeout and redaction`
+- ef4faf551c9ce8e22e7028a6217731f2af143429 `fix: support context-safe redaction markers`
+- 541736c200553003bc44e163d7e1465ee388195c `fix: preserve valid redacted JUnit XML`
+- 1d517492ae3b8233cc299bf37255b05483e64b0b `test: enforce valid redacted JUnit artifacts`
+- f1db76d4125264150b8efc06fc187fe870149dfd `fix: sanitize full debug console boundary`
+- 072d41de0a8c05eb006f29126c4a178a3f5b842a `test: enforce full debug console redaction`
+- b647424966988a072bbd38b9218468af4fb98903 `test: cover context-safe redaction markers`
+- 0848cd7a5cd88f8ce0799c067e451cd165ac6c91 `ci: gate context-safe redaction regression`
+- e913fc24c5a65733e01a4c70bf2b0e578849b7b8 `fix: redact unquoted multiword secret values`
+- 9a95bbaa74e73e212ee050cee8508ecf0055b0ed `test: cover unquoted multiword secret values`
 
-IN_PROGRESS:
-- Eliminate raw filesystem-traceback surfaces in diagnostic wrappers.
-- Remove Full Debug command-output memory duplication while preserving complete raw evidence and bounded failure detail.
-- Make Full Debug PASS semantics single-source and internally consistent.
-- Stabilize remaining-tests shard selection and regression-test the selection rule.
-- Re-run targeted tests, Observability Regression, ancestry checks, and latest-main verification before returning to COMPLETE.
+FINAL_VALIDATION:
+- Origin main at validation time: `9a95bbaa74e73e212ee050cee8508ecf0055b0ed`.
+- Observability Regression run `33359027134` for that exact SHA: COMPLETED / SUCCESS.
+- The dedicated gate's compile/lint stage and all Worker11 failure-injection suites completed successfully.
+- Main-only workflow was preserved; no Worker11 branch or force push was used.
+- General CI run `33359027142` fails before the test fan-out at the repository-wide runtime-mutation budget (`behavioral=427`, reviewed budget `413`). That gate covers runtime code outside Worker11's tools/tests surface and is not a Worker11 observability regression; it remains a repository-level integration item for the owning worker/final integrator.
 
 KNOWN_CROSS_ROLE_DEPENDENCY:
-- `minecraft_mod_ai/complete_orchestrator.py` still contains the Worker12-owned JDT `except Exception -> UNAVAILABLE` boundary. It remains documented in `docs/parallel_handoff/worker-11.md`; Worker11 will not overwrite shared orchestrator ownership.
+- `minecraft_mod_ai/complete_orchestrator.py` contains the Worker12-owned JDT `except Exception -> UNAVAILABLE` boundary. It is already documented in `docs/parallel_handoff/worker-11.md`; Worker11 intentionally did not overwrite shared-orchestrator ownership. Worker12/Worker13 must ensure programming exceptions cannot be mislabeled dependency unavailability at final integration.
 
 UNRESOLVED:
-- The four Worker11 hardening items listed above are intentionally open until code + regression evidence are green.
+- none within Worker11 ownership.
+
+HANDOFF_TO_WORKER_13:
+- Worker11 observability/diagnostics/CI area is ready for integration.
+- Preserve the canonical failure taxonomy/fingerprint contract and the single StreamingRedactor behavior when resolving cross-worker conflicts.
+- Treat the repository-wide runtime-mutation budget failure and the Worker12 JDT broad-catch handoff as cross-role integration checks, not reasons to reopen Worker11's completed observability implementation unless a final integration test exposes a regression in this owned surface.
