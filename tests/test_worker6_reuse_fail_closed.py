@@ -7,6 +7,10 @@ import pytest
 import minecraft_mod_ai.reuse_proof_executor as reuse_proof
 import minecraft_mod_ai.source_transplant as source_transplant
 from minecraft_mod_ai.proof_level import ProofLevel, validate_proof_transition
+from minecraft_mod_ai.reuse_artifacts import (
+    ReusableArtifactBundle,
+    bundle_proof_allows_reuse,
+)
 from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice, SourceTransplantError
 
 
@@ -14,6 +18,7 @@ def _donor(
     *,
     repository: str = "example/worker6-donor",
     license_id: str = "MIT",
+    required_dependencies: tuple[str, ...] = (),
 ) -> DonorSlice:
     payload = b"package donor; public class BossEntity {}\n"
     return DonorSlice(
@@ -34,7 +39,7 @@ def _donor(
         ),
         seed_files=("src/main/java/donor/BossEntity.java",),
         source_symbols=("BossEntity",),
-        required_dependencies=(),
+        required_dependencies=required_dependencies,
         donor_tests=(),
         confidence=0.95,
         closure_complete=True,
@@ -61,6 +66,14 @@ def _receipt(
         verified_capabilities=(),
         residual_capabilities=(candidate.capability,),
     )
+
+
+def _materialized_payload() -> dict[str, bytes]:
+    return {
+        "src/main/java/donor/BossEntity.java": (
+            b"package donor; public class BossEntity {}\n"
+        )
+    }
 
 
 def test_license_verified_requires_discovery_admitted_license() -> None:
@@ -215,3 +228,124 @@ def test_unexpected_materialization_failure_is_not_hidden(
             target_workspace=tmp_path,
             target_context={},
         )
+
+
+def test_dependency_resolution_receipt_replaces_donor_version_and_binds_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    donor = _donor(
+        required_dependencies=(
+            "software.bernie.geckolib:geckolib-fabric:0.0.1",
+        )
+    )
+    monkeypatch.setattr(
+        source_transplant,
+        "materialize_pinned_donor",
+        lambda *args, **kwargs: _materialized_payload(),
+    )
+
+    receipt = reuse_proof.execute_reuse_proof(
+        donor,
+        target_workspace=tmp_path,
+        target_context={
+            "loader": "fabric",
+            "minecraft_version": "1.21.1",
+            "java_version": 21,
+            "target_package": "ai.minecraft.generated.mod",
+            "target_modid": "generated_mod",
+        },
+        compile_checker=lambda *_: True,
+    )
+
+    assert receipt.proof_level == ProofLevel.COMPILE_VERIFIED.value
+    assert receipt.compile_passed is True
+    assert len(receipt.dependency_receipts) == 1
+    dependency = receipt.dependency_receipts[0]
+    assert dependency["donor_declared_coordinate"].endswith(":0.0.1")
+    assert dependency["resolved_coordinate"] == (
+        "software.bernie.geckolib:geckolib-fabric:4.6.0"
+    )
+    assert dependency["selected_version"] == "4.6.0"
+    assert dependency["is_resolved"] is True
+    assert dependency["resolution_fingerprint"].startswith("sha256:")
+
+    bundle = ReusableArtifactBundle.from_donor_slice(
+        donor,
+        proof_receipt=receipt,
+        protected_artifacts=receipt.contract.protected_artifacts,
+    )
+    assert bundle.dependency_receipts == receipt.dependency_receipts
+    assert bundle.dependency_receipts != donor.required_dependencies
+    assert bundle_proof_allows_reuse(bundle, receipt) is True
+
+
+def test_dependency_receipt_tampering_invalidates_bundle_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    donor = _donor(required_dependencies=("geckolib",))
+    monkeypatch.setattr(
+        source_transplant,
+        "materialize_pinned_donor",
+        lambda *args, **kwargs: _materialized_payload(),
+    )
+    receipt = reuse_proof.execute_reuse_proof(
+        donor,
+        target_workspace=tmp_path,
+        target_context={
+            "loader": "fabric",
+            "minecraft_version": "1.21.1",
+            "java_version": 21,
+            "target_package": "ai.minecraft.generated.mod",
+            "target_modid": "generated_mod",
+        },
+        compile_checker=lambda *_: True,
+    )
+    bundle = ReusableArtifactBundle.from_donor_slice(
+        donor,
+        proof_receipt=receipt,
+        protected_artifacts=receipt.contract.protected_artifacts,
+    )
+    assert bundle_proof_allows_reuse(bundle, receipt) is True
+
+    tampered = ReusableArtifactBundle(
+        **{
+            **bundle.__dict__,
+            "dependency_receipts": (),
+        }
+    )
+    assert bundle_proof_allows_reuse(tampered, receipt) is False
+
+
+def test_unresolved_declared_dependency_cannot_become_verified_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    donor = _donor(
+        required_dependencies=("com.example:unknown-worker6-library:1.0.0",)
+    )
+    monkeypatch.setattr(
+        source_transplant,
+        "materialize_pinned_donor",
+        lambda *args, **kwargs: _materialized_payload(),
+    )
+
+    receipt = reuse_proof.execute_reuse_proof(
+        donor,
+        target_workspace=tmp_path,
+        target_context={
+            "loader": "fabric",
+            "minecraft_version": "1.21.1",
+            "java_version": 21,
+            "target_package": "ai.minecraft.generated.mod",
+            "target_modid": "generated_mod",
+        },
+        compile_checker=lambda *_: True,
+    )
+
+    assert ProofLevel.from_value(receipt.proof_level).is_verified() is False
+    assert receipt.compile_passed is False
+    assert len(receipt.dependency_receipts) == 1
+    assert receipt.dependency_receipts[0]["is_resolved"] is False
+    assert any("unknown-worker6-library" in value for value in receipt.unresolved_symbols)
