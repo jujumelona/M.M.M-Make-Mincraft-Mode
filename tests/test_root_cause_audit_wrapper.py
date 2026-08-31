@@ -35,6 +35,18 @@ def _complete_report(*, status: str = "PASS", detail: str = "ok") -> dict:
     }
 
 
+def _redirect_wrapper_paths(tmp_path, monkeypatch) -> tuple:
+    audit_dir = tmp_path / "audit"
+    report_path = audit_dir / "FULL_PROJECT_AUDIT.json"
+    runner_log = audit_dir / "FULL_PROJECT_AUDIT.runner.log"
+    audit_dir.mkdir()
+    monkeypatch.setattr(audit_wrapper, "ROOT", tmp_path)
+    monkeypatch.setattr(audit_wrapper, "AUDIT_DIR", audit_dir)
+    monkeypatch.setattr(audit_wrapper, "REPORT_PATH", report_path)
+    monkeypatch.setattr(audit_wrapper, "RUNNER_LOG_PATH", runner_log)
+    return audit_dir, report_path, runner_log
+
+
 def test_duplicate_failed_check_is_collapsed_to_one_root_with_attempt_count() -> None:
     report = {
         "summary": {"passed": 1, "warned": 0, "failed": 2, "skipped": 0},
@@ -136,22 +148,15 @@ def test_report_consistency_rejects_status_index_mismatch() -> None:
 
 
 def test_main_never_reuses_stale_report_or_runner_log(tmp_path, monkeypatch, capsys) -> None:
-    audit_dir = tmp_path / "audit"
-    report_path = audit_dir / "FULL_PROJECT_AUDIT.json"
-    runner_log = audit_dir / "FULL_PROJECT_AUDIT.runner.log"
-    audit_dir.mkdir()
+    audit_dir, report_path, runner_log = _redirect_wrapper_paths(tmp_path, monkeypatch)
     report_path.write_text(json.dumps(_complete_report()), encoding="utf-8")
     runner_log.write_text("stale runner evidence\n", encoding="utf-8")
-
-    monkeypatch.setattr(audit_wrapper, "ROOT", tmp_path)
-    monkeypatch.setattr(audit_wrapper, "AUDIT_DIR", audit_dir)
-    monkeypatch.setattr(audit_wrapper, "REPORT_PATH", report_path)
-    monkeypatch.setattr(audit_wrapper, "RUNNER_LOG_PATH", runner_log)
 
     def fake_run(*args, **kwargs):
         assert not report_path.exists(), "stale report must be removed before the subprocess starts"
         assert runner_log.read_text(encoding="utf-8") == ""
         assert kwargs["stdout"] is not subprocess.PIPE
+        assert kwargs["timeout"] == audit_wrapper._DEFAULT_AUDIT_TIMEOUT_SECONDS
         kwargs["stdout"].write("current run crashed before writing a report\n")
         return SimpleNamespace(returncode=7)
 
@@ -161,18 +166,11 @@ def test_main_never_reuses_stale_report_or_runner_log(tmp_path, monkeypatch, cap
     assert "MissingAuditReport" in output
     assert "FINAL STATUS\nPASS" not in output
     assert runner_log.read_text(encoding="utf-8").startswith("current run crashed")
+    assert not any(path.name.startswith(".audit-runner-output-") for path in audit_dir.iterdir())
 
 
 def test_main_fails_closed_when_process_and_report_disagree(tmp_path, monkeypatch, capsys) -> None:
-    audit_dir = tmp_path / "audit"
-    report_path = audit_dir / "FULL_PROJECT_AUDIT.json"
-    runner_log = audit_dir / "FULL_PROJECT_AUDIT.runner.log"
-    audit_dir.mkdir()
-
-    monkeypatch.setattr(audit_wrapper, "ROOT", tmp_path)
-    monkeypatch.setattr(audit_wrapper, "AUDIT_DIR", audit_dir)
-    monkeypatch.setattr(audit_wrapper, "REPORT_PATH", report_path)
-    monkeypatch.setattr(audit_wrapper, "RUNNER_LOG_PATH", runner_log)
+    _, report_path, _ = _redirect_wrapper_paths(tmp_path, monkeypatch)
 
     def fake_run(*args, **kwargs):
         kwargs["stdout"].write("runner returned nonzero\n")
@@ -184,3 +182,73 @@ def test_main_fails_closed_when_process_and_report_disagree(tmp_path, monkeypatc
     output = capsys.readouterr().out
     assert "AuditExitMismatch" in output
     assert "report requires exit=0" in output
+
+
+def test_main_redacts_runner_output_before_persisting_artifact(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    _, report_path, runner_log = _redirect_wrapper_paths(tmp_path, monkeypatch)
+    exact_secret = "runner-exact-secret-value"
+    monkeypatch.setenv("MMM_TEST_TOKEN", exact_secret)
+
+    def fake_run(*args, **kwargs):
+        kwargs["stdout"].write(
+            f"unlabelled={exact_secret}\n"
+            "token=labelled secret with spaces\n"
+            '{"password": "quoted secret value", "safe": 1}\n'
+        )
+        report_path.write_text(json.dumps(_complete_report()), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(audit_wrapper.subprocess, "run", fake_run)
+    assert audit_wrapper.main() == 0
+    assert "FINAL STATUS\nPASS" in capsys.readouterr().out
+
+    persisted = runner_log.read_text(encoding="utf-8")
+    assert exact_secret not in persisted
+    assert "labelled secret with spaces" not in persisted
+    assert "quoted secret value" not in persisted
+    assert "unlabelled=<redacted>" in persisted
+    assert "token=<redacted>" in persisted
+    assert '"password": "<redacted>"' in persisted
+    assert '"safe": 1' in persisted
+
+
+def test_audit_timeout_is_bounded_transient_and_preserves_redacted_output(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    audit_dir, report_path, runner_log = _redirect_wrapper_paths(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit_wrapper, "_DEFAULT_AUDIT_TIMEOUT_SECONDS", 17)
+
+    def fake_run(*args, **kwargs):
+        assert kwargs["timeout"] == 17
+        kwargs["stdout"].write("token=timeout-secret\nbefore timeout\n")
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(audit_wrapper.subprocess, "run", fake_run)
+    assert audit_wrapper.main() == 1
+    output = capsys.readouterr().out
+    assert "AuditTimeout" in output
+    assert "[TRANSIENT]" in output
+    assert "timeout=17s" in output
+    assert "Traceback" not in output
+    assert not report_path.exists()
+
+    persisted = runner_log.read_text(encoding="utf-8")
+    assert "timeout-secret" not in persisted
+    assert "token=<redacted>" in persisted
+    assert "before timeout" in persisted
+    assert not any(path.name.startswith(".audit-runner-output-") for path in audit_dir.iterdir())
+
+
+def test_nonpositive_audit_timeout_fails_before_subprocess(tmp_path, monkeypatch, capsys) -> None:
+    _redirect_wrapper_paths(tmp_path, monkeypatch)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("subprocess must not be called for an invalid timeout")
+
+    monkeypatch.setattr(audit_wrapper.subprocess, "run", fail_if_called)
+    assert audit_wrapper._run_audit(timeout_seconds=0) is None
+    output = capsys.readouterr().out
+    assert "InvalidAuditTimeout" in output
+    assert "[INPUT]" in output
