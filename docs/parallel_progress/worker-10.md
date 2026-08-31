@@ -2,7 +2,7 @@ WORKER: 10
 ROLE: Validation + Tests + GameTest + JDT + JAR
 STATUS: COMPLETE
 READY_FOR_WORKER_13: YES
-LAST_UPDATED_MAIN_SHA: 05da781c59e2fe437d1de7706ddc83036bc88209
+LAST_UPDATED_MAIN_SHA: 04aa8bda47a1262bde25cc890cbf8d846ec5c40d
 GREEN_VALIDATION_SHA: 8f1577e8017053ffc840f5ee89fa7c1279d9b2a8
 GREEN_VALIDATION_RUN: 33358613072
 
@@ -31,13 +31,13 @@ ROOT_CAUSES_FIXED:
 - Existing GameTest namespace test data placed its log outside the project root; once the security boundary was correctly fail-closed, that stale fixture had to be moved to the real project-local log location.
 
 FINAL_GITHUB_ACTIONS_EVIDENCE:
-- Temporary dedicated workflow: .github/workflows/worker10-final-verify.yml.
-- First dedicated run 33358543116 intentionally exposed one real regression mismatch: tests/test_validation_execution_contract.py used an external tmp_path GameTest log and therefore hit the new fail-closed path boundary instead of namespace parsing. Static audit, compile, ruff, and package import had already passed in that run.
+- A temporary dedicated workflow was created at .github/workflows/worker10-final-verify.yml solely to obtain independent Worker10 validation evidence; it was removed after the successful run so no permanent verification-only workflow was left behind.
+- First dedicated run 33358543116 exposed one real regression mismatch: tests/test_validation_execution_contract.py used an external tmp_path GameTest log and therefore hit the new fail-closed path boundary instead of namespace parsing. Static audit, compile, ruff, and package import had already passed in that run.
 - Commit 8f1577e8017053ffc840f5ee89fa7c1279d9b2a8 corrected only that stale fixture by placing the GameTest log under the project-local .minecraft_ai/logs path.
 - Dedicated run 33358613072 on 8f1577e8017053ffc840f5ee89fa7c1279d9b2a8 completed SUCCESS.
 - In run 33358613072: dependency installation PASS; debug_repo_audit PASS (375 package Python files and 15 workflows checked); Worker10 compile PASS; ruff F/E7/E9 PASS; package bootstrap import PASS with runtime preflight PASS; all targeted Worker10/core validation regressions reached 100% with no failures.
 - The targeted run included all Worker10 tests plus validation_execution_contract, validation_checkpoint_policy, hardened_release_gates, and atomic_playtest_evidence tests.
-- After the green snapshot, main advanced to 05da781c59e2fe437d1de7706ddc83036bc88209 by exactly one commit changing only tests/test_worker6_reuse_fail_closed.py. No Worker10 validation source/test surface changed after the green run.
+- Final post-green comparison from 8f1577e8017053ffc840f5ee89fa7c1279d9b2a8 through 04aa8bda47a1262bde25cc890cbf8d846ec5c40d showed only Worker6 reuse tests, Worker7 recertification tooling, audit/pytest diagnostic tooling, this progress document, and removal of the temporary Worker10 workflow. No Worker10 validator/JDT/Gradle/GameTest/JAR/artifact source or targeted regression file changed after the green run.
 - Earlier repository-wide CI cancellations caused by main concurrency and the separate global runtime-mutation budget are not counted as Worker10 PASS evidence and were not hidden by relaxing those gates.
 
 KEY_COMMITS:
@@ -48,6 +48,7 @@ KEY_COMMITS:
 - e48ecd51e2e1fd16c1f2db8e509b202630b2b617 Worker10 validation/cache/filesystem hardening checkpoint; confirmed ancestor of main before final verification
 - b345485f991e11e5169f5be5ae23e98e3a5a5342 ci: add worker 10 final verification gate
 - 8f1577e8017053ffc840f5ee89fa7c1279d9b2a8 test: align GameTest fixture with safe project log boundary
+- 04aa8bda47a1262bde25cc890cbf8d846ec5c40d ci: remove temporary worker 10 verification gate
 
 ACTIVE_RELEVANT_FILES:
 - minecraft_mod_ai/validator.py
