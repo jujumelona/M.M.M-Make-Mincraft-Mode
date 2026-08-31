@@ -1,7 +1,11 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from minecraft_mod_ai import platform_specialized_generator_contract as specialized
 from minecraft_mod_ai.geckolib_generator import (
     _entity_index_text,
     _registration_unit_files,
@@ -11,6 +15,7 @@ from minecraft_mod_ai.geckolib_generator import (
     iter_geckolib_entity_records,
 )
 from minecraft_mod_ai.generator import FabricProjectGenerator
+from minecraft_mod_ai.platform_catalog import adapter_from_project
 from minecraft_mod_ai.production_hardener import harden_generated_project
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
@@ -46,30 +51,37 @@ def _unit_paths(project: Path, entity_id: str) -> list[Path]:
     resources = project / "src/main/resources"
     return [
         project / f".minecraft_ai/geckolib-entities/{entity_id}.json",
-        resources
-        / f"data/gecko_scale/mmm_geckolib/entities/{entity_id}.json",
+        resources / f"data/gecko_scale/mmm_geckolib/entities/{entity_id}.json",
         resources / f"assets/gecko_scale/geo/{entity_id}.geo.json",
-        resources
-        / f"assets/gecko_scale/animations/{entity_id}.animation.json",
-        resources
-        / f"assets/gecko_scale/textures/entity/{entity_id}.png",
+        resources / f"assets/gecko_scale/animations/{entity_id}.animation.json",
+        resources / f"assets/gecko_scale/textures/entity/{entity_id}.png",
         package / f"entity/{class_name}Entity.java",
         package / f"client/geckolib/{class_name}GeoModel.java",
         package / f"client/geckolib/{class_name}GeoRenderer.java",
-        package
-        / f"geckolib/entry/{class_name}GeckoRegistration.java",
-        package
-        / (
-            "client/geckolib/entry/"
-            f"{class_name}GeckoClientRegistration.java"
-        ),
+        package / f"geckolib/entry/{class_name}GeckoRegistration.java",
+        package / f"client/geckolib/entry/{class_name}GeckoClientRegistration.java",
     ]
 
 
 def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _project(tmp_path / "project")
+    adapter = adapter_from_project(project)
+    approved = replace(
+        adapter,
+        deterministic_module_kinds=frozenset(
+            {
+                *adapter.deterministic_module_kinds,
+                "entity",
+                "geckolib:entity",
+                "geckolib:version:4.8.2",
+            }
+        ),
+    )
+    monkeypatch.setattr(specialized, "adapter_from_project", lambda _root: approved)
+
     generate_geckolib_entity_assets(
         project_root=project,
         mod_id="gecko_scale",
@@ -79,20 +91,8 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
     first_paths = _unit_paths(project, "frost_guard")
     assert all(path.is_file() for path in first_paths)
     first_hashes = {path: _sha256(path) for path in first_paths}
-    server_root = (
-        project
-        / (
-            "src/main/java/ai/minecraft/gecko_scale/geckolib/"
-            "GeneratedGeckoEntities.java"
-        )
-    )
-    client_root = (
-        project
-        / (
-            "src/main/java/ai/minecraft/gecko_scale/client/geckolib/"
-            "GeneratedGeckoClient.java"
-        )
-    )
+    server_root = project / "src/main/java/ai/minecraft/gecko_scale/geckolib/GeneratedGeckoEntities.java"
+    client_root = project / "src/main/java/ai/minecraft/gecko_scale/client/geckolib/GeneratedGeckoClient.java"
     root_hashes = (_sha256(server_root), _sha256(client_root))
 
     second = generate_geckolib_entity_assets(
@@ -101,15 +101,11 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
         package_name="ai.minecraft.gecko_scale",
         entity_id="ember_guard",
     )
-    assert {
-        path: _sha256(path)
-        for path in first_paths
-    } == first_hashes
+    assert {path: _sha256(path) for path in first_paths} == first_hashes
     assert (_sha256(server_root), _sha256(client_root)) == root_hashes
     second_operations = second["receipts"]["files"]["operations"]
     assert all(
-        "frost_guard" not in operation["path"]
-        and "FrostGuard" not in operation["path"]
+        "frost_guard" not in operation["path"] and "FrostGuard" not in operation["path"]
         for operation in second_operations
     )
 
@@ -122,32 +118,18 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
         entity_id="frost_guard",
         max_health=120.0,
     )
-    assert {
-        path: _sha256(path)
-        for path in second_paths
-    } == second_hashes
+    assert {path: _sha256(path) for path in second_paths} == second_hashes
     assert (_sha256(server_root), _sha256(client_root)) == root_hashes
     assert all(
-        "ember_guard" not in operation["path"]
-        and "EmberGuard" not in operation["path"]
+        "ember_guard" not in operation["path"] and "EmberGuard" not in operation["path"]
         for operation in revised["receipts"]["files"]["operations"]
     )
 
-    index = json.loads(
-        (
-            project / ".minecraft_ai/geckolib-entities.json"
-        ).read_text(encoding="utf-8")
-    )
+    index = json.loads((project / ".minecraft_ai/geckolib-entities.json").read_text(encoding="utf-8"))
     assert index["schema_version"] == "mmm/geckolib-entity-index-v1"
     assert "entities" not in index
-    assert [
-        record["entity_id"]
-        for record in iter_geckolib_entity_records(project)
-    ] == ["ember_guard", "frost_guard"]
-    hardened = harden_generated_project(
-        project,
-        policy=ScalePolicy(java_shard_size=8),
-    )
+    assert [record["entity_id"] for record in iter_geckolib_entity_records(project)] == ["ember_guard", "frost_guard"]
+    hardened = harden_generated_project(project, policy=ScalePolicy(java_shard_size=8))
     assert hardened["registry_definition_count"] == 2
 
 
@@ -178,40 +160,23 @@ def test_thousands_of_registration_units_do_not_grow_root_or_unit_files() -> Non
     client_root = _root_client(package)
     index = _entity_index_text(mod_id)
 
-    small = _registration_unit_files(
-        package,
-        mod_id,
-        base,
-        _entry(0),
-    )
+    small = _registration_unit_files(package, mod_id, base, _entry(0))
     small_max = max(len(value.encode("utf-8")) for value in small.values())
     large_max = 0
     for number in range(2_000):
-        unit = _registration_unit_files(
-            package,
-            mod_id,
-            base,
-            _entry(number),
-        )
+        unit = _registration_unit_files(package, mod_id, base, _entry(number))
         assert len(unit) == 4
-        large_max = max(
-            large_max,
-            *(len(value.encode("utf-8")) for value in unit.values()),
-        )
+        large_max = max(large_max, *(len(value.encode("utf-8")) for value in unit.values()))
 
     assert large_max <= small_max + 256
     assert _root_reg(package, mod_id) == server_root
     assert _root_client(package) == client_root
     assert _entity_index_text(mod_id) == index
     assert "FabricDefaultAttributeRegistry.register" in next(
-        value
-        for path, value in small.items()
-        if path.endswith("GeckoRegistration.java")
+        value for path, value in small.items() if path.endswith("GeckoRegistration.java")
     )
     assert "EntityRendererRegistry.register" in next(
-        value
-        for path, value in small.items()
-        if path.endswith("GeckoClientRegistration.java")
+        value for path, value in small.items() if path.endswith("GeckoClientRegistration.java")
     )
 
 
