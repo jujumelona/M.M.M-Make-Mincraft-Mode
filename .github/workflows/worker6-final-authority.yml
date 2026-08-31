@@ -2,7 +2,7 @@ name: Worker6 final proof authority
 
 # Temporary Worker 6 finalization gate; execute exactly once, then remove after product hardening lands.
 # Triggered for the final Worker 6 authority verification pass.
-# Retry after authority-aligned dependency receipt regression fixes.
+# Retry after authority-aligned dependency and protected-artifact receipt fixes.
 on:
   push:
     paths:
