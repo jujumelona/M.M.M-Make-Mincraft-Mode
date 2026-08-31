@@ -156,7 +156,8 @@ def test_sharded_merge_requires_union_to_cover_every_frozen_requirement() -> Non
         (prompt, _catalog(prompt, "req_collect", "req_portal", "req_travel"))
     )
     try:
+        merged = game_design._merge_game_design_pages([first, second])
         with pytest.raises(SpecValidationError, match="req_travel"):
-            game_design._merge_game_design_pages([first, second])
+            game_design._validate_ready_design(prompt, merged)
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
