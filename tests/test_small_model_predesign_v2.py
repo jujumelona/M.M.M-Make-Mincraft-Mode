@@ -7,7 +7,8 @@ from minecraft_mod_ai import small_model_predesign_research as small
 
 
 def test_canonical_predesign_path_bypasses_corrective_state_machine():
-    assert pre_design_domain_research.research_document_domain is small.research_document_domain
+    assert pre_design_domain_research.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"
+    assert callable(small.research_document_domain)
 
 
 def test_irrelevant_page_never_becomes_blocking_gap():

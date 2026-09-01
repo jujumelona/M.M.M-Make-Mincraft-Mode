@@ -41,7 +41,7 @@ def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is
         trace_metadata=None,
     )
 
-    assert owner.research_document_domain.__module__.endswith("small_model_predesign_research")
+    assert owner.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"
     assert len(calls) == 1
     assert calls[0]["response_format"] == "text"
     assert calls[0]["response_schema"] is None

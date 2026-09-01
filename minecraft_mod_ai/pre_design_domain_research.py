@@ -5,7 +5,29 @@ from typing import Any
 
 # Canonical pre-design research entrypoint. The previous corrective/page-gap state
 # machine is intentionally not on the execution path.
-from .small_model_predesign_research import research_document_domain
+from .small_model_predesign_research import research_document_domain as _small_model_research_document_domain
+
+
+def research_document_domain(
+    agentic_module: Any,
+    project_rag: Any,
+    router: Any,
+    *,
+    prompt: str,
+    domain: Mapping[str, Any],
+    document: Mapping[str, Any],
+    trace_metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Canonical facade for the host-owned small-model pre-design implementation."""
+    return _small_model_research_document_domain(
+        agentic_module,
+        project_rag,
+        router,
+        prompt=prompt,
+        domain=domain,
+        document=document,
+        trace_metadata=trace_metadata,
+    )
 
 
 def _root_page_claims(notes: Sequence[Mapping[str, Any]], *, page_ref: str) -> list[dict[str, Any]]:

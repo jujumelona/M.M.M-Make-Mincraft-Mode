@@ -983,7 +983,7 @@ def _section_messages(
         + " "
         + _ASSET_FORMAT
         + " Preserve exact approved requirement IDs. Write design content as Markdown, not JSON. "
-        + "No code fences, <think>, analysis, "
+        + "No JSON. No code fences, <think>, analysis, "
         "or fields outside the requested headings. "
         + _PRODUCTION_DEPTH
     )
