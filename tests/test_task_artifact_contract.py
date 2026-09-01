@@ -53,6 +53,7 @@ def test_task_acceptance_is_split_into_public_and_internal_fields():
         ],
     }
     contract._REQUIREMENT_DEPS.set({"req_child": ()})
+    contract._REQUIREMENT_PROVIDES.set({"req_child": ("provide:task_child",)})
     result = contract._postprocess_tasks([task], [gap])[0]
 
     assert result["acceptance"] == result["internal_invariants"]
@@ -73,12 +74,19 @@ def test_gameplay_requirement_dependency_becomes_task_dependency_edge():
     contract._REQUIREMENT_DEPS.set(
         {"req_parent": (), "req_child": ("req_parent",)}
     )
+    contract._REQUIREMENT_PROVIDES.set(
+        {
+            "req_parent": ("provide:task_parent",),
+            "req_child": ("provide:task_child",),
+        }
+    )
 
     result = {item["task_id"]: item for item in contract._postprocess_tasks([parent, child], gaps)}
 
-    assert "task_parent" in result["task_child"]["depends_on"]
+    assert result["task_child"]["consumes"] == ["provide:task_parent"]
+    assert result["task_child"]["depends_on"] == ["task_parent"]
     assert result["task_child"]["dependency_reasons"]["task_parent"] == {
-        "kind": "requirement_causality",
+        "kind": "requirement_dataflow",
         "requirement_ref": "req_parent",
     }
 
