@@ -351,9 +351,8 @@ def _install_post_bootstrap_contracts() -> None:
         agentic_research_module=None,
         model_router_module=model_router,
     )
-    # Keep the two non-RAG small-model amplifiers. The retired pre-design code-RAG wrapper
-    # is deliberately not installed.
-    small_model_max_agent_contract._install_tool_retrieval(model_router)
+    # The canonical progress-aware loop already exposes the phase-valid ACI.  Do not
+    # rerank that host-authorized tool frontier through an unrelated heuristic top-k.
     small_model_max_agent_contract._install_repair_context(
         repair_engine,
         agentic_optimization_contract,

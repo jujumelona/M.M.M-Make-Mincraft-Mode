@@ -30,6 +30,35 @@ class CustomModuleGenerationError(RuntimeError):
     pass
 
 
+def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
+    """Project one immutable semantic work item into the coder request.
+
+    Evidence-first planning already owns global proposal state.  Generation receives the
+    task-local contract (CodePlan-style per-edit authority) rather than replaying the
+    complete module/proposal configuration into every model turn.
+    """
+
+    config = module.config if isinstance(module.config, dict) else {}
+    evidence_task = config.get("evidence_task")
+    if isinstance(evidence_task, dict):
+        return {
+            "module_id": module.module_id,
+            "kind": module.kind,
+            "evidence_task": dict(evidence_task),
+            "depends_on": list(module.depends_on),
+            "required_gates": list(module.required_gates),
+        }
+    # Compatibility for callers that have not yet been compiled through the
+    # evidence-first semantic work graph.  No fields are silently discarded.
+    return {
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "config": config,
+        "depends_on": list(module.depends_on),
+        "required_gates": list(module.required_gates),
+    }
+
+
 _AGENT_MUTABLE_PREFIXES = (
     "src/main/java/",
     "src/main/resources/",
@@ -274,13 +303,9 @@ class CustomModuleGenerator:
             self._cached_root = root
             self._cached_index = index
 
+        module_contract = _task_local_module_contract(module)
         query = json.dumps(
-            {
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "config": module.config,
-                "depends_on": module.depends_on,
-            },
+            module_contract,
             ensure_ascii=False,
             sort_keys=True,
         )
@@ -395,13 +420,7 @@ class CustomModuleGenerator:
                 "mappings": mappings,
                 "java": java_version,
             },
-            "module": {
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "config": module.config,
-                "depends_on": list(module.depends_on),
-                "required_gates": list(module.required_gates),
-            },
+            "module": module_contract,
             "project_manifest": index.manifest_receipt(),
             "source_observation_receipt": observation_ledger["receipt"],
             "initial_exact_source_context": observation_pages[0],
@@ -1055,13 +1074,7 @@ def _output_exhaustion_continuation_messages(
             "mappings": mappings,
             "java": java_version,
         },
-        "module": {
-            "module_id": module.module_id,
-            "kind": module.kind,
-            "config": module.config,
-            "depends_on": list(module.depends_on),
-            "required_gates": list(module.required_gates),
-        },
+        "module": _task_local_module_contract(module),
         "continuation": {
             "reason": "previous_tool_enabled_page_exhausted_output",
             "continuation_index": continuation_index,
