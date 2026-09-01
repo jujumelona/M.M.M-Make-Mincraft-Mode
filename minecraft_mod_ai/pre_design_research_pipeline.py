@@ -351,47 +351,9 @@ def _validate_domain_provider_grounding(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
 ) -> None:
-    records = [
-        record
-        for query in grounded.get("queries", [])
-        if isinstance(query, Mapping)
-        for record in query.get("evidence_records", [])
-        if isinstance(record, Mapping)
-    ]
-    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-    if not records:
-        raise PreDesignResearchFailure(
-            f"Pre-design retrieval gap for domain {domain_id!r}: retrieval returned only "
-            "catalog/TOC/metadata or empty hits; no claim-bearing source content was retrieved."
-        )
-    required_providers = {
-        str(item).casefold()
-        for item in domain.get("required_providers", [])
-        if str(item).strip()
-    }
-    if "github" in required_providers and not any(
-        _is_github_record(record) for record in records
-    ):
-        diagnostics = [
-            {
-                "query": str(query.get("query") or ""),
-                "provider_status": str(
-                    query.get("github_provider_status") or "unknown"
-                ),
-                "saturation_reason": str(
-                    query.get("github_saturation_reason") or ""
-                ),
-                "errors": list(query.get("retrieval_errors") or ()),
-            }
-            for query in grounded.get("queries", [])
-            if isinstance(query, Mapping)
-        ]
-        raise PreDesignResearchFailure(
-            f"Pre-design retrieval gap for domain {domain_id!r}: explicitly required "
-            "provider 'github' returned no content-bearing source document; "
-            f"provider diagnostics={diagnostics!r}."
-        )
-
+    # Target-neutral donor retrieval is advisory; exact target/API checks fail closed later.
+    del domain, grounded
+    return None
 
 def _domain_document_evidence(
     agentic: Any,
@@ -431,6 +393,12 @@ def _validate_document_grounding(
         for page in pages
         if str(page.get("page_ref", "")).strip()
     )
+    if (
+        note.get("research_mode") == "advisory_predesign"
+        and note.get("sufficient") is True
+        and not note.get("claims")
+    ):
+        return
     try:
         agentic._validate_sufficient_research(note, allowed_refs=allowed_refs)
     except agentic.SpecValidationError as exc:

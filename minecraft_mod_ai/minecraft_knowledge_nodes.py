@@ -214,6 +214,31 @@ def detect_features(prompt: str, game_design: Mapping[str, Any] | None=None) -> 
         if any(_contains(text, term) for term in terms):
             features.add(feature)
     folded = text.casefold()
+
+    stateful_terms = (
+        "economy", "currency", "trade", "trading", "upgrade", "crew", "colony",
+        "colonization", "terraform", "돈", "거래", "업그레이드", "선원", "식민",
+    )
+    world_terms = (
+        "planet", "dimension", "world", "space travel", "colonization", "terraform",
+        "행성", "우주", "식민",
+    )
+    mineral_terms = ("ore", "mineral", "광물", "광석")
+    if any(term in folded for term in stateful_terms):
+        features.add("persistence")
+    if any(term in folded for term in world_terms):
+        features.add("dimension")
+    if any(term in folded for term in mineral_terms):
+        features.add("world_feature")
+    if (
+        any(term in folded for term in stateful_terms)
+        and not any(
+            term in folded
+            for term in ("singleplayer only", "single-player only", "싱글플레이 전용")
+        )
+    ):
+        features.add("networking")
+
     if re.search('\\b(?:add|create|make|new|custom)\\b.{0,40}\\bitem\\b', folded) or re.search('\\bitem\\b.{0,40}\\b(?:add|create|make|register)\\b', folded) or re.search('(?:새|신규|커스텀).{0,20}아이템', text) or re.search('아이템(?:을|를)?\\s*(?:추가|등록|만들|제작)', text):
         features.add('custom_item')
     if any(_contains(text, x) for x in ('machine', '기계', '장치', '설비')) and (any(_contains(text, x) for x in ('inventory', 'container', '인벤토리', '보관함')) or 'gui' in features or 'networking' in features):

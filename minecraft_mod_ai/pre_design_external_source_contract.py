@@ -18,7 +18,7 @@ from functools import wraps
 from typing import Any
 
 _INSTALLED = False
-_DEFAULT_MAX_QUERIES = 12
+_DEFAULT_MAX_QUERIES = 20
 _HARD_MAX_QUERIES = 20
 _MAX_REPOSITORIES_PER_QUERY = 3
 _GITHUB_API = "https://api.github.com"
@@ -48,7 +48,7 @@ def _max_queries() -> int:
     # GitHub unauthenticated repository search is only 10 requests/minute.  Never
     # configure the pre-design phase to deterministically exceed that ceiling itself;
     # leave two requests of headroom for other process activity.
-    provider_cap = _HARD_MAX_QUERIES if _github_token() else 8
+    provider_cap = _HARD_MAX_QUERIES if _github_token() else 10
     return max(1, min(value, _HARD_MAX_QUERIES, provider_cap))
 
 
@@ -92,16 +92,44 @@ def _query_terms(query: str) -> set[str]:
 
 def _body_relevant(query: str, body: str) -> bool:
     wanted = _query_terms(query)
-    if not wanted:
-        return bool(body.strip())
     body_terms = {
         token.casefold()
         for token in _WORD.findall(body)
         if len(token) >= 3
     }
-    return bool(wanted & body_terms)
-
-
+    if wanted and not (wanted & body_terms):
+        return False
+    folded = body.casefold()
+    ecosystem_markers = (
+        "fabric.mod.json",
+        "fabric api",
+        "fabricmc",
+        "minecraft mod",
+        "forge mod",
+        "neoforge",
+        "mods.toml",
+        "architectury",
+        "curseforge",
+        "modrinth",
+        "minecraftversion",
+    )
+    if not any(marker in folded for marker in ecosystem_markers):
+        return False
+    generic_markers = (
+        "student zone",
+        "awesome list",
+        "awesome-minecraft",
+        "learning path",
+        "bootcamp",
+        "minecraft bot",
+        "mineflayer",
+        "llm agent",
+    )
+    if any(marker in folded for marker in generic_markers) and not any(
+        marker in folded for marker in ("fabric.mod.json", "mods.toml", "architectury")
+    ):
+        return False
+    return True
 def _headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -374,18 +402,23 @@ def _stable_queries(value: Any) -> list[str]:
     return result
 
 
-def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> set[str]:
-    """Select one approved retrieval query per authored requirement when available."""
-
+def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> list[str]:
+    # Stable one-query-per-authored-requirement first pass.
     if str(payload.get("schema_version") or "") == "mmm/corrective-retrieval-request-v1":
-        return {
-            query.casefold()
-            for domain in payload.get("domains", ())
-            if isinstance(domain, Mapping)
-            for query in _stable_queries(domain.get("queries"))
-        }
+        result: list[str] = []
+        seen: set[str] = set()
+        for domain in payload.get("domains", ()):
+            if not isinstance(domain, Mapping):
+                continue
+            for query in _stable_queries(domain.get("queries")):
+                key = query.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    result.append(query)
+        return result
 
-    selected: set[str] = set()
+    result: list[str] = []
+    seen: set[str] = set()
     domains = payload.get("domains")
     for domain in domains if isinstance(domains, list) else ():
         if not isinstance(domain, Mapping) or str(domain.get("domain_id") or "") != "request":
@@ -396,7 +429,6 @@ def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> set[str]:
             continue
         try:
             from . import authored_scope_research_contract as authored_scope
-
             catalog = authored_scope._active_catalog(prompt)
         except Exception:
             catalog = None
@@ -406,12 +438,15 @@ def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> set[str]:
         for raw in rows:
             if not isinstance(raw, Mapping):
                 continue
-            planned = _stable_queries(raw.get("search_queries"))
-            if planned:
-                selected.add(planned[0].casefold())
-    return selected
-
-
+            queries = _stable_queries(raw.get("search_queries"))
+            if not queries:
+                continue
+            query = queries[0]
+            key = query.casefold()
+            if key not in seen:
+                seen.add(key)
+                result.append(query)
+    return result
 def _fallback_query_keys(bundle: Mapping[str, Any], limit: int) -> set[str]:
     all_queries: list[str] = []
     for domain in bundle.get("domains", ()) if isinstance(bundle.get("domains"), list) else ():
@@ -462,12 +497,13 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
         return result
 
     limit = _max_queries()
-    selected = _planned_requirement_query_keys(payload)
+    planned = _planned_requirement_query_keys(payload)
     selection_origin = "approved_requirement_queries"
-    if not selected:
-        selected = _fallback_query_keys(bundle, limit)
+    if not planned:
+        planned = sorted(_fallback_query_keys(bundle, limit))
         selection_origin = "bounded_fallback_queries"
-    selected = set(list(selected)[:limit])
+    selected_order = planned[:limit]
+    selected = {query.casefold() for query in selected_order}
     provider_rate_limited = False
     _emit_source_trace(
         "external_query_plan",
@@ -475,7 +511,7 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
         configured_limit=limit,
         authenticated=bool(_github_token()),
         selected_count=len(selected),
-        selected_queries=sorted(selected),
+        selected_queries=selected_order,
     )
 
     augmented_domains: list[Any] = []

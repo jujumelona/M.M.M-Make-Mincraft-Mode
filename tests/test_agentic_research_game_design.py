@@ -38,23 +38,27 @@ class _SectionRouter:
                 "enable_tools": enable_tools,
             }
         )
-        values = {
+        requested = []
+        text = str(messages[-1]["content"])
+        for field in (
+            "title", "pitch", "core_loop", "progression", "combat", "mod_context",
+            "modules", "assets", "acceptance_tests", "art_direction",
+        ):
+            if f"- {field}" in text:
+                requested.append(field)
+        bodies = {
             "title": "연구 기반 모드",
             "pitch": "검색 근거를 바탕으로 설계한다.",
-            "core_loop": ["탐색하고 상호작용한다"],
-            "progression": ["기능을 단계적으로 해금한다"],
-            "combat": {},
-            "mod_context": {},
-            "modules": [],
-            "assets": [],
-            "acceptance_tests": ["요청한 핵심 루프가 게임 내에서 동작한다"],
-            "art_direction": {},
+            "core_loop": "- 탐색하고 상호작용한다",
+            "progression": "- 기능을 단계적으로 해금한다",
+            "combat": "none",
+            "mod_context": "none",
+            "modules": "none",
+            "assets": "none",
+            "acceptance_tests": "- 요청한 핵심 루프가 게임 내에서 동작한다",
+            "art_direction": "none",
         }
-        assert response_format == "json"
-        assert isinstance(response_schema, dict)
-        fields = list(response_schema["required"])
-        return json.dumps({field: values[field] for field in fields}, ensure_ascii=False)
-
+        return "\n".join(f"## {field}\n{bodies[field]}" for field in requested)
 
 class _ResearchRouter:
     def __init__(self, evidence_ref: str = "forced_project_rag") -> None:
@@ -106,7 +110,7 @@ def _deterministic_research() -> dict[str, object]:
     }
 
 
-def test_sectioned_game_design_generates_each_section_once_as_structured_json() -> None:
+def test_sectioned_game_design_uses_host_parsed_markdown() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -125,16 +129,13 @@ def test_sectioned_game_design_generates_each_section_once_as_structured_json() 
     ]
     assert len(router.calls) == len(expected_sections)
     assert all(call["role"] == "planner" for call in router.calls)
-    assert all(call["response_format"] == "json" for call in router.calls)
-    assert all(isinstance(call["response_schema"], dict) for call in router.calls)
+    assert all(call["response_format"] == "text" for call in router.calls)
+    assert all(call["response_schema"] is None for call in router.calls)
     assert all(call["tool_stage"] == "game_design" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
     for fields, call in zip(expected_sections, router.calls, strict=True):
-        schema = call["response_schema"]
-        assert schema["required"] == list(fields)
-        assert schema["additionalProperties"] is False
         system = str(call["messages"][0]["content"])
-        assert "Do not emit reasoning" in system
+        assert "No JSON" in system
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]

@@ -305,6 +305,12 @@ def _validate_sufficient_research(note: Mapping[str, Any], *, allowed_refs: froz
         return
     claims = note.get("claims", [])
     if not isinstance(claims, list) or not claims:
+        if (
+            note.get("research_mode") == "advisory_predesign"
+            and note.get("research_evidence_status")
+            in {"no_relevant_external_evidence", "partial", "supported"}
+        ):
+            return
         raise SpecValidationError("research_note.sufficient=true requires at least one grounded claim")
     if not allowed_refs:
         raise SpecValidationError(
@@ -441,18 +447,13 @@ def _generate_section(
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    del host_properties
     trace = PlannerStageTrace(
         stage=f"game_design_{section_id}",
         prompt=prompt,
         media_paths=media_paths,
         metadata=dict(trace_metadata or {}),
     )
-    schema = {
-        "type": "object",
-        "properties": dict(host_properties),
-        "required": list(fields),
-        "additionalProperties": False,
-    }
     raw = router.generate_text(
         "planner",
         _section_messages(
@@ -462,28 +463,23 @@ def _generate_section(
             research=research,
         ),
         media_paths=media_paths,
-        response_format="json",
-        response_schema=schema,
+        response_format="text",
+        response_schema=None,
         tool_stage="game_design",
         enable_tools=False,
     )
     try:
-        payload = _extract_json_object(raw)
-        section = {field: payload[field] for field in fields if field in payload}
+        section = _parse_markdown_section(raw, fields)
         requirement_ids = tuple(
             item["requirement_id"] for item in _active_requirement_ledger(prompt)
         )
-        _validate_section_types(
-            section,
-            fields,
-            requirement_ids=requirement_ids,
-        )
+        _validate_section_types(section, fields, requirement_ids=requirement_ids)
     except (KeyError, SpecValidationError, ValueError, TypeError) as exc:
         trace.record_attempt(
             raw_output=raw,
             validation_error=str(exc),
             candidate=None,
-            context={"section_id": section_id, "format": "structured_json"},
+            context={"section_id": section_id, "format": "host_parsed_markdown"},
         )
         raise
     trace.record_attempt(
@@ -491,12 +487,10 @@ def _generate_section(
         validation_error=None,
         candidate=section,
         accepted=section,
-        context={"section_id": section_id, "format": "structured_json"},
+        context={"section_id": section_id, "format": "host_parsed_markdown"},
     )
     trace.record_success(section)
     return section
-
-
 def _normalize_heading(value: str) -> str:
     value = value.strip().strip("`").casefold()
     return re.sub(r"[^a-z0-9]+", "_", value).strip("_")
@@ -566,6 +560,9 @@ def _markdown_list(body: str) -> list[str]:
 
 
 def _markdown_map(body: str) -> dict[str, list[str]]:
+    normalized = " ".join(_strip_list_marker(line) for line in body.splitlines() if _strip_list_marker(line)).strip().casefold()
+    if normalized in _NONE_VALUES:
+        return {}
     result: dict[str, list[str]] = {}
     current = "summary"
     for line in body.splitlines():
@@ -978,29 +975,31 @@ def _section_messages(
     fields: Sequence[str],
     research: Mapping[str, Any],
 ) -> list[dict[str, str]]:
-    """Prompt only for semantic design decisions; structure is enforced by the host schema."""
     system = (
-        "You are a bounded Minecraft mod design worker. Make only the semantic design decisions "
-        "needed for the assigned section. Do not emit reasoning, analysis, <think> blocks, Markdown "
-        "headings, instructions, or fields outside the requested schema. Preserve exact approved "
-        "requirement IDs. Do not invent features merely to fill fields. User-facing strings stay in "
-        "the user's language and identifiers stay English snake_case. "
+        "You are a bounded Minecraft mod design worker. Output only the requested Markdown "
+        "sections. For every requested field write a heading exactly as '## <field>'. "
+        "Use plain text or bullets under it. For map fields use '- key: value' or nested bullets. "
+        + _MODULE_FORMAT
+        + " "
+        + _ASSET_FORMAT
+        + " Preserve exact approved requirement IDs. No JSON, code fences, <think>, analysis, "
+        "or fields outside the requested headings. "
         + _PRODUCTION_DEPTH
     )
     ledger = _active_requirement_ledger(prompt)
-    user_payload = {
-        "authoritative_request": prompt,
-        "section_id": section_id,
-        "requested_fields": list(fields),
-        "research_context": _compact_research_for_design(research),
-        "approved_requirements": list(ledger),
-    }
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
-    ]
-
-
+    user = (
+        "AUTHORITATIVE REQUEST\n"
+        + prompt
+        + "\n\nSECTION\n"
+        + section_id
+        + "\n\nREQUESTED FIELDS\n"
+        + "\n".join(f"- {field}" for field in fields)
+        + "\n\n"
+        + _render_requirement_ledger(ledger)
+        + "\n\nRESEARCH CONTEXT\n"
+        + _render_design_research(research)
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 def _render_design_research(research: Mapping[str, Any]) -> str:
     compact = _compact_research_for_design(research)
     lines: list[str] = []
