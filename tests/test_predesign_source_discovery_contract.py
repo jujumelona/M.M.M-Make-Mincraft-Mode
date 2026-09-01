@@ -162,3 +162,16 @@ def test_legacy_pre_design_owner_is_physically_absent_and_unreferenced():
         if "agentic_pre_design_rag" in text:
             offenders.append(str(path))
     assert offenders == []
+
+
+def test_runtime_does_not_reinstall_retired_predesign_wrappers():
+    bootstrap = Path("minecraft_mod_ai/runtime_bootstrap.py").read_text(encoding="utf-8")
+    finalization = Path("minecraft_mod_ai/runtime_finalization.py").read_text(encoding="utf-8")
+    stability = Path("minecraft_mod_ai/runtime_stability_contract.py").read_text(encoding="utf-8")
+    retrieval = Path("minecraft_mod_ai/small_model_retrieval_efficiency_contract.py").read_text(encoding="utf-8")
+
+    assert "pre_design_external_source_contract" not in bootstrap
+    assert "research_grounded_rag_contract" not in finalization
+    assert "_install_bounded_research_efficiency" not in stability
+    assert "_install_synthesis_convergence" not in stability
+    assert "_install_pre_design_rag_cascade(agentic_pre_design_rag)" not in retrieval
