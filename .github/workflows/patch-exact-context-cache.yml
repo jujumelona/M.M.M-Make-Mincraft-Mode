@@ -1,0 +1,59 @@
+name: Exact Context Props Cache
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-exact-context-cache.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch exact context cache and isolated tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/llama_exact_context.py')
+          path.write_text('''from __future__ import annotations\n\n"""Exact live llama.cpp chat-context accounting.\n\nThe live server remains authoritative for chat-template tokenization and slot context.\nManaged-server ``n_ctx`` is cached only for the exact process generation identity;\ninput-token counts are always measured for the concrete payload.\n"""\n\nimport threading\nfrom collections.abc import Mapping\nfrom dataclasses import dataclass\nfrom typing import Any\n\n_CONTEXT_CACHE_LOCK = threading.RLock()\n_MANAGED_CONTEXT_CACHE: dict[str, int] = {}\n\n\n@dataclass(frozen=True)\nclass LiveContextAccounting:\n    input_tokens: int\n    context_tokens: int\n\n    @property\n    def remaining_tokens(self) -> int:\n        return self.context_tokens - self.input_tokens\n\n\nclass ExactContextOverflow(RuntimeError):\n    pass\n\n\ndef _client(server_url: str) -> Any:\n    from .llama_stream_efficiency_contract import _client as managed_client\n\n    return managed_client(server_url)\n\n\ndef _managed_generation_identity(server_url: str) -> str:\n    try:\n        from .llama_server_autotune import managed_server_generation_identity\n\n        return managed_server_generation_identity(server_url)\n    except Exception:  # noqa: BLE001 - external/unmanaged servers are intentionally uncached\n        return ""\n\n\ndef _read_context_tokens(client: Any, server_url: str) -> int:\n    origin = server_url.rstrip("/").removesuffix("/v1")\n    props_response = client.get(f"{origin}/props")\n    props_response.raise_for_status()\n    props = props_response.json()\n    settings = props["default_generation_settings"]\n    context_tokens = int(settings["n_ctx"])\n    if context_tokens <= 0:\n        raise RuntimeError(f"llama.cpp returned invalid n_ctx={context_tokens}")\n    return context_tokens\n\n\ndef _context_tokens(client: Any, server_url: str) -> int:\n    generation = _managed_generation_identity(server_url)\n    if not generation:\n        return _read_context_tokens(client, server_url)\n    with _CONTEXT_CACHE_LOCK:\n        cached = _MANAGED_CONTEXT_CACHE.get(generation)\n        if cached is not None:\n            return cached\n        context_tokens = _read_context_tokens(client, server_url)\n        # MMM owns at most one managed llama-server process. Retaining only the live\n        # generation prevents a stale process configuration from surviving restart.\n        _MANAGED_CONTEXT_CACHE.clear()\n        _MANAGED_CONTEXT_CACHE[generation] = context_tokens\n        return context_tokens\n\n\ndef live_context_accounting(\n    server_url: str,\n    payload: Mapping[str, Any],\n) -> LiveContextAccounting:\n    client = _client(server_url)\n    body = dict(payload)\n    body.pop("stream", None)\n    token_response = client.post(\n        f"{server_url.rstrip('/')}/chat/completions/input_tokens",\n        json=body,\n    )\n    token_response.raise_for_status()\n    token_payload = token_response.json()\n    input_tokens = int(token_payload["input_tokens"])\n    context_tokens = _context_tokens(client, server_url)\n    if input_tokens < 0:\n        raise RuntimeError(\n            "llama.cpp returned invalid live context accounting: "\n            f"input_tokens={input_tokens} n_ctx={context_tokens}"\n        )\n    return LiveContextAccounting(\n        input_tokens=input_tokens,\n        context_tokens=context_tokens,\n    )\n\n\ndef capacity_safe_payload(\n    server_url: str,\n    payload: Mapping[str, Any],\n) -> dict[str, Any]:\n    result = dict(payload)\n    accounting = live_context_accounting(server_url, result)\n    remaining = accounting.remaining_tokens\n    if remaining <= 0:\n        raise ExactContextOverflow(\n            "exact llama.cpp chat input exceeds the active runtime slot; "\n            f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens}"\n        )\n    requested = int(result.get("max_tokens", 0) or 0)\n    if requested <= 0 or requested > remaining:\n        result["max_tokens"] = remaining\n    return result\n\n\n__all__ = [\n    "ExactContextOverflow",\n    "LiveContextAccounting",\n    "capacity_safe_payload",\n    "live_context_accounting",\n]\n''', encoding='utf-8')
+
+          path = Path('tests/test_exact_llama_context_accounting.py')
+          path.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai.llama_exact_context import (\n    capacity_safe_payload,\n    live_context_accounting,\n)\n\n\nclass _Response:\n    def __init__(self, payload):\n        self._payload = payload\n\n    def raise_for_status(self):\n        return None\n\n    def json(self):\n        return self._payload\n\n\nclass _Client:\n    def __init__(self):\n        self.props_calls = 0\n        self.token_calls = 0\n\n    def post(self, url, json):\n        self.token_calls += 1\n        assert url.endswith("/v1/chat/completions/input_tokens")\n        assert json["messages"][0]["content"] == "hello"\n        return _Response({"object": "response.input_tokens", "input_tokens": 37})\n\n    def get(self, url):\n        self.props_calls += 1\n        assert url.endswith("/props")\n        return _Response({"default_generation_settings": {"n_ctx": 128}})\n\n\ndef _uncached(monkeypatch, client):\n    import minecraft_mod_ai.llama_exact_context as module\n\n    monkeypatch.setattr(module, "_client", lambda _url: client)\n    monkeypatch.setattr(module, "_managed_generation_identity", lambda _url: "")\n\n\ndef test_live_accounting_uses_server_tokenizer_and_slot(monkeypatch):\n    client = _Client()\n    _uncached(monkeypatch, client)\n    accounting = live_context_accounting(\n        "http://127.0.0.1:8910/v1",\n        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 999},\n    )\n    assert accounting.input_tokens == 37\n    assert accounting.context_tokens == 128\n    assert accounting.remaining_tokens == 91\n\n\ndef test_output_allowance_is_only_physical_remaining_context(monkeypatch):\n    client = _Client()\n    _uncached(monkeypatch, client)\n    payload = capacity_safe_payload(\n        "http://127.0.0.1:8910/v1",\n        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 999},\n    )\n    assert payload["max_tokens"] == 91\n\n\ndef test_no_arbitrary_output_shrink_when_requested_output_physically_fits(monkeypatch):\n    client = _Client()\n    _uncached(monkeypatch, client)\n    payload = capacity_safe_payload(\n        "http://127.0.0.1:8910/v1",\n        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 80},\n    )\n    assert payload["max_tokens"] == 80\n\n\ndef test_managed_generation_reuses_props_but_recounts_each_payload(monkeypatch):\n    import minecraft_mod_ai.llama_exact_context as module\n\n    client = _Client()\n    module._MANAGED_CONTEXT_CACHE.clear()\n    monkeypatch.setattr(module, "_client", lambda _url: client)\n    monkeypatch.setattr(\n        module, "_managed_generation_identity", lambda _url: "managed:generation-a"\n    )\n    for _ in range(3):\n        live_context_accounting(\n            "http://127.0.0.1:8910/v1",\n            {"messages": [{"role": "user", "content": "hello"}]},\n        )\n    assert client.token_calls == 3\n    assert client.props_calls == 1\n\n\ndef test_managed_restart_invalidates_cached_context(monkeypatch):\n    import minecraft_mod_ai.llama_exact_context as module\n\n    client = _Client()\n    identity = {"value": "managed:generation-a"}\n    module._MANAGED_CONTEXT_CACHE.clear()\n    monkeypatch.setattr(module, "_client", lambda _url: client)\n    monkeypatch.setattr(\n        module, "_managed_generation_identity", lambda _url: identity["value"]\n    )\n    live_context_accounting(\n        "http://127.0.0.1:8910/v1",\n        {"messages": [{"role": "user", "content": "hello"}]},\n    )\n    identity["value"] = "managed:generation-b"\n    live_context_accounting(\n        "http://127.0.0.1:8910/v1",\n        {"messages": [{"role": "user", "content": "hello"}]},\n    )\n    assert client.props_calls == 2\n''', encoding='utf-8')
+
+          path = Path('tests/test_llama_prefill_calibration_cache.py')
+          text = path.read_text(encoding='utf-8')
+          if 'import pytest\n' not in text:
+              text = text.replace('from __future__ import annotations\n\n', 'from __future__ import annotations\n\nimport pytest\n\n', 1)
+          fixture = '''\n\n@pytest.fixture(autouse=True)\ndef _isolate_prefill_tests_from_exact_context_network(monkeypatch):\n    import minecraft_mod_ai.llama_exact_context as exact_context\n\n    monkeypatch.setattr(\n        exact_context,\n        "capacity_safe_payload",\n        lambda _server_url, payload: dict(payload),\n    )\n'''
+          marker = '\n\ndef _adapter(*, extra=None) -> LlamaCppAdapter:\n'
+          if '_isolate_prefill_tests_from_exact_context_network' not in text:
+              if marker not in text:
+                  raise SystemExit('prefill adapter marker missing')
+              text = text.replace(marker, fixture + marker, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify exact-context contracts
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check --fix minecraft_mod_ai/llama_exact_context.py tests/test_exact_llama_context_accounting.py tests/test_llama_prefill_calibration_cache.py
+          python -m py_compile minecraft_mod_ai/llama_exact_context.py
+          python -m ruff check minecraft_mod_ai/llama_exact_context.py tests/test_exact_llama_context_accounting.py tests/test_llama_prefill_calibration_cache.py
+          python -m pytest -q tests/test_exact_llama_context_accounting.py tests/test_llama_prefill_calibration_cache.py
+      - name: Commit production and regressions
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/llama_exact_context.py tests/test_exact_llama_context_accounting.py tests/test_llama_prefill_calibration_cache.py
+          git diff --cached --check
+          git commit -m 'perf: cache managed llama context size per generation'
+          git push origin HEAD:main
