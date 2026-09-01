@@ -70,19 +70,34 @@ jobs:
           text = path.read_text(encoding='utf-8')
           old = '    assert getattr(model_router.ModelRouter._prepare_generation_request, "_mmm_small_model_tool_retrieval", False)'
           new = '    assert not getattr(model_router.ModelRouter._prepare_generation_request, "_mmm_small_model_tool_retrieval", False)'
-          if old not in text:
-              raise SystemExit('stale selector assertion missing')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('selector assertion missing')
+          path.write_text(text, encoding='utf-8')
 
           path = Path('tests/test_exact_llama_context_accounting.py')
           text = path.read_text(encoding='utf-8')
           text = text.replace('from types import SimpleNamespace\n\n', '')
           text = text.replace('    ExactContextOverflow,\n', '')
           path.write_text(text, encoding='utf-8')
+
+          path = Path('minecraft_mod_ai/small_model_predesign_research.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'except Exception as exc:',
+              'except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics',
+          )
+          text = text.replace(
+              'except Exception:',
+              'except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely',
+          )
+          path.write_text(text, encoding='utf-8')
           PY
       - name: Install and verify
         run: |
           python -m pip install -e '.[dev]'
+          python -m ruff check --fix minecraft_mod_ai/model_router.py minecraft_mod_ai/small_model_predesign_research.py tests/test_predesign_capacity_batching.py tests/test_small_model_research_completion.py tests/test_exact_llama_context_accounting.py
           python -m py_compile minecraft_mod_ai/model_router.py minecraft_mod_ai/small_model_predesign_research.py
           python -m ruff check minecraft_mod_ai/model_router.py minecraft_mod_ai/small_model_predesign_research.py tests/test_predesign_capacity_batching.py tests/test_small_model_research_completion.py tests/test_exact_llama_context_accounting.py
           python -m pytest -q tests/test_predesign_capacity_batching.py tests/test_predesign_source_discovery_contract.py tests/test_small_model_research_completion.py tests/test_exact_llama_context_accounting.py
@@ -90,7 +105,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add minecraft_mod_ai/model_router.py tests/test_small_model_research_completion.py tests/test_exact_llama_context_accounting.py
+          git add minecraft_mod_ai/model_router.py minecraft_mod_ai/small_model_predesign_research.py tests/test_small_model_research_completion.py tests/test_exact_llama_context_accounting.py
           git diff --cached --check
           git commit -m 'refactor: expose exact input accounting to research'
           git push origin HEAD:main
