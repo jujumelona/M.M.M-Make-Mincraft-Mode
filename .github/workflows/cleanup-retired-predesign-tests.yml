@@ -29,6 +29,7 @@ jobs:
               'tests/test_pre_design_phase_grounding_recovery.py',
               'tests/test_pre_design_rag_root_cause.py',
               'tests/test_pre_design_research_pipeline.py',
+              'tests/test_predesign_rag_runtime_root_cause.py',
           )
           for raw in obsolete:
               path = Path(raw)
@@ -52,6 +53,14 @@ jobs:
                   raise SystemExit(f'stale import marker missing: {raw}')
               path.write_text(text.replace(old, '', 1), encoding='utf-8')
 
+          composition = Path('tests/test_predesign_runtime_composition.py')
+          text = composition.read_text(encoding='utf-8')
+          old = 'import minecraft_mod_ai.agentic_pre_design_rag as project_rag\n'
+          new = 'import minecraft_mod_ai.pre_design_grounded_rag as project_rag\n'
+          if old not in text:
+              raise SystemExit('runtime composition legacy import marker missing')
+          composition.write_text(text.replace(old, new, 1), encoding='utf-8')
+
           path = Path('tests/test_runtime_contract_composer_ownership.py')
           text = path.read_text(encoding='utf-8')
           start = text.index('def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:')
@@ -59,13 +68,18 @@ jobs:
           replacement = '''def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:\n    import re\n\n    source = (PACKAGE / "runtime_bootstrap.py").read_text(encoding="utf-8")\n    expected = [\n        "prebootstrap",\n        "core",\n        "model-runtime",\n        "validation",\n        "generation",\n        "platform",\n        "planner",\n        "architecture",\n        "late-safety",\n        "public-boundary",\n        "post-bootstrap",\n        "postbootstrap",\n        "integrity",\n    ]\n    observed = re.findall(r'ContractStage\\(\\s*"([^"]+)"', source)\n    assert observed[: len(expected)] == expected\n    assert 'compose_contract_stages(' in source\n'''
           path.write_text(text[:start] + replacement + text[next_test:], encoding='utf-8')
 
-          token = 'agentic_' + 'pre_design_' + 'rag'
+          import_markers = (
+              'import minecraft_mod_ai.agentic_pre_design_rag',
+              'from minecraft_mod_ai import agentic_pre_design_rag',
+              'from minecraft_mod_ai.agentic_pre_design_rag import',
+          )
           offenders = []
           for path in Path('tests').glob('test_*.py'):
-              if token in path.read_text(encoding='utf-8'):
+              text = path.read_text(encoding='utf-8')
+              if any(marker in text for marker in import_markers):
                   offenders.append(str(path))
           if offenders:
-              raise SystemExit('remaining retired-owner test references: ' + ', '.join(offenders))
+              raise SystemExit('remaining retired-owner test imports: ' + ', '.join(offenders))
           PY
       - name: Compile changed tests
         run: |
@@ -74,6 +88,7 @@ jobs:
             tests/test_agentic_research_game_design.py \
             tests/test_planner_failure_regressions.py \
             tests/test_research_claim_transport.py \
+            tests/test_predesign_runtime_composition.py \
             tests/test_runtime_contract_composer_ownership.py
       - name: Commit cleanup to main
         run: |
