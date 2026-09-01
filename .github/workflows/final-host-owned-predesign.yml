@@ -1,4 +1,5 @@
 name: Final host-owned predesign cleanup
+# rerun-generation: 7
 on:
   push:
     paths:
