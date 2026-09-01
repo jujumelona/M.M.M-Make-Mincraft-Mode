@@ -1,0 +1,442 @@
+name: One-shot Pre-design Fast Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-predesign-fast.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch provider contract and parallel retrieval
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          central = Path('minecraft_mod_ai/central_research.py')
+          text = central.read_text(encoding='utf-8')
+          marker = '        "modrinth",\n        "github",\n        "openverse_images",'
+          replacement = '        "modrinth",\n        "curseforge",\n        "github",\n        "openverse_images",'
+          if text.count(marker) < 2:
+              raise SystemExit('central provider markers changed')
+          text = text.replace(marker, replacement, 2)
+          text = text.replace(
+              'required.extend(("modrinth", "github"))',
+              'required.extend(("modrinth", "curseforge", "github"))',
+              1,
+          )
+          central.write_text(text, encoding='utf-8')
+
+          rag = Path('minecraft_mod_ai/pre_design_grounded_rag.py')
+          text = rag.read_text(encoding='utf-8')
+          old_import = 'import urllib.request\nfrom collections.abc import Mapping\n'
+          new_import = 'import urllib.request\nimport threading\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\nfrom collections.abc import Mapping\n'
+          if old_import not in text:
+              raise SystemExit('rag import marker changed')
+          text = text.replace(old_import, new_import, 1)
+          text = text.replace(
+              '_TIMEOUT = 8.0\n',
+              '_TIMEOUT = 8.0\n_MAX_QUERY_WORKERS = max(1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKERS", "4") or 4)))\n',
+              1,
+          )
+          text = text.replace(
+              '"versions": list(hit.get("versions") or [])[:20],\n',
+              '"versions": list(hit.get("versions") or [])[:20],\n                    "source_url": str(detail.get("source_url") or ""),\n',
+              1,
+          )
+          text = text.replace(
+              '"metadata": {"mod_id": mod_id, "slug": str(row.get("slug") or "")},\n',
+              '"metadata": {\n                    "mod_id": mod_id,\n                    "slug": str(row.get("slug") or ""),\n                    "source_url": str(links.get("sourceUrl") or ""),\n                },\n',
+              1,
+          )
+
+          start = text.index('def _forced_rag_bundle(')
+          end = text.index('\ndef _body(', start)
+          replacement = r'''def _github_repo_from_url(value: str) -> str:
+              try:
+                  parsed = urllib.parse.urlparse(str(value or "").strip())
+              except ValueError:
+                  return ""
+              if parsed.netloc.casefold() not in {"github.com", "www.github.com"}:
+                  return ""
+              parts = [part for part in parsed.path.split("/") if part]
+              if len(parts) < 2:
+                  return ""
+              owner, repo = parts[0], parts[1]
+              if repo.endswith(".git"):
+                  repo = repo[:-4]
+              return f"{owner}/{repo}" if owner and repo else ""
+
+
+          def _linked_github_sources(
+              records: list[dict[str, Any]],
+              *,
+              disabled: Callable[[], bool],
+              disable: Callable[[], None],
+          ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+              repositories: list[str] = []
+              for record in records:
+                  metadata = record.get("metadata")
+                  source_url = (
+                      str(metadata.get("source_url") or "")
+                      if isinstance(metadata, Mapping)
+                      else ""
+                  )
+                  repo = _github_repo_from_url(source_url)
+                  if repo and repo not in repositories:
+                      repositories.append(repo)
+              if not repositories:
+                  return [], {
+                      "provider": "github",
+                      "status": "skipped_no_linked_source",
+                      "result_count": 0,
+                      "search_requests": 0,
+                      "source_requests": 0,
+                  }
+              if disabled():
+                  return [], {
+                      "provider": "github",
+                      "status": "disabled_after_rate_or_auth_failure",
+                      "result_count": 0,
+                      "search_requests": 0,
+                      "source_requests": 0,
+                  }
+              token = os.environ.get("GITHUB_TOKEN", "").strip()
+              headers = {"Authorization": f"Bearer {token}"} if token else {}
+              found: list[dict[str, Any]] = []
+              errors: list[str] = []
+              for full_name in repositories[:2]:
+                  try:
+                      body = _text(
+                          f"https://api.github.com/repos/{full_name}/readme", headers
+                      ).strip()
+                  except urllib.error.HTTPError as exc:
+                      if exc.code in {401, 403, 429}:
+                          disable()
+                      errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
+                      continue
+                  except Exception as exc:
+                      errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
+                      continue
+                  if not body:
+                      continue
+                  found.append(
+                      {
+                          "source_id": f"github:{full_name}",
+                          "source_type": "github_repository_body",
+                          "source_locator": f"github:{full_name}",
+                          "url": f"https://github.com/{full_name}",
+                          "title": full_name.rsplit("/", 1)[-1],
+                          "content": body,
+                          "content_sha256": _sha256_text(body),
+                          "body_retrieved": True,
+                          "evidence_origin": "github_linked_source_readme",
+                          "metadata": {"repository": full_name},
+                      }
+                  )
+              return found, {
+                  "provider": "github",
+                  "status": "available" if found else "linked_source_unavailable",
+                  "result_count": len(found),
+                  "search_requests": 0,
+                  "source_requests": min(2, len(repositories)),
+                  "readme_errors": errors[:3],
+              }
+
+
+          def _forced_rag_bundle(
+              router: Any, research_brief: Mapping[str, Any]
+          ) -> dict[str, Any]:
+              domains = (
+                  [x for x in research_brief.get("domains", []) if isinstance(x, Mapping)]
+                  if isinstance(research_brief.get("domains"), list)
+                  else []
+              )
+              versions = _versions(router)
+              code_index = _existing_code_index()
+              github_blocked = False
+              github_state_lock = threading.Lock()
+              github_fallback_lock = threading.Lock()
+
+              def disabled() -> bool:
+                  with github_state_lock:
+                      return github_blocked
+
+              def disable() -> None:
+                  nonlocal github_blocked
+                  with github_state_lock:
+                      github_blocked = True
+
+              def run_query(query: str) -> dict[str, Any]:
+                  records: list[dict[str, Any]] = []
+                  receipts: dict[str, Any] = {}
+                  errors: list[dict[str, Any]] = []
+
+                  primary_calls: dict[str, Callable[[], tuple[list[dict[str, Any]], dict[str, Any]]]] = {
+                      "modrinth": lambda: _search_modrinth(query),
+                  }
+                  if os.environ.get("CURSEFORGE_API_KEY", "").strip():
+                      primary_calls["curseforge"] = lambda: _search_curseforge(query)
+                  else:
+                      receipts["curseforge"] = {
+                          "provider": "curseforge",
+                          "status": "not_configured",
+                          "result_count": 0,
+                      }
+
+                  with ThreadPoolExecutor(max_workers=len(primary_calls)) as pool:
+                      futures = {pool.submit(call): provider for provider, call in primary_calls.items()}
+                      for future in as_completed(futures):
+                          provider = futures[future]
+                          try:
+                              found, receipt = future.result()
+                              records.extend(found)
+                              receipts[provider] = receipt
+                          except Exception as exc:
+                              receipt = _error(provider, exc)
+                              receipts[provider] = receipt
+                              errors.append(receipt)
+
+                  linked, linked_receipt = _linked_github_sources(
+                      records, disabled=disabled, disable=disable
+                  )
+                  records.extend(linked)
+                  receipts["github"] = linked_receipt
+
+                  if not records:
+                      with github_fallback_lock:
+                          try:
+                              found, receipt = _search_github(
+                                  query, disabled=disabled, disable=disable
+                              )
+                              records.extend(found)
+                              receipts["github"] = receipt
+                          except Exception as exc:
+                              receipt = _error("github", exc)
+                              receipts["github"] = receipt
+                              errors.append(receipt)
+                  elif not linked:
+                      receipts["github"] = {
+                          **dict(linked_receipt),
+                          "status": "skipped_sufficient_ecosystem_evidence",
+                      }
+
+                  unique: list[dict[str, Any]] = []
+                  seen: set[str] = set()
+                  for record in records:
+                      key = str(record.get("source_id") or record.get("url") or "")
+                      if key and key not in seen:
+                          seen.add(key)
+                          unique.append(record)
+                  gh = receipts.get("github", {}) if isinstance(receipts.get("github"), Mapping) else {}
+                  return {
+                      "query": query,
+                      "query_sha256": _sha256_text(query),
+                      "project_rag": _search_authoritative_catalog(query, versions),
+                      "code_rag": _search_code_index(code_index, query),
+                      "external_rag": {
+                          "schema_version": "mmm/external-pre-design-discovery-v3",
+                          "sources": unique,
+                          "errors": errors,
+                          "providers": receipts,
+                          "github_retrieval": {
+                              "provider_status": str(gh.get("status") or "not_requested"),
+                              "saturation_reason": (
+                                  "rate_or_auth_failure"
+                                  if str(gh.get("status"))
+                                  in {"error", "disabled_after_rate_or_auth_failure"}
+                                  else ""
+                              ),
+                              "search_requests": int(gh.get("search_requests") or 0),
+                              "source_requests": int(gh.get("source_requests") or 0),
+                          },
+                      },
+                  }
+
+              unique_queries: list[str] = []
+              for domain in domains:
+                  raw_queries = domain.get("queries", [])
+                  for raw in raw_queries if isinstance(raw_queries, list) else []:
+                      query = str(raw or "").strip()
+                      if query and query not in unique_queries:
+                          unique_queries.append(query)
+
+              by_query: dict[str, dict[str, Any]] = {}
+              if unique_queries:
+                  workers = min(_MAX_QUERY_WORKERS, len(unique_queries))
+                  with ThreadPoolExecutor(max_workers=workers) as pool:
+                      futures = {pool.submit(run_query, query): query for query in unique_queries}
+                      for future in as_completed(futures):
+                          query = futures[future]
+                          try:
+                              by_query[query] = future.result()
+                          except Exception as exc:
+                              by_query[query] = {
+                                  "query": query,
+                                  "query_sha256": _sha256_text(query),
+                                  "project_rag": {"sources": [], "errors": []},
+                                  "code_rag": {"status": "error", "hits": []},
+                                  "external_rag": {
+                                      "schema_version": "mmm/external-pre-design-discovery-v3",
+                                      "sources": [],
+                                      "errors": [_error("query_worker", exc)],
+                                      "providers": {},
+                                      "github_retrieval": {
+                                          "provider_status": "not_requested",
+                                          "saturation_reason": "",
+                                          "search_requests": 0,
+                                          "source_requests": 0,
+                                      },
+                                  },
+                              }
+
+              out_domains: list[dict[str, Any]] = []
+              external_count = 0
+              query_count = 0
+              for domain in domains:
+                  rows: list[dict[str, Any]] = []
+                  raw_queries = domain.get("queries", [])
+                  for raw in raw_queries if isinstance(raw_queries, list) else []:
+                      query = str(raw or "").strip()
+                      if not query:
+                          continue
+                      query_count += 1
+                      row = dict(by_query[query])
+                      rows.append(row)
+                      external = row.get("external_rag")
+                      if isinstance(external, Mapping):
+                          sources = external.get("sources")
+                          external_count += len(sources) if isinstance(sources, list) else 0
+                  out_domains.append(
+                      {"domain_id": str(domain.get("domain_id") or ""), "queries": rows}
+                  )
+              payload: dict[str, Any] = {
+                  "schema_version": "mmm/pre-design-grounded-rag-v5",
+                  "versions": list(versions),
+                  "domain_count": len(domains),
+                  "query_count": query_count,
+                  "unique_query_count": len(unique_queries),
+                  "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
+                  "external_source_count": external_count,
+                  "domains": out_domains,
+              }
+              payload["research_sha256"] = _sha256(payload)
+              return payload
+          '''
+          # Dedent the embedded replacement after YAML/Python indentation.
+          import textwrap
+          text = text[:start] + textwrap.dedent(replacement) + text[end:]
+          rag.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_predesign_source_discovery_contract.py')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace(
+              '        body = f"verified implementation evidence for {query}"\n        return [\n            {\n                "source_id": f"modrinth:{len(modrinth_calls)}",\n                "source_type": "modrinth_project_body",\n                "source_locator": f"modrinth:{len(modrinth_calls)}",\n                "url": "https://modrinth.com/mod/example",\n                "title": "example",\n                "content": body,\n                "content_sha256": rag._sha256_text(body),\n                "body_retrieved": True,\n            }\n        ], {"provider": "modrinth", "status": "available", "result_count": 1}\n',
+              '        return [], {"provider": "modrinth", "status": "available", "result_count": 0}\n',
+              1,
+          )
+          text = text.replace(
+              '    assert all(row["external_rag"]["sources"] for row in rows)\n',
+              '    assert all(not row["external_rag"]["sources"] for row in rows)\n',
+              1,
+          )
+          text += r'''
+
+          def test_curseforge_is_a_valid_central_research_provider():
+              from minecraft_mod_ai import central_research as central
+
+              domain = central._research_domain(
+                  {
+                      "domain_id": "request",
+                      "objective": "research request",
+                      "requirements": ["request"],
+                      "evidence_kinds": ["runtime_behavior"],
+                      "queries": ["minecraft mechanic implementation"],
+                      "providers": ["modrinth", "curseforge", "github"],
+                  }
+              )
+              assert "curseforge" in domain.providers
+
+
+          def test_duplicate_queries_are_executed_once(monkeypatch):
+              calls: list[str] = []
+
+              def modrinth(query: str):
+                  calls.append(query)
+                  return [], {"provider": "modrinth", "status": "available", "result_count": 0}
+
+              monkeypatch.setattr(rag, "_search_modrinth", modrinth)
+              monkeypatch.setattr(
+                  rag,
+                  "_search_github",
+                  lambda query, **kwargs: ([], {"provider": "github", "status": "available", "result_count": 0}),
+              )
+              monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
+              monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
+              monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
+              brief = {
+                  "domains": [
+                      {"domain_id": "request", "queries": ["same query", "same query", "other query"]}
+                  ]
+              }
+              bundle = rag._forced_rag_bundle(object(), brief)
+              assert bundle["query_count"] == 3
+              assert bundle["unique_query_count"] == 2
+              assert sorted(calls) == ["other query", "same query"]
+
+
+          def test_ecosystem_evidence_skips_broad_github(monkeypatch):
+              body = "implementation body"
+              monkeypatch.setattr(
+                  rag,
+                  "_search_modrinth",
+                  lambda query: ([{
+                      "source_id": "modrinth:one",
+                      "source_type": "modrinth_project_body",
+                      "source_locator": "modrinth:one",
+                      "url": "https://modrinth.com/mod/one",
+                      "title": "one",
+                      "content": body,
+                      "content_sha256": rag._sha256_text(body),
+                      "body_retrieved": True,
+                      "metadata": {"source_url": ""},
+                  }], {"provider": "modrinth", "status": "available", "result_count": 1}),
+              )
+              monkeypatch.setattr(
+                  rag,
+                  "_search_github",
+                  lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("broad GitHub fallback must be skipped")),
+              )
+              monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
+              monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
+              monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
+              bundle = rag._forced_rag_bundle(
+                  object(), {"domains": [{"domain_id": "request", "queries": ["one query"]}]}
+              )
+              row = bundle["domains"][0]["queries"][0]
+              assert row["external_rag"]["sources"]
+              assert row["external_rag"]["github_retrieval"]["provider_status"] == "skipped_sufficient_ecosystem_evidence"
+          '''
+          test.write_text(text, encoding='utf-8')
+          PY
+      - name: Compile and run focused regressions
+        run: |
+          python -m py_compile minecraft_mod_ai/central_research.py minecraft_mod_ai/pre_design_grounded_rag.py
+          python -m pytest -q tests/test_predesign_source_discovery_contract.py
+      - name: Commit fast fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/central_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
+          git commit -m 'fix: validate and parallelize pre-design discovery'
+          git push origin HEAD:main
