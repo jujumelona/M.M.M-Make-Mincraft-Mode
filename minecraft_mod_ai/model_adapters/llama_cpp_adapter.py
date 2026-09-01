@@ -74,6 +74,18 @@ class LlamaCppAdapter(ModelAdapter):
             )
         return endpoint
 
+    def input_context_accounting(self, request: GenerationRequest):
+        """Ask the live llama.cpp server to count the exact templated request."""
+
+        from ..llama_exact_context import live_context_accounting
+        from ..llama_server_hardware_policy import _server_payload
+
+        server_url = self._server_url(request)
+        return live_context_accounting(
+            server_url,
+            _server_payload(self, request),
+        )
+
     def generate(self, request: GenerationRequest) -> str:
         turn = self.generate_turn(request)
         if turn.tool_calls:
@@ -499,7 +511,10 @@ def _completion_message_with_prefill(
                 template_prefix=calibrated_template_prefix,
             )
 
+    from ..llama_exact_context import capacity_safe_payload
+
     while True:
+        current_payload = capacity_safe_payload(server_url, current_payload)
         try:
             final_message = _completion_message(server_url, current_payload)
         except RuntimeError as exc:

@@ -1278,8 +1278,6 @@ def _generate_turn_with_context_recovery(
 ) -> Any:
     """Fit one live agent turn and recover bounded completion failures in-place."""
 
-    fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
-    _replace_live_messages(messages, fitted)
     turn_request = replace(
         request,
         messages=tuple(messages),
@@ -1287,6 +1285,17 @@ def _generate_turn_with_context_recovery(
         tool_choice=tool_choice,
         parallel_tool_calls=parallel_tool_calls,
     )
+    exact_accounting = getattr(adapter, "input_context_accounting", None)
+    if callable(exact_accounting):
+        accounting = exact_accounting(turn_request)
+        if accounting.input_tokens < accounting.context_tokens:
+            fitted = tuple(messages)
+        else:
+            fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
+    else:
+        fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
+    _replace_live_messages(messages, fitted)
+    turn_request = replace(turn_request, messages=tuple(messages))
     try:
         with router._generation_scope(config):
             return adapter.generate_turn(turn_request)
