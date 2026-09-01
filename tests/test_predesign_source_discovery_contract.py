@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import urllib.error
+from pathlib import Path
 
 from minecraft_mod_ai import pre_design_grounded_rag as rag
 from minecraft_mod_ai import small_model_predesign_research as small
+from minecraft_mod_ai.pre_design_rag_quality_contract import _source_body
 
 
 def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
@@ -18,11 +20,13 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
         return [
             {
                 "source_id": f"modrinth:{len(modrinth_calls)}",
-                "source_type": "modrinth_project",
+                "source_type": "modrinth_project_body",
+                "source_locator": f"modrinth:{len(modrinth_calls)}",
                 "url": "https://modrinth.com/mod/example",
                 "title": "example",
                 "content": body,
                 "content_sha256": rag._sha256_text(body),
+                "body_retrieved": True,
             }
         ], {"provider": "modrinth", "status": "available", "result_count": 1}
 
@@ -73,6 +77,19 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
         in {"error", "disabled_after_rate_or_auth_failure"}
         for row in rows
     )
+
+
+def test_fetched_modrinth_body_is_claim_bearing_evidence():
+    body = "A concrete implementation body with persistence and interaction details."
+    record = {
+        "source_id": "modrinth:abc123",
+        "source_type": "modrinth_project_body",
+        "source_locator": "modrinth:abc123",
+        "url": "https://modrinth.com/mod/example",
+        "content": body,
+        "body_retrieved": True,
+    }
+    assert _source_body(record) == body
 
 
 def test_zero_source_bodies_skip_model_and_preserve_requirement(monkeypatch, tmp_path):
@@ -133,3 +150,15 @@ def test_materializer_never_creates_fake_empty_page(monkeypatch, tmp_path):
     assert document["model_unit_count"] == 0
     assert document["page_count"] == 0
     assert rag._read_evidence_pages(document) == []
+
+
+def test_legacy_pre_design_owner_is_physically_absent_and_unreferenced():
+    root = Path("minecraft_mod_ai")
+    legacy = root / "agentic_pre_design_rag.py"
+    assert not legacy.exists()
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "agentic_pre_design_rag" in text:
+            offenders.append(str(path))
+    assert offenders == []
