@@ -13,9 +13,9 @@ from .complete_spec import (
     complete_proposal_from_parts,
 )
 from .evidence_first_planning import compile_evidence_first_plan, task_batches
-from .game_design import GameDesignPlanner
 from .model_router import ModelRouter
 from .planner_template_schema import build_batch_skeleton
+from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .spec import SpecValidationError
 
 
@@ -32,12 +32,11 @@ class _ProductionBatch:
 
 
 class CompleteGameDesignPlanner:
-    """Plan production through deterministic host-owned batch templates.
+    """Canonical fail-closed complete planner.
 
-    The model never creates the batch graph or schema. Host code derives the complete
-    production template from the validated game design and creates every module identity.
-    Evidence-first production batches are materialized directly from those host-owned
-    templates; they do not ask the model to emit or repair JSON planning pages.
+    The live path is a compiler-like sequence owned by :class:`PlanningPipeline`:
+    semantic design -> platform receipt -> target evidence -> evidence PlanIR ->
+    production DAG. Runtime installers do not decide whether a failed stage may advance.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -71,25 +70,24 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        game_design, base_proposal = GameDesignPlanner(self.router).plan(
+        artifacts = PlanningPipeline(self.router).prepare(
             prompt,
             media_paths=media_paths,
         )
-        research_brief = game_design.get("_research_brief")
-        if not isinstance(research_brief, dict):
-            research_brief = central_research.normalize_research_brief(prompt, game_design)
-
         internal_design = {
-            **game_design,
-            "_research_brief": research_brief,
-            "_technical_evidence": _retrieve_implementation_evidence(
-                prompt,
-                game_design,
-                research_brief,
-            ),
+            **artifacts.game_design,
+            "_research_brief": artifacts.research_brief,
+            "_technical_evidence": artifacts.technical_evidence,
         }
 
-        evidence_plan = compile_evidence_first_plan(prompt, internal_design)
+        try:
+            evidence_plan = compile_evidence_first_plan(prompt, internal_design)
+        except Exception as exc:
+            raise PlanningStageError(
+                PlanningStage.EVIDENCE,
+                "evidence-first PlanIR compilation failed",
+                cause=exc,
+            ) from exc
         internal_design = {
             **internal_design,
             "_evidence_first_plan": evidence_plan,
@@ -114,13 +112,10 @@ class CompleteGameDesignPlanner:
             for key, value in internal_design.items()
             if not str(key).startswith("_")
         }
-        # Resolve through the module at call time so late runtime-finalization wrappers
-        # (notably production_boundary_contract) are not bypassed by a stale imported
-        # function alias captured before finalization completed.
         compiled = production_contract.compile_production_contract(
             requested_prompt=prompt,
             game_design=contract_design,
-            research_brief=research_brief,
+            research_brief=artifacts.research_brief,
             modules=modules,
             assets=assets,
             acceptance_tests=acceptance_tests,
@@ -133,15 +128,13 @@ class CompleteGameDesignPlanner:
         }
         proposal = complete_proposal_from_parts(
             requested_prompt=prompt,
-            base_proposal=base_proposal,
+            base_proposal=artifacts.base_proposal,
             game_design=internal_design,
             modules=modules,
             assets=assets,
             acceptance_tests=tuple(compiled.acceptance_tests),
             existing_input_sha256=existing_input_sha256,
         )
-        # Platform lowering is an explicit, inspectable post-plan step. Do not hide it
-        # behind a runtime monkeypatch of this method.
         from .platform_central_ai_contract import lower_live_modules
 
         return lower_live_modules(self, proposal)
@@ -189,12 +182,7 @@ class CompleteGameDesignPlanner:
                 ),
                 acceptance_tests=batch.acceptance_tests,
             )
-            # The host already owns the complete task graph, identities, dependencies,
-            # completion predicates, and acceptance projection. Do not round-trip this
-            # deterministic plan through an LLM JSON page: that only adds structured
-            # recovery latency and lets internal execution language leak outward.
             page = skeleton
-
             expected_ids = {
                 str(item["module_id"])
                 for item in skeleton["modules"]
@@ -248,11 +236,7 @@ class CompleteGameDesignPlanner:
 
 
 def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
-    """Legacy compatibility helper for callers without an evidence-first contract.
-
-    Live complete planning uses :func:`_evidence_host_batches`; this function remains
-    available for stored callers and tests that construct the old minimal design shape.
-    """
+    """Legacy compatibility helper for stored callers without evidence PlanIR."""
     raw_modules = game_design.get("modules")
     exports: list[str] = []
     seen: set[str] = set()
@@ -294,7 +278,6 @@ def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_Product
 
 
 def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
-    """Compile the validated semantic task DAG into host-owned production batches."""
     raw_batches = task_batches(plan)
     requirements = {
         str(item.get("requirement_id") or ""): dict(item)
@@ -321,8 +304,6 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
                 exports=tuple(str(item) for item in raw["exports"]),
                 task_contract=task,
                 evidence_plan_sha256=str(plan["plan_sha256"]),
-                # Task-local integrity checks stay inside task_contract. Public/release
-                # acceptance comes only from acceptance_release_bindings above.
                 acceptance_tests=(),
             )
         )
@@ -330,11 +311,6 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
 
 
 def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the bounded design outline expected by runtime platform contracts.
-
-    This is a deterministic compatibility helper only. It performs no model call and
-    does not reintroduce structured/JSON planner generation.
-    """
     keys = (
         "mod_id",
         "mod_name",
@@ -366,25 +342,30 @@ def _retrieve_implementation_evidence(
     game_design: dict[str, Any],
     research_brief: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Compatibility entrypoint. It is intentionally fail-closed."""
     existing = game_design.get("_platform_evidence")
     if isinstance(existing, Mapping):
-        return dict(existing)
+        payload = dict(existing)
+        if payload.get("status") == "unavailable":
+            raise PlanningStageError(
+                PlanningStage.EVIDENCE,
+                "bound platform evidence is unavailable",
+            )
+        return payload
     brief = research_brief or central_research.normalize_research_brief(prompt, game_design)
-    try:
-        value = central_research.retrieve_domain_evidence(brief)
-    except (SpecValidationError, ValueError, TypeError, RuntimeError):
-        return {
-            "schema_version": "mmm/research-unavailable-v1",
-            "domains": [],
-            "status": "unavailable",
-        }
-    if isinstance(value, Mapping):
-        return dict(value)
-    return {
-        "schema_version": "mmm/research-unavailable-v1",
-        "domains": [],
-        "status": "unavailable",
-    }
+    value = central_research.retrieve_domain_evidence(brief)
+    if not isinstance(value, Mapping):
+        raise PlanningStageError(
+            PlanningStage.EVIDENCE,
+            "central research returned a non-object evidence receipt",
+        )
+    payload = dict(value)
+    if payload.get("status") == "unavailable":
+        raise PlanningStageError(
+            PlanningStage.EVIDENCE,
+            "central research marked evidence unavailable",
+        )
+    return payload
 
 
 def _module(value: Mapping[str, Any]) -> ProductionModule:
