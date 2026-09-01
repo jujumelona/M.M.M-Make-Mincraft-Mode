@@ -18,8 +18,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Install focused test dependency
-        run: python -m pip install -q pytest
+      - name: Install project test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Reapply validated patch script
         run: |
           python - <<'PY'
