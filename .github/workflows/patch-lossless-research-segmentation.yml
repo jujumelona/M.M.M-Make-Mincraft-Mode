@@ -1,0 +1,311 @@
+name: Lossless Research Segmentation
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-lossless-research-segmentation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch lossless context segmentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('minecraft_mod_ai/small_model_predesign_research.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('def _capacity_batches(')
+          end = text.index('\ndef _extract_batch(', start)
+          replacement = '''def _accounting_fits(accounting: Any, reserve: int) -> bool:
+              return int(accounting.input_tokens) + reserve <= int(accounting.context_tokens)
+
+
+          def _segment_page_to_live_context(
+              router: Any,
+              *,
+              domain: Mapping[str, Any],
+              page: Mapping[str, Any],
+              reserve: int,
+          ) -> tuple[list[dict[str, Any]], list[str]]:
+              """Losslessly split one oversized source page using exact live token accounting."""
+
+              original = dict(page)
+              page_ref = str(original.get("page_ref") or "").strip()
+              content = str(original.get("content") or "")
+              if not page_ref or not content:
+                  return [], []
+              try:
+                  accounting = _live_accounting(router, _batch_messages(domain, [original]))
+              except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+                  return [original], [
+                      f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"
+                  ]
+              if accounting is None:
+                  return [original], [
+                      "exact_input_accounting_unavailable;oversized_source_kept_whole"
+                  ]
+              if _accounting_fits(accounting, reserve):
+                  return [original], []
+
+              ranges: list[tuple[int, int]] = []
+              start = 0
+              while start < len(content):
+                  low = start + 1
+                  high = len(content)
+                  best = start
+                  while low <= high:
+                      mid = (low + high) // 2
+                      candidate = dict(original)
+                      candidate["page_ref"] = f"{page_ref}&segment_probe={start}:{mid}"
+                      candidate["content"] = content[start:mid]
+                      try:
+                          probe = _live_accounting(
+                              router, _batch_messages(domain, [candidate])
+                          )
+                      except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+                          return [original], [
+                              f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"
+                          ]
+                      if probe is None:
+                          return [original], [
+                              "exact_input_accounting_lost;oversized_source_kept_whole"
+                          ]
+                      if _accounting_fits(probe, reserve):
+                          best = mid
+                          low = mid + 1
+                      else:
+                          high = mid - 1
+                  if best <= start:
+                      return [original], [
+                          "source_prompt_overhead_exceeds_live_context:" + page_ref
+                      ]
+                  ranges.append((start, best))
+                  start = best
+
+              count = len(ranges)
+              segments: list[dict[str, Any]] = []
+              for index, (segment_start, segment_end) in enumerate(ranges, start=1):
+                  segment = dict(original)
+                  segment["page_ref"] = f"{page_ref}&segment={index}/{count}"
+                  segment["parent_page_ref"] = page_ref
+                  segment["segment_index"] = index - 1
+                  segment["segment_count"] = count
+                  segment["segment_start"] = segment_start
+                  segment["segment_end"] = segment_end
+                  segment["content"] = content[segment_start:segment_end]
+                  segments.append(segment)
+              if "".join(str(item["content"]) for item in segments) != content:
+                  raise AssertionError("lossless source segmentation invariant failed")
+              return segments, [
+                  f"source_segmented_by_live_context:{page_ref}:{count}"
+              ]
+
+
+          def _capacity_batches(
+              router: Any,
+              *,
+              domain: Mapping[str, Any],
+              pages: Sequence[Mapping[str, Any]],
+          ) -> tuple[list[list[dict[str, Any]]], list[str]]:
+              """Pack all evidence by live tokenizer/context capacity with no fixed page cap."""
+
+              ordered = [
+                  dict(page)
+                  for page in pages
+                  if str(page.get("page_ref") or "").strip()
+                  and str(page.get("content") or "").strip()
+              ]
+              if not ordered:
+                  return [], []
+
+              diagnostics: list[str] = []
+              reserve = _planner_output_reserve(router)
+              try:
+                  probe = _live_accounting(router, _batch_messages(domain, ordered[:1]))
+              except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+                  diagnostics.append(
+                      f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"
+                  )
+                  probe = None
+              if probe is None:
+                  diagnostics.append(
+                      "exact_input_accounting_unavailable;all_pages_kept_in_one_batch"
+                  )
+                  return [ordered], diagnostics
+
+              expanded: list[dict[str, Any]] = []
+              for page in ordered:
+                  segments, notes = _segment_page_to_live_context(
+                      router,
+                      domain=domain,
+                      page=page,
+                      reserve=reserve,
+                  )
+                  expanded.extend(segments)
+                  diagnostics.extend(notes)
+
+              batches: list[list[dict[str, Any]]] = []
+              current: list[dict[str, Any]] = []
+              for index, page in enumerate(expanded):
+                  trial = [*current, page]
+                  try:
+                      accounting = _live_accounting(
+                          router, _batch_messages(domain, trial)
+                      )
+                  except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+                      diagnostics.append(
+                          f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"
+                      )
+                      accounting = None
+                  if accounting is None:
+                      if current:
+                          batches.append(current)
+                      remaining = expanded[index:]
+                      if remaining:
+                          batches.append(remaining)
+                      diagnostics.append(
+                          "exact_input_accounting_lost;remaining_pages_kept_together"
+                      )
+                      return batches, diagnostics
+                  if _accounting_fits(accounting, reserve):
+                      current = trial
+                      continue
+                  if not current:
+                      diagnostics.append(
+                          "source_segment_unexpectedly_exceeds_live_context:"
+                          + str(page.get("page_ref") or "")
+                      )
+                      batches.append([page])
+                      continue
+                  batches.append(current)
+                  current = [page]
+              if current:
+                  batches.append(current)
+              return batches, diagnostics
+          '''
+          replacement = re.sub(r'^          ', '', replacement, flags=re.MULTILINE)
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('minecraft_mod_ai/pre_design_grounded_rag.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('_PAGE_BYTES = 1800\n', '')
+          split_start = text.index('def _split(value: str) -> list[str]:')
+          split_end = text.index('\ndef _materialize_domain_evidence_document(', split_start)
+          text = text[:split_start] + text[split_end + 1:]
+          old = '''        parts = _split(rendered)
+                  for pi, content in enumerate(parts):
+                      pages.append(
+                          {
+                              "schema_version": "mmm/research-evidence-page-v2",
+                              "domain_id": domain_id,
+                              "unit_id": f"source:{ui}",
+                              "part_index": pi,
+                              "part_count": len(parts),
+                              "content": content,
+                          }
+                      )'''
+          old = re.sub(r'^          ', '', old, flags=re.MULTILINE)
+          new = '''        pages.append(
+                      {
+                          "schema_version": "mmm/research-evidence-page-v2",
+                          "domain_id": domain_id,
+                          "unit_id": f"source:{ui}",
+                          "part_index": 0,
+                          "part_count": 1,
+                          "content": rendered,
+                      }
+                  )'''
+          new = re.sub(r'^          ', '', new, flags=re.MULTILINE)
+          if old not in text:
+              raise SystemExit('materialization split block not found')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '        "page_chars": _PAGE_BYTES,\n        "page_bytes": _PAGE_BYTES,\n',
+              '        "page_partition": "claim_bearing_source_unit",\n',
+              1,
+          )
+          text = text.replace(
+              '        "page_chars",\n        "page_bytes",\n',
+              '        "page_partition",\n',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/test_predesign_capacity_batching.py')
+          text = path.read_text(encoding='utf-8')
+          addition = '''
+
+          def test_oversized_source_is_split_losslessly_by_live_context():
+              class LengthRouter(_ExactRouter):
+                  def input_context_accounting(self, role, messages, **kwargs):
+                      user = messages[-1]["content"]
+                      bodies = []
+                      active = False
+                      current = []
+                      for line in user.splitlines():
+                          if line.startswith("SOURCE PAGE_REF="):
+                              active = True
+                              current = []
+                              continue
+                          if line.startswith("END SOURCE PAGE_REF="):
+                              active = False
+                              bodies.append("\\n".join(current))
+                              continue
+                          if active:
+                              current.append(line)
+                      return SimpleNamespace(
+                          input_tokens=sum(len(body) for body in bodies),
+                          context_tokens=120,
+                      )
+
+              content = "x" * 355
+              page = {"page_ref": "page:oversized", "content": content}
+              batches, diagnostics = research._capacity_batches(
+                  LengthRouter(),
+                  domain={"objective": "implementation"},
+                  pages=[page],
+              )
+              flattened = [item for batch in batches for item in batch]
+              assert len(flattened) > 1
+              assert "".join(item["content"] for item in flattened) == content
+              assert all(item["parent_page_ref"] == "page:oversized" for item in flattened)
+              assert any(note.startswith("source_segmented_by_live_context:") for note in diagnostics)
+          '''
+          addition = re.sub(r'^          ', '', addition, flags=re.MULTILINE)
+          if 'test_oversized_source_is_split_losslessly_by_live_context' not in text:
+              text += addition
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_predesign_source_unit_materialization.py')
+          if not test_path.exists():
+              test_path.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai import pre_design_grounded_rag as rag\n\n\ndef test_materialization_keeps_large_source_body_as_one_lossless_unit(tmp_path, monkeypatch):\n    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))\n    body = "source-body-" + ("z" * 5000)\n    evidence = {\n        "grounded_rag": {\n            "queries": [\n                {\n                    "query": "large source",\n                    "evidence_records": [\n                        {\n                            "source_id": "source:large",\n                            "source_type": "test",\n                            "url": "https://example.invalid/source",\n                            "title": "large",\n                            "content": body,\n                        }\n                    ],\n                }\n            ]\n        }\n    }\n    document = rag._materialize_domain_evidence_document("domain", evidence)\n    pages = rag._read_evidence_pages(document)\n    assert document["page_count"] == 1\n    assert document["model_unit_count"] == 1\n    assert document["page_partition"] == "claim_bearing_source_unit"\n    assert len(pages) == 1\n    assert body in pages[0]["content"]\n    assert pages[0]["part_count"] == 1\n''', encoding='utf-8')
+          PY
+      - name: Verify focused research contracts
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check --fix minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
+          python -m py_compile minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py
+          python -m ruff check minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
+          python -m pytest -q tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py tests/test_predesign_source_discovery_contract.py tests/test_small_model_research_completion.py
+      - name: Commit production and regression
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
+          git diff --cached --check
+          git commit -m 'refactor: make research source segmentation lossless'
+          git push origin HEAD:main
