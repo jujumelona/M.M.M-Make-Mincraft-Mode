@@ -23,7 +23,12 @@ def test_retrieval_progress_stops_duplicate_queries() -> None:
     d1 = progress.begin("search_code_rag", {"query": "BlockRegistry"})
     assert d1 == RetrievalDecision.EXECUTE
 
-    obs = progress.observe("search_code_rag", {"query": "BlockRegistry"}, {"results": ["BlockRegistry.java"]}, usable=True)
+    obs = progress.observe(
+        "search_code_rag",
+        {"query": "BlockRegistry"},
+        {"results": ["BlockRegistry.java"]},
+        usable=True,
+    )
     assert obs == RetrievalObservation.FRESH
 
     d2 = progress.begin("search_code_rag", {"query": "BlockRegistry"})
@@ -35,16 +40,26 @@ def test_retrieval_progress_detects_duplicate_evidence() -> None:
     progress = RetrievalProgress()
 
     progress.begin("search_code_rag", {"query": "BlockRegistry"})
-    obs1 = progress.observe("search_code_rag", {"query": "BlockRegistry"}, {"results": ["BlockRegistry.java"]}, usable=True)
+    obs1 = progress.observe(
+        "search_code_rag",
+        {"query": "BlockRegistry"},
+        {"results": ["BlockRegistry.java"]},
+        usable=True,
+    )
     assert obs1 == RetrievalObservation.FRESH
 
     progress.begin("search_code_rag", {"query": "FindBlocks"})
-    obs2 = progress.observe("search_code_rag", {"query": "FindBlocks"}, {"results": ["BlockRegistry.java"]}, usable=True)
+    obs2 = progress.observe(
+        "search_code_rag",
+        {"query": "FindBlocks"},
+        {"results": ["BlockRegistry.java"]},
+        usable=True,
+    )
     assert obs2 == RetrievalObservation.DUPLICATE_EVIDENCE
 
 
 def test_forced_rag_finite_attempts_cap() -> None:
-    """Verify that host-forced RAG fails with ModelConfigurationError after 2 violating attempts."""
+    """Verify that host-forced RAG terminates after the bounded violating attempt."""
     from contextlib import nullcontext
 
     router = MagicMock()
@@ -57,16 +72,31 @@ def test_forced_rag_finite_attempts_cap() -> None:
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
     adapter = MagicMock()
-    adapter.generate_turn.return_value = MagicMock(content="I am not calling the tool.", tool_calls=())
+    # This regression exercises the forced-RAG loop, not exact llama context
+    # accounting. Explicitly model an adapter without that optional capability;
+    # MagicMock would otherwise fabricate a callable method and fake token fields.
+    adapter.input_context_accounting = None
+    adapter.generate_turn.return_value = MagicMock(
+        content="I am not calling the tool.",
+        tool_calls=(),
+    )
 
     request = GenerationRequest(
-        messages=({"role": "user", "content": "Implement feature with mandatory RAG"},),
+        messages=(
+            {
+                "role": "user",
+                "content": "Implement feature with mandatory RAG",
+            },
+        ),
         tools=(
             {
                 "type": "function",
                 "function": {
                     "name": "search_code_rag",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
                 },
             },
         ),
@@ -76,7 +106,10 @@ def test_forced_rag_finite_attempts_cap() -> None:
     runtime = MagicMock()
     runtime.allowed_tools.return_value = frozenset({"search_code_rag"})
 
-    with pytest.raises(ModelConfigurationError, match="Production coder did not honor host-forced RAG tool choice"):
+    with pytest.raises(
+        ModelConfigurationError,
+        match="Production coder did not honor host-forced RAG tool choice",
+    ):
         generate_with_tools(
             router,
             config=config,
