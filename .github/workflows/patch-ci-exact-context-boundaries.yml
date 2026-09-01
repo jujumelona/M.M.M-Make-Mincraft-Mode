@@ -1,0 +1,147 @@
+name: Exact Context Boundary Regression Fixes
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-ci-exact-context-boundaries.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch production capability detection and stale unit boundaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # Production: only treat a real, statically-declared adapter capability as exact accounting.
+          path = Path('minecraft_mod_ai/model_router.py')
+          text = path.read_text(encoding='utf-8')
+          if 'from inspect import getattr_static\n' not in text:
+              text = text.replace('import threading\n', 'import threading\nfrom inspect import getattr_static\n', 1)
+          old = '''        counter = getattr(adapter, "input_context_accounting", None)\n        if not callable(counter):\n            return None\n        return counter(request)\n'''
+          new = '''        try:\n            declared_counter = getattr_static(adapter, "input_context_accounting")\n        except AttributeError:\n            return None\n        if not callable(declared_counter):\n            return None\n        counter = getattr(adapter, "input_context_accounting", None)\n        if not callable(counter):\n            return None\n        return counter(request)\n'''
+          if old not in text:
+              raise SystemExit('model_router accounting block not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # Parallel tool-surface test: validate selector ownership/safety, not an arbitrary tool-count cap.
+          path = Path('tests/test_llama_parallel_runtime_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '    assert exposed_names\n    assert len(exposed_names) <= 8\n',
+              '    assert exposed_names\n    assert {"search_code_rag", "search_project_rag"} <= exposed_names\n',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          # Prefill unit tests own completion-boundary behavior; exact-capacity transport is tested elsewhere.
+          path = Path('tests/test_llama_assistant_prefill_continuation.py')
+          text = path.read_text(encoding='utf-8')
+          if 'from minecraft_mod_ai import llama_exact_context\n' not in text:
+              text = text.replace(
+                  'import pytest\n\n',
+                  'import pytest\n\nfrom minecraft_mod_ai import llama_exact_context\n',
+                  1,
+              )
+          fixture = '''\n\n@pytest.fixture(autouse=True)\ndef _stub_exact_context_capacity(monkeypatch) -> None:\n    monkeypatch.setattr(\n        llama_exact_context,\n        "capacity_safe_payload",\n        lambda _url, payload: dict(payload),\n    )\n'''
+          marker = '\n\ndef _adapter(*, extra=None) -> LlamaCppAdapter:\n'
+          if '_stub_exact_context_capacity' not in text:
+              if marker not in text:
+                  raise SystemExit('prefill fixture insertion point missing')
+              text = text.replace(marker, fixture + marker, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # Adapter request-contract tests mock HTTP completion; isolate the exact-capacity layer too.
+          path = Path('tests/test_llama_cpp_adapter_request_contract.py')
+          text = path.read_text(encoding='utf-8')
+          if 'from minecraft_mod_ai import llama_exact_context\n' not in text:
+              text = text.replace(
+                  'from minecraft_mod_ai import llama_server_autotune\n',
+                  'from minecraft_mod_ai import llama_exact_context, llama_server_autotune\n',
+                  1,
+              )
+          fixture_old = '''def _stub_canonical_server_owner(monkeypatch) -> None:\n    monkeypatch.setattr(\n        llama_server_autotune,\n        "ensure_tuned_server",\n        lambda _config, _request: "http://127.0.0.1:8910/v1",\n    )\n'''
+          fixture_new = '''def _stub_canonical_server_owner(monkeypatch) -> None:\n    monkeypatch.setattr(\n        llama_server_autotune,\n        "ensure_tuned_server",\n        lambda _config, _request: "http://127.0.0.1:8910/v1",\n    )\n    monkeypatch.setattr(\n        llama_exact_context,\n        "capacity_safe_payload",\n        lambda _url, payload: dict(payload),\n    )\n'''
+          if fixture_old not in text:
+              raise SystemExit('llama request fixture block missing')
+          text = text.replace(fixture_old, fixture_new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # Runtime JSON transport test is about Qwen tool parsing, not live tokenizer/accounting IO.
+          path = Path('tests/test_runtime_json_gap_regression.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''    from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract\n'''
+          if anchor not in text:
+              raise SystemExit('runtime json import anchor missing')
+          text = text.replace(
+              anchor,
+              '    from minecraft_mod_ai import llama_exact_context\n' + anchor,
+              1,
+          )
+          hook = '''    monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://unit.test/v1")\n    monkeypatch.setattr(stream_contract, "_report_server_connection", lambda _url: None)\n'''
+          replacement = '''    monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://unit.test/v1")\n    monkeypatch.setattr(\n        llama_exact_context,\n        "capacity_safe_payload",\n        lambda _url, payload: dict(payload),\n    )\n    monkeypatch.setattr(stream_contract, "_report_server_connection", lambda _url: None)\n'''
+          if hook not in text:
+              raise SystemExit('runtime json hook missing')
+          text = text.replace(hook, replacement, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # Small-model research now batches pages; update the regression to the canonical owner.
+          path = Path('tests/test_small_model_predesign_v2.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('def test_predesign_model_uses_plain_text_and_host_exact_quote():')
+          end = text.index('\n\ndef test_advisory_empty_evidence_is_valid_host_state():', start)
+          updated = '''def test_predesign_model_uses_plain_text_and_host_exact_quote():\n    calls = []\n\n    class Router:\n        def generate_text(self, *args, **kwargs):\n            calls.append(kwargs)\n            return (\n                "EVIDENCE\\thost#1\\tSpace stations can orbit planets."\n                "\\tUse an orbiting station abstraction."\n            )\n\n    claims, diagnostics, model_calls = small._extract_batch(\n        Router(),\n        domain={"objective": "space station", "queries": ["minecraft space station"]},\n        pages=[\n            {\n                "page_ref": "host#1",\n                "content": "Space stations can orbit planets. Other text.",\n            }\n        ],\n    )\n    assert diagnostics == []\n    assert model_calls == 1\n    assert claims and claims[0]["evidence_refs"] == ["host#1"]\n    assert claims[0]["support_quote"] == "Space stations can orbit planets."\n    assert calls[0]["response_format"] == "text"\n    assert calls[0]["response_schema"] is None\n    assert calls[0]["enable_tools"] is False\n'''
+          text = text[:start] + updated + text[end:]
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify focused regression closure
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check --fix minecraft_mod_ai/model_router.py \
+            tests/test_llama_parallel_runtime_contract.py \
+            tests/test_llama_assistant_prefill_continuation.py \
+            tests/test_llama_cpp_adapter_request_contract.py \
+            tests/test_runtime_json_gap_regression.py \
+            tests/test_small_model_predesign_v2.py \
+            tests/test_unified_host_execution_loop.py
+          python -m py_compile minecraft_mod_ai/model_router.py
+          python -m ruff check minecraft_mod_ai/model_router.py \
+            tests/test_llama_parallel_runtime_contract.py \
+            tests/test_llama_assistant_prefill_continuation.py \
+            tests/test_llama_cpp_adapter_request_contract.py \
+            tests/test_runtime_json_gap_regression.py \
+            tests/test_small_model_predesign_v2.py \
+            tests/test_unified_host_execution_loop.py
+          python -m pytest -q \
+            tests/test_llama_parallel_runtime_contract.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_llama_assistant_prefill_continuation.py \
+            tests/test_llama_cpp_adapter_request_contract.py \
+            tests/test_runtime_json_gap_regression.py \
+            tests/test_small_model_predesign_v2.py \
+            tests/test_agent_context_window_contract.py
+      - name: Commit production and tests
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/model_router.py \
+            tests/test_llama_parallel_runtime_contract.py \
+            tests/test_llama_assistant_prefill_continuation.py \
+            tests/test_llama_cpp_adapter_request_contract.py \
+            tests/test_runtime_json_gap_regression.py \
+            tests/test_small_model_predesign_v2.py
+          git diff --cached --check
+          git commit -m 'fix: harden exact-context capability boundaries'
+          git push origin HEAD:main
