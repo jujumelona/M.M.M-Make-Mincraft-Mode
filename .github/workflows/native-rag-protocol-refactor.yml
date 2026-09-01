@@ -1,4 +1,4 @@
-name: Native RAG protocol refactor
+name: Small-model planner architecture fix
 
 on:
   push:
@@ -9,12 +9,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: native-rag-protocol-refactor
+  group: small-model-planner-architecture-fix
   cancel-in-progress: false
 
 jobs:
   refactor:
-    if: "contains(github.event.head_commit.message, 'chore: run native RAG protocol refactor')"
+    if: "contains(github.event.head_commit.message, 'chore: run small-model architecture fix')"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -24,7 +24,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Apply native text protocol refactor
+
+      - name: Locate canonical owners
+        run: |
+          echo '=== pre-body GitHub selection ==='
+          grep -Rni -C 35 'github_repository_selected_for_body' minecraft_mod_ai || true
+          echo '=== evidence materializer ==='
+          grep -Rni -C 20 'def _materialize_domain_evidence_document' minecraft_mod_ai || true
+          echo '=== design retrieval facets ==='
+          grep -Rni -C 30 'design_retrieval_facets' minecraft_mod_ai || true
+
+      - name: Move bounded design work to schema-constrained non-thinking path
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -32,301 +42,357 @@ jobs:
           def replace_between(text: str, start: str, end: str, replacement: str) -> str:
               i = text.index(start)
               j = text.index(end, i)
-              return text[:i] + replacement.rstrip() + "\n\n\n" + text[j:]
+              return text[:i] + replacement.rstrip() + '\n\n\n' + text[j:]
 
-          design_path = Path('minecraft_mod_ai/agentic_research_game_design.py')
-          design = design_path.read_text(encoding='utf-8')
-          import_anchor = 'from .planner_stage_trace import PlannerStageTrace\n'
-          protocol_import = (
-              'from .research_note_protocol import instructions as research_note_instructions\n'
-              'from .research_note_protocol import parse as parse_research_note\n'
-          )
-          if protocol_import not in design:
-              design = design.replace(import_anchor, import_anchor + protocol_import, 1)
+          path = Path('minecraft_mod_ai/agentic_research_game_design.py')
+          text = path.read_text(encoding='utf-8')
 
-          design = replace_between(
-              design,
-              'def _research_domain_with_agent(',
+          text = replace_between(
+              text,
               'def generate_sectioned_game_design(',
-              '''def _research_domain_with_agent(
+              'def _generate_section(',
+              '''def generate_sectioned_game_design(
+              game_design_module: Any,
+              router: Any,
+              prompt: str,
+              *,
+              media_paths: Sequence[str | Path] = (),
+              research: Mapping[str, Any],
+              trace_metadata: Mapping[str, Any] | None = None,
+          ) -> dict[str, Any]:
+              """Generate bounded structured sections, then validate requirement coverage."""
+              merged: dict[str, Any] = {}
+              for index, (section_id, fields, host_properties) in enumerate(_SECTION_SPECS):
+                  section = _generate_section(
+                      router,
+                      prompt=prompt,
+                      section_id=section_id,
+                      fields=fields,
+                      host_properties=host_properties,
+                      research=research,
+                      media_paths=media_paths if index == 0 else (),
+                      trace_metadata=trace_metadata,
+                  )
+                  merged.update(section)
+              if merged.get("art_direction") == {}:
+                  merged.pop("art_direction", None)
+              game_design_module._validate_design(merged)
+              return _validate_requirement_coverage(merged, _active_requirement_ledger(prompt))'''
+          )
+
+          text = replace_between(
+              text,
+              'def _generate_section(',
+              'def _normalize_heading(',
+              '''def _generate_section(
               router: Any,
               *,
               prompt: str,
-              domain: Mapping[str, Any],
-              deterministic: Mapping[str, Any],
+              section_id: str,
+              fields: Sequence[str],
+              host_properties: Mapping[str, Any],
+              research: Mapping[str, Any],
+              media_paths: Sequence[str | Path],
               trace_metadata: Mapping[str, Any] | None,
           ) -> dict[str, Any]:
-              """Perform one evidence-grounded research synthesis turn.
-
-              Retrieval correction belongs to the retrieval layer. A malformed research-note
-              format is logged and rejected; it is never repaired by asking the model to emit
-              the same content again in a different serialization.
-              """
-              domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-              evidence = _domain_evidence_slice(domain_id, deterministic)
-              allowed_refs = _allowed_research_refs(evidence)
               trace = PlannerStageTrace(
-                  stage="pre_design_research",
+                  stage=f"game_design_{section_id}",
                   prompt=prompt,
-                  metadata={"domain_id": domain_id, **dict(trace_metadata or {})},
+                  media_paths=media_paths,
+                  metadata=dict(trace_metadata or {}),
               )
+              schema = {
+                  "type": "object",
+                  "properties": dict(host_properties),
+                  "required": list(fields),
+                  "additionalProperties": False,
+              }
               raw = router.generate_text(
                   "planner",
-                  _research_messages(
+                  _section_messages(
                       prompt=prompt,
-                      domain=domain,
-                      deterministic_evidence=evidence,
-                      prior=None,
+                      section_id=section_id,
+                      fields=fields,
+                      research=research,
                   ),
-                  response_format="text",
-                  response_schema=None,
-                  tool_stage="research",
-                  enable_tools=True,
+                  media_paths=media_paths,
+                  response_format="json",
+                  response_schema=schema,
+                  tool_stage="game_design",
+                  enable_tools=False,
               )
               try:
-                  note = _parse_research_note(raw, domain_id)
-                  _validate_sufficient_research(note, allowed_refs=allowed_refs)
-              except SpecValidationError as exc:
+                  payload = _extract_json_object(raw)
+                  section = {field: payload[field] for field in fields if field in payload}
+                  requirement_ids = tuple(
+                      item["requirement_id"] for item in _active_requirement_ledger(prompt)
+                  )
+                  _validate_section_types(
+                      section,
+                      fields,
+                      requirement_ids=requirement_ids,
+                  )
+              except (KeyError, SpecValidationError, ValueError, TypeError) as exc:
                   trace.record_attempt(
                       raw_output=raw,
                       validation_error=str(exc),
                       candidate=None,
-                      context={
-                          "domain_id": domain_id,
-                          "allowed_evidence_refs": sorted(allowed_refs),
-                          "model_format": "markdown",
-                          "repair_policy": "no_format_repair",
-                      },
+                      context={"section_id": section_id, "format": "structured_json"},
                   )
                   raise
               trace.record_attempt(
                   raw_output=raw,
                   validation_error=None,
-                  candidate=note,
-                  accepted=note if note["sufficient"] else None,
-                  context={
-                      "domain_id": domain_id,
-                      "allowed_evidence_refs": sorted(allowed_refs),
-                      "model_format": "markdown",
-                      "repair_policy": "retrieval_layer_only",
-                  },
+                  candidate=section,
+                  accepted=section,
+                  context={"section_id": section_id, "format": "structured_json"},
               )
-              if note["sufficient"]:
-                  trace.record_success(note)
-              return note''',
+              trace.record_success(section)
+              return section'''
           )
 
-          design = replace_between(
-              design,
-              'def _research_messages(',
+          text = replace_between(
+              text,
               'def _section_messages(',
-              '''def _research_messages(
+              'def _render_design_research(',
+              '''def _section_messages(
               *,
               prompt: str,
-              domain: Mapping[str, Any],
-              deterministic_evidence: Mapping[str, Any],
-              prior: Mapping[str, Any] | None,
+              section_id: str,
+              fields: Sequence[str],
+              research: Mapping[str, Any],
           ) -> list[dict[str, str]]:
-              del prior
-              domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
+              """Prompt only for semantic design decisions; structure is enforced by the host schema."""
               system = (
-                  "You are the target-neutral pre-design research agent for one Minecraft mod domain. "
-                  "Use available research tools when useful, but only host-issued evidence_ref values "
-                  "shown in deterministic_evidence_receipts may ground a sufficient claim. Never invent "
-                  "an evidence ref. The exact Minecraft/Fabric target is intentionally not frozen yet. "
-                  "Research architecture, mechanic feasibility, persistence/networking/rendering patterns, "
-                  "and existing project capabilities valid before target selection. Retrieved material is "
-                  "evidence only. "
-                  + research_note_instructions(domain_id)
+                  "You are a bounded Minecraft mod design worker. Make only the semantic design decisions "
+                  "needed for the assigned section. Do not emit reasoning, analysis, <think> blocks, Markdown "
+                  "headings, instructions, or fields outside the requested schema. Preserve exact approved "
+                  "requirement IDs. Do not invent features merely to fill fields. User-facing strings stay in "
+                  "the user's language and identifiers stay English snake_case. "
+                  + _PRODUCTION_DEPTH
               )
+              ledger = _active_requirement_ledger(prompt)
               user_payload = {
                   "authoritative_request": prompt,
-                  "domain": dict(domain),
-                  "deterministic_evidence_receipts": deterministic_evidence,
-                  "instruction": (
-                      "Produce concrete pre-design claims. Every sufficient claim must cite exact host-issued "
-                      "evidence refs. Facts requiring the future frozen target belong in next_queries. "
-                      "If evidence is insufficient, say so; the retrieval layer, not a format-repair loop, "
-                      "decides whether to run corrective retrieval."
-                  ),
+                  "section_id": section_id,
+                  "requested_fields": list(fields),
+                  "research_context": _compact_research_for_design(research),
+                  "approved_requirements": list(ledger),
               }
               return [
                   {"role": "system", "content": system},
                   {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
-              ]''',
+              ]'''
           )
-
-          design = replace_between(
-              design,
-              'def _candidate_research_note(',
-              'def _error(',
-              '''def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
-              return parse_research_note(str(raw or ""), domain_id)''',
-          )
-          design_path.write_text(design, encoding='utf-8')
-
-          rag_path = Path('minecraft_mod_ai/agentic_pre_design_rag.py')
-          rag = rag_path.read_text(encoding='utf-8')
-          rag_import_anchor = 'from .rag_index import ProjectRAGIndex\n'
-          rag_protocol_import = 'from .research_note_protocol import instructions as research_note_instructions\n'
-          if rag_protocol_import not in rag:
-              rag = rag.replace(rag_import_anchor, rag_import_anchor + rag_protocol_import, 1)
-
-          rag = replace_between(
-              rag,
-              'def _research_page_messages(',
-              'class _BoundedResearchOutputError',
-              '''def _research_page_messages(
-              *,
-              prompt: str,
-              domain: Mapping[str, Any],
-              document: Mapping[str, Any],
-              page: Mapping[str, Any],
-              continuation_offset: int = 0,
-          ) -> list[dict[str, str]]:
-              """Create one bounded page-reading request with host-owned completion state."""
-              domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-              system = (
-                  "You are reading exactly one bounded page from a host-owned Minecraft research evidence "
-                  "document. Extract only design-relevant claims supported by this page. Do not assume unseen "
-                  "pages are absent; the host owns page delivery, cursor advancement, tail verification, and "
-                  "completion. Never emit page-completion fields. sufficient means this page produced at least "
-                  "one usable evidence-grounded claim. "
-                  + research_note_instructions(domain_id)
-              )
-              content = str(page.get("content", ""))
-              offset = max(0, min(len(content), int(continuation_offset)))
-              user = (
-                  f"AUTHORITATIVE REQUEST\n{prompt}\n\n"
-                  f"DOMAIN\n{json.dumps(dict(domain), ensure_ascii=False, sort_keys=True)}\n\n"
-                  f"EVIDENCE DOCUMENT RECEIPT\n{json.dumps(_prompt_document_receipt(document), ensure_ascii=False, sort_keys=True)}\n\n"
-                  f"PAGE REF\n{page.get('page_ref', '')}\n"
-                  f"UNIT ID\n{page.get('unit_id', '')}\n"
-                  f"CONTENT START OFFSET\n{offset}\n"
-                  f"CONTENT TOTAL CHARS\n{len(content)}\n\n"
-                  f"CONTENT REMAINING\n{content[offset:]}\n\n"
-                  "Read the entire supplied content. Preserve concrete source/version/API facts and unresolved "
-                  "uncertainty. Cite the supplied page_ref for claims grounded in this page."
-              )
-              return [{"role": "system", "content": system}, {"role": "user", "content": user}]''',
-          )
-
-          rag = rag.replace(
-              'class _BoundedResearchOutputError(RuntimeError):\n    pass\n',
-              'class _BoundedResearchOutputError(RuntimeError):\n'
-              '    def __init__(self, message: str, *, allow_adaptive_split: bool = False) -> None:\n'
-              '        super().__init__(message)\n'
-              '        self.allow_adaptive_split = allow_adaptive_split\n',
-              1,
-          )
-
-          rag = replace_between(
-              rag,
-              'def _repair_messages(',
-              'def _emit_bounded_failure(',
-              '',
-          )
-          rag = replace_between(
-              rag,
-              'def _generate_bounded(',
-              'def _structured_output_failure(',
-              '''def _generate_bounded(
-              agentic_module: Any,
-              router: Any,
-              *,
-              messages: list[dict[str, str]],
-              response_schema: Mapping[str, Any],
-              parser: Any,
-              progress_label: str,
-          ) -> Any:
-              """One model synthesis call. Formatting failures are never model-repaired."""
-              del response_schema
-              _emit_research_progress("model_attempt", label=progress_label, attempt=1)
-              raw = ""
-              try:
-                  raw = router.generate_text(
-                      "planner",
-                      messages,
-                      response_format="text",
-                      response_schema=None,
-                      tool_stage="research",
-                      enable_tools=False,
-                  )
-                  return parser(raw)
-              except Exception as error:
-                  _emit_bounded_failure(
-                      "bounded_model_or_parse_failure",
-                      progress_label=progress_label,
-                      raw_output=raw,
-                      error=error,
-                  )
-                  if isinstance(error, agentic_module.SpecValidationError):
-                      raise _BoundedResearchOutputError(
-                          "bounded research Markdown failed host validation; format repair is forbidden: "
-                          f"{type(error).__name__}: {error}",
-                          allow_adaptive_split=False,
-                      ) from error
-                  raise''',
-          )
-          rag = replace_between(
-              rag,
-              'def _structured_output_failure(',
-              'def _router_role_signature(',
-              '',
-          )
-
-          rag = replace_between(
-              rag,
-              'def _synthesis_messages(',
-              'def _bounded_text_receipt(',
-              '''def _synthesis_messages(
-              *,
-              prompt: str,
-              domain: Mapping[str, Any],
-              notes: list[dict[str, Any]],
-              level: int,
-              group_index: int,
-          ) -> list[dict[str, str]]:
-              domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-              system = (
-                  "You are a bounded hierarchical Minecraft research synthesizer. Preserve only grounded claims, "
-                  "contradictions, gaps, next queries, and cited reusable procedures from the supplied child notes. "
-                  "The host retains the full evidence ledger. Never invent evidence refs. "
-                  + research_note_instructions(domain_id)
-              )
-              user = (
-                  f"AUTHORITATIVE REQUEST SHA256\n{_sha256_text(prompt)}\n\n"
-                  f"DOMAIN\n{json.dumps(_bounded_domain_projection(domain), ensure_ascii=False, sort_keys=True)}\n\n"
-                  f"SYNTHESIS LEVEL\n{level}\nGROUP\n{group_index}\n\n"
-                  f"BOUNDED CHILD NOTES\n{json.dumps(notes, ensure_ascii=False, sort_keys=True)}\n\n"
-                  "Synthesize only these child notes. Set sufficient=true only when at least one concrete grounded "
-                  "claim survives and the supplied evidence resolves this group."
-              )
-              return [{"role": "system", "content": system}, {"role": "user", "content": user}]''',
-          )
-
-          rag = rag.replace(
-              'if len(remaining) > _MIN_ADAPTIVE_FRAGMENT_CHARS:',
-              'if exc.allow_adaptive_split and len(remaining) > _MIN_ADAPTIVE_FRAGMENT_CHARS:',
-          )
-          rag = rag.replace(
-              'if children:\n            _emit_research_progress(',
-              'if exc.allow_adaptive_split and children:\n            _emit_research_progress(',
-          )
-          rag_path.write_text(rag, encoding='utf-8')
+          path.write_text(text, encoding='utf-8')
           PY
-      - name: Validate changed sources
+
+      - name: Tighten retrieval admission before evidence fusion
         run: |
-          python -m compileall -q minecraft_mod_ai
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+              i = text.index(start)
+              j = text.index(end, i)
+              return text[:i] + replacement.rstrip() + '\n\n\n' + text[j:]
+
+          path = Path('minecraft_mod_ai/pre_design_rag_fusion.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_between(
+              text,
+              'def _record_is_query_relevant(',
+              'def _evidence_excerpt(',
+              '''def _record_is_query_relevant(query: str, record: Mapping[str, Any]) -> bool:
+              """Categorically gate external evidence by ecosystem identity and request intent.
+
+              Generic scaffolding words such as build/create/system are not semantic evidence. External
+              GitHub/Modrinth records must first identify as Minecraft ecosystem material and must also
+              overlap a non-scaffolding intent term from the approved retrieval query.
+              """
+              scaffolding = {
+                  "build", "building", "create", "creating", "make", "making", "use", "using",
+                  "support", "supports", "mode", "system", "systems", "feature", "features",
+                  "source", "implementation", "code", "example", "examples", "project",
+                  "minecraft", "mod", "mods",
+              }
+              ecosystem = {
+                  "minecraft", "fabric", "forge", "neoforge", "quilt", "modrinth", "curseforge",
+                  "bukkit", "spigot", "paper", "mixin", "yarn", "loom",
+              }
+              query_terms = _query_relevance_tokens(query)
+              intent = {term for term in query_terms if term not in scaffolding}
+              if not intent:
+                  intent = query_terms
+              searchable = " ".join(
+                  str(record.get(field) or "")
+                  for field in (
+                      "title", "name", "description", "source_id", "url", "repository",
+                      "topics", "content",
+                  )
+              )
+              record_terms = _tokens(searchable)
+              source_type = str(record.get("source_type") or "").casefold()
+              source_id = str(record.get("source_id") or "").casefold()
+              url = str(record.get("url") or "").casefold()
+              external = (
+                  "github" in source_type
+                  or source_id.startswith("github:")
+                  or "github.com/" in url
+                  or "modrinth" in source_type
+                  or source_id.startswith("modrinth:")
+                  or "modrinth.com/" in url
+              )
+              if external and not (record_terms & ecosystem):
+                  return False
+              return bool(intent & record_terms)'''
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Update regression contract for structured design
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+              i = text.index(start)
+              j = text.index(end, i)
+              return text[:i] + replacement.rstrip() + '\n\n\n' + text[j:]
+
+          path = Path('tests/test_agentic_research_game_design.py')
+          text = path.read_text(encoding='utf-8')
+          text = replace_between(
+              text,
+              'class _SectionRouter:',
+              'class _ResearchRouter:',
+              '''class _SectionRouter:
+              def __init__(self) -> None:
+                  self.calls: list[dict[str, object]] = []
+
+              def generate_text(
+                  self,
+                  role,
+                  messages,
+                  *,
+                  media_paths=(),
+                  response_format="text",
+                  response_schema=None,
+                  tool_stage=None,
+                  enable_tools=True,
+              ):
+                  self.calls.append(
+                      {
+                          "role": role,
+                          "messages": messages,
+                          "media_paths": tuple(media_paths),
+                          "response_format": response_format,
+                          "response_schema": response_schema,
+                          "tool_stage": tool_stage,
+                          "enable_tools": enable_tools,
+                      }
+                  )
+                  values = {
+                      "title": "연구 기반 모드",
+                      "pitch": "검색 근거를 바탕으로 설계한다.",
+                      "core_loop": ["탐색하고 상호작용한다"],
+                      "progression": ["기능을 단계적으로 해금한다"],
+                      "combat": {},
+                      "mod_context": {},
+                      "modules": [],
+                      "assets": [],
+                      "acceptance_tests": ["요청한 핵심 루프가 게임 내에서 동작한다"],
+                      "art_direction": {},
+                  }
+                  assert response_format == "json"
+                  assert isinstance(response_schema, dict)
+                  fields = list(response_schema["required"])
+                  return json.dumps({field: values[field] for field in fields}, ensure_ascii=False)'''
+          )
+          text = replace_between(
+              text,
+              'def test_sectioned_game_design_generates_each_section_once_as_prose()',
+              'def test_research_domain_accepts_only_host_issued_grounding_ref(',
+              '''def test_sectioned_game_design_generates_each_section_once_as_structured_json() -> None:
+              router = _SectionRouter()
+              research = {
+                  "research_brief": {"domains": []},
+                  "domain_notes": [],
+                  "deterministic": {},
+                  "errors": [],
+              }
+              result = agentic.generate_sectioned_game_design(
+                  game_design,
+                  router,
+                  "연구를 먼저 하고 모드를 설계해줘",
+                  research=research,
+              )
+              expected_sections = [
+                  tuple(fields) for _section_id, fields, _properties in agentic._SECTION_SPECS
+              ]
+              assert len(router.calls) == len(expected_sections)
+              assert all(call["role"] == "planner" for call in router.calls)
+              assert all(call["response_format"] == "json" for call in router.calls)
+              assert all(isinstance(call["response_schema"], dict) for call in router.calls)
+              assert all(call["tool_stage"] == "game_design" for call in router.calls)
+              assert all(call["enable_tools"] is False for call in router.calls)
+              for fields, call in zip(expected_sections, router.calls, strict=True):
+                  schema = call["response_schema"]
+                  assert schema["required"] == list(fields)
+                  assert schema["additionalProperties"] is False
+                  system = str(call["messages"][0]["content"])
+                  assert "Do not emit reasoning" in system
+              assert result["title"] == "연구 기반 모드"
+              assert result["core_loop"]
+              assert result["acceptance_tests"]
+              assert "art_direction" not in result'''
+          )
+          path.write_text(text, encoding='utf-8')
+
+          quality = Path('tests/test_pre_design_rag_quality_contract.py')
+          qtext = quality.read_text(encoding='utf-8')
+          marker = 'def test_retrieval_query_filter_rejects_raw_prompt_and_non_ascii():'
+          addition = '''def test_external_fusion_rejects_generic_word_collision_without_minecraft_identity():
+              from minecraft_mod_ai import pre_design_rag_fusion as fusion
+
+              query = "minecraft mod build space station modules"
+              noise = {
+                  "source_id": "github:microsoft/StudentsAtBuild-2021",
+                  "source_type": "github_source",
+                  "title": "Students at Build 2021",
+                  "url": "https://github.com/microsoft/StudentsAtBuild-2021",
+                  "content": "Student projects and conference build sessions.",
+              }
+              relevant = {
+                  "source_id": "github:example/minecraft-space-mod",
+                  "source_type": "github_source",
+                  "title": "Minecraft Fabric modular space station",
+                  "url": "https://github.com/example/minecraft-space-mod",
+                  "content": "Fabric mod implementing space station modules and vessel construction.",
+              }
+              assert fusion._record_is_query_relevant(query, noise) is False
+              assert fusion._record_is_query_relevant(query, relevant) is True
+
+
+          '''
+          if 'test_external_fusion_rejects_generic_word_collision_without_minecraft_identity' not in qtext:
+              qtext = qtext.replace(marker, addition + marker, 1)
+          quality.write_text(qtext, encoding='utf-8')
+          PY
+
+      - name: Validate architecture changes
+        run: |
           python -m pip install --prefer-binary -e '.[dev]'
-          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
-          python -m pytest -q tests/test_agentic_research_game_design.py -k 'research or sectioned'
-      - name: Commit native RAG protocol
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python -m pytest -q tests/test_agentic_research_game_design.py tests/test_pre_design_rag_quality_contract.py
+
+      - name: Commit canonical architecture changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/native-rag-protocol-refactor.yml
-          git add minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/agentic_pre_design_rag.py
+          git add minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/pre_design_rag_fusion.py tests/test_agentic_research_game_design.py tests/test_pre_design_rag_quality_contract.py
           git diff --cached --check
-          git commit -m 'refactor: separate RAG retrieval correction from output formatting'
+          git commit -m 'refactor: constrain small-model planning and evidence admission'
           git push origin HEAD:main
