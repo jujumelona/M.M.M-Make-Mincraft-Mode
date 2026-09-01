@@ -1,6 +1,6 @@
 name: Small-model host-owned pre-design redesign
 
-# v4 execution trigger
+# v5 execution trigger
 on:
   push:
     branches: [main]
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   refactor:
-    if: "${{ contains(github.event.head_commit.message, 'chore: apply small-model host redesign v4') }}"
+    if: "${{ contains(github.event.head_commit.message, 'chore: apply small-model host redesign v5') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,13 +24,25 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply host-owned small-model redesign
-        run: python .github/scripts/comprehensive_small_model_rag_refactor.py
+        run: |
+          python .github/scripts/comprehensive_small_model_rag_refactor.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('minecraft_mod_ai/agentic_research_game_design.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''def _markdown_map(body: str) -> dict[str, list[str]]:\n    result: dict[str, list[str]] = {}\n    current = "summary"\n'''
+          new = '''def _markdown_map(body: str) -> dict[str, list[str]]:\n    normalized = " ".join(_strip_list_marker(line) for line in body.splitlines() if _strip_list_marker(line)).strip().casefold()\n    if normalized in _NONE_VALUES:\n        return {}\n    result: dict[str, list[str]] = {}\n    current = "summary"\n'''
+          if old not in s:
+              raise SystemExit('markdown map marker not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Static architecture guards
         run: |
           ! grep -q 'pre_design_rag_corrective' minecraft_mod_ai/pre_design_domain_research.py
           grep -q 'small_model_predesign_research' minecraft_mod_ai/pre_design_domain_research.py
           grep -q 'response_format="text"' minecraft_mod_ai/small_model_predesign_research.py
           grep -q 'host_parsed_markdown' minecraft_mod_ai/agentic_research_game_design.py
+          grep -q 'normalized in _NONE_VALUES' minecraft_mod_ai/agentic_research_game_design.py
           ! grep -q 'summary\["gaps"\] = list(active_page_gaps)' minecraft_mod_ai/pre_design_domain_research.py
       - name: Validate redesign
         run: |
