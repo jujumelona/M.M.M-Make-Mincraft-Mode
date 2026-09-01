@@ -1,0 +1,68 @@
+name: Integrated full-CI contract repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/integrated_ci_contract_repair.py'
+      - '.github/workflows/integrated-ci-contract-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply integrated repair
+        run: python .github/scripts/integrated_ci_contract_repair.py
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Compile and lint affected contracts
+        run: |
+          python -m compileall -q minecraft_mod_ai tests
+          ruff check \
+            minecraft_mod_ai/agentic_research_game_design.py \
+            minecraft_mod_ai/pre_design_external_source_contract.py \
+            minecraft_mod_ai/pre_design_rag_fusion.py \
+            minecraft_mod_ai/pre_design_research_pipeline.py \
+            minecraft_mod_ai/pre_design_rag_corrective.py \
+            minecraft_mod_ai/runtime_stability_contract.py \
+            minecraft_mod_ai/small_model_predesign_research.py \
+            minecraft_mod_ai/pre_design_domain_research.py \
+            tests/test_pre_design_rag_direct_owner.py \
+            --select F,E7,E9
+      - name: Run all known contract regressions
+        run: |
+          pytest -q \
+            tests/test_agentic_game_design_text_contract.py \
+            tests/test_structured_unit_generation_contract.py \
+            tests/test_worker03_planner_design_readiness.py \
+            tests/test_agentic_pre_design_retrieval_policy.py \
+            tests/test_pre_design_rag_zero_relevance_gate.py \
+            tests/test_worker02_rag_clean_code_regressions.py \
+            tests/test_worker02_rag_source_evidence_contract.py \
+            tests/test_pre_design_rag_root_cause.py \
+            tests/test_pre_design_phase_grounding_recovery.py \
+            tests/test_runtime_stability_contract.py \
+            tests/test_predesign_rag_runtime_root_cause.py \
+            tests/test_pre_design_rag_direct_owner.py \
+            tests/test_pre_design_rag_quality_contract.py \
+            tests/test_small_model_predesign_v2.py
+      - name: Commit verified repair
+        run: |
+          rm -f .github/scripts/integrated_ci_contract_repair.py
+          rm -f .github/workflows/integrated-ci-contract-repair.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: reconcile small-model pipeline with full CI contracts'
+          git push origin HEAD:main
