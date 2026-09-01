@@ -142,32 +142,20 @@ def test_many_semantic_leaves_share_one_model_turn() -> None:
     assert router.text_calls == 0
 
 
-def test_retrieval_planner_is_one_structured_batch_for_many_requirements() -> None:
+def test_retrieval_planner_is_host_deterministic_for_many_requirements() -> None:
     requirements = [
-        {"requirement_id": "req-build"},
-        {"requirement_id": "req-launch"},
+        {
+            "requirement_id": "req-build",
+            "capability": "vehicle.spacecraft.build",
+            "depends_on": [],
+        },
+        {
+            "requirement_id": "req-launch",
+            "capability": "vehicle.spacecraft.launch",
+            "depends_on": ["req-build"],
+        },
     ]
-    payload = {
-        "requirements": [
-            {
-                "requirement_id": "req-build",
-                "depends_on": [],
-                "search_queries": [
-                    "minecraft spacecraft assembly source",
-                    "minecraft vehicle construction implementation",
-                ],
-            },
-            {
-                "requirement_id": "req-launch",
-                "depends_on": ["req-build"],
-                "search_queries": [
-                    "minecraft spacecraft launch source",
-                    "minecraft vehicle flight implementation",
-                ],
-            },
-        ]
-    }
-    router = _StructuredRouter({"plan_requirement_retrieval": payload})
+    router = _StructuredRouter({})
 
     raw = planning_authority._call_retrieval_planner(
         router,
@@ -180,13 +168,17 @@ def test_retrieval_planner_is_one_structured_batch_for_many_requirements() -> No
         raw,
     )
 
-    assert len(router.calls) == 1
-    assert router.calls[0]["tool_name"] == "plan_requirement_retrieval"
+    assert router.calls == []
     assert router.text_calls == 0
     assert normalized["req-build"]["depends_on"] == []
     assert normalized["req-launch"]["depends_on"] == ["req-build"]
-    assert len(normalized["req-build"]["search_queries"]) == 2
-    assert len(normalized["req-launch"]["search_queries"]) == 2
+    assert len(normalized["req-build"]["search_queries"]) >= 2
+    assert len(normalized["req-launch"]["search_queries"]) >= 2
+    assert all(
+        query.casefold().startswith("minecraft ")
+        for item in normalized.values()
+        for query in item["search_queries"]
+    )
 
 
 def test_retrieval_schema_requires_exact_requirement_cardinality() -> None:
