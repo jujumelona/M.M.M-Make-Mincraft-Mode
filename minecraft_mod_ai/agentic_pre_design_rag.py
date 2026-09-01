@@ -1296,142 +1296,19 @@ def _research_document_domain(
     document: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    del trace_metadata
-    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-    domain_key = _domain_checkpoint_key(
+    """Legacy API facade delegated to the canonical host-owned research owner."""
+    import sys
+    from .small_model_predesign_research import research_document_domain
+
+    return research_document_domain(
+        agentic_module,
+        sys.modules[__name__],
         router,
         prompt=prompt,
         domain=domain,
         document=document,
+        trace_metadata=trace_metadata,
     )
-    with _domain_lock(domain_key):
-        cached = _read_complete_manifest(agentic_module, domain_key, domain_id)
-        if cached is not None:
-            _emit_research_progress(
-                "domain_checkpoint_complete",
-                domain_id=domain_id,
-                manifest_path=str(_manifest_path(domain_key)),
-                checkpoint_dir=str(_checkpoint_dir(domain_key)),
-                note=cached,
-            )
-            return cached
-
-        pages = _read_evidence_pages(document)
-        failures: list[dict[str, str]] = []
-        page_notes: list[dict[str, Any]] = []
-        _emit_research_progress(
-            "domain_start",
-            domain_id=domain_id,
-            page_count=len(pages),
-            evidence_document=_prompt_document_receipt(document),
-            evidence_pages_path=document.get("pages_path"),
-            evidence_raw_path=document.get("raw_path"),
-            checkpoint_dir=str(_checkpoint_dir(domain_key)),
-        )
-        for page_index, page in enumerate(pages):
-            _emit_research_progress(
-                "page_start",
-                domain_id=domain_id,
-                page_index=page_index + 1,
-                page_count=len(pages),
-                page_ref=str(page.get("page_ref", "")),
-            )
-            page_notes.append(_host_page_note(domain_id, page))
-            _emit_research_progress(
-                "page_ledgered",
-                domain_id=domain_id,
-                page_index=page_index + 1,
-                page_count=len(pages),
-                page_ref=str(page.get("page_ref", "")),
-            )
-
-        summary = _hierarchical_synthesis(
-            agentic_module,
-            router,
-            prompt=prompt,
-            domain=domain,
-            page_notes=page_notes,
-            domain_key=domain_key,
-            failures=failures,
-        )
-        claims = _stable_unique_claims([*page_notes, summary])
-        catalog = _materialize_claim_catalog(domain_key, domain_id, claims)
-        evidence_ledger = _materialize_evidence_ledger(domain_key, domain_id, pages)
-        failure_reasons = []
-        if failures:
-            failure_reasons.append("bounded synthesis failure")
-        if summary.get("sufficient") is not True:
-            failure_reasons.append("synthesis returned sufficient=false")
-        if not claims:
-            failure_reasons.append("synthesis produced zero grounded claims")
-
-        status = "failed" if failure_reasons else "complete"
-        note: dict[str, Any] = {
-            **_core_note(summary),
-            "evidence_document": _prompt_document_receipt(document),
-            "claim_catalog": catalog,
-            "evidence_ledger": evidence_ledger,
-            "checkpoint": {
-                "schema_version": _DOMAIN_CHECKPOINT_SCHEMA,
-                "request_sha256": "sha256:" + domain_key,
-                "status": status,
-                "manifest_path": str(_manifest_path(domain_key)),
-                "checkpoint_dir": str(_checkpoint_dir(domain_key)),
-            },
-        }
-        if failures:
-            existing_gaps = [str(item) for item in note.get("gaps", [])]
-            note["gaps"] = existing_gaps + [
-                f"{item['unit']}: {item['error']}" for item in failures
-            ]
-            note["research_failures"] = list(failures)
-        if failure_reasons:
-            note["sufficient"] = False
-            note["fixed_point"] = True
-            note["failure_reasons"] = failure_reasons
-
-        _write_manifest(
-            domain_key,
-            status=status,
-            note=note,
-            failures=failures,
-        )
-
-        if status != "complete":
-            _emit_research_progress(
-                "domain_failure",
-                domain_id=domain_id,
-                status=status,
-                failure_reasons=failure_reasons,
-                failures=failures,
-                summary=summary,
-                claim_catalog=catalog,
-                evidence_ledger=evidence_ledger,
-                evidence_document=_prompt_document_receipt(document),
-                manifest_path=str(_manifest_path(domain_key)),
-                checkpoint_dir=str(_checkpoint_dir(domain_key)),
-                note=note,
-            )
-            raise _BoundedResearchOutputError(
-                "pre-design research failed closed for domain "
-                f"{domain_id!r}: {'; '.join(failure_reasons)}; "
-                f"manifest={_manifest_path(domain_key)}"
-            )
-
-        _emit_research_progress(
-            "domain_complete",
-            domain_id=domain_id,
-            status=status,
-            claim_count=catalog["claim_count"],
-            procedure_count=len(note.get("procedures", [])),
-            page_count=len(pages),
-            failure_count=0,
-            claim_catalog=catalog,
-            evidence_ledger=evidence_ledger,
-            manifest_path=str(_manifest_path(domain_key)),
-            checkpoint_dir=str(_checkpoint_dir(domain_key)),
-        )
-        return note
 
 
 def _materialize_domain_evidence_document(

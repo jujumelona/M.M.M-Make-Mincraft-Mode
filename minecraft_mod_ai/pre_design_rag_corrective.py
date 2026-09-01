@@ -122,86 +122,31 @@ def _generate_gap_queries(
     raw_prompt: str,
     progress_label: str,
 ) -> list[str]:
-    # Queries are the executable contract. Small diagnostic fields such as
-    # ``sufficient``/``gaps`` are harmless model annotations and must not discard an
-    # otherwise valid corrective search plan before the parser can extract it.
-    query_array_schema = {
-        "type": "array",
-        "minItems": 1,
-        "maxItems": 4,
-        "items": {"type": "string", "minLength": 4, "maxLength": 180},
-        "uniqueItems": True,
-    }
-    schema = {
-        "type": "object",
-        "properties": {
-            "queries": query_array_schema,
-            # Qwen commonly emits this semantically equivalent key. Accept it at the
-            # host parser boundary instead of discarding a valid retrieval plan before
-            # any external source request can run.
-            "search_queries": query_array_schema,
-        },
-        "additionalProperties": True,
-    }
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Write 1-4 concise English search queries that retrieve the missing "
-                "evidence for the already-approved Minecraft-mod requirement. Do not "
-                "change the requirement, select a donor, copy the raw request, or "
-                "repeat an already searched query."
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "domain_id": str(domain.get("domain_id") or ""),
-                    "objective": str(domain.get("objective") or ""),
-                    "requirements": list(domain.get("requirements") or ()),
-                    "evidence_gap": list(gaps)[-8:],
-                    "already_searched": list(prior_queries)[-12:],
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        },
-    ]
-
-    def parse(raw: str) -> list[str]:
-        try:
-            value = json.loads(raw)
-        except Exception as exc:
-            raise agentic_module.SpecValidationError(
-                f"corrective query planner returned invalid JSON: {exc}"
-            ) from exc
-        queries = value.get("queries") if isinstance(value, Mapping) else None
-        if not isinstance(queries, list) and isinstance(value, Mapping):
-            queries = value.get("search_queries")
-        if not isinstance(queries, list):
-            raise agentic_module.SpecValidationError(
-                "corrective query planner omitted queries/search_queries"
-            )
-        result = _correction_queries(
-            queries,
-            seen=seen,
-            raw_prompt=raw_prompt,
-        )
-        if not result:
-            raise agentic_module.SpecValidationError(
-                "corrective query planner returned no new executable query"
-            )
-        return result
-
-    return project_rag._generate_bounded(
-        agentic_module,
-        router,
-        messages=messages,
-        response_schema=schema,
-        parser=parse,
-        progress_label=progress_label + " corrective-query",
+    """Consume unsearched host-approved queries; never ask the model to author JSON."""
+    del agentic_module, project_rag, router, gaps, prior_queries
+    candidates: list[str] = []
+    raw_queries = domain.get("queries")
+    if isinstance(raw_queries, Sequence) and not isinstance(raw_queries, (str, bytes, bytearray)):
+        for raw in raw_queries:
+            if isinstance(raw, Mapping):
+                direct = str(raw.get("query") or "").strip()
+                if direct:
+                    candidates.append(direct)
+                nested = raw.get("search_queries")
+                if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes, bytearray)):
+                    candidates.extend(str(item).strip() for item in nested if str(item).strip())
+            elif str(raw).strip():
+                candidates.append(str(raw).strip())
+    result = _correction_queries(candidates, seen=seen, raw_prompt=raw_prompt)
+    _emit_corrective_trace(
+        "host_corrective_query_plan",
+        domain_id=str(domain.get("domain_id") or ""),
+        progress_label=progress_label,
+        candidate_count=len(candidates),
+        selected_queries=result,
+        model_called=False,
     )
+    return result
 
 
 def _read_and_verify_document(

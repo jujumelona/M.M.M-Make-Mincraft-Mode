@@ -338,73 +338,28 @@ def _research_domain_with_agent(
     deterministic: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    """Compatibility facade: host receipts only, never model-authored research JSON."""
+    del router, prompt, trace_metadata
     domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
     evidence = _domain_evidence_slice(domain_id, deterministic)
-    allowed_refs = _allowed_research_refs(evidence)
-    trace = PlannerStageTrace(
-        stage="pre_design_research",
-        prompt=prompt,
-        metadata={"domain_id": domain_id, **dict(trace_metadata or {})},
-    )
-    prior: dict[str, Any] | None = None
-    seen_frontiers: set[frozenset[str]] = set()
-    while True:
-        raw = router.generate_text(
-            "planner",
-            _research_messages(prompt=prompt, domain=domain, deterministic_evidence=evidence, prior=prior),
-            response_format="json",
-            response_schema=_RESEARCH_NOTE_SCHEMA,
-            tool_stage="research",
-            enable_tools=True,
-        )
-        try:
-            note = _parse_research_note(raw, domain_id)
-            _validate_sufficient_research(note, allowed_refs=allowed_refs)
-        except SpecValidationError as exc:
-            candidate = _candidate_research_note(raw, domain_id)
-            frontier = frozenset(_claim_refs(candidate) & allowed_refs) if isinstance(candidate, Mapping) else frozenset()
-            trace.record_attempt(
-                raw_output=raw,
-                validation_error=str(exc),
-                candidate=candidate,
-                context={"domain_id": domain_id, "allowed_evidence_refs": sorted(allowed_refs)},
-            )
-            if frontier in seen_frontiers:
-                return {
-                    "domain_id": domain_id,
-                    "claims": [],
-                    "gaps": [str(exc)],
-                    "next_queries": list(domain.get("queries", [])),
-                    "procedures": [],
-                    "sufficient": False,
-                    "fixed_point": True,
-                }
-            seen_frontiers.add(frontier)
-            prior = {
-                "domain_id": domain_id,
-                "claims": [],
-                "gaps": [str(exc)],
-                "next_queries": list(domain.get("queries", [])),
-                "procedures": [],
-                "sufficient": False,
-                "allowed_evidence_refs": sorted(allowed_refs),
-            }
-            continue
-        trace.record_attempt(
-            raw_output=raw,
-            validation_error=None,
-            candidate=note,
-            accepted=note if note["sufficient"] else None,
-            context={"domain_id": domain_id, "allowed_evidence_refs": sorted(allowed_refs)},
-        )
-        if note["sufficient"]:
-            trace.record_success(note)
-            return note
-        frontier = _claim_refs(note) & allowed_refs
-        if frontier in seen_frontiers:
-            return {**note, "fixed_point": True}
-        seen_frontiers.add(frontier)
-        prior = note
+    return {
+        "domain_id": domain_id,
+        "claims": [],
+        "gaps": [],
+        "next_queries": [],
+        "procedures": [],
+        "sufficient": True,
+        "fixed_point": False,
+        "research_mode": "advisory_predesign",
+        "research_evidence_status": (
+            "host_receipts_available" if _allowed_research_refs(evidence) else "no_relevant_external_evidence"
+        ),
+        "quality_contract": {
+            "model_role": "none_for_receipt_sufficiency",
+            "host_role": "scope+retrieval+evidence_refs+sufficiency+serialization",
+            "model_json": False,
+        },
+    }
 
 
 def generate_sectioned_game_design(

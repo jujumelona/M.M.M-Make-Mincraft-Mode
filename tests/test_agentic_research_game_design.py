@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -142,53 +141,21 @@ def test_sectioned_game_design_uses_host_parsed_markdown() -> None:
     assert "art_direction" not in result
 
 
-def test_research_domain_accepts_only_host_issued_grounding_ref(monkeypatch) -> None:
-    router = _ResearchRouter()
-
-    class _Trace:
-        def __init__(self, *args, **kwargs):
-            self.attempts = []
-
-        def record_attempt(self, **kwargs):
-            self.attempts.append(kwargs)
-
-        def record_success(self, value):
-            self.success = value
-
-    monkeypatch.setattr(agentic, "PlannerStageTrace", _Trace)
+def test_research_domain_legacy_facade_is_host_owned() -> None:
+    class NeverModel:
+        def __getattr__(self, name):
+            raise AssertionError(f"model called: {name}")
 
     result = agentic._research_domain_with_agent(
-        router,
+        NeverModel(),
         prompt="기능을 조사해서 설계해줘",
-        domain={
-            "domain_id": "request",
-            "objective": "요청 조사",
-            "requirements": ["기능"],
-            "evidence_kinds": ["minecraft_api"],
-            "queries": ["minecraft mod feature"],
-            "providers": ["official_docs", "project_rag", "external_mcp"],
-            "depends_on": [],
-        },
+        domain={"domain_id": "request", "objective": "요청 조사", "queries": ["minecraft mod feature"]},
         deterministic=_deterministic_research(),
         trace_metadata=None,
     )
-
     assert result["sufficient"] is True
-    assert result["claims"][0]["evidence_refs"] == ["forced_project_rag"]
-    assert len(router.calls) == 1
-    call = router.calls[0]
-    assert call["tool_stage"] == "research"
-    assert call["response_format"] == "json"
-    assert call["response_schema"] is agentic._RESEARCH_NOTE_SCHEMA
-    assert call["enable_tools"] is True
-    rendered = json.dumps(call["messages"], ensure_ascii=False)
-    assert "intentionally" in rendered
-    payload = json.loads(call["messages"][-1]["content"])
-    assert (
-        payload["deterministic_evidence_receipts"]["forced_project_rag"]["evidence_ref"]
-        == "forced_project_rag"
-    )
-    assert "evidence_document" not in rendered
+    assert result["research_mode"] == "advisory_predesign"
+    assert result["quality_contract"]["model_json"] is False
 
 
 def test_sufficient_research_rejects_empty_and_invented_refs() -> None:
@@ -280,54 +247,35 @@ def test_evidence_document_preserves_full_raw_and_bounds_every_page(
     assert all(page["page_count"] == len(pages) for page in pages)
 
 
-def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
+def test_legacy_paged_entrypoint_uses_small_model_text_and_host_quote_verification(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path / "evidence"))
-    monkeypatch.setenv("MMM_RESEARCH_CHECKPOINT_ROOT", str(tmp_path / "checkpoints"))
     evidence = {
-        "official_rag": {
-            "domain_id": "mk_combat",
-            "queries": [
-                {"query": "damage", "raw": "공식근거-" + ("A" * 8_000)},
-                {"query": "registry", "raw": "레지스트리-" + ("B" * 7_000)},
-            ],
-        },
         "forced_project_rag": {
             "domain_id": "mk_combat",
             "queries": [
-                {"query": "bossbar", "raw": "강제근거-" + ("C" * 9_000)}
+                {
+                    "query": "damage",
+                    "raw": "Minecraft Fabric combat damage registration example",
+                }
             ],
-        },
+        }
     }
     document = paged_rag._materialize_domain_evidence_document("mk_combat", evidence)
-    pages = paged_rag._read_evidence_pages(document)
-    calls: list[list[dict[str, str]]] = []
+    calls: list[dict[str, object]] = []
 
     class Router:
-        profile = "test-lossless-synthesis"
-        registry = None
-
         def generate_text(self, role, messages, **kwargs):
-            del role, kwargs
-            calls.append(messages)
-            return json.dumps(
-                {
-                    "research_note": {
-                        "domain_id": "mk_combat",
-                        "claims": [
-                            {
-                                "claim": "bounded evidence reached synthesis",
-                                "evidence_refs": ["probe:lossless-synthesis"],
-                            }
-                        ],
-                        "gaps": [],
-                        "next_queries": [],
-                        "procedures": [],
-                        "sufficient": True,
-                    }
-                },
-                ensure_ascii=False,
+            assert role == "planner"
+            calls.append({"messages": messages, **kwargs})
+            rendered = str(messages[-1]["content"])
+            assert rendered.startswith("OBJECTIVE\n")
+            assert "\nSOURCE\n" in rendered
+            assert "Minecraft Fabric combat damage registration example" in rendered
+            return (
+                "EVIDENCE\tMinecraft Fabric combat damage registration example"
+                "\tUse a combat damage registration pattern."
             )
 
     result = paged_rag._research_document_domain(
@@ -336,29 +284,26 @@ def test_all_lossless_evidence_fragments_reach_bounded_synthesis(
         prompt="전투 기능을 정확한 근거로 설계해줘",
         domain={
             "domain_id": "mk_combat",
-            "queries": ["damage", "registry", "bossbar"],
+            "objective": "minecraft combat damage",
+            "queries": ["minecraft combat damage"],
         },
         document=document,
         trace_metadata=None,
     )
 
-    delivered_fragments: list[str] = []
-    for messages in calls:
-        payload = json.loads(messages[-1]["content"])
-        children = payload.get("bounded_child_notes", [])
-        assert len(json.dumps(children, ensure_ascii=False).encode("utf-8")) <= (
-            paged_rag._SYNTHESIS_INPUT_BYTES + 256
-        )
-        for child in children:
-            fragment = child.get("evidence_fragment")
-            if isinstance(fragment, dict):
-                delivered_fragments.append(str(fragment.get("content", "")))
-
-    assert Counter(delivered_fragments) == Counter(
-        str(page["content"]) for page in pages
+    assert calls
+    assert all(call["response_format"] == "text" for call in calls)
+    assert all(call["response_schema"] is None for call in calls)
+    assert all(call["enable_tools"] is False for call in calls)
+    assert result["research_mode"] == "advisory_predesign"
+    assert result["claims"]
+    assert result["claims"][0]["support_quote"] == (
+        "Minecraft Fabric combat damage registration example"
     )
-    assert result["evidence_ledger"]["record_count"] == len(pages)
-    assert result["checkpoint"]["status"] == "complete"
+    assert result["claims"][0]["support_verification"] == (
+        "host_exact_quote_from_small_model_line"
+    )
+    assert result["quality_contract"]["model_json"] is False
 
 
 def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> None:

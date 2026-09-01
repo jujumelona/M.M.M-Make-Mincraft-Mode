@@ -10,7 +10,6 @@ bodies. Search metadata and snippets are never promoted to evidence.
 import base64
 import hashlib
 import json
-import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -45,11 +44,10 @@ def _max_queries() -> int:
         value = int(raw) if raw else _DEFAULT_MAX_QUERIES
     except ValueError:
         value = _DEFAULT_MAX_QUERIES
-    # GitHub unauthenticated repository search is only 10 requests/minute.  Never
-    # configure the pre-design phase to deterministically exceed that ceiling itself;
-    # leave two requests of headroom for other process activity.
-    provider_cap = _HARD_MAX_QUERIES if _github_token() else 8
-    return max(1, min(value, _HARD_MAX_QUERIES, provider_cap))
+    # This value is a fallback batch budget only. Approved requirement coverage
+    # is never truncated to fit a provider request count. Provider rate limits are
+    # observed dynamically and recorded as provider state instead.
+    return max(1, min(value, _HARD_MAX_QUERIES))
 
 
 def _clean_query(value: Any) -> str:
@@ -90,46 +88,72 @@ def _query_terms(query: str) -> set[str]:
     return specific or tokens
 
 
+_GENERIC_QUERY_TERMS = frozenset({
+    "build", "building", "create", "custom", "craft", "crafting", "make",
+    "minecraft", "fabric", "forge", "neoforge", "mod", "mods", "mode",
+    "source", "implementation", "system", "feature", "space", "game",
+})
+_GENERIC_REPOSITORY_MARKERS = (
+    "studentsatbuild", "student zone", "awesome-minecraft", "awesome minecraft",
+    "stockmarket", "stock market", "mindcraft-bots", "minecraft bot", "mineflayer",
+    "llm agent", "learning path", "bootcamp", "tutorial collection", "games list",
+)
+
+
+def _specific_query_terms(query: str) -> set[str]:
+    return {term for term in _query_terms(query) if term not in _GENERIC_QUERY_TERMS}
+
+
+def _term_overlap(wanted: set[str], available: set[str]) -> bool:
+    for left in wanted:
+        for right in available:
+            if left == right:
+                return True
+            if min(len(left), len(right)) >= 5 and (left.startswith(right) or right.startswith(left)):
+                return True
+    return False
+
+
+def _repository_candidate_relevant(query: str, repository: Mapping[str, Any]) -> bool:
+    full_name = str(repository.get("full_name") or "").strip()
+    description = str(repository.get("description") or "").strip()
+    topics = repository.get("topics")
+    topic_text = " ".join(str(item) for item in topics) if isinstance(topics, list) else ""
+    folded = " ".join((full_name, description, topic_text)).casefold()
+    if not folded or any(marker in folded for marker in _GENERIC_REPOSITORY_MARKERS):
+        return False
+    if "minecraft" not in folded:
+        return False
+    terms = {token.casefold() for token in _WORD.findall(folded) if len(token) >= 3}
+    specific = _specific_query_terms(query)
+    if specific and not _term_overlap(specific, terms):
+        return False
+    return True
+
+
 def _body_relevant(query: str, body: str) -> bool:
     wanted = _query_terms(query)
-    body_terms = {
-        token.casefold()
-        for token in _WORD.findall(body)
-        if len(token) >= 3
-    }
-    if wanted and not (wanted & body_terms):
+    body_terms = {token.casefold() for token in _WORD.findall(body) if len(token) >= 3}
+    specific = {term for term in wanted if term not in _GENERIC_QUERY_TERMS}
+    if specific and not _term_overlap(specific, body_terms):
+        return False
+    if not specific and wanted and not _term_overlap(wanted, body_terms):
         return False
     folded = body.casefold()
     ecosystem_markers = (
-        "fabric.mod.json",
-        "fabric api",
-        "fabricmc",
-        "minecraft mod",
-        "forge mod",
-        "neoforge",
-        "mods.toml",
-        "architectury",
-        "curseforge",
-        "modrinth",
-        "minecraftversion",
+        "fabric.mod.json", "fabric api", "fabricmc", "minecraft mod",
+        "mod for minecraft", "forge mod", "neoforge", "mods.toml",
+        "architectury", "curseforge", "modrinth", "minecraftversion",
     )
     if not any(marker in folded for marker in ecosystem_markers):
         return False
-    generic_markers = (
-        "student zone",
-        "awesome list",
-        "awesome-minecraft",
-        "learning path",
-        "bootcamp",
-        "minecraft bot",
-        "mineflayer",
-        "llm agent",
-    )
-    if any(marker in folded for marker in generic_markers) and not any(
+    if any(marker in folded for marker in _GENERIC_REPOSITORY_MARKERS) and not any(
         marker in folded for marker in ("fabric.mod.json", "mods.toml", "architectury")
     ):
         return False
     return True
+
+
 def _headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -265,6 +289,15 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
                         query=query,
                         candidate_index=candidate_index,
                         reason="invalid_full_name",
+                    )
+                    continue
+                if not _repository_candidate_relevant(query, repository):
+                    _emit_source_trace(
+                        "github_repository_skipped",
+                        query=query,
+                        candidate_index=candidate_index,
+                        repository=full_name,
+                        reason="repository_not_minecraft_mod_query_relevant",
                     )
                     continue
                 _emit_source_trace(
@@ -448,6 +481,7 @@ def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> list[str]:
                 result.append(query)
     return result
 def _fallback_query_keys(bundle: Mapping[str, Any], limit: int) -> set[str]:
+    del limit
     all_queries: list[str] = []
     for domain in bundle.get("domains", ()) if isinstance(bundle.get("domains"), list) else ():
         if not isinstance(domain, Mapping):
@@ -457,11 +491,7 @@ def _fallback_query_keys(bundle: Mapping[str, Any], limit: int) -> set[str]:
                 query = _clean_query(row.get("query"))
                 if query:
                     all_queries.append(query)
-    if len(all_queries) <= limit:
-        return {query.casefold() for query in all_queries}
-    stride = max(1, math.floor(len(all_queries) / limit))
-    chosen = all_queries[::stride][:limit]
-    return {query.casefold() for query in chosen}
+    return {query.casefold() for query in all_queries}
 
 
 def _safe_count(value: Any) -> int:
@@ -502,7 +532,9 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
     if not planned:
         planned = sorted(_fallback_query_keys(bundle, limit))
         selection_origin = "bounded_fallback_queries"
-    selected_order = planned[:limit]
+    # The normal authored plan contributes one first-pass query per requirement.
+    # Never silently starve later requirements because an unrelated global cap was hit.
+    selected_order = list(dict.fromkeys(planned))
     selected = {query.casefold() for query in selected_order}
     provider_rate_limited = False
     _emit_source_trace(

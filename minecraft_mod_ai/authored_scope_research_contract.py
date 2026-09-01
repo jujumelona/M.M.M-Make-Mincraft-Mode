@@ -186,30 +186,50 @@ def _call_retrieval_planner(
     prompt: str,
     requirements: Sequence[Mapping[str, Any]],
 ) -> Any:
-    ids = [str(item.get("requirement_id") or "") for item in requirements]
-    schema = _retrieval_plan_schema(ids)
-    messages = _retrieval_plan_messages(prompt, requirements)
-    native = getattr(router, "generate_tool_decision", None)
-    if callable(native):
-        return native(
-            "planner",
-            messages,
-            tool_name="plan_requirement_retrieval",
-            parameters=schema,
-            description=(
-                "Create authored prerequisite edges and English multi-query retrieval "
-                "queries for each frozen requirement."
-            ),
+    """Build query structure deterministically; the small model owns no JSON protocol."""
+    del router, prompt
+    from .canonical_capability_ontology import search_queries_for_capability
+
+    rows: list[dict[str, Any]] = []
+    for item in requirements:
+        rid = str(item.get("requirement_id") or "").strip()
+        capability = str(item.get("capability") or "").strip()
+        if not rid:
+            continue
+        raw_deps = item.get("depends_on")
+        deps = (
+            [str(dep).strip() for dep in raw_deps if str(dep).strip() and str(dep).strip() != rid]
+            if isinstance(raw_deps, list)
+            else []
         )
-    raw = router.generate_text(
-        "planner",
-        messages,
-        response_format="json",
-        response_schema=schema,
-        tool_stage="research_query_planning",
-        enable_tools=False,
-    )
-    return json.loads(raw) if isinstance(raw, str) else raw
+        queries = list(search_queries_for_capability(capability)) if capability else []
+        concept = re.sub(r"[^A-Za-z0-9]+", " ", capability.replace("_", " ")).strip()
+        if not concept:
+            semantic = str(item.get("semantic_statement") or "")
+            concept = " ".join(_QUERY_WORD.findall(semantic))[:120].strip()
+        if not concept:
+            concept = "requested minecraft mechanic"
+        queries.extend((
+            f"minecraft mod {concept} implementation",
+            f"minecraft fabric {concept} source",
+        ))
+        cleaned: list[str] = []
+        for query in queries:
+            value = _query_text(query)
+            if value and "minecraft" not in value.casefold():
+                value = f"minecraft {value}"
+            if _is_english_retrieval_query(value) and value.casefold() not in {q.casefold() for q in cleaned}:
+                cleaned.append(value)
+            if len(cleaned) >= 5:
+                break
+        if len(cleaned) < 2:
+            raise ValueError(f"host retrieval planner could not build two queries for {rid}")
+        rows.append({
+            "requirement_id": rid,
+            "depends_on": list(dict.fromkeys(deps)),
+            "search_queries": cleaned,
+        })
+    return {"requirements": rows}
 
 
 def _validate_dependency_dag(
