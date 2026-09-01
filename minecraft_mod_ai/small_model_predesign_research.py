@@ -204,13 +204,22 @@ def research_document_domain(
         document.clear()
         document.update(working_document)
 
-    try:
-        pages = project_rag._read_evidence_pages(working_document)
-    except Exception:
+    projection_is_empty = (
+        "model_unit_count" in working_document
+        and int(working_document.get("model_unit_count") or 0) == 0
+    )
+    if projection_is_empty:
         pages = []
+    else:
+        try:
+            pages = project_rag._read_evidence_pages(working_document)
+        except Exception:
+            pages = []
 
     claims: list[dict[str, Any]] = []
-    diagnostics: list[str] = []
+    diagnostics: list[str] = (
+        ["no_claim_bearing_source_bodies"] if projection_is_empty else []
+    )
     for page in _candidate_pages(pages, domain):
         extracted, page_diagnostics = _extract_page(router, domain=domain, page=page)
         claims.extend(extracted)

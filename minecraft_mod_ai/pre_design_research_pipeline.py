@@ -466,17 +466,18 @@ def _design_request_fits(
 
     budget = request_message_budget(config, ())
     for section_id, fields, _properties in agentic._SECTION_SPECS:
-        messages = agentic._section_messages(
-            prompt=prompt,
-            section_id=section_id,
-            fields=fields,
-            research=research,
-        )
-        prepared = _inject_system_context(
-            messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT
-        )
-        if _canonical_size(prepared) > budget:
-            return False
+        for field in fields:
+            messages = agentic._field_messages(
+                prompt=prompt,
+                section_id=section_id,
+                field=field,
+                research=research,
+            )
+            prepared = _inject_system_context(
+                messages, _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT
+            )
+            if _canonical_size(prepared) > budget:
+                return False
     return True
 
 

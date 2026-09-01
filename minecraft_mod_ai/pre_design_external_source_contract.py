@@ -111,6 +111,16 @@ def _term_overlap(wanted: set[str], available: set[str]) -> bool:
                 return True
             if min(len(left), len(right)) >= 5 and (left.startswith(right) or right.startswith(left)):
                 return True
+            # Capability words often differ only by morphology in repository metadata
+            # (seasonal/seasons, colony/colonization, planting/plant).  Accept a long
+            # semantic stem while still requiring Minecraft-ecosystem gating separately.
+            common = 0
+            for lch, rch in zip(left, right):
+                if lch != rch:
+                    break
+                common += 1
+            if common >= 5 and (len(left) - common <= 4 or len(right) - common <= 4):
+                return True
     return False
 
 

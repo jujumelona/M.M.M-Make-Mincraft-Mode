@@ -37,14 +37,9 @@ class _SectionRouter:
                 "enable_tools": enable_tools,
             }
         )
-        requested = []
         text = str(messages[-1]["content"])
-        for field in (
-            "title", "pitch", "core_loop", "progression", "combat", "mod_context",
-            "modules", "assets", "acceptance_tests", "art_direction",
-        ):
-            if f"- {field}" in text:
-                requested.append(field)
+        marker = "\n\nFIELD\n"
+        field = text.split(marker, 1)[1].split("\n", 1)[0].strip()
         bodies = {
             "title": "연구 기반 모드",
             "pitch": "검색 근거를 바탕으로 설계한다.",
@@ -57,7 +52,7 @@ class _SectionRouter:
             "acceptance_tests": "- 요청한 핵심 루프가 게임 내에서 동작한다",
             "art_direction": "none",
         }
-        return "\n".join(f"## {field}\n{bodies[field]}" for field in requested)
+        return bodies[field]
 
 class _ResearchRouter:
     def __init__(self, evidence_ref: str = "forced_project_rag") -> None:
@@ -109,7 +104,7 @@ def _deterministic_research() -> dict[str, object]:
     }
 
 
-def test_sectioned_game_design_uses_host_parsed_markdown() -> None:
+def test_sectioned_game_design_uses_host_owned_field_compiler() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -123,23 +118,48 @@ def test_sectioned_game_design_uses_host_parsed_markdown() -> None:
         "연구를 먼저 하고 모드를 설계해줘",
         research=research,
     )
-    expected_sections = [
-        tuple(fields) for _section_id, fields, _properties in agentic._SECTION_SPECS
+    expected_fields = [
+        field
+        for _section_id, fields, _properties in agentic._SECTION_SPECS
+        for field in fields
     ]
-    assert len(router.calls) == len(expected_sections)
+    assert len(router.calls) == len(expected_fields)
     assert all(call["role"] == "planner" for call in router.calls)
     assert all(call["response_format"] == "text" for call in router.calls)
     assert all(call["response_schema"] is None for call in router.calls)
     assert all(call["tool_stage"] == "game_design" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
-    for fields, call in zip(expected_sections, router.calls, strict=True):
+    for field, call in zip(expected_fields, router.calls, strict=True):
         system = str(call["messages"][0]["content"])
+        user = str(call["messages"][1]["content"])
         assert "No JSON" in system
+        assert "Do not write the field name, a Markdown ## heading" in system
+        assert f"\n\nFIELD\n{field}\n" in user
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
     assert "art_direction" not in result
 
+
+def test_missing_markdown_headings_can_never_abort_identity_section() -> None:
+    class HeadinglessRouter:
+        def generate_text(self, role, messages, **kwargs):
+            del role, messages, kwargs
+            return "계절 작물과 요리를 연결하는 플레이 경험"
+
+    section = agentic._generate_section(
+        HeadinglessRouter(),
+        prompt="계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘.",
+        section_id="identity_and_loop",
+        fields=("title", "pitch", "core_loop"),
+        research={},
+        media_paths=(),
+        trace_metadata=None,
+    )
+    assert set(section) == {"title", "pitch", "core_loop"}
+    assert section["title"]
+    assert section["pitch"]
+    assert section["core_loop"]
 
 def test_research_domain_legacy_facade_is_host_owned() -> None:
     class NeverModel:
