@@ -4,6 +4,7 @@ import threading
 from types import SimpleNamespace
 
 import minecraft_mod_ai.agentic_research_game_design as agentic
+import minecraft_mod_ai.pre_design_grounded_rag as forced_rag
 import minecraft_mod_ai.llama_structured_decode_policy as decode_policy
 import minecraft_mod_ai.llama_tuning_pipeline as tuning_pipeline
 

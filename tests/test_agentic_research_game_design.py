@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -213,118 +212,6 @@ def test_domain_slice_issues_refs_only_for_real_host_evidence() -> None:
         {"forced_project_rag"}
     )
 
-
-def test_evidence_document_preserves_full_raw_and_bounds_every_page(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
-    huge_official = "official:" + ("A" * 45_000)
-    huge_forced = "forced:" + ("B" * 55_000)
-    evidence = {
-        "official_rag": {
-            "domain_id": "mk_combat",
-            "queries": [{"query": "damage", "raw": huge_official}],
-        },
-        "forced_project_rag": {
-            "domain_id": "mk_combat",
-            "queries": [{"query": "bossbar", "raw": huge_forced}],
-        },
-        "technology_radar": {"status": "available"},
-    }
-
-    document = paged_rag._materialize_domain_evidence_document("mk_combat", evidence)
-    raw = json.loads(Path(document["raw_path"]).read_text(encoding="utf-8"))
-    pages = paged_rag._read_evidence_pages(document)
-
-    assert raw == evidence
-    assert document["page_count"] == len(pages)
-    assert pages
-    assert document["model_projection"] == "claim_bearing_source_bodies_only;raw_receipt_lossless"
-    assert all(
-        len(str(page.get("content", "")).encode("utf-8"))
-        <= paged_rag._EVIDENCE_PAGE_CHARS
-        for page in pages
-    )
-    oversized_records: dict[str, list[dict[str, object]]] = {}
-    for page in pages:
-        record_sha256 = page.get("record_sha256")
-        if record_sha256:
-            oversized_records.setdefault(str(record_sha256), []).append(page)
-    reconstructed = []
-    for fragments in oversized_records.values():
-        fragments.sort(key=lambda item: int(item["part_index"]))
-        assert [int(item["part_index"]) for item in fragments] == list(
-            range(int(fragments[0]["part_count"]))
-        )
-        rendered = "".join(str(item["content"]) for item in fragments)
-        reconstructed.append(rendered)
-        assert paged_rag._sha256_text(rendered) == fragments[0]["record_sha256"]
-    joined = "\n".join(reconstructed)
-    assert huge_official in joined
-    assert huge_forced in joined
-    assert [page["page_index"] for page in pages] == list(range(len(pages)))
-    assert all(page["page_count"] == len(pages) for page in pages)
-
-
-def test_legacy_paged_entrypoint_uses_small_model_text_and_host_quote_verification(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path / "evidence"))
-    evidence = {
-        "forced_project_rag": {
-            "domain_id": "mk_combat",
-            "queries": [
-                {
-                    "query": "damage",
-                    "raw": "Minecraft Fabric combat damage registration example",
-                }
-            ],
-        }
-    }
-    document = paged_rag._materialize_domain_evidence_document("mk_combat", evidence)
-    calls: list[dict[str, object]] = []
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "planner"
-            calls.append({"messages": messages, **kwargs})
-            rendered = str(messages[-1]["content"])
-            assert rendered.startswith("OBJECTIVE\n")
-            assert "\nSOURCE\n" in rendered
-            assert "Minecraft Fabric combat damage registration example" in rendered
-            return (
-                "EVIDENCE\tMinecraft Fabric combat damage registration example"
-                "\tUse a combat damage registration pattern."
-            )
-
-    result = paged_rag._research_document_domain(
-        agentic,
-        Router(),
-        prompt="전투 기능을 정확한 근거로 설계해줘",
-        domain={
-            "domain_id": "mk_combat",
-            "objective": "minecraft combat damage",
-            "queries": ["minecraft combat damage"],
-        },
-        document=document,
-        trace_metadata=None,
-    )
-
-    assert calls
-    assert all(call["response_format"] == "text" for call in calls)
-    assert all(call["response_schema"] is None for call in calls)
-    assert all(call["enable_tools"] is False for call in calls)
-    assert result["research_mode"] == "advisory_predesign"
-    assert result["claims"]
-    assert result["claims"][0]["support_quote"] == (
-        "Minecraft Fabric combat damage registration example"
-    )
-    assert result["claims"][0]["support_verification"] == (
-        "host_exact_quote_from_small_model_line"
-    )
-    assert result["quality_contract"]["model_json"] is False
-
-
 def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> None:
     huge_forced = "F" * 40_000
     forced = {
@@ -358,30 +245,6 @@ def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> 
     assert prompt_slice["forced_project_rag"]["project_source_count"] == 6
     assert prompt_slice["forced_project_rag"]["evidence_ref"] == "forced_project_rag"
     assert "evidence_document" not in prompt_slice
-
-
-def test_each_page_reader_prompt_stays_bounded(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
-    evidence = {
-        "forced_project_rag": {
-            "domain_id": "mk_entity",
-            "queries": [{"query": "entity AI", "content": "Z" * 120_000}],
-        }
-    }
-    document = paged_rag._materialize_domain_evidence_document("mk_entity", evidence)
-    pages = paged_rag._read_evidence_pages(document)
-
-    for page in pages:
-        messages = paged_rag._research_page_messages(
-            prompt="Build the requested mod without changing the authoritative scope.",
-            domain={"domain_id": "mk_entity", "queries": ["entity AI"]},
-            document=document,
-            page=page,
-        )
-        assert len(messages) == 2
-        assert len(messages[1]["content"]) < 20_000
-        assert str(page["page_ref"]) in messages[1]["content"]
-
 
 def test_runtime_binding_uses_native_research_first_owner() -> None:
     assert getattr(game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False)

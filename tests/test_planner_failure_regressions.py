@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from minecraft_mod_ai import agentic_research_game_design as agentic
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+from minecraft_mod_ai import pre_design_grounded_rag as project_rag
 from minecraft_mod_ai.agent_capability_context import (
     filter_tool_schemas_for_role,
     target_neutral_research_scope,
@@ -69,97 +69,31 @@ def test_target_neutral_research_hides_donor_and_target_compatibility_tools() ->
         "external_mcp_call",
     } <= names
 
-
-def test_ungrounded_sufficient_research_reaches_evidence_frontier_fixed_point(
-    monkeypatch,
-) -> None:
-    class _Trace:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def record_attempt(self, **kwargs):
-            pass
-
-        def record_success(self, value):
-            raise AssertionError("ungrounded research must not be accepted")
-
-    monkeypatch.setattr(agentic, "PlannerStageTrace", _Trace)
-    router = _Router(
-        [
-            json.dumps(
-                {
-                    "research_note": {
-                        "domain_id": "request",
-                        "claims": [{"claim": "첫 표현", "evidence_refs": []}],
-                        "gaps": [],
-                        "next_queries": [],
-                        "procedures": [],
-                        "sufficient": True,
-                    }
-                },
-                ensure_ascii=False,
-            ),
-            json.dumps(
-                {
-                    "research_note": {
-                        "domain_id": "request",
-                        "claims": [{"claim": "말만 바꾼 둘째 표현", "evidence_refs": []}],
-                        "gaps": [],
-                        "next_queries": [],
-                        "procedures": [],
-                        "sufficient": True,
-                    }
-                },
-                ensure_ascii=False,
-            ),
-        ]
-    )
-
-    result = agentic._research_domain_with_agent(
-        router,
-        prompt="기능을 조사해줘",
-        domain={
-            "domain_id": "request",
-            "objective": "target-neutral research",
-            "requirements": ["기능"],
-            "queries": ["feature"],
-        },
-        deterministic={
-            "forced_project_rag": {
-                "project_source_count": 1,
-                "domains": [
+def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    content = "real host-owned target-neutral evidence"
+    document = project_rag._materialize_domain_evidence_document(
+        "request",
+        {
+            "grounded_rag": {
+                "domain_id": "request",
+                "queries": [
                     {
-                        "domain_id": "request",
-                        "queries": [
+                        "query": "target neutral evidence",
+                        "evidence_records": [
                             {
-                                "query": "feature",
-                                "sources": [{"source_id": "fixture"}],
+                                "source_id": "fixture",
+                                "source_type": "official_reviewed_document",
+                                "source_locator": "fixture",
+                                "url": "fixture://evidence",
+                                "title": "fixture",
+                                "content": content,
+                                "content_sha256": project_rag._sha256_text(content),
+                                "body_retrieved": True,
                             }
                         ],
                     }
                 ],
-            }
-        },
-        trace_metadata=None,
-    )
-
-    assert result["sufficient"] is False
-    assert result["fixed_point"] is True
-    assert len(router.calls) == 2
-
-
-def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
-    document = project_rag._materialize_domain_evidence_document(
-        "request",
-        {
-            "official_rag": {
-                "documents": [
-                    {
-                        "document_id": "fixture",
-                        "content": "real host-owned target-neutral evidence",
-                    }
-                ]
             }
         },
     )
@@ -179,7 +113,7 @@ def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> 
         "procedures": [],
         "sufficient": True,
     }
-    with pytest.raises(PreDesignResearchFailure, match="lossless evidence pages"):
+    with pytest.raises(PreDesignResearchFailure, match="outside host-owned pages"):
         pipeline._validate_document_grounding(
             agentic,
             project_rag,

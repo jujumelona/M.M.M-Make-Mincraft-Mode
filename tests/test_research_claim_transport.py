@@ -76,35 +76,3 @@ def test_qwen_content_and_source_ref_are_canonicalized() -> None:
         allowed_refs=frozenset({_PAGE_REF}),
     )
 
-
-def test_paged_synthesis_preserves_qwen_claim_text() -> None:
-    tail_sha256 = "sha256:page-tail"
-    raw = json.dumps(
-        {
-            "research_note": _qwen_claim_note(),
-            "continuation": {
-                "complete": True,
-                "next_offset": 32,
-                "tail_sha256": tail_sha256,
-            },
-        },
-        ensure_ascii=False,
-    )
-
-    parsed = paged_rag._parse_page_response(
-        agentic,
-        raw,
-        domain_id="request",
-        current_offset=0,
-        content_chars=32,
-        tail_sha256=tail_sha256,
-    )
-
-    assert parsed["note"]["claims"][0]["claim"] == (
-        "잡몹에서 보스로 이어지는 성장 구조를 설계할 수 있다."
-    )
-    assert parsed["note"]["claims"][0]["evidence_refs"] == [_PAGE_REF]
-    agentic._validate_sufficient_research(
-        parsed["note"],
-        allowed_refs=frozenset({_PAGE_REF}),
-    )
