@@ -1,0 +1,72 @@
+name: One-shot Design Meta Guard Patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/design-meta-guard-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch canonical design acceptance boundaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          agentic = Path('minecraft_mod_ai/agentic_research_game_design.py')
+          text = agentic.read_text(encoding='utf-8')
+          marker = 'from .planner_stage_trace import PlannerStageTrace\n'
+          addition = marker + 'from .model_meta_output_contract import assert_design_field_clean\n'
+          if 'from .model_meta_output_contract import assert_design_field_clean' not in text:
+              if marker not in text:
+                  raise SystemExit('agentic import marker not found')
+              text = text.replace(marker, addition, 1)
+
+          old = '''    if field in {"title", "pitch"}:\n        value = _plain_text(body)\n        if not value:\n            raise SpecValidationError(f"Planner left {field} empty")\n        return value\n    if field in _LIST_FIELDS:\n        values = _markdown_list(body)\n        if not values:\n            raise SpecValidationError(f"Planner left {field} empty")\n        return values\n'''
+          new = '''    if field in {"title", "pitch"}:\n        value = _plain_text(body)\n        if not value:\n            raise SpecValidationError(f"Planner left {field} empty")\n        try:\n            assert_design_field_clean(field, value)\n        except ValueError as exc:\n            raise SpecValidationError(str(exc)) from exc\n        return value\n    if field in _LIST_FIELDS:\n        values = _markdown_list(body)\n        if not values:\n            raise SpecValidationError(f"Planner left {field} empty")\n        if field == "core_loop":\n            try:\n                assert_design_field_clean(field, values)\n            except ValueError as exc:\n                raise SpecValidationError(str(exc)) from exc\n        return values\n'''
+          if old not in text:
+              raise SystemExit('agentic field parser marker not found')
+          text = text.replace(old, new, 1)
+          agentic.write_text(text, encoding='utf-8')
+
+          game = Path('minecraft_mod_ai/game_design.py')
+          text = game.read_text(encoding='utf-8')
+          marker = 'from .model_router import ModelRouter\n'
+          addition = marker + 'from .model_meta_output_contract import assert_design_field_clean\n'
+          if 'from .model_meta_output_contract import assert_design_field_clean' not in text:
+              if marker not in text:
+                  raise SystemExit('game design import marker not found')
+              text = text.replace(marker, addition, 1)
+
+          start = text.index('def _validate_design(design: dict[str, Any]) -> None:')
+          end = text.index('\n\ndef _deterministic_bootstrap(', start)
+          replacement = '''def _validate_design(design: dict[str, Any]) -> None:\n    for field in ("title", "pitch"):\n        value = design.get(field)\n        if not isinstance(value, str) or not value.strip():\n            raise SpecValidationError(f"game_design.{field} must be a non-empty string")\n    for field in ("core_loop", "progression", "acceptance_tests", "modules", "assets"):\n        if not isinstance(design.get(field), list):\n            raise SpecValidationError(f"game_design.{field} must be a list")\n    for field in ("combat", "mod_context"):\n        if not isinstance(design.get(field), dict):\n            raise SpecValidationError(f"game_design.{field} must be an object")\n    for field in ("title", "pitch", "core_loop"):\n        try:\n            assert_design_field_clean(field, design.get(field))\n        except ValueError as exc:\n            raise SpecValidationError(str(exc)) from exc\n'''
+          text = text[:start] + replacement + text[end:]
+          game.write_text(text, encoding='utf-8')
+          PY
+      - name: Compile patched modules
+        run: |
+          python -m py_compile \
+            minecraft_mod_ai/model_meta_output_contract.py \
+            minecraft_mod_ai/agentic_research_game_design.py \
+            minecraft_mod_ai/game_design.py
+      - name: Commit patch to main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/game_design.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: reject internal meta output from design fields'
+            git push origin HEAD:main
+          fi
