@@ -4,7 +4,7 @@ from __future__ import annotations
 
 ``runtime_bootstrap.initialize_runtime`` installs the ordered core/late/post-bootstrap
 contracts. Integrations that intentionally happen only *after* that sequence live here.
-Request semantics and retrieval-query planning are native calls owned by
+Request semantics and retrieval-query planning are host-scoped text calls owned by
 ``planning_authority`` and therefore are deliberately absent from this mutation phase.
 
 Late finalization is process-lifetime composition just like bootstrap. If any installer

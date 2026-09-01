@@ -125,10 +125,10 @@ _GAME_DESIGN_RESPONSE_SCHEMA: dict[str, Any] = {
 class GameDesignPlanner:
     """Create the frozen game design before retrieval and implementation planning.
 
-    Request semantics and retrieval intent are compiled natively before design. ModelRouter
-    uses research-first sectioned Markdown design; non-agentic routers use the strict
-    host-owned fallback. Runtime bootstrap must not replace request authority, the design
-    generator, readiness validation, or page merge.
+    Request semantics and retrieval intent are compiled through host-scoped text turns
+    before design. ModelRouter uses research-first sectioned Markdown design; non-agentic
+    routers use the strict host-owned fallback. Runtime bootstrap must not replace request
+    authority, the design generator, readiness validation, or page merge.
     """
 
     def __init__(self, router: ModelRouter) -> None:

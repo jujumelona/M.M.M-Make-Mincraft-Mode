@@ -723,6 +723,12 @@ def _native_protocol_failure(exc: BaseException) -> bool:
     cause = getattr(exc, "cause", exc)
     if not isinstance(cause, RuntimeError):
         return False
+    # A native forced-tool probe can succeed with a tiny scalar schema and still fail
+    # on real arguments. Treat strict parser failures as transport/protocol failures so
+    # the existing bounded argument-only path gets one chance with the action already
+    # selected by the host. This does not weaken schema validation or retry indefinitely.
+    if type(cause).__name__ == "ToolCallValidationError":
+        return True
     text = str(cause).casefold()
     markers = (
         "did not emit a tool call",
