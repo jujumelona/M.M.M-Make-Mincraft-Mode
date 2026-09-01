@@ -2,7 +2,8 @@ name: Pre-design Runtime Regression
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'minecraft_mod_ai/**'
       - 'tests/test_predesign_source_discovery_contract.py'
@@ -26,9 +27,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
       - name: Import package bootstrap
-        run: python -c "import minecraft_mod_ai; print('package import: PASS')"
+        run: |
+          python -c "import minecraft_mod_ai; print('package import PASS')"
       - name: Run pre-design regression contract
-        run: python -m pytest -q tests/test_predesign_source_discovery_contract.py
+        run: |
+          python -m pytest -q tests/test_predesign_source_discovery_contract.py
       - name: Ban retired pre-design owner
         run: |
           test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
