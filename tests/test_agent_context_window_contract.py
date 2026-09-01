@@ -361,3 +361,44 @@ def test_superseded_context_and_coder_route_modules_are_deleted() -> None:
         source = path.read_text(encoding="utf-8")
         for module_name in retired:
             assert module_name not in source, f"retired module referenced by {path}"
+
+
+
+def test_exact_context_recovery_uses_live_tokens_not_fixed_40k(monkeypatch) -> None:
+    original = (
+        {"role": "system", "content": "s" * 100},
+        {"role": "user", "content": "u" * 100},
+        {"role": "assistant", "content": "a" * 100},
+    )
+    seen_budgets: list[int] = []
+
+    def fake_emergency(messages, *, budget_bytes):
+        seen_budgets.append(int(budget_bytes))
+        marker = max(1, int(budget_bytes))
+        return (*tuple(messages[:2]), {"role": "system", "content": f"budget={marker}"})
+
+    class Accounting:
+        def __init__(self, input_tokens: int):
+            self.input_tokens = input_tokens
+            self.context_tokens = 32_768
+
+    def exact(request):
+        marker = int(str(request.messages[-1]["content"]).split("=")[-1])
+        return Accounting(20_000 if marker <= 72 * 1024 else 30_000)
+
+    monkeypatch.setattr(tool_loop, "request_message_budget", lambda config, tools: 96 * 1024)
+    monkeypatch.setattr(tool_loop, "emergency_fit_messages", fake_emergency)
+    request = GenerationRequest(messages=original)
+    recovered = tool_loop._exact_context_recovery_candidate(
+        original,
+        turn_request=request,
+        exact_accounting=exact,
+        config=_config(),
+        tools=(),
+    )
+    assert recovered is not None
+    candidate, receipt = recovered
+    assert receipt["budget_bytes"] == 72 * 1024
+    assert receipt["remaining_tokens"] == 12_768
+    assert "budget=73728" in str(candidate[-1]["content"])
+    assert seen_budgets[:3] == [96 * 1024, 84 * 1024, 72 * 1024]

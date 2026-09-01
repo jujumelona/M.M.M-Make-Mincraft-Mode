@@ -1266,6 +1266,51 @@ def _retry_atomic_after_output_exhaustion(
         raise
 
 
+
+def _exact_context_recovery_candidate(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    turn_request: GenerationRequest,
+    exact_accounting: Any,
+    config: Any,
+    tools: Sequence[Any],
+) -> tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None:
+    """Select the largest deterministic retry that leaves useful live output space."""
+
+    base_budget = max(1, int(request_message_budget(config, tools)))
+    budgets = tuple(
+        dict.fromkeys(
+            max(1, base_budget * numerator // 8)
+            for numerator in (8, 7, 6, 5, 4, 3, 2, 1)
+        )
+    )
+    original = tuple(messages)
+    fallback: tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None = None
+
+    for budget in budgets:
+        candidate = tuple(emergency_fit_messages(original, budget_bytes=budget))
+        if candidate == original:
+            continue
+        accounting = exact_accounting(replace(turn_request, messages=candidate))
+        input_tokens = int(accounting.input_tokens)
+        context_tokens = int(accounting.context_tokens)
+        remaining_tokens = context_tokens - input_tokens
+        if remaining_tokens <= 0:
+            continue
+        receipt = {
+            "budget_bytes": budget,
+            "input_tokens": input_tokens,
+            "context_tokens": context_tokens,
+            "remaining_tokens": remaining_tokens,
+        }
+        if fallback is None:
+            fallback = (candidate, receipt)
+        configured_output = max(1, int(getattr(config, "max_new_tokens", 0) or 1))
+        desired_reserve = min(configured_output, max(1, context_tokens // 4))
+        if remaining_tokens >= desired_reserve:
+            return candidate, receipt
+    return fallback
+
 def _generate_turn_with_context_recovery(
     router: Any,
     *,
@@ -1322,14 +1367,27 @@ def _generate_turn_with_context_recovery(
         if boundary_kind != CONTEXT_PRESSURE:
             raise
 
-        emergency_budget = min(
-            40 * 1024,
-            request_message_budget(config, request.tools),
-        )
-        emergency = emergency_fit_messages(
-            messages,
-            budget_bytes=emergency_budget,
-        )
+        recovery_receipt: dict[str, int] = {}
+        if callable(exact_accounting):
+            exact_recovery = _exact_context_recovery_candidate(
+                messages,
+                turn_request=turn_request,
+                exact_accounting=exact_accounting,
+                config=config,
+                tools=request.tools,
+            )
+            if exact_recovery is None:
+                mark_context_recovery_exhausted(exc)
+                raise
+            emergency, recovery_receipt = exact_recovery
+        else:
+            active_budget = max(1, request_message_budget(config, request.tools))
+            emergency_budget = max(1, active_budget * 3 // 4)
+            emergency = emergency_fit_messages(
+                messages,
+                budget_bytes=emergency_budget,
+            )
+            recovery_receipt = {"budget_bytes": emergency_budget}
         if not _replace_live_messages(messages, emergency):
             mark_context_recovery_exhausted(exc)
             raise
@@ -1341,7 +1399,7 @@ def _generate_turn_with_context_recovery(
         print(
             "agent context: deterministic overflow recovery",
             f"messages={len(messages)}",
-            f"budget_bytes={emergency_budget}",
+            *(f"{key}={value}" for key, value in recovery_receipt.items()),
             flush=True,
         )
         try:

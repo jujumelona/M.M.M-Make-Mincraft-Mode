@@ -393,7 +393,7 @@ def _rewrite_compilation(
         canonical_ref = f"acceptance:{req_id}"
         if canonical_ref not in refs:
             refs.insert(0, canonical_ref)
-        group["acceptance_refs"] = list(dict.fromkeys(refs))[:3]
+        group["acceptance_refs"] = list(dict.fromkeys(refs))
 
         dimensions = [
             value for value in _production._BASELINE_DIMENSIONS if value in active_ids

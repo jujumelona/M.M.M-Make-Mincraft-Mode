@@ -248,11 +248,16 @@ def install(context_module: Any) -> None:
         def safe_emergency_fit_messages(
             messages: Sequence[Mapping[str, Any]],
             *,
-            budget_bytes: int = 40 * 1024,
+            budget_bytes: int | None = None,
         ) -> tuple[Mapping[str, Any], ...]:
+            requested_budget = (
+                int(context_module._MAX_CONTEXT_BYTES)
+                if budget_bytes is None
+                else int(budget_bytes)
+            )
             exact_budget = max(
                 1,
-                min(int(context_module._MAX_CONTEXT_BYTES), int(budget_bytes)),
+                min(int(context_module._MAX_CONTEXT_BYTES), requested_budget),
             )
             original = tuple(dict(message) for message in messages)
             original_size = context_module._canonical_size(original)

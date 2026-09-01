@@ -323,7 +323,7 @@ def _normalize_retrieval_plan(
         dependencies[rid] = deps
         result[rid] = {
             "depends_on": list(deps),
-            "search_queries": queries[:5],
+            "search_queries": queries,
         }
 
     if set(result) != known:
@@ -520,7 +520,7 @@ def _compile_knowledge_plan_with_active_catalog(
                     "source_text": source_text,
                     "semantic_statement": semantic,
                     "depends_on": list(raw.get("depends_on") or []),
-                    "research_queries": queries[:5],
+                    "research_queries": queries,
                 }
             )
     plan["authored_capability_routes"] = routes

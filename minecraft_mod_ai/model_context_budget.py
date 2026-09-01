@@ -493,11 +493,12 @@ def fit_messages_to_context(
 def emergency_fit_messages(
     messages: Sequence[Mapping[str, Any]],
     *,
-    budget_bytes: int = 40 * 1024,
+    budget_bytes: int | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     """Bound a retry payload when a backend reports context pressure."""
 
-    budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, int(budget_bytes)))
+    requested_budget = _MAX_CONTEXT_BYTES if budget_bytes is None else int(budget_bytes)
+    budget = max(_MIN_CONTEXT_BYTES, min(_MAX_CONTEXT_BYTES, requested_budget))
     values = _compact_implementation_seed(messages)
     values = _compact_old_exchanges(values, budget=budget)
     if _canonical_size(values) <= budget:
