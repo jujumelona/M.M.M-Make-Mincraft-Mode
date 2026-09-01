@@ -29,8 +29,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          # 1) Keep the concurrency regression, but point its "legacy attrs absent" checks
-          # at the canonical owner rather than an already-deleted module name.
           path = Path('tests/test_agentic_planner_runtime_hardening.py')
           text = path.read_text(encoding='utf-8')
           anchor = 'import minecraft_mod_ai.agentic_research_game_design as agentic\n'
@@ -41,8 +39,6 @@ jobs:
               text = text.replace(anchor, anchor + addition, 1)
           path.write_text(text, encoding='utf-8')
 
-          # 2) Grounding validation is still meaningful. Re-express its fixture using the
-          # current claim-bearing grounded_rag envelope and canonical materializer.
           path = Path('tests/test_planner_failure_regressions.py')
           text = path.read_text(encoding='utf-8')
           anchor = 'from minecraft_mod_ai import pre_design_research_pipeline as pipeline\n'
@@ -56,8 +52,6 @@ jobs:
           text = text[:start] + replacement
           path.write_text(text, encoding='utf-8')
 
-          # 3) The first two transport tests exercise the live canonical parser. The third
-          # one exclusively tested the deleted paged-RAG continuation parser, so remove it.
           path = Path('tests/test_research_claim_transport.py')
           text = path.read_text(encoding='utf-8')
           marker = '\n\ndef test_paged_synthesis_preserves_qwen_claim_text() -> None:'
@@ -65,9 +59,6 @@ jobs:
               text = text.split(marker, 1)[0] + '\n'
           path.write_text(text, encoding='utf-8')
 
-          # 4) These three tests exercised private functions/constants of the retired
-          # paged owner. Equivalent live contracts now have dedicated regressions in
-          # test_predesign_source_discovery_contract.py, so remove only those blocks.
           path = Path('tests/test_agentic_research_game_design.py')
           text = path.read_text(encoding='utf-8')
           obsolete = [
@@ -80,12 +71,12 @@ jobs:
               if signature not in text:
                   continue
               start = text.index(signature)
-              # Include decorators only when immediately preceding; these tests have none.
               next_test = text.find('\n\ndef ', start + len(signature))
               if next_test == -1:
                   text = text[:start].rstrip() + '\n'
               else:
                   text = text[:start].rstrip() + text[next_test:]
+          text = text.replace('from pathlib import Path\n', '', 1)
           path.write_text(text, encoding='utf-8')
           PY
       - name: Verify lint and focused tests
