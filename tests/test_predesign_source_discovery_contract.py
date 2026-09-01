@@ -16,19 +16,7 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
 
     def modrinth(query: str):
         modrinth_calls.append(query)
-        body = f"verified implementation evidence for {query}"
-        return [
-            {
-                "source_id": f"modrinth:{len(modrinth_calls)}",
-                "source_type": "modrinth_project_body",
-                "source_locator": f"modrinth:{len(modrinth_calls)}",
-                "url": "https://modrinth.com/mod/example",
-                "title": "example",
-                "content": body,
-                "content_sha256": rag._sha256_text(body),
-                "body_retrieved": True,
-            }
-        ], {"provider": "modrinth", "status": "available", "result_count": 1}
+        return [], {"provider": "modrinth", "status": "available", "result_count": 0}
 
     def github(query: str, *, disabled=None, disable=None):
         github_calls.append(query)
@@ -70,8 +58,11 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
     assert len(github_calls) == 11
     rows = bundle["domains"][0]["queries"]
     assert len(rows) == 11
-    assert all(row["external_rag"]["sources"] for row in rows)
-    assert rows[0]["external_rag"]["github_retrieval"]["provider_status"] == "error"
+    assert all(not row["external_rag"]["sources"] for row in rows)
+    assert rows[0]["external_rag"]["github_retrieval"]["provider_status"] in {
+        "error",
+        "disabled_after_rate_or_auth_failure",
+    }
     assert all(
         row["external_rag"]["github_retrieval"]["provider_status"]
         in {"error", "disabled_after_rate_or_auth_failure"}
@@ -175,3 +166,79 @@ def test_runtime_does_not_reinstall_retired_predesign_wrappers():
     assert "_install_bounded_research_efficiency" not in stability
     assert "_install_synthesis_convergence" not in stability
     assert "_install_pre_design_rag_cascade(agentic_pre_design_rag)" not in retrieval
+
+
+def test_curseforge_is_a_valid_central_research_provider():
+    from minecraft_mod_ai import central_research as central
+
+    domain = central._research_domain(
+        {
+            "domain_id": "request",
+            "objective": "research request",
+            "requirements": ["request"],
+            "evidence_kinds": ["runtime_behavior"],
+            "queries": ["minecraft mechanic implementation"],
+            "providers": ["modrinth", "curseforge", "github"],
+        }
+    )
+    assert "curseforge" in domain.providers
+
+
+def test_duplicate_queries_are_executed_once(monkeypatch):
+    calls: list[str] = []
+
+    def modrinth(query: str):
+        calls.append(query)
+        return [], {"provider": "modrinth", "status": "available", "result_count": 0}
+
+    monkeypatch.setattr(rag, "_search_modrinth", modrinth)
+    monkeypatch.setattr(
+        rag,
+        "_search_github",
+        lambda query, **kwargs: ([], {"provider": "github", "status": "available", "result_count": 0}),
+    )
+    monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
+    monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
+    monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
+    brief = {
+        "domains": [
+            {"domain_id": "request", "queries": ["same query", "same query", "other query"]}
+        ]
+    }
+    bundle = rag._forced_rag_bundle(object(), brief)
+    assert bundle["query_count"] == 3
+    assert bundle["unique_query_count"] == 2
+    assert sorted(calls) == ["other query", "same query"]
+
+
+def test_ecosystem_evidence_skips_broad_github(monkeypatch):
+    body = "implementation body"
+    monkeypatch.setattr(
+        rag,
+        "_search_modrinth",
+        lambda query: ([{
+            "source_id": "modrinth:one",
+            "source_type": "modrinth_project_body",
+            "source_locator": "modrinth:one",
+            "url": "https://modrinth.com/mod/one",
+            "title": "one",
+            "content": body,
+            "content_sha256": rag._sha256_text(body),
+            "body_retrieved": True,
+            "metadata": {"source_url": ""},
+        }], {"provider": "modrinth", "status": "available", "result_count": 1}),
+    )
+    monkeypatch.setattr(
+        rag,
+        "_search_github",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("broad GitHub fallback must be skipped")),
+    )
+    monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
+    monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
+    monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
+    bundle = rag._forced_rag_bundle(
+        object(), {"domains": [{"domain_id": "request", "queries": ["one query"]}]}
+    )
+    row = bundle["domains"][0]["queries"][0]
+    assert row["external_rag"]["sources"]
+    assert row["external_rag"]["github_retrieval"]["provider_status"] == "skipped_sufficient_ecosystem_evidence"

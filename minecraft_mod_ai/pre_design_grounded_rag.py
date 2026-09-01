@@ -10,6 +10,8 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -24,6 +26,7 @@ from .rag_index import ProjectRAGIndex
 
 _PAGE_BYTES = 1800
 _TIMEOUT = 8.0
+_MAX_QUERY_WORKERS = max(1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKERS", "4") or 4)))
 _UA = "MMM-PreDesignResearch/2.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 
 
@@ -149,6 +152,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                     "project_id": project_id,
                     "slug": slug,
                     "versions": list(hit.get("versions") or [])[:20],
+                    "source_url": str(detail.get("source_url") or ""),
                 },
             }
         )
@@ -209,7 +213,11 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 "content_sha256": _sha256_text(body),
                 "body_retrieved": True,
                 "evidence_origin": "curseforge_mod_body",
-                "metadata": {"mod_id": mod_id, "slug": str(row.get("slug") or "")},
+                "metadata": {
+                    "mod_id": mod_id,
+                    "slug": str(row.get("slug") or ""),
+                    "source_url": str(links.get("sourceUrl") or ""),
+                },
             }
         )
     return records, {
@@ -367,6 +375,98 @@ def _search_code_index(index: Path | None, query: str) -> dict[str, Any]:
         }
 
 
+def _github_repo_from_url(value: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(str(value or "").strip())
+    except ValueError:
+        return ""
+    if parsed.netloc.casefold() not in {"github.com", "www.github.com"}:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return ""
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return f"{owner}/{repo}" if owner and repo else ""
+
+
+def _linked_github_sources(
+    records: list[dict[str, Any]],
+    *,
+    disabled: Callable[[], bool],
+    disable: Callable[[], None],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    repositories: list[str] = []
+    for record in records:
+        metadata = record.get("metadata")
+        source_url = (
+            str(metadata.get("source_url") or "")
+            if isinstance(metadata, Mapping)
+            else ""
+        )
+        repo = _github_repo_from_url(source_url)
+        if repo and repo not in repositories:
+            repositories.append(repo)
+    if not repositories:
+        return [], {
+            "provider": "github",
+            "status": "skipped_no_linked_source",
+            "result_count": 0,
+            "search_requests": 0,
+            "source_requests": 0,
+        }
+    if disabled():
+        return [], {
+            "provider": "github",
+            "status": "disabled_after_rate_or_auth_failure",
+            "result_count": 0,
+            "search_requests": 0,
+            "source_requests": 0,
+        }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    found: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for full_name in repositories[:2]:
+        try:
+            body = _text(
+                f"https://api.github.com/repos/{full_name}/readme", headers
+            ).strip()
+        except urllib.error.HTTPError as exc:
+            if exc.code in {401, 403, 429}:
+                disable()
+            errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
+            continue
+        except Exception as exc:
+            errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
+            continue
+        if not body:
+            continue
+        found.append(
+            {
+                "source_id": f"github:{full_name}",
+                "source_type": "github_repository_body",
+                "source_locator": f"github:{full_name}",
+                "url": f"https://github.com/{full_name}",
+                "title": full_name.rsplit("/", 1)[-1],
+                "content": body,
+                "content_sha256": _sha256_text(body),
+                "body_retrieved": True,
+                "evidence_origin": "github_linked_source_readme",
+                "metadata": {"repository": full_name},
+            }
+        )
+    return found, {
+        "provider": "github",
+        "status": "available" if found else "linked_source_unavailable",
+        "result_count": len(found),
+        "search_requests": 0,
+        "source_requests": min(2, len(repositories)),
+        "readme_errors": errors[:3],
+    }
+
+
 def _forced_rag_bundle(
     router: Any, research_brief: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -378,96 +478,173 @@ def _forced_rag_bundle(
     versions = _versions(router)
     code_index = _existing_code_index()
     github_blocked = False
+    github_state_lock = threading.Lock()
+    github_fallback_lock = threading.Lock()
 
     def disabled() -> bool:
-        return github_blocked
+        with github_state_lock:
+            return github_blocked
 
     def disable() -> None:
         nonlocal github_blocked
-        github_blocked = True
+        with github_state_lock:
+            github_blocked = True
 
-    out_domains: list[dict[str, Any]] = []
-    query_count = 0
-    external_count = 0
-    for domain in domains:
-        rows: list[dict[str, Any]] = []
-        for raw in (
-            domain.get("queries", []) if isinstance(domain.get("queries"), list) else []
-        ):
-            query = str(raw or "").strip()
-            if not query:
-                continue
-            query_count += 1
-            records: list[dict[str, Any]] = []
-            receipts: dict[str, Any] = {}
-            errors: list[dict[str, Any]] = []
-            calls = (
-                ("modrinth", lambda: _search_modrinth(query)),
-                ("curseforge", lambda: _search_curseforge(query)),
-                (
-                    "github",
-                    lambda: _search_github(query, disabled=disabled, disable=disable),
-                ),
-            )
-            for provider, call in calls:
+    def run_query(query: str) -> dict[str, Any]:
+        records: list[dict[str, Any]] = []
+        receipts: dict[str, Any] = {}
+        errors: list[dict[str, Any]] = []
+
+        primary_calls: dict[str, Callable[[], tuple[list[dict[str, Any]], dict[str, Any]]]] = {
+            "modrinth": lambda: _search_modrinth(query),
+        }
+        if os.environ.get("CURSEFORGE_API_KEY", "").strip():
+            primary_calls["curseforge"] = lambda: _search_curseforge(query)
+        else:
+            receipts["curseforge"] = {
+                "provider": "curseforge",
+                "status": "not_configured",
+                "result_count": 0,
+            }
+
+        with ThreadPoolExecutor(max_workers=len(primary_calls)) as pool:
+            futures = {pool.submit(call): provider for provider, call in primary_calls.items()}
+            for future in as_completed(futures):
+                provider = futures[future]
                 try:
-                    found, receipt = call()
+                    found, receipt = future.result()
                     records.extend(found)
                     receipts[provider] = receipt
                 except Exception as exc:
                     receipt = _error(provider, exc)
                     receipts[provider] = receipt
                     errors.append(receipt)
-            unique: list[dict[str, Any]] = []
-            seen: set[str] = set()
-            for record in records:
-                key = str(record.get("source_id") or record.get("url") or "")
-                if key and key not in seen:
-                    seen.add(key)
-                    unique.append(record)
-            external_count += len(unique)
-            gh = (
-                receipts.get("github", {})
-                if isinstance(receipts.get("github"), Mapping)
-                else {}
-            )
-            rows.append(
-                {
-                    "query": query,
-                    "query_sha256": _sha256_text(query),
-                    "project_rag": _search_authoritative_catalog(query, versions),
-                    "code_rag": _search_code_index(code_index, query),
-                    "external_rag": {
-                        "schema_version": "mmm/external-pre-design-discovery-v2",
-                        "sources": unique,
-                        "errors": errors,
-                        "providers": receipts,
-                        "github_retrieval": {
-                            "provider_status": str(gh.get("status") or "not_requested"),
-                            "saturation_reason": "rate_or_auth_failure"
-                            if str(gh.get("status"))
-                            in {"error", "disabled_after_rate_or_auth_failure"}
-                            else "",
-                            "search_requests": int(gh.get("search_requests") or 0),
-                            "source_requests": int(gh.get("source_requests") or 0),
+
+        linked, linked_receipt = _linked_github_sources(
+            records, disabled=disabled, disable=disable
+        )
+        records.extend(linked)
+        receipts["github"] = linked_receipt
+
+        if not records:
+            with github_fallback_lock:
+                try:
+                    found, receipt = _search_github(
+                        query, disabled=disabled, disable=disable
+                    )
+                    records.extend(found)
+                    receipts["github"] = receipt
+                except Exception as exc:
+                    receipt = _error("github", exc)
+                    receipts["github"] = receipt
+                    errors.append(receipt)
+        elif not linked:
+            receipts["github"] = {
+                **dict(linked_receipt),
+                "status": "skipped_sufficient_ecosystem_evidence",
+            }
+
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for record in records:
+            key = str(record.get("source_id") or record.get("url") or "")
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(record)
+        gh = receipts.get("github", {}) if isinstance(receipts.get("github"), Mapping) else {}
+        return {
+            "query": query,
+            "query_sha256": _sha256_text(query),
+            "project_rag": _search_authoritative_catalog(query, versions),
+            "code_rag": _search_code_index(code_index, query),
+            "external_rag": {
+                "schema_version": "mmm/external-pre-design-discovery-v3",
+                "sources": unique,
+                "errors": errors,
+                "providers": receipts,
+                "github_retrieval": {
+                    "provider_status": str(gh.get("status") or "not_requested"),
+                    "saturation_reason": (
+                        "rate_or_auth_failure"
+                        if str(gh.get("status"))
+                        in {"error", "disabled_after_rate_or_auth_failure"}
+                        else ""
+                    ),
+                    "search_requests": int(gh.get("search_requests") or 0),
+                    "source_requests": int(gh.get("source_requests") or 0),
+                },
+            },
+        }
+
+    unique_queries: list[str] = []
+    for domain in domains:
+        raw_queries = domain.get("queries", [])
+        for raw in raw_queries if isinstance(raw_queries, list) else []:
+            query = str(raw or "").strip()
+            if query and query not in unique_queries:
+                unique_queries.append(query)
+
+    by_query: dict[str, dict[str, Any]] = {}
+    if unique_queries:
+        workers = min(_MAX_QUERY_WORKERS, len(unique_queries))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(run_query, query): query for query in unique_queries}
+            for future in as_completed(futures):
+                query = futures[future]
+                try:
+                    by_query[query] = future.result()
+                except Exception as exc:
+                    by_query[query] = {
+                        "query": query,
+                        "query_sha256": _sha256_text(query),
+                        "project_rag": {"sources": [], "errors": []},
+                        "code_rag": {"status": "error", "hits": []},
+                        "external_rag": {
+                            "schema_version": "mmm/external-pre-design-discovery-v3",
+                            "sources": [],
+                            "errors": [_error("query_worker", exc)],
+                            "providers": {},
+                            "github_retrieval": {
+                                "provider_status": "not_requested",
+                                "saturation_reason": "",
+                                "search_requests": 0,
+                                "source_requests": 0,
+                            },
                         },
-                    },
-                }
-            )
+                    }
+
+    out_domains: list[dict[str, Any]] = []
+    external_count = 0
+    query_count = 0
+    for domain in domains:
+        rows: list[dict[str, Any]] = []
+        raw_queries = domain.get("queries", [])
+        for raw in raw_queries if isinstance(raw_queries, list) else []:
+            query = str(raw or "").strip()
+            if not query:
+                continue
+            query_count += 1
+            row = dict(by_query[query])
+            rows.append(row)
+            external = row.get("external_rag")
+            if isinstance(external, Mapping):
+                sources = external.get("sources")
+                external_count += len(sources) if isinstance(sources, list) else 0
         out_domains.append(
             {"domain_id": str(domain.get("domain_id") or ""), "queries": rows}
         )
     payload: dict[str, Any] = {
-        "schema_version": "mmm/pre-design-grounded-rag-v4",
+        "schema_version": "mmm/pre-design-grounded-rag-v5",
         "versions": list(versions),
         "domain_count": len(domains),
         "query_count": query_count,
+        "unique_query_count": len(unique_queries),
+        "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
         "external_source_count": external_count,
         "domains": out_domains,
     }
     payload["research_sha256"] = _sha256(payload)
     return payload
-
 
 def _body(record: Mapping[str, Any]) -> str:
     return str(

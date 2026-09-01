@@ -47,6 +47,7 @@ _ALLOWED_PROVIDERS = frozenset(
         "official_docs",
         "project_rag",
         "modrinth",
+        "curseforge",
         "github",
         "openverse_images",
         "wikipedia",
@@ -60,6 +61,7 @@ _ALLOWED_PROVIDERS = frozenset(
 _EXTERNAL_PROVIDERS = frozenset(
     {
         "modrinth",
+        "curseforge",
         "github",
         "openverse_images",
         "wikipedia",
@@ -697,7 +699,7 @@ def _augment_domain_routes(domain: ResearchDomain) -> ResearchDomain:
     if "local_project" in kinds or "source_code" in kinds:
         required.append("project_rag")
     if "dependency" in kinds:
-        required.extend(("modrinth", "github"))
+        required.extend(("modrinth", "curseforge", "github"))
     if "source_code" in kinds:
         required.append("github")
     if "gameplay_reference" in kinds:
