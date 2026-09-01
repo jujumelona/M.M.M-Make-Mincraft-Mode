@@ -52,20 +52,24 @@ def test_predesign_model_uses_plain_text_and_host_exact_quote():
         def generate_text(self, *args, **kwargs):
             calls.append(kwargs)
             return (
-                "EVIDENCE\tSpace stations can orbit planets."
+                "EVIDENCE\thost#1\tSpace stations can orbit planets."
                 "\tUse an orbiting station abstraction."
             )
 
-    claims, diagnostics = small._extract_page(
+    claims, diagnostics, model_calls = small._extract_batch(
         Router(),
         domain={"objective": "space station", "queries": ["minecraft space station"]},
-        page={
-            "page_ref": "host#1",
-            "content": "Space stations can orbit planets. Other text.",
-        },
+        pages=[
+            {
+                "page_ref": "host#1",
+                "content": "Space stations can orbit planets. Other text.",
+            }
+        ],
     )
     assert diagnostics == []
+    assert model_calls == 1
     assert claims and claims[0]["evidence_refs"] == ["host#1"]
+    assert claims[0]["support_quote"] == "Space stations can orbit planets."
     assert calls[0]["response_format"] == "text"
     assert calls[0]["response_schema"] is None
     assert calls[0]["enable_tools"] is False

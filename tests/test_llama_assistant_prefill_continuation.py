@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from minecraft_mod_ai import llama_exact_context
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     OUTPUT_EXHAUSTED,
@@ -20,6 +21,15 @@ class _Response:
 
     def json(self):
         return self._payload
+
+
+@pytest.fixture(autouse=True)
+def _stub_exact_context_capacity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        llama_exact_context,
+        "capacity_safe_payload",
+        lambda _url, payload: dict(payload),
+    )
 
 
 def _adapter(*, extra=None) -> LlamaCppAdapter:

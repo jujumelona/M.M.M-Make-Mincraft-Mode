@@ -50,6 +50,7 @@ def test_qwen35_json_requests_keep_validation_host_side_without_grammar():
 
 
 def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch):
+    from minecraft_mod_ai import llama_exact_context
     from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
     from minecraft_mod_ai.model_adapters import (
         llama_cpp_adapter as llama_adapter_module,
@@ -83,6 +84,11 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
         )
     )
     monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://unit.test/v1")
+    monkeypatch.setattr(
+        llama_exact_context,
+        "capacity_safe_payload",
+        lambda _url, payload: dict(payload),
+    )
     monkeypatch.setattr(stream_contract, "_report_server_connection", lambda _url: None)
 
     sent_payloads = []

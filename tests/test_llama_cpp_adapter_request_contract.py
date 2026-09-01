@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from minecraft_mod_ai import llama_server_autotune
+from minecraft_mod_ai import llama_exact_context, llama_server_autotune
 from minecraft_mod_ai.model_adapters.base import (
     AdapterConfig,
     GenerationRequest,
@@ -36,6 +36,11 @@ def _stub_canonical_server_owner(monkeypatch) -> None:
         llama_server_autotune,
         "ensure_tuned_server",
         lambda _config, _request: "http://127.0.0.1:8910/v1",
+    )
+    monkeypatch.setattr(
+        llama_exact_context,
+        "capacity_safe_payload",
+        lambda _url, payload: dict(payload),
     )
 
 

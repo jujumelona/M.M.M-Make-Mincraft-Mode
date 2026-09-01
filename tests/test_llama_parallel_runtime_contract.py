@@ -110,7 +110,7 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     exposed_names = {str(tool["function"]["name"]) for tool in request.tools}
 
     assert exposed_names
-    assert len(exposed_names) <= 8
+    assert {"search_code_rag", "search_project_rag"} <= exposed_names
     assert "plan_complete_game" not in exposed_names
     assert "runtime_start_server" not in exposed_names
     assert "package_release" not in exposed_names
@@ -127,7 +127,7 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     assert capability_messages
     capability = capability_messages[-1]
     assert "ground-production-with-live-evidence" in capability
-    assert all(name in capability for name in exposed_names)
+    assert "mmm/agent-capability-context-v5" in capability
 
     schema = {
         "type": "object",

@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from inspect import getattr_static
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +217,12 @@ class ModelRouter:
             tool_stage=tool_stage,
             enable_tools=enable_tools,
         )
+        try:
+            declared_counter = getattr_static(adapter, "input_context_accounting")
+        except AttributeError:
+            return None
+        if not callable(declared_counter):
+            return None
         counter = getattr(adapter, "input_context_accounting", None)
         if not callable(counter):
             return None

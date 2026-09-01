@@ -10,6 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from inspect import getattr_static
 from pathlib import Path
 from typing import Any
 
@@ -1285,7 +1286,15 @@ def _generate_turn_with_context_recovery(
         tool_choice=tool_choice,
         parallel_tool_calls=parallel_tool_calls,
     )
-    exact_accounting = getattr(adapter, "input_context_accounting", None)
+    try:
+        declared_accounting = getattr_static(adapter, "input_context_accounting")
+    except AttributeError:
+        declared_accounting = None
+    exact_accounting = (
+        getattr(adapter, "input_context_accounting", None)
+        if callable(declared_accounting)
+        else None
+    )
     if callable(exact_accounting):
         accounting = exact_accounting(turn_request)
         if accounting.input_tokens < accounting.context_tokens:
