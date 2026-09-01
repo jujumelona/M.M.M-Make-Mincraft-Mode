@@ -1,3 +1,4 @@
+# trigger-v2
 name: Comprehensive small-model RAG refactor
 
 on:
@@ -35,8 +36,6 @@ jobs:
               path.write_text(text, encoding='utf-8')
               changed.append(str(path))
 
-          # 1) Low-level structured-output tolerance. This is a compatibility fallback,
-          # not a reason to ask the small model to author JSON for orchestration.
           p = root / 'structured_output.py'
           s = p.read_text(encoding='utf-8')
           old = '        value = json.loads(output)'
@@ -45,7 +44,6 @@ jobs:
               s = s.replace(old, new, 1)
               write(p, s)
 
-          # 2) Corrective retrieval is host-owned. Never make Qwen produce a JSON query plan.
           p = root / 'pre_design_rag_corrective.py'
           s = p.read_text(encoding='utf-8')
           start = s.index('def _generate_gap_queries(')
@@ -62,16 +60,9 @@ jobs:
     raw_prompt: str,
     progress_label: str,
 ) -> list[str]:
-    """Build corrective retrieval deterministically; the model never owns query syntax.
-
-    Page-local prose is only a hint. Prefer approved domain queries not yet executed, then
-    derive bounded implementation-oriented searches from unresolved hints. This function
-    intentionally performs zero model calls.
-    """
-    del agentic_module, project_rag, router, progress_label
+    """Build corrective retrieval deterministically; the model never owns query syntax."""
+    del agentic_module, project_rag, router, progress_label, prior_queries
     result: list[str] = []
-
-    # The approved retrieval plan remains the first authority.
     for raw in domain.get("queries", ()):
         query = " ".join(str(raw or "").split()).strip()
         key = query.casefold()
@@ -80,9 +71,6 @@ jobs:
             result.append(query)
             if len(result) >= 8:
                 return result
-
-    # If every approved query was already attempted, convert diagnostic hints into
-    # implementation searches without asking the small model to serialize anything.
     stop = {"the", "a", "an", "and", "or", "of", "in", "on", "for", "to", "this", "that",
             "provided", "page", "content", "specific", "evidence", "requested", "user"}
     for gap in gaps:
@@ -97,8 +85,7 @@ jobs:
                 break
         if not terms:
             continue
-        query = "Minecraft Fabric mod implementation " + " ".join(terms)
-        query = query[:180].strip()
+        query = ("Minecraft Fabric mod implementation " + " ".join(terms))[:180].strip()
         key = query.casefold()
         if key in seen or not _is_retrieval_query(query, raw_prompt=raw_prompt):
             continue
@@ -109,16 +96,6 @@ jobs:
     return result
 '''
           s = s[:start] + host_gap + s[end:]
-
-          # Page-local omissions/rejected paraphrases are diagnostics, not global authored-
-          # requirement blockers. A verified external claim stays verified.
-          s = re.sub(
-              r'def _round_is_terminally_sufficient\(.*?\n\s*\)\n',
-              lambda m: m.group(0),
-              s,
-              count=0,
-              flags=re.S,
-          )
           old_block = '''    return (\n        _round_has_verified_claims(summary)\n        and not _stable_text(page_gaps)\n        and not _stable_text(support_rejections)\n    )'''
           if old_block in s:
               s = s.replace(old_block, '''    del page_gaps, support_rejections\n    return _round_has_verified_claims(summary)''', 1)
@@ -134,8 +111,6 @@ jobs:
           s = s.replace('        if active_support_rejections:\n            reasons.append("unresolved support rejections remain")\n', '')
           write(p, s)
 
-          # 3) Claim verification uses a tiny line protocol, not JSON. Host owns indices,
-          # exact quotes and resulting EvidenceCard dictionaries.
           p = root / 'pre_design_rag_support.py'
           s = p.read_text(encoding='utf-8')
           start = s.index('def _verify_page_claims(')
@@ -156,22 +131,14 @@ jobs:
     content = str(page.get("content") or "")
     page_ref = str(page.get("page_ref") or "").strip()
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "Judge each numbered claim only from SOURCE. Output exactly one line per claim: "
-                "INDEX<TAB>NO, or INDEX<TAB>an exact contiguous quote copied from SOURCE. "
-                "No JSON, markdown, explanation, or extra lines."
-            ),
-        },
-        {
-            "role": "user",
-            "content": "CLAIMS\n" + "\n".join(
-                f"{i}\t{claim}" for i, claim in enumerate(claims)
-            ) + "\n\nSOURCE\n" + content,
-        },
+        {"role": "system", "content": (
+            "Judge each numbered claim only from SOURCE. Output exactly one line per claim: "
+            "INDEX<TAB>NO, or INDEX<TAB>an exact contiguous quote copied from SOURCE. "
+            "No JSON, markdown, explanation, or extra lines.")},
+        {"role": "user", "content": "CLAIMS\n" + "\n".join(
+            f"{i}\t{claim}" for i, claim in enumerate(claims)
+        ) + "\n\nSOURCE\n" + content},
     ]
-
     def parse(raw: str) -> tuple[list[dict[str, Any]], list[str]]:
         indexed: dict[int, str | None] = {}
         for line in str(raw or "").splitlines():
@@ -193,30 +160,17 @@ jobs:
             quote = indexed.get(index)
             if not quote or quote not in content or len("".join(quote.split())) < _MIN_QUOTE_CHARS:
                 rejected.append(claim)
-                _emit_support_trace(
-                    "claim_support_rejected", page_ref=page_ref, claim_index=index,
-                    claim=claim, reason="no_exact_host_quote",
-                )
+                _emit_support_trace("claim_support_rejected", page_ref=page_ref, claim_index=index,
+                                    claim=claim, reason="no_exact_host_quote")
                 continue
-            accepted.append({
-                "claim": claim,
-                "evidence_refs": [page_ref],
-                "support_quote": quote,
-                "support_quote_sha256": _sha256_text(quote),
-                "support_verification": "model_line_entailment+host_exact_quote",
-            })
-            _emit_support_trace(
-                "claim_support_accepted", page_ref=page_ref, claim_index=index,
-                claim=claim, quote_chars=len(quote), quote_sha256=_sha256_text(quote),
-            )
+            accepted.append({"claim": claim, "evidence_refs": [page_ref], "support_quote": quote,
+                             "support_quote_sha256": _sha256_text(quote),
+                             "support_verification": "model_line_entailment+host_exact_quote"})
+            _emit_support_trace("claim_support_accepted", page_ref=page_ref, claim_index=index,
+                                claim=claim, quote_chars=len(quote), quote_sha256=_sha256_text(quote))
         return accepted, rejected
-
     return project_rag._generate_bounded(
-        agentic_module,
-        router,
-        messages=messages,
-        response_schema=None,
-        parser=parse,
+        agentic_module, router, messages=messages, response_schema=None, parser=parse,
         progress_label=progress_label + " claim-support",
     )
 '''
@@ -224,43 +178,34 @@ jobs:
           s = s.replace('== "model_entailment+host_exact_quote"', 'in {"model_entailment+host_exact_quote", "model_line_entailment+host_exact_quote"}')
           write(p, s)
 
-          # 4) Runtime bounded helper supports plain-text semantic microtasks. JSON remains
-          # available only for legacy/page protocols that still need schema decoding.
           p = root / 'runtime_stability_contract.py'
           s = p.read_text(encoding='utf-8')
           s = s.replace('response_schema: Mapping[str, Any],\n        parser: Any,', 'response_schema: Mapping[str, Any] | None,\n        parser: Any,', 1)
           old = '''        bound_schema, domain_id = _bound_research_schema(\n            module,\n            response_schema,\n            messages,\n        )\n        aligned_messages = _aligned_research_messages(\n            messages,\n            response_schema=bound_schema,\n            domain_id=domain_id,\n        )'''
-          new = '''        if response_schema is None:\n            bound_schema: Mapping[str, Any] | None = None\n            domain_id = ""\n            aligned_messages = [dict(message) for message in messages]\n        else:\n            bound_schema, domain_id = _bound_research_schema(\n                module,\n                response_schema,\n                messages,\n            )\n            aligned_messages = _aligned_research_messages(\n                messages,\n                response_schema=bound_schema,\n                domain_id=domain_id,\n            )'''
+          new = '''        if response_schema is None:\n            bound_schema: Mapping[str, Any] | None = None\n            domain_id = ""\n            aligned_messages = [dict(message) for message in messages]\n        else:\n            bound_schema, domain_id = _bound_research_schema(\n                module, response_schema, messages,\n            )\n            aligned_messages = _aligned_research_messages(\n                messages, response_schema=bound_schema, domain_id=domain_id,\n            )'''
           if old not in s:
               raise SystemExit('runtime bounded preamble not found')
           s = s.replace(old, new, 1)
           old = '''            raw = router.generate_text(\n                "planner",\n                aligned_messages,\n                response_format="json",\n                response_schema=bound_schema,\n                tool_stage="research",\n                enable_tools=False,\n            )'''
-          new = '''            if bound_schema is None:\n                raw = router.generate_text(\n                    "planner", aligned_messages, tool_stage="research", enable_tools=False\n                )\n            else:\n                raw = router.generate_text(\n                    "planner",\n                    aligned_messages,\n                    response_format="json",\n                    response_schema=bound_schema,\n                    tool_stage="research",\n                    enable_tools=False,\n                )'''
+          new = '''            if bound_schema is None:\n                raw = router.generate_text(\n                    "planner", aligned_messages, tool_stage="research", enable_tools=False\n                )\n            else:\n                raw = router.generate_text(\n                    "planner", aligned_messages, response_format="json", response_schema=bound_schema,\n                    tool_stage="research", enable_tools=False,\n                )'''
           if old not in s:
               raise SystemExit('runtime bounded model call not found')
           s = s.replace(old, new, 1)
           write(p, s)
 
-          # 5) Local project RAG should use semantic retrieval/reranking when available.
           p = root / 'agentic_pre_design_rag.py'
           s = p.read_text(encoding='utf-8')
-          s = s.replace('semantic=False, rerank=False', 'semantic=True, rerank=True')
-          write(p, s)
+          if 'semantic=False, rerank=False' in s:
+              s = s.replace('semantic=False, rerank=False', 'semantic=True, rerank=True')
+              write(p, s)
 
-          # 6) Remove global external-query truncation wherever the runtime owner lives.
-          # We deliberately patch only the owner containing the trace reason, never generic
-          # list slicing elsewhere.
           cap_owners = []
           for p in root.glob('*.py'):
               text = p.read_text(encoding='utf-8')
               if 'bounded_fallback_queries' not in text and 'not_selected_by_bounded_query_plan' not in text:
                   continue
               original = text
-              # Common implementations slice a selected list by configured_limit.
-              text = text.replace('[:configured_limit]', '')
-              text = text.replace('[: configured_limit]', '')
-              # Raise only the default for explicit external query limits; per-tool page
-              # bounds elsewhere are intentionally untouched.
+              text = text.replace('[:configured_limit]', '').replace('[: configured_limit]', '')
               text = re.sub(
                   r'((?:EXTERNAL|PREDESIGN)[A-Z0-9_]*QUERY[A-Z0-9_]*LIMIT[^\n]{0,120}?)(?<!\d)8(?!\d)',
                   lambda m: m.group(1) + '64', text,
@@ -270,55 +215,35 @@ jobs:
                   cap_owners.append(str(p))
           print('query-cap owners patched:', cap_owners)
 
-          # 7) Add regression tests for the exact failure class. These are host-level and
-          # do not require external network access.
           test = Path('tests/test_small_model_rag_host_contract.py')
           test.write_text(r'''from __future__ import annotations
+from minecraft_mod_ai.pre_design_rag_corrective import _generate_gap_queries, _round_is_terminally_sufficient
 
-from minecraft_mod_ai.pre_design_rag_corrective import (
-    _generate_gap_queries,
-    _round_is_terminally_sufficient,
-)
+def test_page_local_diagnostics_do_not_revoke_verified_evidence():
+    assert _round_is_terminally_sufficient({"claims": [{"claim": "ok"}]}, page_gaps=["x"], support_rejections=["y"])
 
-
-def test_page_local_gaps_and_rejections_do_not_revoke_verified_evidence():
-    summary = {"claims": [{"claim": "supported"}]}
-    assert _round_is_terminally_sufficient(
-        summary, page_gaps=["this page lacks colonization"], support_rejections=["paraphrase"]
-    )
-
-
-def test_corrective_queries_are_host_generated_without_model_call():
+def test_corrective_queries_are_host_owned():
     class ExplodingRouter:
         def generate_text(self, *args, **kwargs):
-            raise AssertionError("corrective query planning must not call the model")
-
+            raise AssertionError("model must not plan corrective queries")
     seen = {"minecraft mod first query"}
-    queries = _generate_gap_queries(
-        object(), object(), ExplodingRouter(),
+    result = _generate_gap_queries(object(), object(), ExplodingRouter(),
         domain={"queries": ["minecraft mod first query", "minecraft fabric colony persistence"]},
-        gaps=["planet colonization persistence ownership lifecycle"],
-        prior_queries=[], seen=seen, raw_prompt="사용자 요청", progress_label="test",
-    )
-    assert queries
-    assert "minecraft fabric colony persistence" in [q.casefold() for q in queries]
+        gaps=["planet colonization persistence ownership lifecycle"], prior_queries=[], seen=seen,
+        raw_prompt="사용자 요청", progress_label="test")
+    assert any("colony persistence" in q.casefold() for q in result)
 
-
-def test_small_model_support_protocol_is_not_json_source_contract():
+def test_support_verifier_uses_line_protocol_not_json():
     from minecraft_mod_ai import pre_design_rag_support as support
-    src = support._verify_page_claims.__doc__ or ""
-    assert "line protocol" in src
+    assert "line protocol" in (support._verify_page_claims.__doc__ or "")
 ''', encoding='utf-8')
           changed.append(str(test))
 
-          # Assert the old catastrophic semantics are gone from executable owners.
           corr = (root / 'pre_design_rag_corrective.py').read_text(encoding='utf-8')
           assert 'corrective query planner omitted queries/search_queries' not in corr
           assert 'summary["gaps"] = list(active_page_gaps)' not in corr
-          support = (root / 'pre_design_rag_support.py').read_text(encoding='utf-8')
-          assert 'response_schema=None' in support
-          runtime = (root / 'runtime_stability_contract.py').read_text(encoding='utf-8')
-          assert 'if bound_schema is None:' in runtime
+          assert 'response_schema=None' in (root / 'pre_design_rag_support.py').read_text(encoding='utf-8')
+          assert 'if bound_schema is None:' in (root / 'runtime_stability_contract.py').read_text(encoding='utf-8')
           print('changed files:', sorted(set(changed)))
           PY
       - name: Validate comprehensive RAG refactor
