@@ -680,6 +680,7 @@ def _build_catalog(
             "provenance_roles": sorted(_ALL_PROVENANCE_ROLES),
             "normal_model_turns": 1,
             "max_repair_turns": 0,
+            "generation_policy": "single_pass_constrained",
             "source_grounding_owner": "host",
         },
         "catalog_sha256": "",
