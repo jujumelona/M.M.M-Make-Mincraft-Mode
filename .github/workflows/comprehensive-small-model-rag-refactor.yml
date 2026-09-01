@@ -1,5 +1,6 @@
 name: Small-model host-owned pre-design redesign
 
+# v2 execution trigger
 on:
   push:
     branches: [main]
