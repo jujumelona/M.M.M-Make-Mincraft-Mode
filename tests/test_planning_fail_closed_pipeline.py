@@ -7,7 +7,7 @@ import pytest
 from minecraft_mod_ai import platform_selection_pipeline as strict_platform
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline, PlanningStageError
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, PlatformProvider
-from minecraft_mod_ai.spec import SpecValidationError
+from minecraft_mod_ai.spec import PlatformLock, SpecValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "minecraft_mod_ai"
@@ -52,6 +52,29 @@ def test_unavailable_evidence_cannot_advance() -> None:
                 "status": "unavailable",
             }
         )
+
+
+def test_platform_lock_validation_is_offline_and_does_not_reresolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import minecraft_mod_ai.platform_catalog as catalog
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("proposal validation must not resolve a provider")
+
+    monkeypatch.setattr(catalog, "adapter_for_lock_values", forbidden)
+    lock = PlatformLock(
+        edition="java",
+        loader="fabric",
+        minecraft_version="1.21.1",
+        java_version="21",
+        yarn_mappings="mojang",
+        fabric_loader="0.16.0",
+        fabric_api="1.0.0+1.21.1",
+        fabric_loom="1.9",
+        gradle="8.10",
+    )
+    lock.validate()
 
 
 def test_candidate_receipt_is_resolved_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
