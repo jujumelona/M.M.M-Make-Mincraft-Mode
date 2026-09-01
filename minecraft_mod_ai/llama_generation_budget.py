@@ -6,8 +6,10 @@ The backend-specific wrapper delegates general budget ownership to the transport
 ``generation_output_budget`` policy. The staged game-design planner's tool-free
 ``{"section": ...}`` JSON responses additionally receive a schema-derived ceiling: a
 small section must not inherit the entire remaining model context as its decode allowance.
-Generic structured requests and native tool actions retain the existing output-budget
-contract.
+Host-selected semantic/retrieval decisions retain the existing bounded function-call page
+budget even when Qwen native-tool parsing falls back to schema-constrained JSON.
+Generic structured requests and expansive native tool actions retain the existing
+output-budget contract.
 """
 
 from collections.abc import Mapping, Sequence
@@ -21,6 +23,20 @@ from .generation_output_budget import (
 from .model_context_budget import tool_action_token_budget
 
 _MARKER = "_mmm_finite_generation_budget"
+_SEMANTIC_DECISION_FIELDS = frozenset(
+    {
+        "source_clause_index",
+        "capability_id",
+        "source_anchor",
+        "semantic_statement",
+        "given",
+        "when",
+        "then",
+    }
+)
+_RETRIEVAL_DECISION_FIELDS = frozenset(
+    {"requirement_id", "depends_on", "search_queries"}
+)
 
 
 def plain_action_token_budget(config: Any) -> int:
@@ -110,11 +126,48 @@ def _is_staged_planner_section_schema(schema: Mapping[str, Any]) -> bool:
     return str(section.get("type", "") or "").strip().casefold() == "object"
 
 
+def _planning_decision_schema_kind(schema: Any) -> str:
+    """Recognize only MMM's two host-owned planning decision argument contracts."""
+
+    if not isinstance(schema, Mapping):
+        return ""
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or set(properties) != {"requirements"}:
+        return ""
+    requirements = properties.get("requirements")
+    if not isinstance(requirements, Mapping) or requirements.get("type") != "array":
+        return ""
+    item = requirements.get("items")
+    if not isinstance(item, Mapping):
+        return ""
+    item_properties = item.get("properties")
+    if not isinstance(item_properties, Mapping):
+        return ""
+    fields = frozenset(str(key) for key in item_properties)
+    if fields == _SEMANTIC_DECISION_FIELDS:
+        return "semantic"
+    if fields == _RETRIEVAL_DECISION_FIELDS:
+        return "retrieval"
+    return ""
+
+
+def _planning_decision_json_fallback(request: Any) -> str:
+    """Identify argument-only fallback pages after native Qwen tool parsing fails."""
+
+    if getattr(request, "tools", ()) or ():
+        return ""
+    if str(getattr(request, "response_format", "") or "").strip().casefold() != "json":
+        return ""
+    return _planning_decision_schema_kind(getattr(request, "response_schema", None))
+
+
 def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]] | None:
     """Derive a decode ceiling only for staged game-design section JSON.
 
     Generic JSON generation remains governed by the common runtime budget. Native tool
     actions are also excluded because source edits can require large argument payloads.
+    Host planning-decision fallback JSON is handled separately by the same finite tool
+    page policy as its native function-call form.
 
     The coefficients represent serialization capacity, not a fixed stage clamp:
     scalars reserve 320 tokens, arrays 1280, objects 896, required fields 96, and
@@ -161,6 +214,24 @@ def install(hardware_module: Any) -> None:
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         raw_payload = current(adapter, request)
         bounded = apply_generation_budget(raw_payload, config=adapter.config)
+
+        decision_kind = _planning_decision_json_fallback(request)
+        if decision_kind:
+            common_budget = max(1, int(bounded.get("max_tokens", 1) or 1))
+            page_budget = max(1, int(tool_action_token_budget(adapter.config)))
+            effective = min(common_budget, page_budget)
+            bounded["max_tokens"] = effective
+            print(
+                "llama server: planner decision fallback output budget",
+                f" kind={decision_kind}",
+                f" common={common_budget}",
+                f" tool_page={page_budget}",
+                f" effective={effective}",
+                sep="",
+                flush=True,
+            )
+            return bounded
+
         derived = structured_response_token_ceiling(request)
         if derived is None:
             return bounded
