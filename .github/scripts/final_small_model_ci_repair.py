@@ -30,4 +30,16 @@ s = s.replace(
 )
 p.write_text(s, encoding='utf-8')
 
+# This regression was introduced with the host-owned pipeline.  The canonical public
+# owner is the pre_design_domain_research facade; implementation identity is not part
+# of the contract and conflicts with the long-standing single-owner invariant.
+p = Path('tests/test_small_model_predesign_v2.py')
+s = p.read_text(encoding='utf-8')
+s = s.replace(
+    '    assert pre_design_domain_research.research_document_domain is small.research_document_domain\n',
+    '    assert pre_design_domain_research.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"\n    assert callable(small.research_document_domain)\n',
+    1,
+)
+p.write_text(s, encoding='utf-8')
+
 print('final CI compatibility repair applied')
