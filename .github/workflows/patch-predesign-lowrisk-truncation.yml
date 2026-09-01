@@ -1,0 +1,74 @@
+name: Pre-design Low-risk Truncation Cleanup
+
+on:
+  push:
+    paths:
+      - .github/workflows/patch-predesign-lowrisk-truncation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Remove evidence truncation not tied to runtime capacity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/pre_design_grounded_rag.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'def _query_terms(value: str, limit: int = 12) -> str:\n',
+              'def _query_terms(value: str) -> str:\n',
+              1,
+          )
+          text = text.replace(
+              '        words.append(key)\n        if len(words) >= limit:\n            break\n',
+              '        words.append(key)\n',
+              1,
+          )
+          text = text.replace('_query_terms(query, 10)', '_query_terms(query)')
+          text = text.replace(
+              'retriever.search(query, limit=min(6, len(catalog)), **kwargs)',
+              'retriever.search(query, limit=len(catalog), **kwargs)',
+              1,
+          )
+          text = text.replace('for full_name in repositories[:2]:', 'for full_name in repositories:', 1)
+          text = text.replace(
+              '"source_requests": min(2, len(repositories)),',
+              '"source_requests": len(repositories),',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_predesign_source_discovery_contract.py')
+          text = test.read_text(encoding='utf-8')
+          addition = '''\n\ndef test_query_terms_do_not_drop_late_authored_terms():\n    query = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron"\n    terms = rag._query_terms(query).split()\n    assert terms[-3:] == ["nu", "xi", "omicron"]\n    assert len(terms) == 15\n\n\ndef test_authoritative_catalog_returns_all_applicable_primary_sources():\n    result = rag._search_authoritative_catalog("automated testing data generation", ())\n    source_ids = {source["source_id"] for source in result["sources"]}\n    assert source_ids == {\n        "fabric-project-creation",\n        "fabric-building",\n        "fabric-data-generation",\n        "fabric-automatic-testing",\n        "fabric-mod-json",\n        "fabric-develop-live",\n        "fabric-meta",\n        "fabric-api-maven",\n    }\n\n\ndef test_linked_github_source_discovery_does_not_stop_after_two(monkeypatch):\n    records = [\n        {"metadata": {"source_url": f"https://github.com/example/repo-{index}"}}\n        for index in range(4)\n    ]\n    monkeypatch.setattr(rag, "_text", lambda url, headers=None: "implementation body")\n    found, receipt = rag._linked_github_sources(\n        records, disabled=lambda: False, disable=lambda: None\n    )\n    assert len(found) == 4\n    assert receipt["source_requests"] == 4\n'''
+          if 'test_query_terms_do_not_drop_late_authored_terms' not in text:
+              text += addition
+          test.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify focused discovery contracts
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check --fix --ignore BLE001 minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
+          python -m py_compile minecraft_mod_ai/pre_design_grounded_rag.py
+          python -m ruff check --ignore BLE001 minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
+          python -m pytest -q tests/test_predesign_source_discovery_contract.py tests/test_predesign_external_source_acquisition.py tests/test_pre_design_phase_contract.py
+      - name: Commit production and regression
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
+          git diff --cached --check
+          git commit -m 'refactor: remove low-risk predesign evidence truncation'
+          git push origin HEAD:main
