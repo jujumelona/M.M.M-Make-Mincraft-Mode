@@ -7,15 +7,15 @@ import json
 import os
 import re
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-import threading
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .knowledge import (
     AuthoritativeEvidenceRetriever,
@@ -24,7 +24,6 @@ from .knowledge import (
 )
 from .rag_index import ProjectRAGIndex
 
-_PAGE_BYTES = 1800
 _TIMEOUT = 8.0
 _MAX_QUERY_WORKERS = max(1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKERS", "4") or 4)))
 _UA = "MMM-PreDesignResearch/2.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
@@ -386,8 +385,7 @@ def _github_repo_from_url(value: str) -> str:
     if len(parts) < 2:
         return ""
     owner, repo = parts[0], parts[1]
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    repo = repo.removesuffix(".git")
     return f"{owner}/{repo}" if owner and repo else ""
 
 
@@ -726,20 +724,6 @@ def _write(path: Path, text: str) -> None:
             Path(name).unlink(missing_ok=True)
 
 
-def _split(value: str) -> list[str]:
-    result: list[str] = []
-    start = 0
-    while start < len(value):
-        end = min(len(value), start + _PAGE_BYTES)
-        while end > start and len(value[start:end].encode("utf-8")) > _PAGE_BYTES:
-            end -= 1
-        if end <= start:
-            end = start + 1
-        result.append(value[start:end])
-        start = end
-    return result
-
-
 def _materialize_domain_evidence_document(
     domain_id: str, evidence: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -755,24 +739,22 @@ def _materialize_domain_evidence_document(
         rendered = json.dumps(
             unit, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
-        parts = _split(rendered)
-        for pi, content in enumerate(parts):
-            pages.append(
-                {
-                    "schema_version": "mmm/research-evidence-page-v2",
-                    "domain_id": domain_id,
-                    "unit_id": f"source:{ui}",
-                    "part_index": pi,
-                    "part_count": len(parts),
-                    "content": content,
-                }
-            )
-    for i, page in enumerate(pages):
+        pages.append(
+            {
+                "schema_version": "mmm/research-evidence-page-v2",
+                "domain_id": domain_id,
+                "unit_id": f"source:{ui}",
+                "part_index": 0,
+                "part_count": 1,
+                "content": rendered,
+            }
+        )
+    for index, page in enumerate(pages):
         page.update(
             {
-                "page_index": i,
+                "page_index": index,
                 "page_count": len(pages),
-                "page_ref": f"{digest}#page={i + 1}/{len(pages)}",
+                "page_ref": f"{digest}#page={index + 1}/{len(pages)}",
             }
         )
     _write(raw_path, raw)
@@ -791,13 +773,11 @@ def _materialize_domain_evidence_document(
         "raw_path": str(raw_path),
         "pages_path": str(pages_path),
         "page_count": len(pages),
-        "page_chars": _PAGE_BYTES,
-        "page_bytes": _PAGE_BYTES,
-        "source_keys": sorted(str(k) for k in evidence),
+        "page_partition": "claim_bearing_source_unit",
+        "source_keys": sorted(str(key) for key in evidence),
         "model_unit_count": len(units),
         "model_projection": "claim_bearing_source_bodies_only",
     }
-
 
 def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     expected = int(document.get("page_count") or 0)
@@ -824,8 +804,7 @@ def _prompt_document_receipt(document: Mapping[str, Any]) -> dict[str, Any]:
         "domain_id",
         "document_sha256",
         "page_count",
-        "page_chars",
-        "page_bytes",
+        "page_partition",
         "source_keys",
         "model_unit_count",
         "model_projection",

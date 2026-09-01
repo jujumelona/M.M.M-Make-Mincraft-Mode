@@ -95,3 +95,39 @@ def test_accounting_unavailable_keeps_all_pages_without_new_fixed_cap():
         "exact_input_accounting_unavailable;all_pages_kept_in_one_batch"
         in diagnostics
     )
+
+
+def test_oversized_source_is_split_losslessly_by_live_context():
+    class LengthRouter(_ExactRouter):
+        def input_context_accounting(self, role, messages, **kwargs):
+            user = messages[-1]["content"]
+            bodies = []
+            active = False
+            current = []
+            for line in user.splitlines():
+                if line.startswith("SOURCE PAGE_REF="):
+                    active = True
+                    current = []
+                    continue
+                if line.startswith("END SOURCE PAGE_REF="):
+                    active = False
+                    bodies.append("\n".join(current))
+                    continue
+                if active:
+                    current.append(line)
+            return SimpleNamespace(
+                input_tokens=sum(len(body) for body in bodies),
+                context_tokens=120,
+            )
+
+    content = "x" * 355
+    batches, diagnostics = research._capacity_batches(
+        LengthRouter(),
+        domain={"objective": "implementation"},
+        pages=[{"page_ref": "page:oversized", "content": content}],
+    )
+    flattened = [item for batch in batches for item in batch]
+    assert len(flattened) > 1
+    assert "".join(item["content"] for item in flattened) == content
+    assert all(item["parent_page_ref"] == "page:oversized" for item in flattened)
+    assert any(note.startswith("source_segmented_by_live_context:") for note in diagnostics)

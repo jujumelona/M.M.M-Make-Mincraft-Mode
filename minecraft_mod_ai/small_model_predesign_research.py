@@ -108,7 +108,7 @@ def _planner_output_reserve(router: Any) -> int:
     try:
         config = router.registry.role(router.profile, "planner")
         return max(0, int(getattr(config, "max_new_tokens", 0) or 0))
-    except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
+    except Exception:
         return 0
 
 
@@ -126,14 +126,81 @@ def _live_accounting(router: Any, messages: Sequence[Mapping[str, Any]]) -> Any 
     )
 
 
+def _accounting_fits(accounting: Any, reserve: int) -> bool:
+    return int(accounting.input_tokens) + reserve <= int(accounting.context_tokens)
+
+
+def _segment_page_to_live_context(
+    router: Any,
+    *,
+    domain: Mapping[str, Any],
+    page: Mapping[str, Any],
+    reserve: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Losslessly split one oversized source using exact live token accounting."""
+    original = dict(page)
+    page_ref = str(original.get("page_ref") or "").strip()
+    content = str(original.get("content") or "")
+    if not page_ref or not content:
+        return [], []
+    try:
+        accounting = _live_accounting(router, _batch_messages(domain, [original]))
+    except Exception as exc:
+        return [original], [f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"]
+    if accounting is None:
+        return [original], ["exact_input_accounting_unavailable;oversized_source_kept_whole"]
+    if _accounting_fits(accounting, reserve):
+        return [original], []
+
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    while offset < len(content):
+        low, high, best = offset + 1, len(content), offset
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = dict(original)
+            candidate["page_ref"] = f"{page_ref}&segment_probe={offset}:{mid}"
+            candidate["content"] = content[offset:mid]
+            try:
+                probe = _live_accounting(router, _batch_messages(domain, [candidate]))
+            except Exception as exc:
+                return [original], [f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"]
+            if probe is None:
+                return [original], ["exact_input_accounting_lost;oversized_source_kept_whole"]
+            if _accounting_fits(probe, reserve):
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best <= offset:
+            return [original], ["source_prompt_overhead_exceeds_live_context:" + page_ref]
+        ranges.append((offset, best))
+        offset = best
+
+    count = len(ranges)
+    segments: list[dict[str, Any]] = []
+    for index, (segment_start, segment_end) in enumerate(ranges, start=1):
+        segment = dict(original)
+        segment["page_ref"] = f"{page_ref}&segment={index}/{count}"
+        segment["parent_page_ref"] = page_ref
+        segment["segment_index"] = index - 1
+        segment["segment_count"] = count
+        segment["segment_start"] = segment_start
+        segment["segment_end"] = segment_end
+        segment["content"] = content[segment_start:segment_end]
+        segments.append(segment)
+    if "".join(str(item["content"]) for item in segments) != content:
+        raise AssertionError("lossless source segmentation invariant failed")
+    return segments, [f"source_segmented_by_live_context:{page_ref}:{count}"]
+
+
 def _capacity_batches(
     router: Any,
     *,
     domain: Mapping[str, Any],
     pages: Sequence[Mapping[str, Any]],
 ) -> tuple[list[list[dict[str, Any]]], list[str]]:
-    """Pack all pages by live tokenizer/context capacity, never a fixed page count."""
-
+    """Pack all evidence by live context capacity with no fixed page cap."""
     ordered = [
         dict(page)
         for page in pages
@@ -142,69 +209,57 @@ def _capacity_batches(
     ]
     if not ordered:
         return [], []
-
     diagnostics: list[str] = []
     reserve = _planner_output_reserve(router)
     try:
         probe = _live_accounting(router, _batch_messages(domain, ordered[:1]))
-    except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+    except Exception as exc:
         diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
         probe = None
     if probe is None:
         diagnostics.append("exact_input_accounting_unavailable;all_pages_kept_in_one_batch")
         return [ordered], diagnostics
 
+    expanded: list[dict[str, Any]] = []
+    for page in ordered:
+        segments, notes = _segment_page_to_live_context(
+            router, domain=domain, page=page, reserve=reserve
+        )
+        expanded.extend(segments)
+        diagnostics.extend(notes)
+
     batches: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
-    for index, page in enumerate(ordered):
+    for index, page in enumerate(expanded):
         trial = [*current, page]
         try:
             accounting = _live_accounting(router, _batch_messages(domain, trial))
-        except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+        except Exception as exc:
             diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
             accounting = None
         if accounting is None:
             if current:
                 batches.append(current)
-            remaining = ordered[index:]
+            remaining = expanded[index:]
             if remaining:
                 batches.append(remaining)
             diagnostics.append("exact_input_accounting_lost;remaining_pages_kept_together")
             return batches, diagnostics
-
-        input_tokens = int(accounting.input_tokens)
-        context_tokens = int(accounting.context_tokens)
-        if input_tokens + reserve <= context_tokens:
+        if _accounting_fits(accounting, reserve):
             current = trial
             continue
-
-        if current:
-            batches.append(current)
-            current = [page]
-            try:
-                single = _live_accounting(router, _batch_messages(domain, current))
-            except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
-                diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
-                single = None
-            if single is None:
-                batches.append(current)
-                current = []
-                continue
-            if int(single.input_tokens) + reserve > int(
-                single.context_tokens
-            ):
-                diagnostics.append(
-                    "source_page_exceeds_live_context:" + str(page.get("page_ref") or "")
-                )
-                current = []
-        else:
+        if not current:
             diagnostics.append(
-                "source_page_exceeds_live_context:" + str(page.get("page_ref") or "")
+                "source_segment_unexpectedly_exceeds_live_context:"
+                + str(page.get("page_ref") or "")
             )
+            batches.append([page])
+            continue
+        batches.append(current)
+        current = [page]
     if current:
         batches.append(current)
     return batches, diagnostics
-
 
 def _extract_batch(
     router: Any,
@@ -230,7 +285,7 @@ def _extract_batch(
             tool_stage="research",
             enable_tools=False,
         )
-    except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
+    except Exception as exc:
         return [], [f"model_read_failure:{type(exc).__name__}:{exc}"], 1
 
     claims: list[dict[str, Any]] = []
@@ -277,7 +332,7 @@ def _load_grounded(document: Mapping[str, Any]) -> dict[str, Any]:
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
+    except Exception:
         return {}
     return dict(value) if isinstance(value, Mapping) else {}
 
@@ -354,7 +409,7 @@ def research_document_domain(
             working_document = project_rag._materialize_domain_evidence_document(
                 domain_id, evidence
             )
-        except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
+        except Exception:
             working_document = dict(document)
 
     if isinstance(document, dict):
@@ -368,7 +423,7 @@ def research_document_domain(
     else:
         try:
             pages = project_rag._read_evidence_pages(working_document)
-        except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
+        except Exception:
             pages = []
 
     claims: list[dict[str, Any]] = []
