@@ -1,6 +1,6 @@
 name: Small-model host-owned pre-design redesign
 
-# v3 execution trigger
+# v4 execution trigger
 on:
   push:
     branches: [main]
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   refactor:
-    if: "${{ contains(github.event.head_commit.message, 'chore: apply small-model host redesign v3') }}"
+    if: "${{ contains(github.event.head_commit.message, 'chore: apply small-model host redesign v4') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.11'
       - name: Apply host-owned small-model redesign
         run: python .github/scripts/comprehensive_small_model_rag_refactor.py
       - name: Static architecture guards
@@ -35,7 +35,7 @@ jobs:
       - name: Validate redesign
         run: |
           python -m compileall -q minecraft_mod_ai tests
-          python -m pip install -q pytest ruff
+          python -m pip install -q -e '.[dev]'
           ruff check minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_domain_research.py minecraft_mod_ai/pre_design_research_pipeline.py minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/pre_design_external_source_contract.py minecraft_mod_ai/minecraft_knowledge_nodes.py tests/test_small_model_predesign_v2.py tests/test_agentic_research_game_design.py --select F,E7,E9
           pytest -q tests/test_small_model_predesign_v2.py tests/test_agentic_research_game_design.py
       - name: Commit verified redesign
