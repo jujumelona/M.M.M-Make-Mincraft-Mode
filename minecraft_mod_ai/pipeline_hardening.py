@@ -123,28 +123,6 @@ def _repair_note_provenance(
     return result
 
 
-def _install_research_provenance_hardening() -> None:
-    from . import agentic_pre_design_rag as rag
-
-    original = rag._synthesize_group_with_recovery
-    if getattr(original, "_mmm_provenance_hardened", False):
-        return
-
-    def hardened(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        group = kwargs.get("group")
-        if group is None and len(args) >= 6:
-            group = args[5]
-        allowed = _allowed_evidence_refs(group or ())
-        notes = original(*args, **kwargs)
-        return [
-            _repair_note_provenance(note, allowed_refs=allowed)
-            if isinstance(note, Mapping)
-            else note
-            for note in notes
-        ]
-
-    hardened._mmm_provenance_hardened = True  # type: ignore[attr-defined]
-    rag._synthesize_group_with_recovery = hardened
 
 
 @dataclass(frozen=True)
@@ -352,7 +330,6 @@ def install_pipeline_hardening() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    _install_research_provenance_hardening()
     _install_machine_only_pack_metadata()
     _install_two_stage_platform_optimizer()
     _install_explicit_version_constraint()

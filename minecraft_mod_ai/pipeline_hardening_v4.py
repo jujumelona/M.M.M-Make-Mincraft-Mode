@@ -201,21 +201,6 @@ def _install_strict_provenance_filter() -> None:
     v1._repair_note_provenance = _strict_provenance_repair
 
 
-def _install_lossless_page_research() -> None:
-    """Mark, but never replace, the canonical research implementation.
-
-    The current ``agentic_pre_design_rag._research_document_domain`` already carries
-    every host-issued raw evidence fragment through bounded hierarchical synthesis and
-    participates in the progress/checkpoint wrapper chain. An older hardening copy of
-    that function bypassed newer heartbeat/resume behavior and replaced raw evidence
-    notes with per-fragment LLM extraction. Keeping the canonical function intact is
-    both more lossless and composition-safe.
-    """
-
-    from . import agentic_pre_design_rag as rag
-
-    current = rag._research_document_domain
-    setattr(current, "_mmm_lossless_page_research", True)
 
 
 def install_pipeline_hardening_v4() -> None:
@@ -224,7 +209,6 @@ def install_pipeline_hardening_v4() -> None:
         return
     _install_semantic_seed_search()
     _install_strict_provenance_filter()
-    _install_lossless_page_research()
     _INSTALLED = True
 
 

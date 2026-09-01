@@ -372,15 +372,8 @@ def _install_domain_retry(rag: Any) -> None:
 
 
 def install_pipeline_hardening_v6() -> None:
+    """Compatibility no-op; canonical pre-design research has no runtime hardening patch."""
     global _INSTALLED
-    if _INSTALLED:
-        return
-
-    from . import agentic_pre_design_rag as rag
-
-    _install_synthesis_recovery(rag)
-    _install_page_grounding_recovery(rag)
-    _install_domain_retry(rag)
     _INSTALLED = True
 
 
