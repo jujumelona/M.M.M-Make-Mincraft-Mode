@@ -63,7 +63,7 @@ jobs:
           python -m ruff check --fix --ignore BLE001 minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
           python -m py_compile minecraft_mod_ai/pre_design_grounded_rag.py
           python -m ruff check --ignore BLE001 minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_source_discovery_contract.py
-          python -m pytest -q tests/test_predesign_source_discovery_contract.py tests/test_predesign_external_source_acquisition.py tests/test_pre_design_phase_contract.py
+          python -m pytest -q tests/test_predesign_source_discovery_contract.py tests/test_pre_design_external_source_acquisition.py tests/test_pre_design_phase_contract.py
       - name: Commit production and regression
         run: |
           git config user.name github-actions[bot]
