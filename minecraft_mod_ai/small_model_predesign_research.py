@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-_PROTOCOL = "mmm/small-model-predesign-evidence-v2"
+_PROTOCOL = "mmm/small-model-predesign-evidence-v3"
 _STOP = {
     "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with",
     "minecraft", "fabric", "mod", "mods", "mode", "requested", "user",
@@ -36,7 +36,7 @@ def _page_score(page: Mapping[str, Any], domain: Mapping[str, Any]) -> int:
         ]
     )
     if not wanted:
-        return 1
+        return 0
     have = _terms([str(page.get("content") or "")])
     return len(wanted & have)
 
@@ -44,14 +44,14 @@ def _page_score(page: Mapping[str, Any], domain: Mapping[str, Any]) -> int:
 def _candidate_pages(
     pages: Sequence[Mapping[str, Any]], domain: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
+    """Order every page by relevance without dropping zero-score evidence."""
+
     scored = [
         (max(0, _page_score(page, domain)), index, dict(page))
         for index, page in enumerate(pages)
     ]
-    positive = [item for item in scored if item[0] > 0]
-    selected = positive if positive else scored[: min(4, len(scored))]
-    selected.sort(key=lambda item: (-item[0], item[1]))
-    return [page for _score, _index, page in selected]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [page for _score, _index, page in scored]
 
 
 def _exact_span(content: str, proposed: str) -> str:
@@ -68,26 +68,29 @@ def _exact_span(content: str, proposed: str) -> str:
     return match.group(0) if match else ""
 
 
-def _extract_page(
-    router: Any,
-    *,
-    domain: Mapping[str, Any],
-    page: Mapping[str, Any],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    content = str(page.get("content") or "")
-    page_ref = str(page.get("page_ref") or "").strip()
-    if not content.strip() or not page_ref:
-        return [], ["empty_host_page"]
-    messages = [
+def _batch_messages(
+    domain: Mapping[str, Any], pages: Sequence[Mapping[str, Any]]
+) -> list[dict[str, str]]:
+    sources: list[str] = []
+    for page in pages:
+        page_ref = str(page.get("page_ref") or "").strip()
+        content = str(page.get("content") or "")
+        if not page_ref or not content.strip():
+            continue
+        sources.append(
+            f"SOURCE PAGE_REF={page_ref}\n{content}\nEND SOURCE PAGE_REF={page_ref}"
+        )
+    return [
         {
             "role": "system",
             "content": (
-                "Read SOURCE only. Extract at most 3 implementation facts useful for the "
-                "Minecraft mod design. Output one line per useful fact exactly as "
-                "EVIDENCE<TAB>EXACT_QUOTE<TAB>IMPLEMENTATION_INSIGHT. "
-                "EXACT_QUOTE must be copied from SOURCE, not paraphrased. "
-                "If nothing useful exists output only NONE. No JSON, Markdown, code fences, "
-                "analysis, headings, IDs, sufficiency flags, search queries, or extra prose."
+                "Read only the tagged SOURCES. Extract every directly useful implementation "
+                "fact supported by an exact source span. Output one line per fact exactly as "
+                "EVIDENCE<TAB>PAGE_REF<TAB>EXACT_QUOTE<TAB>IMPLEMENTATION_INSIGHT. "
+                "PAGE_REF must name the source containing EXACT_QUOTE, and EXACT_QUOTE must "
+                "be copied from that source rather than paraphrased. If no useful supported "
+                "fact exists output only NONE. No JSON, Markdown, code fences, analysis, "
+                "headings, sufficiency flags, search queries, or extra prose."
             ),
         },
         {
@@ -95,11 +98,130 @@ def _extract_page(
             "content": (
                 "OBJECTIVE\n"
                 + str(domain.get("objective") or "")
-                + "\n\nSOURCE\n"
-                + content
+                + "\n\n"
+                + "\n\n".join(sources)
             ),
         },
     ]
+
+
+def _planner_output_reserve(router: Any) -> int:
+    try:
+        config = router.registry.role(router.profile, "planner")
+        return max(0, int(getattr(config, "max_new_tokens", 0) or 0))
+    except Exception:
+        return 0
+
+
+def _live_accounting(router: Any, messages: Sequence[Mapping[str, Any]]) -> Any | None:
+    counter = getattr(router, "input_context_accounting", None)
+    if not callable(counter):
+        return None
+    return counter(
+        "planner",
+        messages,
+        response_format="text",
+        response_schema=None,
+        tool_stage="research",
+        enable_tools=False,
+    )
+
+
+def _capacity_batches(
+    router: Any,
+    *,
+    domain: Mapping[str, Any],
+    pages: Sequence[Mapping[str, Any]],
+) -> tuple[list[list[dict[str, Any]]], list[str]]:
+    """Pack all pages by live tokenizer/context capacity, never a fixed page count."""
+
+    ordered = [
+        dict(page)
+        for page in pages
+        if str(page.get("page_ref") or "").strip()
+        and str(page.get("content") or "").strip()
+    ]
+    if not ordered:
+        return [], []
+
+    diagnostics: list[str] = []
+    reserve = _planner_output_reserve(router)
+    try:
+        probe = _live_accounting(router, _batch_messages(domain, ordered[:1]))
+    except Exception as exc:
+        diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
+        probe = None
+    if probe is None:
+        diagnostics.append("exact_input_accounting_unavailable;all_pages_kept_in_one_batch")
+        return [ordered], diagnostics
+
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for index, page in enumerate(ordered):
+        trial = [*current, page]
+        try:
+            accounting = _live_accounting(router, _batch_messages(domain, trial))
+        except Exception as exc:
+            diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
+            accounting = None
+        if accounting is None:
+            if current:
+                batches.append(current)
+            remaining = ordered[index:]
+            if remaining:
+                batches.append(remaining)
+            diagnostics.append("exact_input_accounting_lost;remaining_pages_kept_together")
+            return batches, diagnostics
+
+        input_tokens = int(getattr(accounting, "input_tokens"))
+        context_tokens = int(getattr(accounting, "context_tokens"))
+        if input_tokens + reserve <= context_tokens:
+            current = trial
+            continue
+
+        if current:
+            batches.append(current)
+            current = [page]
+            try:
+                single = _live_accounting(router, _batch_messages(domain, current))
+            except Exception as exc:
+                diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
+                single = None
+            if single is None:
+                batches.append(current)
+                current = []
+                continue
+            if int(getattr(single, "input_tokens")) + reserve > int(
+                getattr(single, "context_tokens")
+            ):
+                diagnostics.append(
+                    "source_page_exceeds_live_context:" + str(page.get("page_ref") or "")
+                )
+                current = []
+        else:
+            diagnostics.append(
+                "source_page_exceeds_live_context:" + str(page.get("page_ref") or "")
+            )
+    if current:
+        batches.append(current)
+    return batches, diagnostics
+
+
+def _extract_batch(
+    router: Any,
+    *,
+    domain: Mapping[str, Any],
+    pages: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    contents = {
+        str(page.get("page_ref") or "").strip(): str(page.get("content") or "")
+        for page in pages
+        if str(page.get("page_ref") or "").strip()
+        and str(page.get("content") or "").strip()
+    }
+    if not contents:
+        return [], ["empty_host_batch"], 0
+    messages = _batch_messages(domain, pages)
     try:
         raw = router.generate_text(
             "planner",
@@ -110,27 +232,32 @@ def _extract_page(
             enable_tools=False,
         )
     except Exception as exc:
-        return [], [f"model_read_failure:{type(exc).__name__}:{exc}"]
+        return [], [f"model_read_failure:{type(exc).__name__}:{exc}"], 1
 
     claims: list[dict[str, Any]] = []
     diagnostics: list[str] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     for raw_line in str(raw or "").splitlines():
         line = raw_line.strip()
         if not line or line.casefold() == "none":
             continue
-        parts = line.split("\t", 2)
-        if len(parts) != 3 or parts[0].strip().casefold() != "evidence":
+        parts = line.split("\t", 3)
+        if len(parts) != 4 or parts[0].strip().casefold() != "evidence":
             diagnostics.append("ignored_malformed_model_line")
             continue
-        exact = _exact_span(content, parts[1])
-        insight = " ".join(parts[2].split()).strip()
-        if not exact or len("".join(exact.split())) < 8:
+        page_ref = parts[1].strip()
+        content = contents.get(page_ref)
+        if content is None:
+            diagnostics.append("rejected_unknown_page_ref")
+            continue
+        exact = _exact_span(content, parts[2])
+        insight = " ".join(parts[3].split()).strip()
+        if not exact:
             diagnostics.append("rejected_non_exact_quote")
             continue
         if not insight:
             insight = "Implementation reference: " + " ".join(exact.split())
-        key = (insight, exact)
+        key = (insight, exact, page_ref)
         if key in seen:
             continue
         seen.add(key)
@@ -142,9 +269,7 @@ def _extract_page(
                 "support_verification": "host_exact_quote_from_small_model_line",
             }
         )
-        if len(claims) >= 3:
-            break
-    return claims, diagnostics
+    return claims, diagnostics, 1
 
 
 def _load_grounded(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -251,10 +376,22 @@ def research_document_domain(
     diagnostics: list[str] = (
         ["no_claim_bearing_source_bodies;model_not_called"] if projection_is_empty else []
     )
-    for page in _candidate_pages(pages, domain):
-        extracted, page_diagnostics = _extract_page(router, domain=domain, page=page)
+    model_call_count = 0
+    batches, batch_diagnostics = _capacity_batches(
+        router,
+        domain=domain,
+        pages=_candidate_pages(pages, domain),
+    )
+    diagnostics.extend(batch_diagnostics)
+    for batch in batches:
+        extracted, batch_notes, calls = _extract_batch(
+            router,
+            domain=domain,
+            pages=batch,
+        )
         claims.extend(extracted)
-        diagnostics.extend(page_diagnostics)
+        diagnostics.extend(batch_notes)
+        model_call_count += calls
 
     unique: list[dict[str, Any]] = []
     seen_claims: set[tuple[str, str]] = set()
@@ -285,7 +422,8 @@ def research_document_domain(
         "research_evidence_status": evidence_status,
         "authoritative_requirement_fallback": requirement_fallback,
         "source_body_count": source_body_count,
-        "model_called": bool(pages),
+        "model_called": model_call_count > 0,
+        "model_call_count": model_call_count,
         "page_local_diagnostics": list(dict.fromkeys(diagnostics)),
         "evidence_page_refs": page_refs,
         "evidence_document": _document_receipt(project_rag, working_document),
@@ -297,12 +435,13 @@ def research_document_domain(
             ),
             "model_json": False,
             "model_corrective_queries": False,
+            "capacity_boundary": "live_adapter_input_tokens+configured_output<=live_context",
             "page_local_uncertainty_blocks_design": False,
             "missing_external_evidence_blocks_design": False,
             "zero_source_body_model_calls": 0,
         },
         "checkpoint": {
-            "schema_version": "mmm/research-domain-checkpoint-v8",
+            "schema_version": "mmm/research-domain-checkpoint-v9",
             "status": "complete",
         },
     }
