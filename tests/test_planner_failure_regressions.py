@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-from minecraft_mod_ai import agentic_pre_design_rag as project_rag
 from minecraft_mod_ai import agentic_research_game_design as agentic
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 from minecraft_mod_ai.agent_capability_context import (

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import minecraft_mod_ai.agentic_pre_design_rag as paged_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
 from minecraft_mod_ai import game_design
 from minecraft_mod_ai.spec import SpecValidationError

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-import minecraft_mod_ai.agentic_pre_design_rag as project_rag
+import minecraft_mod_ai.pre_design_grounded_rag as project_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.pre_design_research_pipeline as pipeline
 

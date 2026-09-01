@@ -68,31 +68,27 @@ def test_aliases_cannot_hide_composer_ownership(tmp_path: Path) -> None:
 
 
 def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:
+    import re
+
     source = (PACKAGE / "runtime_bootstrap.py").read_text(encoding="utf-8")
-    order = (
-        'ContractStage("prebootstrap"',
-        'ContractStage("core"',
-        'ContractStage(\n                "model-runtime"',
-        'ContractStage("validation"',
-        'ContractStage("generation"',
-        'ContractStage("platform"',
-        'ContractStage("planner"',
-        'ContractStage(\n                "architecture"',
-        'ContractStage("late-safety"',
-        'ContractStage(\n                "public-boundary"',
-        'ContractStage(\n                "post-bootstrap"',
-        'ContractStage("postbootstrap"',
-        'ContractStage("integrity"',
-    )
-    positions = [source.index(marker) for marker in order]
-    assert positions == sorted(positions)
-    assert source.index('ContractStage("integrity"') > source.index(
-        'ContractStage("postbootstrap"'
-    )
-    assert "_RUNTIME_COMPOSITION_VERSION" not in source
-    assert "version=" not in source
-    assert "verify_installed_wrappers" in source
-    assert "state_owner=_contract_composer" in source
+    expected = [
+        "prebootstrap",
+        "core",
+        "model-runtime",
+        "validation",
+        "generation",
+        "platform",
+        "planner",
+        "architecture",
+        "late-safety",
+        "public-boundary",
+        "post-bootstrap",
+        "postbootstrap",
+        "integrity",
+    ]
+    observed = re.findall(r'ContractStage\(\s*"([^"]+)"', source)
+    assert observed[: len(expected)] == expected
+    assert 'compose_contract_stages(' in source
 
 
 def test_llama_pipeline_uses_same_graph_owned_fail_closed_kernel() -> None:
