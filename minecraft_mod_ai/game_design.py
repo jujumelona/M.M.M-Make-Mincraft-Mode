@@ -11,6 +11,7 @@ from typing import Any
 from .capability_plugins import plugin_manifest
 from .central_research import normalize_research_brief
 from .model_router import ModelRouter
+from .model_meta_output_contract import assert_design_field_clean
 from .planner import HeuristicPlanner, _proposal_from_model_data
 from .spec import Proposal, SpecValidationError
 
@@ -920,6 +921,11 @@ def _validate_design(design: dict[str, Any]) -> None:
     for field in ("combat", "mod_context"):
         if not isinstance(design.get(field), dict):
             raise SpecValidationError(f"game_design.{field} must be an object")
+    for field in ("title", "pitch", "core_loop"):
+        try:
+            assert_design_field_clean(field, design.get(field))
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
 
 
 def _deterministic_bootstrap(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:

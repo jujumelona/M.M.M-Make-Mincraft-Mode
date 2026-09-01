@@ -9,6 +9,7 @@ from typing import Any
 
 from .external_procedural_skill_contract import _sanitize_procedure, compact_skillbank
 from .planner_stage_trace import PlannerStageTrace
+from .model_meta_output_contract import assert_design_field_clean
 from .spec import SpecValidationError
 
 _RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
@@ -496,11 +497,20 @@ def _parse_field_output(raw: Any, field: str) -> Any:
         value = _plain_text(body)
         if not value:
             raise SpecValidationError(f"Planner left {field} empty")
+        try:
+            assert_design_field_clean(field, value)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
         return value
     if field in _LIST_FIELDS:
         values = _markdown_list(body)
         if not values:
             raise SpecValidationError(f"Planner left {field} empty")
+        if field == "core_loop":
+            try:
+                assert_design_field_clean(field, values)
+            except ValueError as exc:
+                raise SpecValidationError(str(exc)) from exc
         return values
     if field in _MAP_FIELDS:
         return _markdown_map(body)
