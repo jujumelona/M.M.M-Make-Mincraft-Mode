@@ -63,6 +63,28 @@ def test_fusion_deduplicates_across_queries_and_rewards_multi_query_support():
     ]
 
 
+def test_external_fusion_rejects_generic_word_collision_without_minecraft_identity():
+    from minecraft_mod_ai import pre_design_rag_fusion as fusion
+
+    query = "minecraft mod build space station modules"
+    noise = {
+        "source_id": "github:microsoft/StudentsAtBuild-2021",
+        "source_type": "github_source",
+        "title": "Students at Build 2021",
+        "url": "https://github.com/microsoft/StudentsAtBuild-2021",
+        "content": "Student projects and conference build sessions.",
+    }
+    relevant = {
+        "source_id": "github:example/minecraft-space-mod",
+        "source_type": "github_source",
+        "title": "Minecraft Fabric modular space station",
+        "url": "https://github.com/example/minecraft-space-mod",
+        "content": "Fabric mod implementing space station modules and vessel construction.",
+    }
+    assert fusion._record_is_query_relevant(query, noise) is False
+    assert fusion._record_is_query_relevant(query, relevant) is True
+
+
 def test_retrieval_query_filter_rejects_raw_prompt_and_non_ascii():
     prompt = "make a colony progression mod"
     assert quality._is_retrieval_query(

@@ -38,13 +38,6 @@ class _SectionRouter:
                 "enable_tools": enable_tools,
             }
         )
-        user_text = str(messages[-1]["content"])
-        required = tuple(
-            field
-            for _section_id, fields, _properties in agentic._SECTION_SPECS
-            for field in fields
-            if f"- ## {field}" in user_text
-        )
         values = {
             "title": "연구 기반 모드",
             "pitch": "검색 근거를 바탕으로 설계한다.",
@@ -57,21 +50,10 @@ class _SectionRouter:
             "acceptance_tests": ["요청한 핵심 루프가 게임 내에서 동작한다"],
             "art_direction": {},
         }
-        blocks: list[str] = []
-        for field in required:
-            blocks.append(f"## {field}")
-            value = values[field]
-            if isinstance(value, str):
-                blocks.append(value)
-            elif field in {"modules", "assets"}:
-                blocks.append("- none")
-            elif isinstance(value, list):
-                blocks.extend(f"- {item}" for item in value)
-            elif isinstance(value, dict):
-                for key, items in value.items():
-                    blocks.append(f"### {key}")
-                    blocks.extend(f"- {item}" for item in items)
-        return "\n".join(blocks)
+        assert response_format == "json"
+        assert isinstance(response_schema, dict)
+        fields = list(response_schema["required"])
+        return json.dumps({field: values[field] for field in fields}, ensure_ascii=False)
 
 
 class _ResearchRouter:
@@ -124,7 +106,7 @@ def _deterministic_research() -> dict[str, object]:
     }
 
 
-def test_sectioned_game_design_generates_each_section_once_as_prose() -> None:
+def test_sectioned_game_design_generates_each_section_once_as_structured_json() -> None:
     router = _SectionRouter()
     research = {
         "research_brief": {"domains": []},
@@ -132,29 +114,27 @@ def test_sectioned_game_design_generates_each_section_once_as_prose() -> None:
         "deterministic": {},
         "errors": [],
     }
-
     result = agentic.generate_sectioned_game_design(
         game_design,
         router,
         "연구를 먼저 하고 모드를 설계해줘",
         research=research,
     )
-
     expected_sections = [
-        tuple(fields)
-        for _section_id, fields, _properties in agentic._SECTION_SPECS
+        tuple(fields) for _section_id, fields, _properties in agentic._SECTION_SPECS
     ]
     assert len(router.calls) == len(expected_sections)
     assert all(call["role"] == "planner" for call in router.calls)
-    assert all(call["response_format"] == "text" for call in router.calls)
-    assert all(call["response_schema"] is None for call in router.calls)
+    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(isinstance(call["response_schema"], dict) for call in router.calls)
+    assert all(call["tool_stage"] == "game_design" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
     for fields, call in zip(expected_sections, router.calls, strict=True):
+        schema = call["response_schema"]
+        assert schema["required"] == list(fields)
+        assert schema["additionalProperties"] is False
         system = str(call["messages"][0]["content"])
-        user = str(call["messages"][-1]["content"])
-        assert "not JSON" in system
-        for field in fields:
-            assert f"- ## {field}" in user
+        assert "Do not emit reasoning" in system
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]

@@ -25,9 +25,9 @@ _EVIDENCE_DOCUMENT_SCHEMA = "mmm/research-evidence-document-v1"
 _EVIDENCE_PAGE_SCHEMA = "mmm/research-evidence-page-v1"
 # v3 invalidates old terminal-gap/synthesis caches created before failure-state and
 # procedure preservation became part of the canonical contract.
-_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v3"
-_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-host-completion-v3"
-_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v3"
+_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v6"
+_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-host-completion-v4"
+_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v4"
 _SYNTHESIS_INPUT_BYTES = 3_600
 _SYNTHESIS_GROUP_ITEMS = 4
 _MIN_ADAPTIVE_FRAGMENT_CHARS = 512
@@ -301,6 +301,39 @@ def _emit_bounded_failure(
     )
 
 
+def _normalize_bounded_json_text(raw_text: str) -> str:
+    """Recover one embedded or fenced JSON value locally without another model turn."""
+    candidate = str(raw_text or "").strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+    decoder = json.JSONDecoder()
+    starts = [0] + [
+        index for index, char in enumerate(candidate) if char in "{[" and index
+    ]
+    seen: set[int] = set()
+    for position in starts:
+        if position in seen:
+            continue
+        seen.add(position)
+        try:
+            value, _ = decoder.raw_decode(candidate[position:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (Mapping, list)):
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+    raise ValueError("no recoverable JSON object or array in bounded model output")
+
+
 def _generate_bounded(
     agentic_module: Any,
     router: Any,
@@ -310,6 +343,7 @@ def _generate_bounded(
     parser: Any,
     progress_label: str,
 ) -> Any:
+    """Use one model turn, deterministic host normalization, then fail closed."""
     _emit_research_progress("model_attempt", label=progress_label, attempt=1)
     raw = ""
     try:
@@ -321,50 +355,46 @@ def _generate_bounded(
             tool_stage="research",
             enable_tools=False,
         )
+    except Exception as model_error:
+        _emit_bounded_failure(
+            "bounded_model_failure",
+            progress_label=progress_label,
+            raw_output=raw,
+            error=model_error,
+        )
+        raise
+    try:
         return parser(raw)
     except Exception as first_error:
         _emit_bounded_failure(
-            "bounded_model_or_parse_failure",
+            "bounded_parse_failure",
             progress_label=progress_label,
             raw_output=raw,
             error=first_error,
         )
-        if not isinstance(first_error, agentic_module.SpecValidationError) and not (
-            _structured_output_failure(first_error)
-        ):
+        if not isinstance(first_error, agentic_module.SpecValidationError) and not _structured_output_failure(first_error):
             raise
-        _emit_research_progress(
-            "bounded_json_repair",
-            label=progress_label,
-            attempt=2,
-            error=f"{type(first_error).__name__}: {first_error}",
+    try:
+        normalized = _normalize_bounded_json_text(raw)
+        parsed = parser(normalized)
+    except Exception as local_error:
+        _emit_bounded_failure(
+            "bounded_host_normalization_failure",
+            progress_label=progress_label,
+            raw_output=raw,
+            error=local_error,
         )
-        repaired = ""
-        try:
-            repaired = router.generate_text(
-                "planner",
-                _repair_messages(messages, error=first_error),
-                response_format="json",
-                response_schema=response_schema,
-                tool_stage="research",
-                enable_tools=False,
-            )
-            return parser(repaired)
-        except Exception as second_error:
-            _emit_bounded_failure(
-                "bounded_repair_failure",
-                progress_label=progress_label,
-                raw_output=repaired,
-                error=second_error,
-            )
-            if not isinstance(
-                second_error, agentic_module.SpecValidationError
-            ) and not _structured_output_failure(second_error):
-                raise
-            raise _BoundedResearchOutputError(
-                "bounded JSON repair failed after two fully logged attempts: "
-                f"{type(second_error).__name__}: {second_error}"
-            ) from second_error
+        raise _BoundedResearchOutputError(
+            "bounded JSON failed after one model attempt and deterministic host normalization: "
+            f"{type(local_error).__name__}: {local_error}"
+        ) from local_error
+    _emit_research_progress(
+        "bounded_host_normalized",
+        label=progress_label,
+        attempt=1,
+        raw_output_sha256=_sha256_text(raw),
+    )
+    return parsed
 
 
 def _structured_output_failure(exc: BaseException) -> bool:

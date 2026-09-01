@@ -298,6 +298,7 @@ def _install_bounded_research_efficiency(module: Any) -> None:
             domain_id=domain_id,
         )
         module._emit_research_progress("model_attempt", label=progress_label, attempt=1)
+        raw = ""
         try:
             raw = router.generate_text(
                 "planner",
@@ -307,15 +308,45 @@ def _install_bounded_research_efficiency(module: Any) -> None:
                 tool_stage="research",
                 enable_tools=False,
             )
-            return parser(raw)
         except Exception as exc:
-            from .structured_output import StructuredOutputValidationError
-
-            if isinstance(exc, (agentic_module.SpecValidationError, StructuredOutputValidationError)):
-                raise module._BoundedResearchOutputError(
-                    f"bounded structured output failed after host repair: {exc}"
-                ) from exc
+            module._emit_bounded_failure(
+                "bounded_model_failure",
+                progress_label=progress_label,
+                raw_output=raw,
+                error=exc,
+            )
             raise
+
+        try:
+            return parser(raw)
+        except Exception as first_error:
+            module._emit_bounded_failure(
+                "bounded_parse_failure",
+                progress_label=progress_label,
+                raw_output=raw,
+                error=first_error,
+            )
+            try:
+                normalized = module._normalize_bounded_json_text(raw)
+                parsed = parser(normalized)
+            except Exception as normalized_error:
+                module._emit_bounded_failure(
+                    "bounded_host_normalization_failure",
+                    progress_label=progress_label,
+                    raw_output=raw,
+                    error=normalized_error,
+                )
+                raise module._BoundedResearchOutputError(
+                    "bounded structured output failed after deterministic host normalization: "
+                    f"{type(normalized_error).__name__}: {normalized_error}"
+                ) from normalized_error
+            module._emit_research_progress(
+                "bounded_host_normalized",
+                label=progress_label,
+                attempt=1,
+                raw_output_sha256=module._sha256_text(raw),
+            )
+            return parsed
 
     generate_bounded._mmm_single_structured_repair_owner_v1 = True
     module._generate_bounded = generate_bounded

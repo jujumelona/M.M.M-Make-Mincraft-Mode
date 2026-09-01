@@ -410,14 +410,15 @@ def generate_sectioned_game_design(
     research: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate prose sections, parse them once on the host, then validate coverage."""
+    """Generate bounded structured sections, then validate requirement coverage."""
     merged: dict[str, Any] = {}
-    for index, (section_id, fields, _host_properties) in enumerate(_SECTION_SPECS):
+    for index, (section_id, fields, host_properties) in enumerate(_SECTION_SPECS):
         section = _generate_section(
             router,
             prompt=prompt,
             section_id=section_id,
             fields=fields,
+            host_properties=host_properties,
             research=research,
             media_paths=media_paths if index == 0 else (),
             trace_metadata=trace_metadata,
@@ -435,6 +436,7 @@ def _generate_section(
     prompt: str,
     section_id: str,
     fields: Sequence[str],
+    host_properties: Mapping[str, Any],
     research: Mapping[str, Any],
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
@@ -445,24 +447,43 @@ def _generate_section(
         media_paths=media_paths,
         metadata=dict(trace_metadata or {}),
     )
+    schema = {
+        "type": "object",
+        "properties": dict(host_properties),
+        "required": list(fields),
+        "additionalProperties": False,
+    }
     raw = router.generate_text(
         "planner",
-        _section_messages(prompt=prompt, section_id=section_id, fields=fields, research=research),
+        _section_messages(
+            prompt=prompt,
+            section_id=section_id,
+            fields=fields,
+            research=research,
+        ),
         media_paths=media_paths,
-        response_format="text",
-        response_schema=None,
+        response_format="json",
+        response_schema=schema,
+        tool_stage="game_design",
         enable_tools=False,
     )
     try:
-        section = _parse_markdown_section(raw, fields)
-        requirement_ids = tuple(item["requirement_id"] for item in _active_requirement_ledger(prompt))
-        _validate_section_types(section, fields, requirement_ids=requirement_ids)
-    except SpecValidationError as exc:
+        payload = _extract_json_object(raw)
+        section = {field: payload[field] for field in fields if field in payload}
+        requirement_ids = tuple(
+            item["requirement_id"] for item in _active_requirement_ledger(prompt)
+        )
+        _validate_section_types(
+            section,
+            fields,
+            requirement_ids=requirement_ids,
+        )
+    except (KeyError, SpecValidationError, ValueError, TypeError) as exc:
         trace.record_attempt(
             raw_output=raw,
             validation_error=str(exc),
             candidate=None,
-            context={"section_id": section_id, "format": "markdown"},
+            context={"section_id": section_id, "format": "structured_json"},
         )
         raise
     trace.record_attempt(
@@ -470,7 +491,7 @@ def _generate_section(
         validation_error=None,
         candidate=section,
         accepted=section,
-        context={"section_id": section_id, "format": "markdown"},
+        context={"section_id": section_id, "format": "structured_json"},
     )
     trace.record_success(section)
     return section
@@ -957,33 +978,27 @@ def _section_messages(
     fields: Sequence[str],
     research: Mapping[str, Any],
 ) -> list[dict[str, str]]:
-    """The single model-facing game-design format owner: prose/Markdown only."""
+    """Prompt only for semantic design decisions; structure is enforced by the host schema."""
     system = (
-        "You are one bounded section worker in a Minecraft mod design planner. The research "
-        "phase already ran. Write design content as Markdown, not JSON and not a code block. "
-        "Use exactly one level-2 heading for every requested field, spelled exactly as given, "
-        "and no other level-2 headings. Do not repeat the whole design and do not invent a "
-        "feature merely to fill a field. User-facing text stays in the user's language; "
-        "identifiers stay English snake_case. For combat/mod_context/art_direction, optional "
-        "level-3 subheadings are allowed. Use 'none' only when a modules/assets list is "
-        "genuinely empty. "
-        + _MODULE_FORMAT
-        + " "
-        + _ASSET_FORMAT
-        + " "
+        "You are a bounded Minecraft mod design worker. Make only the semantic design decisions "
+        "needed for the assigned section. Do not emit reasoning, analysis, <think> blocks, Markdown "
+        "headings, instructions, or fields outside the requested schema. Preserve exact approved "
+        "requirement IDs. Do not invent features merely to fill fields. User-facing strings stay in "
+        "the user's language and identifiers stay English snake_case. "
         + _PRODUCTION_DEPTH
     )
-    research_text = _render_design_research(research)
-    requested = "\n".join(f"- ## {field}" for field in fields)
     ledger = _active_requirement_ledger(prompt)
-    user = (
-        f"AUTHORITATIVE REQUEST\n{prompt}\n\n"
-        f"SECTION\n{section_id}\n\n"
-        f"REQUIRED HEADINGS\n{requested}\n\n"
-        f"RESEARCH CONTEXT\n{research_text}\n\n"
-        f"{_render_requirement_ledger(ledger)}"
-    )
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    user_payload = {
+        "authoritative_request": prompt,
+        "section_id": section_id,
+        "requested_fields": list(fields),
+        "research_context": _compact_research_for_design(research),
+        "approved_requirements": list(ledger),
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
+    ]
 
 
 def _render_design_research(research: Mapping[str, Any]) -> str:

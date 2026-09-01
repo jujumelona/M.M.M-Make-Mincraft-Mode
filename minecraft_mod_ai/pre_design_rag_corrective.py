@@ -21,7 +21,7 @@ from .pre_design_rag_support import (
 
 _DEFAULT_CORRECTIVE_ROUNDS = 2
 _MAX_CORRECTIVE_ROUNDS = 4
-_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"
+_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v4"
 _VERIFIED_FIXED_POINT = "verified_claims_sufficient"
 _TRACE_VALUE_LIMIT = 12
 _TRACE_TEXT_LIMIT = 360
@@ -62,6 +62,19 @@ def _round_has_verified_claims(summary: Mapping[str, Any]) -> bool:
 
     return any(isinstance(claim, Mapping) for claim in summary.get("claims", ()))
 
+
+def _round_is_terminally_sufficient(
+    summary: Mapping[str, Any],
+    *,
+    page_gaps: Any = (),
+    support_rejections: Any = (),
+) -> bool:
+    """Require verified claims and zero unresolved evidence obligations."""
+    return (
+        _round_has_verified_claims(summary)
+        and not _stable_text(page_gaps)
+        and not _stable_text(support_rejections)
+    )
 
 def _corrective_round_limit() -> int:
     try:
@@ -468,7 +481,11 @@ def _quality_research_document_domain(
             # authority for request completeness.  This stage proves external design
             # knowledge.  Once at least one exact-quote-supported claim exists, page-local
             # omissions cannot turn that verified evidence back into an unresolved domain.
-            if _round_has_verified_claims(accumulated_summary):
+            if _round_is_terminally_sufficient(
+                accumulated_summary,
+                page_gaps=active_page_gaps,
+                support_rejections=active_support_rejections,
+            ):
                 fixed_point = _VERIFIED_FIXED_POINT
                 break
             if round_index >= max_rounds:
@@ -588,7 +605,7 @@ def _quality_research_document_domain(
         # field as a blocking requirement obligation.
         summary["page_local_gaps"] = list(active_page_gaps)
         summary["support_rejections"] = list(active_support_rejections)
-        summary["gaps"] = [] if claims else list(active_page_gaps)
+        summary["gaps"] = list(active_page_gaps)
         summary["next_queries"] = list(active_summary.get("next_queries") or ())
         catalog = project_rag._materialize_claim_catalog(
             domain_key,
@@ -615,8 +632,10 @@ def _quality_research_document_domain(
                 "corrective retrieval did not reach verified sufficiency: "
                 + (fixed_point or "no_terminal_state")
             )
-        if not claims and summary.get("gaps"):
+        if summary.get("gaps"):
             reasons.append("unresolved evidence gaps remain")
+        if active_support_rejections:
+            reasons.append("unresolved support rejections remain")
         status = "failed" if reasons else "complete"
 
         note: dict[str, Any] = {
@@ -634,7 +653,7 @@ def _quality_research_document_domain(
                 "fusion": "verified_source_body+exact_content_dedupe+query_rank+rrf",
                 "corrective_retrieval": True,
                 "claim_support": "model_entailment+host_exact_quote",
-                "gap_semantics": "page_local_diagnostic_not_domain_blocker",
+                "gap_semantics": "unresolved_page_or_support_gap_blocks_domain_sufficiency",
                 "corrective_round_limit": max_rounds,
                 "corrective_rounds_executed": len(history),
                 "correction_history": history,
@@ -647,7 +666,7 @@ def _quality_research_document_domain(
                 "runtime_rebinding": False,
             },
             "checkpoint": {
-                "schema_version": "mmm/research-domain-checkpoint-v5",
+                "schema_version": "mmm/research-domain-checkpoint-v6",
                 "request_sha256": "sha256:" + domain_key,
                 "status": status,
                 "manifest_path": str(project_rag._manifest_path(domain_key)),
@@ -714,4 +733,5 @@ __all__ = [
     "_quality_research_document_domain",
     "_read_and_verify_document",
     "_round_has_verified_claims",
+    "_round_is_terminally_sufficient",
 ]

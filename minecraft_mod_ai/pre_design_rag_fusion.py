@@ -158,14 +158,48 @@ def _relevance(query: str, record: Mapping[str, Any]) -> float:
 
 
 def _record_is_query_relevant(query: str, record: Mapping[str, Any]) -> bool:
-    """Require at least one non-generic query term before a page can enter fusion.
+    """Categorically gate external evidence by ecosystem identity and request intent.
 
-    Ranking can order weak records, but breadth preservation must never resurrect a
-    record whose title/url/body shares no claim-bearing term with the retrieval query.
-    This is a zero-relevance rejection, not a fixed score threshold.
+    Generic scaffolding words such as build/create/system are not semantic evidence. External
+    GitHub/Modrinth records must first identify as Minecraft ecosystem material and must also
+    overlap a non-scaffolding intent term from the approved retrieval query.
     """
-
-    return _relevance(query, record) > 0.0
+    scaffolding = {
+        "build", "building", "create", "creating", "make", "making", "use", "using",
+        "support", "supports", "mode", "system", "systems", "feature", "features",
+        "source", "implementation", "code", "example", "examples", "project",
+        "minecraft", "mod", "mods",
+    }
+    ecosystem = {
+        "minecraft", "fabric", "forge", "neoforge", "quilt", "modrinth", "curseforge",
+        "bukkit", "spigot", "paper", "mixin", "yarn", "loom",
+    }
+    query_terms = _query_relevance_tokens(query)
+    intent = {term for term in query_terms if term not in scaffolding}
+    if not intent:
+        intent = query_terms
+    searchable = " ".join(
+        str(record.get(field) or "")
+        for field in (
+            "title", "name", "description", "source_id", "url", "repository",
+            "topics", "content",
+        )
+    )
+    record_terms = _tokens(searchable)
+    source_type = str(record.get("source_type") or "").casefold()
+    source_id = str(record.get("source_id") or "").casefold()
+    url = str(record.get("url") or "").casefold()
+    external = (
+        "github" in source_type
+        or source_id.startswith("github:")
+        or "github.com/" in url
+        or "modrinth" in source_type
+        or source_id.startswith("modrinth:")
+        or "modrinth.com/" in url
+    )
+    if external and not (record_terms & ecosystem):
+        return False
+    return bool(intent & record_terms)
 
 
 def _evidence_excerpt(content: str, queries: list[str]) -> str:
