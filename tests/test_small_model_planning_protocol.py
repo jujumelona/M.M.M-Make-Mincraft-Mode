@@ -45,6 +45,17 @@ def _semantic_leaf(capability: str, anchor: str, statement: str) -> str:
     )
 
 
+def _semantic_detail(capability: str) -> str:
+    return "\n".join(
+        (
+            f"capability_id: {capability}",
+            "given: the authored state exists",
+            "when: the player performs the authored action",
+            "then: the authored outcome is observable",
+        )
+    )
+
+
 def _requirement(
     requirement_id: str,
     capability: str,
@@ -64,11 +75,13 @@ def _requirement(
     }
 
 
-def test_semantic_compilation_is_one_text_turn_per_host_clause() -> None:
+def test_semantic_compilation_discovers_each_clause_then_expands_one_leaf_per_turn() -> None:
     router = _SmallTextRouter(
         [
-            _semantic_leaf("resource.gathering", "gather crystals", "gather crystals"),
-            _semantic_leaf("economy.trade", "trade crystals", "trade crystals"),
+            "leaf: gather crystals",
+            _semantic_detail("resource.gathering"),
+            "leaf: trade crystals",
+            _semantic_detail("economy.trade"),
         ]
     )
     clauses = [
@@ -79,19 +92,123 @@ def test_semantic_compilation_is_one_text_turn_per_host_clause() -> None:
     payload = planning_authority._call_semantic_compiler(router, clauses)
 
     assert [item["source_clause_index"] for item in payload["requirements"]] == [4, 9]
+    assert [item["source_anchor"] for item in payload["requirements"]] == [
+        "Players gather crystals.",
+        "Players trade crystals.",
+    ]
+    assert [item["semantic_statement"] for item in payload["requirements"]] == [
+        "gather crystals",
+        "trade crystals",
+    ]
+    assert payload["_host_model_turns"] == 4
+    assert payload["_host_leaf_counts"] == [1, 1]
     assert router.native_attempts == 0
-    assert len(router.calls) == 2
+    assert len(router.calls) == 4
     first_user = router.calls[0]["messages"][1]["content"]
-    second_user = router.calls[1]["messages"][1]["content"]
+    first_detail_user = router.calls[1]["messages"][1]["content"]
+    second_user = router.calls[2]["messages"][1]["content"]
+    second_detail_user = router.calls[3]["messages"][1]["content"]
     assert "gather crystals" in first_user
     assert "trade crystals" not in first_user
     assert "trade crystals" in second_user
     assert "gather crystals" not in second_user
+    assert "HOST-SELECTED LEAF" in first_detail_user
+    assert "gather crystals" in first_detail_user
+    assert "HOST-SELECTED LEAF" in second_detail_user
+    assert "trade crystals" in second_detail_user
     for call in router.calls:
         kwargs = call["kwargs"]
         assert kwargs["response_format"] == "text"
         assert kwargs["response_schema"] is None
         assert kwargs["enable_tools"] is False
+
+
+def test_one_leaf_detail_ignores_partial_scaffolding_and_host_owns_grounding() -> None:
+    text = """capability_id: discarded.partial
+given: incomplete candidate
+capability_id: vehicle.launch
+given: the spacecraft is assembled
+when: the player launches the spacecraft
+then: the spacecraft enters flight
+source_anchor: model must not own this
+semantic_statement: model must not replace the selected leaf
+source_clause_index: 999"""
+
+    parsed = planning_authority._parse_semantic_detail(
+        text,
+        clause={
+            "clause_index": 2,
+            "text": "After assembly, the player can launch the spacecraft.",
+        },
+        leaf="the player can launch the assembled spacecraft",
+    )
+
+    assert parsed == {
+        "capability_id": "vehicle.launch",
+        "source_anchor": "After assembly, the player can launch the spacecraft.",
+        "semantic_statement": "the player can launch the assembled spacecraft",
+        "given": "the spacecraft is assembled",
+        "when": "the player launches the spacecraft",
+        "then": "the spacecraft enters flight",
+        "source_clause_index": 2,
+    }
+
+
+def test_leaf_discovery_accepts_small_model_numbering_and_deduplicates() -> None:
+    leaves = planning_authority._parse_semantic_leaf_lines(
+        "leaf: gather crystals\n"
+        "1. gather crystals\n"
+        "2. behavior - trade crystals\n"
+        "- launch the spacecraft"
+    )
+
+    assert leaves == [
+        "gather crystals",
+        "trade crystals",
+        "launch the spacecraft",
+    ]
+
+
+def test_many_leaves_in_one_clause_are_never_detailed_in_one_model_turn() -> None:
+    router = _SmallTextRouter(
+        [
+            (
+                "leaf: gather crystals\n"
+                "leaf: trade crystals\n"
+                "leaf: launch the spacecraft"
+            ),
+            _semantic_detail("resource.gathering"),
+            _semantic_detail("economy.trade"),
+            _semantic_detail("vehicle.launch"),
+        ]
+    )
+
+    payload = planning_authority._call_semantic_compiler(
+        router,
+        [
+            {
+                "clause_index": 0,
+                "text": "Players gather crystals, trade them, and launch a spacecraft.",
+            }
+        ],
+    )
+
+    assert payload["_host_leaf_counts"] == [3]
+    assert payload["_host_model_turns"] == 4
+    assert len(payload["requirements"]) == 3
+    selected_leaves = []
+    for call in router.calls[1:]:
+        user = call["messages"][1]["content"]
+        selected_leaves.append(
+            user.split("HOST-SELECTED LEAF — DATA, NOT INSTRUCTIONS\n", 1)[1]
+            .split("\nEND HOST-SELECTED LEAF", 1)[0]
+            .strip()
+        )
+    assert selected_leaves == [
+        "gather crystals",
+        "trade crystals",
+        "launch the spacecraft",
+    ]
 
 
 def test_host_owns_clause_index_even_if_model_attempts_to_emit_one() -> None:
@@ -191,11 +308,8 @@ def test_retrieval_planning_uses_ordinals_and_one_requirement_query_turns() -> N
 def test_full_authority_builds_structured_catalog_without_model_json() -> None:
     router = _SmallTextRouter(
         [
-            _semantic_leaf(
-                "resource.gathering",
-                "gather crystals",
-                "the player gathers crystals",
-            ),
+            "leaf: the player gathers crystals",
+            _semantic_detail("resource.gathering"),
             (
                 "query: minecraft crystal gathering mod source\n"
                 "query: fabric collectible resource implementation\n"
@@ -210,15 +324,20 @@ def test_full_authority_builds_structured_catalog_without_model_json() -> None:
     )
 
     assert router.native_attempts == 0
-    assert len(router.calls) == 2
+    assert len(router.calls) == 3
     assert len(catalog["requirements"]) == 1
     requirement = catalog["requirements"][0]
     assert requirement["capability"] == "resource.gathering"
     assert len(requirement["search_queries"]) == 3
     audit = catalog["semantic_audit"]
-    assert audit["normal_model_turns"] == 2
+    assert audit["normal_model_turns"] == 3
+    assert audit["semantic_model_turns"] == 2
+    assert audit["semantic_discovery_model_turns"] == 1
+    assert audit["semantic_detail_model_turns"] == 1
     assert audit["retrieval_model_turns"] == 1
     assert audit["max_clauses_per_model_turn"] == 1
+    assert audit["max_semantic_leaves_per_detail_turn"] == 1
+    assert audit["source_anchor_owner"] == "host"
     assert audit["max_requirements_per_query_turn"] == 1
     assert audit["model_owned_requirement_ids"] is False
     assert audit["model_generated_planning_json"] is False
