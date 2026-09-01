@@ -104,7 +104,9 @@ def replace_obsolete_json_synthesis_test() -> None:
 
 
 '''
-    target.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+    text = text[:start] + replacement + text[end:]
+    text = text.replace("from collections import Counter\n", "", 1)
+    target.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
