@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/comprehensive-small-model-rag-refactor.yml'
+      - '.github/scripts/comprehensive_small_model_rag_refactor.py'
 
 permissions:
   contents: write
@@ -21,7 +22,11 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply comprehensive host-owned RAG refactor
-        run: python .github/scripts/comprehensive_small_model_rag_refactor.py
+        run: |
+          python .github/scripts/comprehensive_small_model_rag_refactor.py
+          grep -q '^import re$' minecraft_mod_ai/pre_design_rag_corrective.py || sed -i '4i import re' minecraft_mod_ai/pre_design_rag_corrective.py
+          echo '=== stale runtime markers in repository ==='
+          grep -R -n -E 'bounded_fallback_queries|not_selected_by_bounded_query_plan|github_source_body_admitted' . --exclude-dir=.git || true
       - name: Validate comprehensive RAG refactor
         run: |
           python -m compileall -q minecraft_mod_ai tests
