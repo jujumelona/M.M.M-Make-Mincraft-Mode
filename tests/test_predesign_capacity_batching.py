@@ -29,7 +29,10 @@ class _ExactRouter:
         self.calls = []
 
     def input_context_accounting(self, role, messages, **kwargs):
-        count = messages[-1]["content"].count("SOURCE PAGE_REF=")
+        count = sum(
+            line.startswith("SOURCE PAGE_REF=")
+            for line in messages[-1]["content"].splitlines()
+        )
         return SimpleNamespace(input_tokens=count * 40, context_tokens=100)
 
     def generate_text(self, role, messages, **kwargs):
