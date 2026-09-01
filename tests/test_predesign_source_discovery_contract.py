@@ -242,3 +242,38 @@ def test_ecosystem_evidence_skips_broad_github(monkeypatch):
     row = bundle["domains"][0]["queries"][0]
     assert row["external_rag"]["sources"]
     assert row["external_rag"]["github_retrieval"]["provider_status"] == "skipped_sufficient_ecosystem_evidence"
+
+
+def test_query_terms_do_not_drop_late_authored_terms():
+    query = "alpha beta gamma delta epsilon zeta theta iota kappa lambda nebula nova nexus orchid"
+    terms = rag._query_terms(query).split()
+    assert terms[-3:] == ["nova", "nexus", "orchid"]
+    assert len(terms) == 14
+
+
+def test_authoritative_catalog_returns_all_applicable_primary_sources():
+    result = rag._search_authoritative_catalog("automated testing data generation", ())
+    source_ids = {source["source_id"] for source in result["sources"]}
+    assert source_ids == {
+        "fabric-project-creation",
+        "fabric-building",
+        "fabric-data-generation",
+        "fabric-automatic-testing",
+        "fabric-mod-json",
+        "fabric-develop-live",
+        "fabric-meta",
+        "fabric-api-maven",
+    }
+
+
+def test_linked_github_source_discovery_does_not_stop_after_two(monkeypatch):
+    records = [
+        {"metadata": {"source_url": f"https://github.com/example/repo-{index}"}}
+        for index in range(4)
+    ]
+    monkeypatch.setattr(rag, "_text", lambda url, headers=None: "implementation body")
+    found, receipt = rag._linked_github_sources(
+        records, disabled=lambda: False, disable=lambda: None
+    )
+    assert len(found) == 4
+    assert receipt["source_requests"] == 4

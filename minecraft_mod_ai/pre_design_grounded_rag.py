@@ -45,7 +45,7 @@ def _sha256(value: Any) -> str:
     )
 
 
-def _query_terms(value: str, limit: int = 12) -> str:
+def _query_terms(value: str) -> str:
     stop = {
         "minecraft",
         "fabric",
@@ -63,8 +63,6 @@ def _query_terms(value: str, limit: int = 12) -> str:
         if len(key) < 3 or key in stop or key in words:
             continue
         words.append(key)
-        if len(words) >= limit:
-            break
     return " ".join(words) or "minecraft fabric"
 
 
@@ -242,7 +240,7 @@ def _search_github(
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     params = urllib.parse.urlencode(
-        {"q": _query_terms(query, 10) + " minecraft fabric mod", "per_page": 3}
+        {"q": _query_terms(query) + " minecraft fabric mod", "per_page": 3}
     )
     try:
         payload = _json(f"https://api.github.com/search/repositories?{params}", headers)
@@ -320,7 +318,7 @@ def _search_authoritative_catalog(
                 else target_neutral_evidence_catalog()
             )
             kwargs = {"minecraft_version": version} if version else {}
-            for source in retriever.search(query, limit=min(6, len(catalog)), **kwargs):
+            for source in retriever.search(query, limit=len(catalog), **kwargs):
                 item = asdict(source)
                 item["matched_version"] = version
                 records.setdefault(source.source_id, item)
@@ -426,7 +424,7 @@ def _linked_github_sources(
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     found: list[dict[str, Any]] = []
     errors: list[str] = []
-    for full_name in repositories[:2]:
+    for full_name in repositories:
         try:
             body = _text(
                 f"https://api.github.com/repos/{full_name}/readme", headers
@@ -460,7 +458,7 @@ def _linked_github_sources(
         "status": "available" if found else "linked_source_unavailable",
         "result_count": len(found),
         "search_requests": 0,
-        "source_requests": min(2, len(repositories)),
+        "source_requests": len(repositories),
         "readme_errors": errors[:3],
     }
 
