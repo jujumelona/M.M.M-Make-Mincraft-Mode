@@ -18,29 +18,68 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Remove retired pre-design import from retrieval efficiency
+      - name: Remove remaining retired pre-design hardening blocks
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('minecraft_mod_ai/small_model_retrieval_efficiency_contract.py')
-          text = path.read_text(encoding='utf-8')
-          old = text
-          text = text.replace('        agentic_pre_design_rag,\n', '')
-          text = text.replace('    _install_pre_design_rag_cascade(agentic_pre_design_rag)\n', '')
-          if text == old:
-              print('target lines already absent')
-          else:
+          def cut_between(path: Path, start_marker: str, end_marker: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if start_marker not in text:
+                  return
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              text = text[:start] + text[end:]
               path.write_text(text, encoding='utf-8')
-              print('removed retired pre-design runtime cascade')
+
+          p = Path('minecraft_mod_ai/pipeline_hardening.py')
+          cut_between(
+              p,
+              'def _install_research_provenance_hardening() -> None:',
+              '\n\n@dataclass',
+          )
+          text = p.read_text(encoding='utf-8').replace(
+              '    _install_research_provenance_hardening()\n', ''
+          )
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('minecraft_mod_ai/pipeline_hardening_v4.py')
+          cut_between(
+              p,
+              'def _install_lossless_page_research() -> None:',
+              '\n\ndef install_pipeline_hardening_v4() -> None:',
+          )
+          text = p.read_text(encoding='utf-8').replace(
+              '    _install_lossless_page_research()\n', ''
+          )
+          p.write_text(text, encoding='utf-8')
+
+          Path('minecraft_mod_ai/pipeline_hardening_v5.py').write_text(
+              '''from __future__ import annotations\n\n"""Compatibility no-op for the retired pre-design checkpoint hardening stage."""\n\n_INSTALLED = False\n\n\ndef install_pipeline_hardening_v5() -> None:\n    global _INSTALLED\n    _INSTALLED = True\n\n\n__all__ = ["install_pipeline_hardening_v5"]\n''',
+              encoding='utf-8',
+          )
+
+          p = Path('minecraft_mod_ai/pipeline_hardening_v6.py')
+          text = p.read_text(encoding='utf-8')
+          marker = 'def install_pipeline_hardening_v6() -> None:'
+          if marker in text:
+              start = text.index(marker)
+              end = text.index('\n\ninstall_pipeline_hardening_v6()', start)
+              replacement = '''def install_pipeline_hardening_v6() -> None:\n    """Compatibility no-op; canonical pre-design research has no runtime hardening patch."""\n    global _INSTALLED\n    _INSTALLED = True\n'''
+              text = text[:start] + replacement + text[end:]
+              p.write_text(text, encoding='utf-8')
           PY
       - name: Commit cleanup to main
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/small_model_retrieval_efficiency_contract.py
+          git add \
+            minecraft_mod_ai/pipeline_hardening.py \
+            minecraft_mod_ai/pipeline_hardening_v4.py \
+            minecraft_mod_ai/pipeline_hardening_v5.py \
+            minecraft_mod_ai/pipeline_hardening_v6.py
           if ! git diff --cached --quiet; then
-            git commit -m 'fix: remove retired pre-design retrieval cascade'
+            git commit -m 'fix: retire obsolete pre-design hardening patches'
             git push origin HEAD:main
           fi
       - name: Audit all remaining retired owner references
