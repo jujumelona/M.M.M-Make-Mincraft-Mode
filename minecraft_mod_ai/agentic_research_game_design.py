@@ -392,6 +392,24 @@ def generate_sectioned_game_design(
     return _validate_requirement_coverage(merged, _active_requirement_ledger(prompt))
 
 
+def _section_field_body(raw: Any, field: str, fields: Sequence[str]) -> str:
+    expected = {_normalize_heading(value): value for value in fields}
+    bodies: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in str(raw or "").splitlines():
+        match = re.match(r"^\s*##\s+(.+?)\s*$", line)
+        if match:
+            current = expected.get(_normalize_heading(match.group(1)))
+            if current is not None:
+                bodies.setdefault(current, [])
+            continue
+        if current is not None:
+            bodies[current].append(line)
+    if field not in bodies:
+        raise SpecValidationError(f"Planner prose omitted required Markdown heading: {field}")
+    return "\n".join(bodies[field]).strip()
+
+
 def _generate_section(
     router: Any,
     *,
@@ -403,11 +421,11 @@ def _generate_section(
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Compile one section host-side from independent semantic field generations.
+    """Generate one coherent section in one model turn, then host-compile each field.
 
-    The model never owns section keys, heading presence, or the final structure.  A
-    malformed field response is replaced from the frozen requirement ledger rather
-    than aborting the entire planner.
+    Related fields share one model context, cutting normal design generation from ten
+    model turns to four without dropping any field. The host still owns every key,
+    parser, type check, requirement binding, and per-field fallback.
     """
     del host_properties
     trace = PlannerStageTrace(
@@ -418,28 +436,26 @@ def _generate_section(
     )
     ledger = _active_requirement_ledger(prompt)
     requirement_ids = tuple(item["requirement_id"] for item in ledger)
+    raw = router.generate_text(
+        "planner",
+        _section_messages(
+            prompt=prompt,
+            section_id=section_id,
+            fields=fields,
+            research=research,
+        ),
+        media_paths=media_paths,
+        response_format="text",
+        response_schema=None,
+        tool_stage="game_design",
+        enable_tools=False,
+    )
     section: dict[str, Any] = {}
-    raw_outputs: dict[str, str] = {}
     fallback_fields: dict[str, str] = {}
-
-    for index, field in enumerate(fields):
-        raw = router.generate_text(
-            "planner",
-            _field_messages(
-                prompt=prompt,
-                section_id=section_id,
-                field=field,
-                research=research,
-            ),
-            media_paths=media_paths if index == 0 else (),
-            response_format="text",
-            response_schema=None,
-            tool_stage="game_design",
-            enable_tools=False,
-        )
-        raw_outputs[field] = str(raw or "")
+    for field in fields:
         try:
-            value = _parse_field_output(raw, field)
+            body = _section_field_body(raw, field, fields)
+            value = _parse_field_output(body, field)
             if field == "modules":
                 value = _ensure_module_coverage(value, ledger)
             _validate_section_types(
@@ -460,19 +476,19 @@ def _generate_section(
         section[field] = value
 
     trace.record_attempt(
-        raw_output=json.dumps(raw_outputs, ensure_ascii=False, sort_keys=True),
+        raw_output=str(raw or ""),
         validation_error=None,
         candidate=section,
         accepted=section,
         context={
             "section_id": section_id,
-            "format": "host_owned_field_compiler",
+            "format": "host_owned_section_compiler",
+            "model_turns": 1,
             "fallback_fields": fallback_fields,
         },
     )
     trace.record_success(section)
     return section
-
 
 def _strip_accidental_field_wrapper(raw: Any, field: str) -> str:
     body = str(raw or "").strip()
@@ -1098,6 +1114,46 @@ def _research_messages(
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
     ]
+
+
+def _section_messages(
+        *,
+        prompt: str,
+        section_id: str,
+        fields: Sequence[str],
+        research: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        headings = "\n".join(f"## {field}" for field in fields)
+        format_rules: list[str] = []
+        if "modules" in fields:
+            format_rules.append(_MODULE_FORMAT)
+        if "assets" in fields:
+            format_rules.append(_ASSET_FORMAT)
+        system = (
+            "You are a bounded Minecraft mod design worker. Write design content as Markdown, not JSON. "
+            "Produce every field for exactly one section in a single coherent response. "
+            "Use each required ## heading exactly once, in the supplied order, and do not add other ## headings. "
+            "Never omit a heading; for an optional empty map/list use literal 'none'. "
+            "Do not emit JSON, code fences, <think>, analysis, system commentary, or unrelated sections. "
+            "Preserve exact approved requirement IDs in modules. "
+            + " ".join(format_rules)
+            + " "
+            + _PRODUCTION_DEPTH
+        )
+        ledger = _active_requirement_ledger(prompt)
+        user = (
+            "AUTHORITATIVE REQUEST\n"
+            + prompt
+            + "\n\nSECTION\n"
+            + section_id
+            + "\n\nREQUIRED MARKDOWN HEADINGS\n"
+            + headings
+            + "\n\n"
+            + _render_requirement_ledger(ledger)
+            + "\n\nRESEARCH CONTEXT\n"
+            + _render_design_research(research)
+        )
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _field_messages(

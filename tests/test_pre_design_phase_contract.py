@@ -3,7 +3,6 @@ from __future__ import annotations
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.authored_scope_research_contract as authored_scope
 import minecraft_mod_ai.pre_design_research_pipeline as pipeline
-import minecraft_mod_ai.research_grounded_rag_contract as grounded
 
 
 def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
@@ -19,12 +18,13 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     providers = set(domains[0]["providers"])
     assert "official_docs" in providers
     assert "project_rag" in providers
-    assert "modrinth" not in providers
-    assert "github" not in providers
+    assert "modrinth" in providers
+    assert "curseforge" in providers
+    assert "github" in providers
     assert all(not domain["domain_id"].startswith("obl_") for domain in domains)
 
 
-def test_pre_design_donor_search_is_deferred_by_the_owning_pipeline() -> None:
+def test_pre_design_public_discovery_is_enabled_without_post_design_domain_expansion() -> None:
     brief = pipeline._pre_design_brief("우주선 모드를 설계해줘")
     providers = {
         provider
@@ -32,9 +32,9 @@ def test_pre_design_donor_search_is_deferred_by_the_owning_pipeline() -> None:
         for provider in domain.get("providers", [])
     }
 
-    assert "modrinth" not in providers
-    assert "github" not in providers
-    assert grounded._external_brief_queries(brief) == ()
+    assert [domain["domain_id"] for domain in brief["domains"]] == ["request"]
+    assert {"modrinth", "curseforge", "github"} <= providers
+    assert "openverse_images" not in providers
 
 
 def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None:

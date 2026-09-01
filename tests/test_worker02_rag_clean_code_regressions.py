@@ -180,7 +180,7 @@ def test_grounded_receipt_status_tracks_real_body_not_candidate_metadata():
     metadata_receipt = pipeline._grounded_rag_receipt(metadata_bundle)
     body_receipt = pipeline._grounded_rag_receipt(body_bundle)
 
-    assert metadata_receipt["status"] == "unavailable"
+    assert metadata_receipt["status"] == "no_external_or_local_source_bodies"
     assert metadata_receipt["content_record_count"] == 0
     assert body_receipt["status"] == "available"
     assert body_receipt["content_record_count"] == 1

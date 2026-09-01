@@ -20,7 +20,7 @@ def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is
     class Router:
         def generate_text(self, role, messages, **kwargs):
             calls.append({"role": role, "messages": messages, **kwargs})
-            return "NONE"
+            raise AssertionError("zero source bodies must not call the model")
 
     document = {
         "domain_id": "req_colony",
@@ -42,9 +42,9 @@ def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is
     )
 
     assert owner.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"
-    assert len(calls) == 1
-    assert calls[0]["response_format"] == "text"
-    assert calls[0]["response_schema"] is None
+    assert calls == []
+    assert note["model_called"] is False
+    assert note["source_body_count"] == 0
     assert note["research_mode"] == "advisory_predesign"
     assert note["research_evidence_status"] == "no_relevant_external_evidence"
     assert note["sufficient"] is True

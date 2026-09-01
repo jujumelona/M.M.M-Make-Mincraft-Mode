@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
+from minecraft_mod_ai import agentic_research_game_design as design
 from minecraft_mod_ai.agentic_research_game_design import generate_sectioned_game_design
-from minecraft_mod_ai.spec import SpecValidationError
 
 
 class _Router:
@@ -87,7 +85,7 @@ def test_game_design_drafting_is_text_not_json_schema():
         assert "not JSON" in system
 
 
-def test_missing_heading_fails_once_without_model_repair_loop():
+def test_missing_heading_uses_host_fallback_without_model_repair_loop():
     router = _Router([
         """## title
 Orbital Frontier
@@ -96,12 +94,16 @@ Orbital Frontier
 """
     ])
 
-    with pytest.raises(SpecValidationError, match="core_loop"):
-        generate_sectioned_game_design(
-            _GameDesignModule,
-            router,
-            "우주 탐사 모드를 만들어줘",
-            research={},
-        )
+    section = design._generate_section(
+        router,
+        prompt="우주 탐사 모드를 만들어줘",
+        section_id="identity_and_loop",
+        fields=("title", "pitch", "core_loop"),
+        research={},
+        media_paths=(),
+        trace_metadata=None,
+    )
 
+    assert section["title"] == "Orbital Frontier"
+    assert section["core_loop"] == ["우주 탐사 모드를 만들어줘"]
     assert len(router.calls) == 1

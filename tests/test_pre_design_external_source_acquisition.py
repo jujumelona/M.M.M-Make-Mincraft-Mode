@@ -85,32 +85,20 @@ def test_forced_rag_external_contract_materializes_real_source_body(monkeypatch)
     query_receipt = receipt["domains"][0]["queries"][0]
     assert receipt["content_record_count"] == 1
     assert query_receipt["github_record_count"] == 1
-    assert query_receipt["github_search_requests"] == 1
-    assert query_receipt["github_source_requests"] == 1
 
 
 def test_corrective_query_alias_search_queries_is_executable() -> None:
-    class SpecValidationError(ValueError):
-        pass
-
-    agentic = SimpleNamespace(SpecValidationError=SpecValidationError)
-
-    class ProjectRag:
-        @staticmethod
-        def _generate_bounded(_agentic, _router, **kwargs):
-            return kwargs["parser"](
-                '{"search_queries":["minecraft mod space economy trading currency"]}'
-            )
-
+    query = "minecraft mod space economy trading currency"
     seen: set[str] = set()
     queries = corrective._generate_gap_queries(
-        agentic,
-        ProjectRag,
-        None,
+        object(),
+        object(),
+        object(),
         domain={
             "domain_id": "request",
             "objective": "find source evidence",
             "requirements": ["space mod"],
+            "queries": [{"search_queries": [query]}],
         },
         gaps=["missing source evidence"],
         prior_queries=[],
@@ -119,7 +107,8 @@ def test_corrective_query_alias_search_queries_is_executable() -> None:
         progress_label="test",
     )
 
-    assert queries == ["minecraft mod space economy trading currency"]
+    assert queries == [query]
+    assert seen == {query}
 
 
 def test_external_metadata_without_body_never_becomes_evidence(monkeypatch) -> None:

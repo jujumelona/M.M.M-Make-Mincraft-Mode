@@ -53,7 +53,7 @@ def test_unrelated_structured_transport_still_validates_json_shape() -> None:
     ]
 
 
-def test_design_section_owner_rejects_missing_required_markdown_heading_once() -> None:
+def test_design_section_owner_falls_back_missing_markdown_heading_without_retry() -> None:
     class Router:
         def __init__(self) -> None:
             self.calls = 0
@@ -72,17 +72,18 @@ def test_design_section_owner_rejects_missing_required_markdown_heading_once() -
 
     router = Router()
     _section_id, fields, _properties = design._SECTION_SPECS[1]
-    with pytest.raises(SpecValidationError, match="combat"):
-        design._generate_section(
-            router,
-            prompt="우주 모드를 설계해줘",
-            section_id="systems_and_progression",
-            fields=fields,
-            research={},
-            media_paths=(),
-            trace_metadata=None,
-        )
+    section = design._generate_section(
+        router,
+        prompt="우주 모드를 설계해줘",
+        section_id="systems_and_progression",
+        fields=fields,
+        research={},
+        media_paths=(),
+        trace_metadata=None,
+    )
 
+    assert section["progression"] == ["gather", "launch"]
+    assert section["combat"] == {}
     assert router.calls == 1
     assert router.kwargs["response_format"] == "text"
     assert router.kwargs["response_schema"] is None

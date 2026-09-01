@@ -103,7 +103,7 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     ]
 
 
-def test_missing_requirement_module_fails_closed_without_model_repair_loop() -> None:
+def test_missing_requirement_module_gets_host_coverage_without_model_repair_loop() -> None:
     prompt = "플레이어가 수정 조각을 모으고 포탈을 연다."
     requirement_id = "req_crystal_portal"
     router = _TextRouter(["""## modules
@@ -115,20 +115,22 @@ def test_missing_requirement_module_fails_closed_without_model_repair_loop() -> 
         (prompt, _catalog(prompt, requirement_id))
     )
     try:
-        with pytest.raises(SpecValidationError, match="modules must be non-empty"):
-            design._generate_section(
-                router,
-                prompt=prompt,
-                section_id="modules_and_assets",
-                fields=("modules", "assets"),
-                research={},
-                media_paths=(),
-                trace_metadata={"test": "worker03-empty"},
-            )
+        section = design._generate_section(
+            router,
+            prompt=prompt,
+            section_id="modules_and_assets",
+            fields=("modules", "assets"),
+            research={},
+            media_paths=(),
+            trace_metadata={"test": "worker03-empty"},
+        )
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
 
     assert len(router.calls) == 1
+    assert section["modules"]
+    assert section["modules"][0]["requirement_refs"] == [requirement_id]
+    assert section["modules"][0]["implementation_obligations"]
 
 
 def test_required_design_fields_fail_closed_without_host_synthesis() -> None:

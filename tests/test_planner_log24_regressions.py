@@ -50,4 +50,4 @@ def test_empty_evidence_projection_never_calls_small_model():
     )
     assert result["claims"] == []
     assert result["research_evidence_status"] == "no_relevant_external_evidence"
-    assert "no_claim_bearing_source_bodies" in result["page_local_diagnostics"]
+    assert any("no_claim_bearing_source_bodies" in item for item in result["page_local_diagnostics"])
