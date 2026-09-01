@@ -26,10 +26,7 @@ def runtime_initialized() -> bool:
 
 
 def _install_runtime_contracts() -> None:
-    from .reuse_asset_upgrade_contract import (
-        install_postbootstrap,
-        install_prebootstrap,
-    )
+    from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
     from .runtime_wrapper_integrity import verify_installed_wrappers
 
     _contract_composer.compose_contract_stages(
@@ -38,23 +35,15 @@ def _install_runtime_contracts() -> None:
         stages=(
             _contract_composer.ContractStage("prebootstrap", install_prebootstrap),
             _contract_composer.ContractStage("core", _install_core_contracts),
-            _contract_composer.ContractStage(
-                "model-runtime", _install_model_runtime_contracts
-            ),
+            _contract_composer.ContractStage("model-runtime", _install_model_runtime_contracts),
             _contract_composer.ContractStage("validation", _install_validation_contracts),
             _contract_composer.ContractStage("generation", _install_generation_contracts),
             _contract_composer.ContractStage("platform", _install_platform_contracts),
             _contract_composer.ContractStage("planner", _install_planner_contracts),
-            _contract_composer.ContractStage(
-                "architecture", _install_architecture_contracts
-            ),
+            _contract_composer.ContractStage("architecture", _install_architecture_contracts),
             _contract_composer.ContractStage("late-safety", _install_late_safety_contracts),
-            _contract_composer.ContractStage(
-                "public-boundary", _install_public_boundary_contracts
-            ),
-            _contract_composer.ContractStage(
-                "post-bootstrap", _install_post_bootstrap_contracts
-            ),
+            _contract_composer.ContractStage("public-boundary", _install_public_boundary_contracts),
+            _contract_composer.ContractStage("post-bootstrap", _install_post_bootstrap_contracts),
             _contract_composer.ContractStage("postbootstrap", install_postbootstrap),
             _contract_composer.ContractStage("integrity", verify_installed_wrappers),
         ),
@@ -87,14 +76,10 @@ def _install_model_runtime_contracts() -> None:
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
     from .forced_tool_execution_contract import install as install_forced_tool_execution
     from .gpu_resource_contract import install as install_gpu_resource
-    from .llama_completion_liveness_contract import (
-        install as install_completion_liveness,
-    )
+    from .llama_completion_liveness_contract import install as install_completion_liveness
     from .llama_context_safety_contract import install as install_context_safety
     from .llama_generation_budget import install as install_llama_generation_budget
-    from .llama_stream_efficiency_contract import (
-        install as install_llama_stream_efficiency,
-    )
+    from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -123,12 +108,8 @@ def _install_model_runtime_contracts() -> None:
 
 def _install_validation_contracts() -> None:
     from . import java_lsp, repair_engine, runner, validation_execution_contract
-    from .java_lsp_process_safety_contract import (
-        install as install_java_lsp_process_safety,
-    )
-    from .research_validation_fingerprint_performance import (
-        harden as harden_validation_fingerprints,
-    )
+    from .java_lsp_process_safety_contract import install as install_java_lsp_process_safety
+    from .research_validation_fingerprint_performance import harden as harden_validation_fingerprints
     from .validation_execution_contract import install as install_validation_execution
 
     install_validation_execution(runner, java_lsp, repair_engine)
@@ -145,29 +126,19 @@ def _install_generation_contracts() -> None:
         project_index,
         source_patch,
     )
-    from .deterministic_minecraft_content_contract import (
-        install as install_deterministic_minecraft_content,
-    )
+    from .deterministic_minecraft_content_contract import install as install_deterministic_minecraft_content
     from .extended_registration_contract import install as install_extended_registration
     from .performance_final_contract import install as install_performance_contract
     from .performance_final_tuning import install as install_performance_tuning
-    from .project_index_manifest_efficiency_contract import (
-        install as install_project_index_manifest_efficiency,
-    )
-    from .project_manifest_hash_efficiency_contract import (
-        install as install_manifest_hash_efficiency,
-    )
+    from .project_index_manifest_efficiency_contract import install as install_project_index_manifest_efficiency
+    from .project_manifest_hash_efficiency_contract import install as install_manifest_hash_efficiency
 
     install_extended_registration(extended_content_generator)
     install_deterministic_minecraft_content(extended_content_generator)
     install_project_index_manifest_efficiency(project_index)
     install_performance_tuning(performance_final_contract)
     install_manifest_hash_efficiency(complete_orchestrator, project_index)
-    install_performance_contract(
-        complete_orchestrator,
-        custom_module_generator,
-        source_patch,
-    )
+    install_performance_contract(complete_orchestrator, custom_module_generator, source_patch)
 
 
 def _install_platform_contracts() -> None:
@@ -191,9 +162,7 @@ def _install_platform_contracts() -> None:
         technology_radar,
         validator,
     )
-    from .minecraft_domain_correctness_contract import (
-        install as install_minecraft_domain_correctness,
-    )
+    from .minecraft_domain_correctness_contract import install as install_minecraft_domain_correctness
     from .mod_scope_contract import install as install_mod_scope
     from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
@@ -203,17 +172,11 @@ def _install_platform_contracts() -> None:
     from .platform_planning_contract import install as install_platform_planning
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
-    from .platform_specialized_generator_contract import (
-        install as install_specialized_generator_guards,
-    )
+    from .platform_specialized_generator_contract import install as install_specialized_generator_guards
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
-    from .proposal_deserialization_contract import (
-        install as install_proposal_deserialization,
-    )
-    from .source_patch_precondition_contract import (
-        install as install_source_patch_preconditions,
-    )
+    from .proposal_deserialization_contract import install as install_proposal_deserialization
+    from .source_patch_precondition_contract import install as install_source_patch_preconditions
     from .system_quality_contract import install as install_system_quality
 
     install_platform_runtime(
@@ -256,14 +219,9 @@ def _install_platform_contracts() -> None:
 
 
 def _install_planner_contracts() -> None:
-    """Install planner-independent efficiency policies only."""
     from . import agentic_optimization_contract, complete_orchestrator_services
-    from .agentic_search_efficiency_contract import (
-        install as install_agentic_search_efficiency,
-    )
-    from .asset_resume_efficiency_contract import (
-        install as install_asset_resume_efficiency,
-    )
+    from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
+    from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
 
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(complete_orchestrator_services)
@@ -289,40 +247,22 @@ def _install_architecture_contracts() -> None:
     from .build_input_scope_contract import install as install_build_input_scope
     from .clean_room_verification_contract import install as install_clean_room
     from .coder_max_efficiency_contract import install_coder_max_efficiency
-    from .custom_generation_search_contract import (
-        install as install_custom_generation_search,
-    )
+    from .custom_generation_search_contract import install as install_custom_generation_search
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
-    from .required_gate_compatibility_contract import (
-        install as install_gate_compatibility,
-    )
+    from .required_gate_compatibility_contract import install as install_gate_compatibility
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
-    from .work_graph_state_transition_contract import (
-        install as install_work_graph_state_transitions,
-    )
+    from .work_graph_state_transition_contract import install as install_work_graph_state_transitions
 
     install_build_input_scope(validation_execution_contract)
     install_atomic_efficiency(atomic_requirement_contract)
     install_atomic_routes(atomic_requirement_contract, production_contract)
     install_reviewer_role(atomic_requirement_contract)
-    install_atomic_quality(
-        atomic_requirement_contract,
-        quality_evidence,
-        complete_orchestrator,
-    )
-    install_atomic_playtest(
-        atomic_requirement_contract,
-        quality_evidence,
-        complete_orchestrator,
-    )
+    install_atomic_quality(atomic_requirement_contract, quality_evidence, complete_orchestrator)
+    install_atomic_playtest(atomic_requirement_contract, quality_evidence, complete_orchestrator)
     install_repair_diagnostics(repair_engine)
-    install_clean_room(
-        complete_orchestrator,
-        quality_evidence,
-        validation_execution_contract,
-    )
+    install_clean_room(complete_orchestrator, quality_evidence, validation_execution_contract)
     install_work_graph_state_transitions(work_graph)
     agentic_optimization_contract.install(
         complete_planner_module=complete_planner,
@@ -346,24 +286,12 @@ def _install_late_safety_contracts() -> None:
         validation_execution_contract,
         work_graph,
     )
-    from .llama_parallel_runtime_contract import (
-        install as install_llama_parallel_runtime,
-    )
-    from .parallel_result_determinism_contract import (
-        install as install_parallel_result_determinism,
-    )
-    from .production_tool_parallel_contract import (
-        install as install_production_tool_parallel_safety,
-    )
-    from .runner_parallel_validation_contract import (
-        install as install_runner_parallel_validation,
-    )
-    from .scheduler_claim_fencing_contract import (
-        install as install_scheduler_claim_fencing,
-    )
-    from .scheduler_parallel_safety_contract import (
-        install as install_scheduler_parallel_safety,
-    )
+    from .llama_parallel_runtime_contract import install as install_llama_parallel_runtime
+    from .parallel_result_determinism_contract import install as install_parallel_result_determinism
+    from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
+    from .runner_parallel_validation_contract import install as install_runner_parallel_validation
+    from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
+    from .scheduler_parallel_safety_contract import install as install_scheduler_parallel_safety
 
     install_scheduler_parallel_safety(
         work_graph_module=work_graph,
@@ -392,63 +320,43 @@ def _install_public_boundary_contracts() -> None:
 
 
 def _install_post_bootstrap_contracts() -> None:
+    """Install late policies without mutating the canonical pre-design research owner."""
+
     from . import (
         agentic_optimization_contract,
-        agentic_pre_design_rag,
-        agentic_research_game_design,
         model_router,
         production_tools,
         qwen_agent_family_contract,
         repair_engine,
+        small_model_max_agent_contract,
         work_graph,
     )
-    from .active_repair_verifier_contract import (
-        install as install_active_repair_verifier,
-    )
+    from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
     from .long_run_resilience_contract import install as install_long_run_resilience
-    from .minecraft_mcp_evidence_contract import (
-        install as install_minecraft_mcp_evidence,
-    )
-    from .pre_design_external_source_contract import (
-        install as install_pre_design_external_source,
-    )
-    from .research_bottleneck_runtime import (
-        install as install_research_bottleneck_runtime,
-    )
-    from .small_model_hybrid_search_contract import (
-        install as install_small_model_hybrid_search,
-    )
-    from .small_model_max_agent_contract import install as install_small_model_max_agent
-    from .small_model_relation_index_contract import (
-        install as install_small_model_relation_index,
-    )
-    from .small_model_research_extensions_contract import (
-        install as install_small_model_research_extensions,
-    )
-    from .small_model_retrieval_efficiency_contract import (
-        install as install_small_model_retrieval_efficiency,
-    )
+    from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
+    from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
+    from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
+    from .small_model_relation_index_contract import install as install_small_model_relation_index
+    from .small_model_research_extensions_contract import install as install_small_model_research_extensions
+    from .small_model_retrieval_efficiency_contract import install as install_small_model_retrieval_efficiency
     from .temporary_skill_contract import install as install_temporary_skill
-    from .unified_trajectory_memory_contract import (
-        install as install_unified_trajectory_memory,
-    )
+    from .unified_trajectory_memory_contract import install as install_unified_trajectory_memory
 
-    # The base pre-design retriever owns the approved query set and local evidence;
-    # this layer performs the missing bounded external search -> source-body acquisition.
-    install_pre_design_external_source(agentic_pre_design_rag)
+    # Research retrieval is no longer runtime-patched. The new pre-design owner executes
+    # Modrinth/CurseForge/GitHub/local discovery directly and isolates provider failures.
     install_agent_security(
-        pre_design_rag_module=agentic_pre_design_rag,
-        agentic_research_module=agentic_research_game_design,
+        pre_design_rag_module=None,
+        agentic_research_module=None,
         model_router_module=model_router,
     )
-    install_small_model_max_agent(
-        model_router_module=model_router,
-        pre_design_rag_module=agentic_pre_design_rag,
-        production_tools_module=production_tools,
-        repair_module=repair_engine,
-        optimization_module=agentic_optimization_contract,
+    # Keep the two non-RAG small-model amplifiers. The retired pre-design code-RAG wrapper
+    # is deliberately not installed.
+    small_model_max_agent_contract._install_tool_retrieval(model_router)
+    small_model_max_agent_contract._install_repair_context(
+        repair_engine,
+        agentic_optimization_contract,
     )
     install_small_model_relation_index(production_tools)
     install_small_model_hybrid_search(production_tools)
@@ -466,3 +374,6 @@ def _install_post_bootstrap_contracts() -> None:
     install_small_model_research_extensions()
     install_unified_trajectory_memory()
     install_adaptive_retrieval(model_router)
+
+
+__all__ = ["initialize_runtime", "runtime_initialized"]
