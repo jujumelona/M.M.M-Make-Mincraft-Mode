@@ -4,9 +4,9 @@ from __future__ import annotations
 
 A configured ``max_new_tokens`` can be a request-packing reservation without becoming
 an artificial decode ceiling. Profiles opt into that behavior with
-``dynamic_output_budget``. Compact reviewed tool calls stay finitely bounded, while
-source mutation/generation actions may use the live context that remains after the
-current request.
+``dynamic_output_budget``. Compact reviewed tool calls and host-selected structured
+planning decisions stay finitely bounded, while source mutation/generation actions may
+use the live context that remains after the current request.
 
 Transport token estimation is intentionally conservative, but it is only an estimate.
 A forced structural tool action is never starved down to a few hundred tokens merely
@@ -29,6 +29,14 @@ _BYTES_PER_TOKEN_ESTIMATE = 3
 _DEFAULT_DYNAMIC_OUTPUT_TOKENS = 16384
 _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS = 4096
 _STRUCTURAL_COMPACT_TOOLS = frozenset({"apply_source_edit"})
+# These are not executable agent actions. They are host-selected, schema-constrained
+# semantic decisions whose arguments are consumed and validated by the host. Treating an
+# unregistered decision function as an unknown side-effecting tool previously let it
+# inherit nearly the whole 32k runtime context (~30k output tokens). Reuse the existing
+# bounded function-call page budget instead of inventing a planner-specific token number.
+_HOST_STRUCTURED_DECISION_TOOLS = frozenset(
+    {"compile_semantic_requirements", "plan_requirement_retrieval"}
+)
 _EXPANSIVE_TOOL_EFFECTS = frozenset(
     {
         "project_changed",
@@ -126,6 +134,11 @@ def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
     is nevertheless a compact *call shape* (one type shell, import, or member); output
     budgeting handles that separately by guaranteeing a minimum page, not by imposing
     the compact-tool maximum.
+
+    Host-selected semantic/retrieval decision functions are intentionally different:
+    they have no side effect, execute no external action, and are fully schema validated.
+    They therefore use the already-reviewed finite tool page budget even though they are
+    not entries in the executable transition registry.
     """
 
     if not tools:
@@ -136,6 +149,8 @@ def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
         name = _tool_name(tool)
         if not name:
             return True
+        if name in _HOST_STRUCTURED_DECISION_TOOLS:
+            continue
         transition = reviewed_transition(name)
         if transition is None:
             return True
