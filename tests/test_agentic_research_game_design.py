@@ -36,21 +36,36 @@ class _SectionRouter:
             }
         )
         text = str(messages[-1]["content"])
-        marker = "\n\nFIELD\n"
-        field = text.split(marker, 1)[1].split("\n", 1)[0].strip()
+        marker = "\n\nSECTION\n"
+        section_id = text.split(marker, 1)[1].split("\n", 1)[0].strip()
         bodies = {
-            "title": "연구 기반 모드",
-            "pitch": "검색 근거를 바탕으로 설계한다.",
-            "core_loop": "- 탐색하고 상호작용한다",
-            "progression": "- 기능을 단계적으로 해금한다",
-            "combat": "none",
-            "mod_context": "none",
-            "modules": "none",
-            "assets": "none",
-            "acceptance_tests": "- 요청한 핵심 루프가 게임 내에서 동작한다",
-            "art_direction": "none",
+            "identity_and_loop": """## title
+연구 기반 모드
+## pitch
+검색 근거를 바탕으로 설계한다.
+## core_loop
+- 탐색하고 상호작용한다
+""",
+            "systems_and_progression": """## progression
+- 기능을 단계적으로 해금한다
+## combat
+none
+## mod_context
+none
+""",
+            "modules_and_assets": """## modules
+none
+## assets
+none
+""",
+            "quality_and_art": """## acceptance_tests
+- 요청한 핵심 루프가 게임 내에서 동작한다
+## art_direction
+none
+""",
         }
-        return bodies[field]
+        return bodies[section_id]
+
 
 class _ResearchRouter:
     def __init__(self, evidence_ref: str = "forced_project_rag") -> None:
@@ -116,23 +131,24 @@ def test_sectioned_game_design_uses_host_owned_field_compiler() -> None:
         "연구를 먼저 하고 모드를 설계해줘",
         research=research,
     )
-    expected_fields = [
-        field
-        for _section_id, fields, _properties in agentic._SECTION_SPECS
-        for field in fields
-    ]
-    assert len(router.calls) == len(expected_fields)
+    assert len(router.calls) == len(agentic._SECTION_SPECS) == 4
     assert all(call["role"] == "planner" for call in router.calls)
     assert all(call["response_format"] == "text" for call in router.calls)
     assert all(call["response_schema"] is None for call in router.calls)
     assert all(call["tool_stage"] == "game_design" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
-    for field, call in zip(expected_fields, router.calls, strict=True):
+    for (section_id, fields, _properties), call in zip(
+        agentic._SECTION_SPECS,
+        router.calls,
+        strict=True,
+    ):
         system = str(call["messages"][0]["content"])
         user = str(call["messages"][1]["content"])
-        assert "No JSON" in system
-        assert "Do not write the field name, a Markdown ## heading" in system
-        assert f"\n\nFIELD\n{field}\n" in user
+        assert "Write design content as Markdown, not JSON" in system
+        assert "single coherent response" in system
+        assert f"\n\nSECTION\n{section_id}\n" in user
+        for field in fields:
+            assert f"## {field}" in user
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
@@ -158,6 +174,7 @@ def test_missing_markdown_headings_can_never_abort_identity_section() -> None:
     assert section["title"]
     assert section["pitch"]
     assert section["core_loop"]
+
 
 def test_research_domain_legacy_facade_is_host_owned() -> None:
     class NeverModel:
@@ -212,6 +229,7 @@ def test_domain_slice_issues_refs_only_for_real_host_evidence() -> None:
         {"forced_project_rag"}
     )
 
+
 def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> None:
     huge_forced = "F" * 40_000
     forced = {
@@ -245,6 +263,7 @@ def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> 
     assert prompt_slice["forced_project_rag"]["project_source_count"] == 6
     assert prompt_slice["forced_project_rag"]["evidence_ref"] == "forced_project_rag"
     assert "evidence_document" not in prompt_slice
+
 
 def test_runtime_binding_uses_native_research_first_owner() -> None:
     assert getattr(game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False)
