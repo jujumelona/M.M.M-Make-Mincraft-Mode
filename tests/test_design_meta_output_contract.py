@@ -18,7 +18,7 @@ from minecraft_mod_ai.spec import SpecValidationError
 )
 def test_section_parser_rejects_internal_meta(field: str, body: str):
     with pytest.raises(SpecValidationError):
-        design._parse_field_output(field, body)
+        design._parse_field_output(body, field)
 
 
 def test_final_design_validation_rejects_internal_meta():
@@ -40,4 +40,4 @@ def test_final_design_validation_rejects_internal_meta():
 
 def test_normal_design_text_is_allowed():
     assert not contains_internal_model_meta("Explore planets and establish colonies.")
-    assert design._parse_field_output("title", "Galactic Settlers") == "Galactic Settlers"
+    assert design._parse_field_output("Galactic Settlers", "title") == "Galactic Settlers"
