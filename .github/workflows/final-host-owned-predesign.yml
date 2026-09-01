@@ -1,0 +1,48 @@
+name: Final host-owned predesign cleanup
+on:
+  push:
+    paths:
+      - '.github/workflows/final-host-owned-predesign.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Architecture grep
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo '=== HEAD ==='
+          git rev-parse HEAD
+          echo '=== legacy module refs ==='
+          grep -RInE 'agentic_pre_design_rag|pre_design_rag_corrective|pre_design_rag_fusion|pre_design_rag_support|CorrectivePreDesignRAG|AgenticPreDesignRAG' minecraft_mod_ai tests .github/workflows || true
+          echo '=== model-owned JSON / corrective refs ==='
+          grep -RInE '_research_domain_with_agent|_research_messages|_parse_research_note|_extract_json_object|response_format=.json.|corrective query|search_queries|configured_limit|bounded_fallback_queries|external_query_plan' minecraft_mod_ai tests || true
+          echo '=== 8 caps near research ==='
+          grep -RInE 'limit.{0,20}=.{0,10}8|max_.{0,20}=.{0,10}8|\[:8\]|range\(8\)' minecraft_mod_ai | head -300 || true
+          echo '=== small-model host refs ==='
+          grep -RInE 'small_model_predesign_research|research_document_domain|advisory_predesign|host_parsed_markdown' minecraft_mod_ai tests || true
+      - name: Syntax
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Focused tests
+        shell: bash
+        run: |
+          python -m pip install -q pytest ruff
+          tests=()
+          for f in \
+            tests/test_agentic_research_game_design.py \
+            tests/test_pre_design_rag_quality_contract.py \
+            tests/test_small_model_predesign_research.py \
+            tests/test_small_model_architecture.py; do
+            [[ -f "$f" ]] && tests+=("$f")
+          done
+          if ((${#tests[@]})); then pytest -q "${tests[@]}"; else echo 'no focused test files found'; fi
