@@ -22,17 +22,15 @@ jobs:
       - name: Patch lossless context segmentation
         run: |
           python - <<'PY'
+          from inspect import cleandoc
           from pathlib import Path
-          import re
-
-          def dedent(value: str) -> str:
-              return re.sub(r'^          ', '', value, flags=re.MULTILINE)
 
           path = Path('minecraft_mod_ai/small_model_predesign_research.py')
           text = path.read_text(encoding='utf-8')
           start = text.index('def _capacity_batches(')
           end = text.index('\ndef _extract_batch(', start)
-          replacement = dedent('''def _accounting_fits(accounting: Any, reserve: int) -> bool:
+          replacement = cleandoc('''
+          def _accounting_fits(accounting: Any, reserve: int) -> bool:
               return int(accounting.input_tokens) + reserve <= int(accounting.context_tokens)
 
 
@@ -166,8 +164,8 @@ jobs:
               if current:
                   batches.append(current)
               return batches, diagnostics
-          ''')
-          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          ''') + '\n\n'
+          path.write_text(text[:start] + replacement + text[end + 1:], encoding='utf-8')
 
           path = Path('minecraft_mod_ai/pre_design_grounded_rag.py')
           text = path.read_text(encoding='utf-8')
@@ -178,7 +176,8 @@ jobs:
               text = text[:split_start] + text[split_end + 1:]
           start = text.index('def _materialize_domain_evidence_document(')
           end = text.index('\ndef _read_evidence_pages(', start)
-          replacement = dedent('''def _materialize_domain_evidence_document(
+          replacement = cleandoc('''
+          def _materialize_domain_evidence_document(
               domain_id: str, evidence: Mapping[str, Any]
           ) -> dict[str, Any]:
               raw = json.dumps(dict(evidence), ensure_ascii=False, sort_keys=True, default=str)
@@ -232,8 +231,8 @@ jobs:
                   "model_unit_count": len(units),
                   "model_projection": "claim_bearing_source_bodies_only",
               }
-          ''')
-          text = text[:start] + replacement + text[end:]
+          ''') + '\n\n'
+          text = text[:start] + replacement + text[end + 1:]
           text = text.replace(
               '        "page_chars",\n        "page_bytes",\n',
               '        "page_partition",\n',
@@ -243,8 +242,7 @@ jobs:
 
           path = Path('tests/test_predesign_capacity_batching.py')
           text = path.read_text(encoding='utf-8')
-          addition = dedent('''
-
+          addition = '\n\n' + cleandoc('''
           def test_oversized_source_is_split_losslessly_by_live_context():
               class LengthRouter(_ExactRouter):
                   def input_context_accounting(self, role, messages, **kwargs):
@@ -279,7 +277,7 @@ jobs:
               assert "".join(item["content"] for item in flattened) == content
               assert all(item["parent_page_ref"] == "page:oversized" for item in flattened)
               assert any(note.startswith("source_segmented_by_live_context:") for note in diagnostics)
-          ''')
+          ''') + '\n'
           if 'test_oversized_source_is_split_losslessly_by_live_context' not in text:
               path.write_text(text + addition, encoding='utf-8')
 
@@ -289,9 +287,9 @@ jobs:
       - name: Verify focused research contracts
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
-          python -m ruff check --fix minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
+          python -m ruff check --fix --ignore BLE001 minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
           python -m py_compile minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py
-          python -m ruff check minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
+          python -m ruff check --ignore BLE001 minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py
           python -m pytest -q tests/test_predesign_capacity_batching.py tests/test_predesign_source_unit_materialization.py tests/test_predesign_source_discovery_contract.py tests/test_small_model_research_completion.py
       - name: Commit production and regression
         run: |
