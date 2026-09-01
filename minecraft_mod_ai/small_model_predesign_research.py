@@ -3,7 +3,6 @@ from __future__ import annotations
 # Small-model-safe, host-owned pre-design research.
 # User-authored gameplay requirements are already authoritative. External RAG is
 # implementation evidence, never permission to design the requested feature.
-
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -109,7 +108,7 @@ def _planner_output_reserve(router: Any) -> int:
     try:
         config = router.registry.role(router.profile, "planner")
         return max(0, int(getattr(config, "max_new_tokens", 0) or 0))
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
         return 0
 
 
@@ -148,7 +147,7 @@ def _capacity_batches(
     reserve = _planner_output_reserve(router)
     try:
         probe = _live_accounting(router, _batch_messages(domain, ordered[:1]))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
         diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
         probe = None
     if probe is None:
@@ -161,7 +160,7 @@ def _capacity_batches(
         trial = [*current, page]
         try:
             accounting = _live_accounting(router, _batch_messages(domain, trial))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
             diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
             accounting = None
         if accounting is None:
@@ -173,8 +172,8 @@ def _capacity_batches(
             diagnostics.append("exact_input_accounting_lost;remaining_pages_kept_together")
             return batches, diagnostics
 
-        input_tokens = int(getattr(accounting, "input_tokens"))
-        context_tokens = int(getattr(accounting, "context_tokens"))
+        input_tokens = int(accounting.input_tokens)
+        context_tokens = int(accounting.context_tokens)
         if input_tokens + reserve <= context_tokens:
             current = trial
             continue
@@ -184,15 +183,15 @@ def _capacity_batches(
             current = [page]
             try:
                 single = _live_accounting(router, _batch_messages(domain, current))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
                 diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
                 single = None
             if single is None:
                 batches.append(current)
                 current = []
                 continue
-            if int(getattr(single, "input_tokens")) + reserve > int(
-                getattr(single, "context_tokens")
+            if int(single.input_tokens) + reserve > int(
+                single.context_tokens
             ):
                 diagnostics.append(
                     "source_page_exceeds_live_context:" + str(page.get("page_ref") or "")
@@ -231,7 +230,7 @@ def _extract_batch(
             tool_stage="research",
             enable_tools=False,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - model/external boundary becomes diagnostics
         return [], [f"model_read_failure:{type(exc).__name__}:{exc}"], 1
 
     claims: list[dict[str, Any]] = []
@@ -278,7 +277,7 @@ def _load_grounded(document: Mapping[str, Any]) -> dict[str, Any]:
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
         return {}
     return dict(value) if isinstance(value, Mapping) else {}
 
@@ -355,7 +354,7 @@ def research_document_domain(
             working_document = project_rag._materialize_domain_evidence_document(
                 domain_id, evidence
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
             working_document = dict(document)
 
     if isinstance(document, dict):
@@ -369,7 +368,7 @@ def research_document_domain(
     else:
         try:
             pages = project_rag._read_evidence_pages(working_document)
-        except Exception:
+        except Exception:  # noqa: BLE001 - optional host/external boundary degrades safely
             pages = []
 
     claims: list[dict[str, Any]] = []

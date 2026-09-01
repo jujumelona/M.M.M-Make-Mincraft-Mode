@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from minecraft_mod_ai.llama_exact_context import (
-    ExactContextOverflow,
     capacity_safe_payload,
     live_context_accounting,
 )

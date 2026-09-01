@@ -192,6 +192,35 @@ class ModelRouter:
         with self._gpu_scope(config.exclusive_gpu):
             yield
 
+    def input_context_accounting(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        media_paths: Sequence[str | Path] = (),
+        response_format: str = "text",
+        response_schema: Mapping[str, Any] | None = None,
+        tool_stage: str | None = None,
+        enable_tools: bool = False,
+    ) -> Any | None:
+        """Return live adapter input/context token accounting without generation."""
+
+        config, adapter = self._generation_adapter(role)
+        _stage, _runtime, _tools, request = self._prepare_generation_request(
+            role,
+            messages,
+            config=config,
+            media_paths=media_paths,
+            response_format=response_format,
+            response_schema=response_schema,
+            tool_stage=tool_stage,
+            enable_tools=enable_tools,
+        )
+        counter = getattr(adapter, "input_context_accounting", None)
+        if not callable(counter):
+            return None
+        return counter(request)
+
     def generate_text(
         self,
         role: str,

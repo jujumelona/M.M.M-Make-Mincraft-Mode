@@ -265,7 +265,7 @@ def test_code_retrieval_routes_by_task_shape() -> None:
 
 def test_latest_bootstrap_installs_single_selector_without_causal_overlay() -> None:
     assert not getattr(max_agent.select_tool_schemas, "_mmm_causal_tool_frontier", False)
-    assert getattr(model_router.ModelRouter._prepare_generation_request, "_mmm_small_model_tool_retrieval", False)
+    assert not getattr(model_router.ModelRouter._prepare_generation_request, "_mmm_small_model_tool_retrieval", False)
     assert getattr(model_router.ModelRouter._prepare_generation_request, "_mmm_temporary_verified_skill", False)
     assert callable(getattr(agentic_optimization_contract, "_mmm_active_candidate_discriminator", None))
     assert getattr(work_graph.DurableWorkLedger.succeed, "_mmm_verified_work_trajectory", False)
