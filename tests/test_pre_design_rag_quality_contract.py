@@ -273,7 +273,7 @@ def test_corrective_loop_retrieves_next_query_before_fixed_point(monkeypatch, tm
                             {
                                 "source_id": "github:colony",
                                 "source_type": "github_source",
-                                "content": "persistent colony saved state implementation",
+                                "content": "Minecraft Fabric persistent colony saved state implementation",
                                 "content_sha256": "sha256:new",
                             }
                         ],
