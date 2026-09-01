@@ -442,7 +442,7 @@ def _generate_section(
     prompt: str,
     section_id: str,
     fields: Sequence[str],
-    host_properties: Mapping[str, Any],
+    host_properties: Mapping[str, Any] | None = None,
     research: Mapping[str, Any],
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
@@ -982,7 +982,8 @@ def _section_messages(
         + _MODULE_FORMAT
         + " "
         + _ASSET_FORMAT
-        + " Preserve exact approved requirement IDs. No JSON, code fences, <think>, analysis, "
+        + " Preserve exact approved requirement IDs. Write design content as Markdown, not JSON. "
+        + "No code fences, <think>, analysis, "
         "or fields outside the requested headings. "
         + _PRODUCTION_DEPTH
     )

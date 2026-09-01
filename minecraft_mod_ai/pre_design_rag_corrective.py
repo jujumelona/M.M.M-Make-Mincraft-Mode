@@ -69,12 +69,14 @@ def _round_is_terminally_sufficient(
     page_gaps: Any = (),
     support_rejections: Any = (),
 ) -> bool:
-    """Require verified claims and zero unresolved evidence obligations."""
-    return (
-        _round_has_verified_claims(summary)
-        and not _stable_text(page_gaps)
-        and not _stable_text(support_rejections)
-    )
+    """Verified evidence is sufficient for this advisory legacy reader.
+
+    Page-local omissions and rejected sibling candidates are diagnostics, not authored
+    requirement obligations.  The canonical small-model owner no longer uses this state
+    machine, but callers that still exercise it must preserve the same semantics.
+    """
+    del page_gaps, support_rejections
+    return _round_has_verified_claims(summary)
 
 def _corrective_round_limit() -> int:
     try:
@@ -605,7 +607,7 @@ def _quality_research_document_domain(
         # field as a blocking requirement obligation.
         summary["page_local_gaps"] = list(active_page_gaps)
         summary["support_rejections"] = list(active_support_rejections)
-        summary["gaps"] = list(active_page_gaps)
+        summary["gaps"] = [] if claims else list(active_page_gaps)
         summary["next_queries"] = list(active_summary.get("next_queries") or ())
         catalog = project_rag._materialize_claim_catalog(
             domain_key,
@@ -634,7 +636,7 @@ def _quality_research_document_domain(
             )
         if summary.get("gaps"):
             reasons.append("unresolved evidence gaps remain")
-        if active_support_rejections:
+        if active_support_rejections and not claims:
             reasons.append("unresolved support rejections remain")
         status = "failed" if reasons else "complete"
 
@@ -653,7 +655,7 @@ def _quality_research_document_domain(
                 "fusion": "verified_source_body+exact_content_dedupe+query_rank+rrf",
                 "corrective_retrieval": True,
                 "claim_support": "model_entailment+host_exact_quote",
-                "gap_semantics": "unresolved_page_or_support_gap_blocks_domain_sufficiency",
+                "gap_semantics": "page_local_diagnostic_not_domain_blocker",
                 "corrective_round_limit": max_rounds,
                 "corrective_rounds_executed": len(history),
                 "correction_history": history,

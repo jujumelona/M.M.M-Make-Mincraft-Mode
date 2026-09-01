@@ -351,9 +351,33 @@ def _validate_domain_provider_grounding(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
 ) -> None:
-    # Target-neutral donor retrieval is advisory; exact target/API checks fail closed later.
-    del domain, grounded
-    return None
+    # Ordinary target-neutral donor discovery is advisory.  An explicitly declared
+    # required provider is different: the host promised that evidence source and must
+    # fail closed if it is absent.
+    required = {str(value).strip().casefold() for value in domain.get("required_providers", ()) if str(value).strip()}
+    if not required:
+        return
+    available: set[str] = set()
+    for row in grounded.get("queries", ()) if isinstance(grounded, Mapping) else ():
+        if not isinstance(row, Mapping):
+            continue
+        for record in row.get("evidence_records", ()):
+            if not isinstance(record, Mapping):
+                continue
+            if _is_github_record(record):
+                available.add("github")
+            source_type = str(record.get("source_type") or "").casefold()
+            source_id = str(record.get("source_id") or "").casefold()
+            if "modrinth" in source_type or source_id.startswith("modrinth:"):
+                available.add("modrinth")
+            section = str(record.get("retrieval_section") or "").casefold()
+            if section == "project_rag" or source_id.startswith("project:"):
+                available.add("project_rag")
+    missing = sorted(required - available)
+    if missing:
+        raise PreDesignResearchFailure(
+            "pre-design required provider evidence is missing: " + ", ".join(missing)
+        )
 
 def _domain_document_evidence(
     agentic: Any,

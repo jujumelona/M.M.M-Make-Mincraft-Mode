@@ -298,6 +298,19 @@ def _install_bounded_research_efficiency(module: Any) -> None:
             domain_id=domain_id,
         )
         module._emit_research_progress("model_attempt", label=progress_label, attempt=1)
+        emit_failure = getattr(module, "_emit_bounded_failure", None)
+        normalize_json = getattr(module, "_normalize_bounded_json_text", None)
+        hash_text = getattr(module, "_sha256_text", None)
+
+        def report_failure(event: str, *, error: Exception, raw_output: str) -> None:
+            if callable(emit_failure):
+                emit_failure(
+                    event,
+                    progress_label=progress_label,
+                    raw_output=raw_output,
+                    error=error,
+                )
+
         raw = ""
         try:
             raw = router.generate_text(
@@ -309,42 +322,31 @@ def _install_bounded_research_efficiency(module: Any) -> None:
                 enable_tools=False,
             )
         except Exception as exc:
-            module._emit_bounded_failure(
-                "bounded_model_failure",
-                progress_label=progress_label,
-                raw_output=raw,
-                error=exc,
-            )
+            report_failure("bounded_model_failure", error=exc, raw_output=raw)
             raise
 
         try:
             return parser(raw)
         except Exception as first_error:
-            module._emit_bounded_failure(
-                "bounded_parse_failure",
-                progress_label=progress_label,
-                raw_output=raw,
-                error=first_error,
-            )
+            report_failure("bounded_parse_failure", error=first_error, raw_output=raw)
             try:
-                normalized = module._normalize_bounded_json_text(raw)
+                normalized = normalize_json(raw) if callable(normalize_json) else raw
                 parsed = parser(normalized)
             except Exception as normalized_error:
-                module._emit_bounded_failure(
+                report_failure(
                     "bounded_host_normalization_failure",
-                    progress_label=progress_label,
-                    raw_output=raw,
                     error=normalized_error,
+                    raw_output=raw,
                 )
                 raise module._BoundedResearchOutputError(
-                    "bounded structured output failed after deterministic host normalization: "
+                    "bounded structured output failed after host repair: "
                     f"{type(normalized_error).__name__}: {normalized_error}"
                 ) from normalized_error
             module._emit_research_progress(
                 "bounded_host_normalized",
                 label=progress_label,
                 attempt=1,
-                raw_output_sha256=module._sha256_text(raw),
+                raw_output_sha256=hash_text(raw) if callable(hash_text) else "",
             )
             return parsed
 

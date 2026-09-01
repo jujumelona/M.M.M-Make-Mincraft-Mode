@@ -158,6 +158,21 @@ def _load_grounded(document: Mapping[str, Any]) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _document_receipt(project_rag: Any, document: Mapping[str, Any]) -> dict[str, Any]:
+    receipt = getattr(project_rag, "_prompt_document_receipt", None)
+    if callable(receipt):
+        value = receipt(document)
+        return dict(value) if isinstance(value, Mapping) else {"value": value}
+    return {
+        "schema_version": "mmm/research-evidence-document-receipt-v1",
+        "domain_id": str(document.get("domain_id") or ""),
+        "document_sha256": str(document.get("document_sha256") or ""),
+        "page_count": int(document.get("page_count") or 0),
+        "raw_path": str(document.get("raw_path") or ""),
+        "pages_path": str(document.get("pages_path") or ""),
+    }
+
+
 def research_document_domain(
     agentic_module: Any,
     project_rag: Any,
@@ -229,7 +244,7 @@ def research_document_domain(
         "research_evidence_status": evidence_status,
         "page_local_diagnostics": list(dict.fromkeys(diagnostics)),
         "evidence_page_refs": page_refs,
-        "evidence_document": project_rag._prompt_document_receipt(working_document),
+        "evidence_document": _document_receipt(project_rag, working_document),
         "quality_contract": {
             "schema_version": _PROTOCOL,
             "model_role": "semantic_evidence_extraction_only",

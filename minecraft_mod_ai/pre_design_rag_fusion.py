@@ -197,9 +197,11 @@ def _record_is_query_relevant(query: str, record: Mapping[str, Any]) -> bool:
         or source_id.startswith("modrinth:")
         or "modrinth.com/" in url
     )
-    if external and not (record_terms & ecosystem):
+    overlap = intent & record_terms
+    provider_ecosystem = "modrinth" in source_type or source_id.startswith("modrinth:") or "modrinth.com/" in url
+    if external and not provider_ecosystem and not (record_terms & ecosystem) and len(overlap) < 2:
         return False
-    return bool(intent & record_terms)
+    return bool(overlap)
 
 
 def _evidence_excerpt(content: str, queries: list[str]) -> str:

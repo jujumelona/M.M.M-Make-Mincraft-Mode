@@ -48,7 +48,7 @@ def _max_queries() -> int:
     # GitHub unauthenticated repository search is only 10 requests/minute.  Never
     # configure the pre-design phase to deterministically exceed that ceiling itself;
     # leave two requests of headroom for other process activity.
-    provider_cap = _HARD_MAX_QUERIES if _github_token() else 10
+    provider_cap = _HARD_MAX_QUERIES if _github_token() else 8
     return max(1, min(value, _HARD_MAX_QUERIES, provider_cap))
 
 
