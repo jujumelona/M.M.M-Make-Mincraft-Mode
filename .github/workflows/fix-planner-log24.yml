@@ -30,6 +30,7 @@ jobs:
           path.write_text(text, encoding='utf-8')
           PY
           python tools/fix_planner_format_and_retrieval.py
+          python tools/fix_planner_budget_field_owner.py
       - name: Install dependencies
         run: python -m pip install -q -e . pytest ruff
       - name: Compile
@@ -40,6 +41,7 @@ jobs:
             minecraft_mod_ai/agentic_research_game_design.py \
             minecraft_mod_ai/pre_design_external_source_contract.py \
             minecraft_mod_ai/small_model_predesign_research.py \
+            minecraft_mod_ai/pre_design_research_pipeline.py \
             tests/test_agentic_research_game_design.py \
             tests/test_planner_log24_regressions.py
       - name: Regression tests
@@ -59,6 +61,7 @@ jobs:
           grep -n '^def _host_field_fallback' minecraft_mod_ai/agentic_research_game_design.py
           grep -n '^def _ensure_module_coverage' minecraft_mod_ai/agentic_research_game_design.py
           ! grep -A90 -n '^def _generate_section' minecraft_mod_ai/agentic_research_game_design.py | grep '_parse_markdown_section(raw, fields)'
+          grep -A35 -n '^def _design_request_fits' minecraft_mod_ai/pre_design_research_pipeline.py | grep '_field_messages'
           grep -n 'no_claim_bearing_source_bodies' minecraft_mod_ai/small_model_predesign_research.py
           grep -n 'common >= 5' minecraft_mod_ai/pre_design_external_source_contract.py
       - name: Commit verified repair
@@ -66,6 +69,7 @@ jobs:
         run: |
           set -euxo pipefail
           rm -f tools/fix_planner_format_and_retrieval.py
+          rm -f tools/fix_planner_budget_field_owner.py
           rm -f .github/workflows/fix-planner-log24.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
