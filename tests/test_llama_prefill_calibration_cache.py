@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai.llama_finish_reason_contract import (
     OUTPUT_EXHAUSTED,
     LlamaCompletionBoundaryError,
@@ -7,6 +9,17 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter as adapter_module
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
+
+
+@pytest.fixture(autouse=True)
+def _isolate_prefill_tests_from_exact_context_network(monkeypatch):
+    import minecraft_mod_ai.llama_exact_context as exact_context
+
+    monkeypatch.setattr(
+        exact_context,
+        "capacity_safe_payload",
+        lambda _server_url, payload: dict(payload),
+    )
 
 
 def _adapter(*, extra=None) -> LlamaCppAdapter:

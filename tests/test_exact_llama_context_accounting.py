@@ -18,23 +18,35 @@ class _Response:
 
 
 class _Client:
+    def __init__(self):
+        self.props_calls = 0
+        self.token_calls = 0
+
     def post(self, url, json):
-        assert url.endswith('/v1/chat/completions/input_tokens')
-        assert json['messages'][0]['content'] == 'hello'
-        return _Response({'object': 'response.input_tokens', 'input_tokens': 37})
+        self.token_calls += 1
+        assert url.endswith("/v1/chat/completions/input_tokens")
+        assert json["messages"][0]["content"] == "hello"
+        return _Response({"object": "response.input_tokens", "input_tokens": 37})
 
     def get(self, url):
-        assert url.endswith('/props')
-        return _Response({'default_generation_settings': {'n_ctx': 128}})
+        self.props_calls += 1
+        assert url.endswith("/props")
+        return _Response({"default_generation_settings": {"n_ctx": 128}})
+
+
+def _uncached(monkeypatch, client):
+    import minecraft_mod_ai.llama_exact_context as module
+
+    monkeypatch.setattr(module, "_client", lambda _url: client)
+    monkeypatch.setattr(module, "_managed_generation_identity", lambda _url: "")
 
 
 def test_live_accounting_uses_server_tokenizer_and_slot(monkeypatch):
-    import minecraft_mod_ai.llama_exact_context as module
-
-    monkeypatch.setattr(module, '_client', lambda _url: _Client())
+    client = _Client()
+    _uncached(monkeypatch, client)
     accounting = live_context_accounting(
-        'http://127.0.0.1:8910/v1',
-        {'messages': [{'role': 'user', 'content': 'hello'}], 'max_tokens': 999},
+        "http://127.0.0.1:8910/v1",
+        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 999},
     )
     assert accounting.input_tokens == 37
     assert accounting.context_tokens == 128
@@ -42,22 +54,60 @@ def test_live_accounting_uses_server_tokenizer_and_slot(monkeypatch):
 
 
 def test_output_allowance_is_only_physical_remaining_context(monkeypatch):
-    import minecraft_mod_ai.llama_exact_context as module
-
-    monkeypatch.setattr(module, '_client', lambda _url: _Client())
+    client = _Client()
+    _uncached(monkeypatch, client)
     payload = capacity_safe_payload(
-        'http://127.0.0.1:8910/v1',
-        {'messages': [{'role': 'user', 'content': 'hello'}], 'max_tokens': 999},
+        "http://127.0.0.1:8910/v1",
+        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 999},
     )
-    assert payload['max_tokens'] == 91
+    assert payload["max_tokens"] == 91
 
 
 def test_no_arbitrary_output_shrink_when_requested_output_physically_fits(monkeypatch):
+    client = _Client()
+    _uncached(monkeypatch, client)
+    payload = capacity_safe_payload(
+        "http://127.0.0.1:8910/v1",
+        {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 80},
+    )
+    assert payload["max_tokens"] == 80
+
+
+def test_managed_generation_reuses_props_but_recounts_each_payload(monkeypatch):
     import minecraft_mod_ai.llama_exact_context as module
 
-    monkeypatch.setattr(module, '_client', lambda _url: _Client())
-    payload = capacity_safe_payload(
-        'http://127.0.0.1:8910/v1',
-        {'messages': [{'role': 'user', 'content': 'hello'}], 'max_tokens': 80},
+    client = _Client()
+    module._MANAGED_CONTEXT_CACHE.clear()
+    monkeypatch.setattr(module, "_client", lambda _url: client)
+    monkeypatch.setattr(
+        module, "_managed_generation_identity", lambda _url: "managed:generation-a"
     )
-    assert payload['max_tokens'] == 80
+    for _ in range(3):
+        live_context_accounting(
+            "http://127.0.0.1:8910/v1",
+            {"messages": [{"role": "user", "content": "hello"}]},
+        )
+    assert client.token_calls == 3
+    assert client.props_calls == 1
+
+
+def test_managed_restart_invalidates_cached_context(monkeypatch):
+    import minecraft_mod_ai.llama_exact_context as module
+
+    client = _Client()
+    identity = {"value": "managed:generation-a"}
+    module._MANAGED_CONTEXT_CACHE.clear()
+    monkeypatch.setattr(module, "_client", lambda _url: client)
+    monkeypatch.setattr(
+        module, "_managed_generation_identity", lambda _url: identity["value"]
+    )
+    live_context_accounting(
+        "http://127.0.0.1:8910/v1",
+        {"messages": [{"role": "user", "content": "hello"}]},
+    )
+    identity["value"] = "managed:generation-b"
+    live_context_accounting(
+        "http://127.0.0.1:8910/v1",
+        {"messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert client.props_calls == 2
