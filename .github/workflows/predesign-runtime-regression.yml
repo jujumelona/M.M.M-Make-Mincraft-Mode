@@ -7,6 +7,7 @@ on:
     paths:
       - 'minecraft_mod_ai/**'
       - 'tests/test_predesign_source_discovery_contract.py'
+      - 'tests/test_design_meta_output_contract.py'
       - '.github/workflows/predesign-runtime-regression.yml'
   workflow_dispatch:
 
@@ -29,13 +30,25 @@ jobs:
       - name: Import package bootstrap
         run: |
           python -c "import minecraft_mod_ai; print('package import PASS')"
-      - name: Run pre-design regression contract
+      - name: Run pre-design and design-output regressions
         run: |
-          python -m pytest -q tests/test_predesign_source_discovery_contract.py
+          python -m pytest -q \
+            tests/test_predesign_source_discovery_contract.py \
+            tests/test_design_meta_output_contract.py
       - name: Ban retired pre-design owner
         run: |
-          test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
-          if grep -R --line-number --include='*.py' 'agentic_pre_design_rag' minecraft_mod_ai; then
-            echo 'retired pre-design owner reference found' >&2
-            exit 1
-          fi
+          python - <<'PY'
+          from pathlib import Path
+
+          token = "agentic_" + "pre_design_" + "rag"
+          legacy = Path("minecraft_mod_ai") / f"{token}.py"
+          if legacy.exists():
+              raise SystemExit(f"retired owner still exists: {legacy}")
+          offenders = []
+          for path in Path("minecraft_mod_ai").rglob("*.py"):
+              if token in path.read_text(encoding="utf-8"):
+                  offenders.append(str(path))
+          if offenders:
+              raise SystemExit("retired owner references: " + ", ".join(offenders))
+          print("retired owner ban PASS")
+          PY
