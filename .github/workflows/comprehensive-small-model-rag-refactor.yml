@@ -1,4 +1,4 @@
-name: Comprehensive small-model RAG refactor
+name: Small-model host-owned pre-design redesign
 
 on:
   push:
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   refactor:
+    if: contains(github.event.head_commit.message, 'chore: apply small-model host redesign v2')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,19 +22,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply comprehensive host-owned RAG refactor
+      - name: Apply host-owned small-model redesign
+        run: python .github/scripts/comprehensive_small_model_rag_refactor.py
+      - name: Static architecture guards
         run: |
-          python .github/scripts/comprehensive_small_model_rag_refactor.py
-          grep -q '^import re$' minecraft_mod_ai/pre_design_rag_corrective.py || sed -i '4i import re' minecraft_mod_ai/pre_design_rag_corrective.py
-          echo '=== stale runtime markers in repository ==='
-          grep -R -n -E 'bounded_fallback_queries|not_selected_by_bounded_query_plan|github_source_body_admitted' . --exclude-dir=.git || true
-      - name: Validate comprehensive RAG refactor
+          ! grep -q 'pre_design_rag_corrective' minecraft_mod_ai/pre_design_domain_research.py
+          grep -q 'small_model_predesign_research' minecraft_mod_ai/pre_design_domain_research.py
+          grep -q 'response_format="text"' minecraft_mod_ai/small_model_predesign_research.py
+          grep -q 'host_parsed_markdown' minecraft_mod_ai/agentic_research_game_design.py
+          ! grep -q 'summary\["gaps"\] = list(active_page_gaps)' minecraft_mod_ai/pre_design_domain_research.py
+      - name: Validate redesign
         run: |
           python -m compileall -q minecraft_mod_ai tests
           python -m pip install -q pytest ruff
-          ruff check minecraft_mod_ai/pre_design_rag_corrective.py minecraft_mod_ai/pre_design_rag_support.py minecraft_mod_ai/runtime_stability_contract.py minecraft_mod_ai/structured_output.py minecraft_mod_ai/pre_design_rag_fusion.py tests/test_small_model_rag_host_contract.py --select F,E7,E9
-          pytest -q tests/test_small_model_rag_host_contract.py tests/test_agentic_research_game_design.py tests/test_pre_design_rag_corrective.py tests/test_pre_design_rag_fusion.py tests/test_pre_design_rag_support.py
-      - name: Commit verified source changes
+          ruff check minecraft_mod_ai/small_model_predesign_research.py minecraft_mod_ai/pre_design_domain_research.py minecraft_mod_ai/pre_design_research_pipeline.py minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/pre_design_external_source_contract.py minecraft_mod_ai/minecraft_knowledge_nodes.py tests/test_small_model_predesign_v2.py tests/test_agentic_research_game_design.py --select F,E7,E9
+          pytest -q tests/test_small_model_predesign_v2.py tests/test_agentic_research_game_design.py
+      - name: Commit verified redesign
         run: |
           rm -f .github/workflows/comprehensive-small-model-rag-refactor.yml
           rm -f .github/scripts/comprehensive_small_model_rag_refactor.py
@@ -41,5 +45,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'fix: move pre-design RAG orchestration to host'
+          git commit -m 'fix: replace pre-design RAG with small-model host pipeline'
           git push origin HEAD:main
