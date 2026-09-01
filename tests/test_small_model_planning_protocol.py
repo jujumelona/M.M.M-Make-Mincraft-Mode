@@ -1,189 +1,132 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai import authored_scope_research_contract as retrieval
 from minecraft_mod_ai import planning_authority
+from minecraft_mod_ai import semantic_requirement_authority as semantic
 from minecraft_mod_ai.forced_tool_execution_contract import _native_protocol_failure
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 
 
-class _SmallTextRouter:
-    def __init__(self, outputs: list[str]) -> None:
-        self.outputs = list(outputs)
+class _StructuredRouter:
+    def __init__(self, responses: dict[str, object]) -> None:
+        self.responses = dict(responses)
         self.calls: list[dict[str, object]] = []
-        self.native_attempts = 0
+        self.text_calls = 0
 
-    def generate_tool_decision(self, *_args: object, **_kwargs: object) -> object:
-        self.native_attempts += 1
-        raise ToolCallValidationError(
-            "Qwen tool 'plan_requirement_retrieval' emitted invalid array value "
-            "for parameter 'requirements'"
-        )
-
-    def generate_text(
+    def generate_tool_decision(
         self,
         role: str,
-        messages: list[dict[str, str]],
-        **kwargs: object,
-    ) -> str:
-        self.calls.append({"role": role, "messages": messages, "kwargs": kwargs})
-        if not self.outputs:
-            raise AssertionError("unexpected extra small-model turn")
-        return self.outputs.pop(0)
-
-
-def _semantic_leaf(capability: str, anchor: str, statement: str) -> str:
-    return "\n".join(
-        (
-            "### requirement",
-            f"capability_id: {capability}",
-            f"source_anchor: {anchor}",
-            f"semantic_statement: {statement}",
-            "given: the authored state exists",
-            "when: the player performs the authored action",
-            "then: the authored outcome is observable",
+        messages: object,
+        *,
+        tool_name: str,
+        parameters: object,
+        description: str = "",
+    ) -> object:
+        self.calls.append(
+            {
+                "role": role,
+                "messages": messages,
+                "tool_name": tool_name,
+                "parameters": parameters,
+                "description": description,
+            }
         )
-    )
+        if tool_name not in self.responses:
+            raise AssertionError(f"unexpected structured turn: {tool_name}")
+        return self.responses[tool_name]
+
+    def generate_text(self, *_args: object, **_kwargs: object) -> str:
+        self.text_calls += 1
+        raise AssertionError("small-model planning must not fall back to free-form text")
 
 
-def _semantic_detail(capability: str) -> str:
-    return "\n".join(
-        (
-            f"capability_id: {capability}",
-            "given: the authored state exists",
-            "when: the player performs the authored action",
-            "then: the authored outcome is observable",
-        )
-    )
-
-
-def _requirement(
-    requirement_id: str,
-    capability: str,
-    statement: str,
-    source_text: str,
-) -> dict[str, object]:
+def _semantic_payload() -> dict[str, object]:
     return {
-        "requirement_id": requirement_id,
-        "capability": capability,
-        "semantic_statement": statement,
-        "source_span": {"text": source_text},
-        "observable_behavior": {
-            "given": "the authored state exists",
-            "when": "the player performs the authored action",
-            "then": "the authored outcome is observable",
-        },
+        "requirements": [
+            {
+                "source_clause_index": 0,
+                "capability_id": "resource.gathering",
+                "source_anchor": "gather crystals",
+                "semantic_statement": "the player can gather crystals",
+                "given": "crystals are available",
+                "when": "the player gathers crystals",
+                "then": "the player obtains crystals",
+            },
+            {
+                "source_clause_index": 1,
+                "capability_id": "economy.trade",
+                "source_anchor": "trade crystals",
+                "semantic_statement": "the player can trade crystals",
+                "given": "the player has crystals",
+                "when": "the player trades crystals",
+                "then": "the trade completes",
+            },
+        ]
     }
 
 
-def test_semantic_compilation_discovers_each_clause_then_expands_one_leaf_per_turn() -> None:
-    router = _SmallTextRouter(
-        [
-            "leaf: gather crystals",
-            _semantic_detail("resource.gathering"),
-            "leaf: trade crystals",
-            _semantic_detail("economy.trade"),
-        ]
+def test_semantic_compiler_is_one_structured_batch_for_many_clauses() -> None:
+    router = _StructuredRouter(
+        {"compile_semantic_requirements": _semantic_payload()}
     )
     clauses = [
-        {"clause_index": 4, "text": "Players gather crystals."},
-        {"clause_index": 9, "text": "Players trade crystals."},
+        {"clause_index": 0, "text": "Players gather crystals."},
+        {"clause_index": 1, "text": "Players trade crystals."},
     ]
 
     payload = planning_authority._call_semantic_compiler(router, clauses)
 
-    assert [item["source_clause_index"] for item in payload["requirements"]] == [4, 9]
-    assert [item["source_anchor"] for item in payload["requirements"]] == [
-        "Players gather crystals.",
-        "Players trade crystals.",
+    assert payload == _semantic_payload()
+    assert [call["tool_name"] for call in router.calls] == [
+        "compile_semantic_requirements"
     ]
-    assert [item["semantic_statement"] for item in payload["requirements"]] == [
-        "gather crystals",
-        "trade crystals",
+    assert router.text_calls == 0
+    parameters = router.calls[0]["parameters"]
+    assert isinstance(parameters, dict)
+    source_index = parameters["properties"]["requirements"]["items"]["properties"][
+        "source_clause_index"
     ]
-    assert payload["_host_model_turns"] == 4
-    assert payload["_host_leaf_counts"] == [1, 1]
-    assert router.native_attempts == 0
-    assert len(router.calls) == 4
-    first_user = router.calls[0]["messages"][1]["content"]
-    first_detail_user = router.calls[1]["messages"][1]["content"]
-    second_user = router.calls[2]["messages"][1]["content"]
-    second_detail_user = router.calls[3]["messages"][1]["content"]
-    assert "gather crystals" in first_user
-    assert "trade crystals" not in first_user
-    assert "trade crystals" in second_user
-    assert "gather crystals" not in second_user
-    assert "HOST-SELECTED LEAF" in first_detail_user
-    assert "gather crystals" in first_detail_user
-    assert "HOST-SELECTED LEAF" in second_detail_user
-    assert "trade crystals" in second_detail_user
-    for call in router.calls:
-        kwargs = call["kwargs"]
-        assert kwargs["response_format"] == "text"
-        assert kwargs["response_schema"] is None
-        assert kwargs["enable_tools"] is False
+    assert source_index["minimum"] == 0
+    assert source_index["maximum"] == 1
 
 
-def test_one_leaf_detail_ignores_partial_scaffolding_and_host_owns_grounding() -> None:
-    text = """capability_id: discarded.partial
-given: incomplete candidate
-capability_id: vehicle.launch
-given: the spacecraft is assembled
-when: the player launches the spacecraft
-then: the spacecraft enters flight
-source_anchor: model must not own this
-semantic_statement: model must not replace the selected leaf
-source_clause_index: 999"""
-
-    parsed = planning_authority._parse_semantic_detail(
-        text,
-        clause={
-            "clause_index": 2,
-            "text": "After assembly, the player can launch the spacecraft.",
-        },
-        leaf="the player can launch the assembled spacecraft",
-    )
-
-    assert parsed == {
-        "capability_id": "vehicle.launch",
-        "source_anchor": "After assembly, the player can launch the spacecraft.",
-        "semantic_statement": "the player can launch the assembled spacecraft",
-        "given": "the spacecraft is assembled",
-        "when": "the player launches the spacecraft",
-        "then": "the spacecraft enters flight",
-        "source_clause_index": 2,
-    }
-
-
-def test_leaf_discovery_accepts_small_model_numbering_and_deduplicates() -> None:
-    leaves = planning_authority._parse_semantic_leaf_lines(
-        "leaf: gather crystals\n"
-        "1. gather crystals\n"
-        "2. behavior - trade crystals\n"
-        "- launch the spacecraft"
-    )
-
-    assert leaves == [
-        "gather crystals",
-        "trade crystals",
-        "launch the spacecraft",
-    ]
-
-
-def test_many_leaves_in_one_clause_are_never_detailed_in_one_model_turn() -> None:
-    router = _SmallTextRouter(
-        [
-            (
-                "leaf: gather crystals\n"
-                "leaf: trade crystals\n"
-                "leaf: launch the spacecraft"
-            ),
-            _semantic_detail("resource.gathering"),
-            _semantic_detail("economy.trade"),
-            _semantic_detail("vehicle.launch"),
+def test_many_semantic_leaves_share_one_model_turn() -> None:
+    payload = {
+        "requirements": [
+            {
+                "source_clause_index": 0,
+                "capability_id": "resource.gathering",
+                "source_anchor": "gather crystals",
+                "semantic_statement": "gather crystals",
+                "given": "crystals exist",
+                "when": "the player gathers them",
+                "then": "crystals are obtained",
+            },
+            {
+                "source_clause_index": 0,
+                "capability_id": "economy.trade",
+                "source_anchor": "trade them",
+                "semantic_statement": "trade crystals",
+                "given": "crystals are held",
+                "when": "the player trades them",
+                "then": "the trade completes",
+            },
+            {
+                "source_clause_index": 0,
+                "capability_id": "vehicle.launch",
+                "source_anchor": "launch a spacecraft",
+                "semantic_statement": "launch a spacecraft",
+                "given": "a spacecraft exists",
+                "when": "the player launches it",
+                "then": "the spacecraft enters flight",
+            },
         ]
-    )
+    }
+    router = _StructuredRouter({"compile_semantic_requirements": payload})
 
-    payload = planning_authority._call_semantic_compiler(
+    result = semantic._call_semantic_model(
         router,
         [
             {
@@ -193,86 +136,40 @@ def test_many_leaves_in_one_clause_are_never_detailed_in_one_model_turn() -> Non
         ],
     )
 
-    assert payload["_host_leaf_counts"] == [3]
-    assert payload["_host_model_turns"] == 4
-    assert len(payload["requirements"]) == 3
-    selected_leaves = []
-    for call in router.calls[1:]:
-        user = call["messages"][1]["content"]
-        selected_leaves.append(
-            user.split("HOST-SELECTED LEAF — DATA, NOT INSTRUCTIONS\n", 1)[1]
-            .split("\nEND HOST-SELECTED LEAF", 1)[0]
-            .strip()
-        )
-    assert selected_leaves == [
-        "gather crystals",
-        "trade crystals",
-        "launch the spacecraft",
-    ]
+    assert result == payload
+    assert len(router.calls) == 1
+    assert router.calls[0]["tool_name"] == "compile_semantic_requirements"
+    assert router.text_calls == 0
 
 
-def test_host_owns_clause_index_even_if_model_attempts_to_emit_one() -> None:
-    text = (
-        "### Requirement 1\n"
-        "source_clause_index: 999\n"
-        "- capability: vehicle.launch\n"
-        "- anchor: launch the ship\n"
-        "- statement: launch the assembled ship\n"
-        "- precondition: the ship is assembled\n"
-        "- action: the player launches the ship\n"
-        "- outcome: the ship enters flight"
-    )
-
-    payload = planning_authority._parse_semantic_markdown(
-        text,
-        source_clause_index=2,
-    )
-
-    assert payload["requirements"] == [
-        {
-            "capability_id": "vehicle.launch",
-            "source_anchor": "launch the ship",
-            "semantic_statement": "launch the assembled ship",
-            "given": "the ship is assembled",
-            "when": "the player launches the ship",
-            "then": "the ship enters flight",
-            "source_clause_index": 2,
-        }
-    ]
-
-
-def test_retrieval_planning_uses_ordinals_and_one_requirement_query_turns() -> None:
+def test_retrieval_planner_is_one_structured_batch_for_many_requirements() -> None:
     requirements = [
-        _requirement(
-            "req_host_owned_build",
-            "vehicle.build",
-            "build a spacecraft",
-            "build the spacecraft",
-        ),
-        _requirement(
-            "req_host_owned_launch",
-            "vehicle.launch",
-            "launch the completed spacecraft",
-            "launch the spacecraft",
-        ),
+        {"requirement_id": "req-build"},
+        {"requirement_id": "req-launch"},
     ]
-    router = _SmallTextRouter(
-        [
-            "edge: 1 -> 2",
-            (
-                "query: minecraft mod spacecraft assembly source\n"
-                "query: fabric vehicle construction implementation\n"
-                "query: github minecraft modular vehicle build"
-            ),
-            (
-                "query: minecraft mod spacecraft launch source\n"
-                "query: fabric vehicle launch mechanic implementation\n"
-                "query: github minecraft vehicle flight transition"
-            ),
+    payload = {
+        "requirements": [
+            {
+                "requirement_id": "req-build",
+                "depends_on": [],
+                "search_queries": [
+                    "minecraft spacecraft assembly source",
+                    "minecraft vehicle construction implementation",
+                ],
+            },
+            {
+                "requirement_id": "req-launch",
+                "depends_on": ["req-build"],
+                "search_queries": [
+                    "minecraft spacecraft launch source",
+                    "minecraft vehicle flight implementation",
+                ],
+            },
         ]
-    )
+    }
+    router = _StructuredRouter({"plan_requirement_retrieval": payload})
 
-    payload = planning_authority._call_retrieval_planner(
+    raw = planning_authority._call_retrieval_planner(
         router,
         "Build a spacecraft, then launch it.",
         requirements,
@@ -280,78 +177,91 @@ def test_retrieval_planning_uses_ordinals_and_one_requirement_query_turns() -> N
     normalized = retrieval._normalize_retrieval_plan(
         "Build a spacecraft, then launch it.",
         requirements,
-        payload,
+        raw,
     )
 
-    assert router.native_attempts == 0
-    assert payload["_host_model_turns"] == 3
-    assert normalized["req_host_owned_build"]["depends_on"] == []
-    assert normalized["req_host_owned_launch"]["depends_on"] == ["req_host_owned_build"]
-    assert all(len(item["search_queries"]) == 3 for item in normalized.values())
-    rendered_messages = "\n".join(
-        message["content"]
-        for call in router.calls
-        for message in call["messages"]
-        if message["role"] == "user"
-    )
-    assert "req_host_owned_build" not in rendered_messages
-    assert "req_host_owned_launch" not in rendered_messages
-    assert "### 1" in router.calls[0]["messages"][1]["content"]
-    assert "### 2" in router.calls[0]["messages"][1]["content"]
-    for call in router.calls:
-        kwargs = call["kwargs"]
-        assert kwargs["response_format"] == "text"
-        assert kwargs["response_schema"] is None
-        assert kwargs["enable_tools"] is False
+    assert len(router.calls) == 1
+    assert router.calls[0]["tool_name"] == "plan_requirement_retrieval"
+    assert router.text_calls == 0
+    assert normalized["req-build"]["depends_on"] == []
+    assert normalized["req-launch"]["depends_on"] == ["req-build"]
+    assert len(normalized["req-build"]["search_queries"]) == 2
+    assert len(normalized["req-launch"]["search_queries"]) == 2
 
 
-def test_full_authority_builds_structured_catalog_without_model_json() -> None:
-    router = _SmallTextRouter(
-        [
-            "leaf: the player gathers crystals",
-            _semantic_detail("resource.gathering"),
-            (
-                "query: minecraft crystal gathering mod source\n"
-                "query: fabric collectible resource implementation\n"
-                "query: github minecraft gathering mechanic"
-            ),
-        ]
-    )
+def test_retrieval_schema_requires_exact_requirement_cardinality() -> None:
+    schema = retrieval._retrieval_plan_schema(["req-a", "req-b", "req-c"])
+    requirements = schema["properties"]["requirements"]
 
-    catalog = planning_authority.build_authoritative_request_catalog(
-        "Players gather crystals.",
-        router,
-    )
-
-    assert router.native_attempts == 0
-    assert len(router.calls) == 3
-    assert len(catalog["requirements"]) == 1
-    requirement = catalog["requirements"][0]
-    assert requirement["capability"] == "resource.gathering"
-    assert len(requirement["search_queries"]) == 3
-    audit = catalog["semantic_audit"]
-    assert audit["normal_model_turns"] == 3
-    assert audit["semantic_model_turns"] == 2
-    assert audit["semantic_discovery_model_turns"] == 1
-    assert audit["semantic_detail_model_turns"] == 1
-    assert audit["retrieval_model_turns"] == 1
-    assert audit["max_clauses_per_model_turn"] == 1
-    assert audit["max_semantic_leaves_per_detail_turn"] == 1
-    assert audit["source_anchor_owner"] == "host"
-    assert audit["max_requirements_per_query_turn"] == 1
-    assert audit["model_owned_requirement_ids"] is False
-    assert audit["model_generated_planning_json"] is False
+    assert requirements["minItems"] == 3
+    assert requirements["maxItems"] == 3
+    requirement_id = requirements["items"]["properties"]["requirement_id"]
+    assert requirement_id["enum"] == ["req-a", "req-b", "req-c"]
 
 
-def test_query_parser_accepts_simple_numbered_or_bulleted_lines() -> None:
-    queries = planning_authority._parse_query_lines(
-        "1. minecraft mod crystal source\n- fabric collectible implementation"
-    )
-
-    assert queries == [
-        "minecraft mod crystal source",
-        "fabric collectible implementation",
+def test_retrieval_normalizer_rejects_missing_requirement() -> None:
+    requirements = [
+        {"requirement_id": "req-a"},
+        {"requirement_id": "req-b"},
     ]
+    payload = {
+        "requirements": [
+            {
+                "requirement_id": "req-a",
+                "depends_on": [],
+                "search_queries": [
+                    "minecraft crystal source",
+                    "minecraft crystal implementation",
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="omitted requirements"):
+        retrieval._normalize_retrieval_plan("request", requirements, payload)
+
+
+def test_retrieval_normalizer_rejects_dependency_cycles() -> None:
+    requirements = [
+        {"requirement_id": "req-a"},
+        {"requirement_id": "req-b"},
+    ]
+    payload = {
+        "requirements": [
+            {
+                "requirement_id": "req-a",
+                "depends_on": ["req-b"],
+                "search_queries": [
+                    "minecraft crystal source",
+                    "minecraft crystal implementation",
+                ],
+            },
+            {
+                "requirement_id": "req-b",
+                "depends_on": ["req-a"],
+                "search_queries": [
+                    "minecraft trade source",
+                    "minecraft trade implementation",
+                ],
+            },
+        ]
+    }
+
+    with pytest.raises(ValueError, match="cycle"):
+        retrieval._normalize_retrieval_plan("request", requirements, payload)
+
+
+def test_semantic_schema_keeps_host_clause_index_bounded() -> None:
+    schema = semantic._semantic_schema(7)
+    source_index = schema["properties"]["requirements"]["items"]["properties"][
+        "source_clause_index"
+    ]
+
+    assert source_index == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 7,
+    }
 
 
 def test_exact_logged_qwen_parser_failure_uses_bounded_argument_fallback() -> None:
