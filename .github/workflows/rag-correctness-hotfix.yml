@@ -1,0 +1,338 @@
+name: RAG correctness hotfix
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/rag-correctness-hotfix.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rag-correctness-hotfix
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Apply reviewed small-model architecture refactor
+        run: |
+          python -m pip install --quiet PyYAML
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          workflow = yaml.safe_load(Path('.github/workflows/native-rag-protocol-refactor.yml').read_text(encoding='utf-8'))
+          wanted = {
+              'Move bounded design work to schema-constrained non-thinking path',
+              'Tighten retrieval admission before evidence fusion',
+              'Update regression contract for structured design',
+          }
+          steps = workflow['jobs']['refactor']['steps']
+          found = set()
+          for step in steps:
+              name = step.get('name') if isinstance(step, dict) else None
+              if name not in wanted:
+                  continue
+              subprocess.run(step['run'], shell=True, executable='/bin/bash', check=True)
+              found.add(name)
+          missing = wanted - found
+          if missing:
+              raise SystemExit(f'missing reviewed refactor steps: {sorted(missing)}')
+          PY
+
+      - name: Fail closed on incomplete evidence and remove model JSON repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+              i = text.index(start)
+              j = text.index(end, i)
+              return text[:i] + replacement.rstrip() + '\n\n\n' + text[j:]
+
+          rag_path = Path('minecraft_mod_ai/agentic_pre_design_rag.py')
+          text = rag_path.read_text(encoding='utf-8')
+          for old, new in (
+              ('_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v3"', '_DOMAIN_CHECKPOINT_SCHEMA = "mmm/research-domain-checkpoint-v6"'),
+              ('_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-host-completion-v3"', '_PAGE_PROTOCOL_SCHEMA = "mmm/research-page-host-completion-v4"'),
+              ('_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v3"', '_SYNTHESIS_PROTOCOL_SCHEMA = "mmm/research-hierarchical-synthesis-v4"'),
+          ):
+              if old not in text:
+                  raise SystemExit(f'expected RAG schema marker missing: {old}')
+              text = text.replace(old, new, 1)
+
+          for old, new in (
+              ('_MAX_INITIAL_RESEARCH_QUERIES = 24', '_MAX_INITIAL_RESEARCH_QUERIES = 36'),
+              ('_MAX_TOTAL_RESEARCH_QUERIES = 36', '_MAX_TOTAL_RESEARCH_QUERIES = 60'),
+              ('_MAX_CORRECTIVE_ROUNDS = 1', '_MAX_CORRECTIVE_ROUNDS = 2'),
+              ('_MAX_CORRECTIVE_QUERIES_PER_ROUND = 8', '_MAX_CORRECTIVE_QUERIES_PER_ROUND = 12'),
+          ):
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          text = replace_between(
+              text,
+              'def _generate_bounded(',
+              'def _structured_output_failure(',
+              '''def _normalize_bounded_json_text(raw_text: str) -> str:
+              """Recover one embedded/fenced JSON value locally without another model turn."""
+              text = str(raw_text or "").strip()
+              if text.startswith("```"):
+                  lines = text.splitlines()
+                  if lines and lines[0].strip().startswith("```"):
+                      lines = lines[1:]
+                  if lines and lines[-1].strip() == "```":
+                      lines = lines[:-1]
+                  text = "\\n".join(lines).strip()
+              decoder = json.JSONDecoder()
+              positions = [0]
+              positions.extend(index for index, char in enumerate(text) if char in "{[" and index)
+              seen: set[int] = set()
+              for position in positions:
+                  if position in seen:
+                      continue
+                  seen.add(position)
+                  try:
+                      value, _end = decoder.raw_decode(text[position:])
+                  except json.JSONDecodeError:
+                      continue
+                  if isinstance(value, (Mapping, list)):
+                      return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+              raise ValueError("no recoverable JSON object or array in bounded model output")
+
+
+          def _generate_bounded(
+              agentic_module: Any,
+              router: Any,
+              *,
+              messages: list[dict[str, str]],
+              response_schema: Mapping[str, Any],
+              parser: Any,
+              progress_label: str,
+          ) -> Any:
+              """One model attempt; deterministic host normalization; then fail closed."""
+              _emit_research_progress("model_attempt", label=progress_label, attempt=1)
+              raw = ""
+              try:
+                  raw = router.generate_text(
+                      "planner",
+                      messages,
+                      response_format="json",
+                      response_schema=response_schema,
+                      tool_stage="research",
+                      enable_tools=False,
+                  )
+              except Exception as model_error:
+                  _emit_bounded_failure(
+                      "bounded_model_failure",
+                      progress_label=progress_label,
+                      raw_output=raw,
+                      error=model_error,
+                  )
+                  raise
+
+              try:
+                  return parser(raw)
+              except Exception as first_error:
+                  _emit_bounded_failure(
+                      "bounded_parse_failure",
+                      progress_label=progress_label,
+                      raw_output=raw,
+                      error=first_error,
+                  )
+                  if not isinstance(first_error, agentic_module.SpecValidationError) and not _structured_output_failure(first_error):
+                      raise
+
+              try:
+                  normalized = _normalize_bounded_json_text(raw)
+                  parsed = parser(normalized)
+              except Exception as local_error:
+                  _emit_bounded_failure(
+                      "bounded_host_normalization_failure",
+                      progress_label=progress_label,
+                      raw_output=raw,
+                      error=local_error,
+                  )
+                  raise _BoundedResearchOutputError(
+                      "bounded JSON failed after one model attempt and deterministic host normalization: "
+                      f"{type(local_error).__name__}: {local_error}"
+                  ) from local_error
+
+              _emit_research_progress(
+                  "bounded_host_normalized",
+                  label=progress_label,
+                  attempt=1,
+                  raw_output_sha256=_sha256_text(raw),
+              )
+              return parsed'''
+          )
+          rag_path.write_text(text, encoding='utf-8')
+
+          corrective_path = Path('minecraft_mod_ai/pre_design_rag_corrective.py')
+          text = corrective_path.read_text(encoding='utf-8')
+          if '_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"' not in text:
+              raise SystemExit('corrective quality schema marker missing')
+          text = text.replace(
+              '_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v3"',
+              '_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v4"',
+              1,
+          )
+
+          marker = '\n\ndef _corrective_round_limit() -> int:'
+          helper = '''
+
+          def _round_is_terminally_sufficient(
+              summary: Mapping[str, Any],
+              *,
+              page_gaps: Any = (),
+              support_rejections: Any = (),
+          ) -> bool:
+              """Verified claims are necessary but unresolved evidence obligations still block success."""
+              return (
+                  _round_has_verified_claims(summary)
+                  and not _stable_text(page_gaps)
+                  and not _stable_text(support_rejections)
+              )
+          '''
+          if marker not in text:
+              raise SystemExit('corrective helper insertion marker missing')
+          text = text.replace(marker, helper.rstrip() + marker, 1)
+
+          old_close = 'if _round_has_verified_claims(accumulated_summary):\n                fixed_point = _VERIFIED_FIXED_POINT\n                break'
+          new_close = 'if _round_is_terminally_sufficient(\n                accumulated_summary,\n                page_gaps=active_page_gaps,\n                support_rejections=active_support_rejections,\n            ):\n                fixed_point = _VERIFIED_FIXED_POINT\n                break'
+          if old_close not in text:
+              raise SystemExit('unsafe any-claim terminal condition missing')
+          text = text.replace(old_close, new_close, 1)
+
+          old_gap = 'summary["gaps"] = [] if claims else list(active_page_gaps)'
+          if old_gap not in text:
+              raise SystemExit('gap-hiding assignment missing')
+          text = text.replace(old_gap, 'summary["gaps"] = list(active_page_gaps)', 1)
+
+          old_reason = 'if not claims and summary.get("gaps"):\n            reasons.append("unresolved evidence gaps remain")'
+          new_reason = 'if summary.get("gaps"):\n            reasons.append("unresolved evidence gaps remain")\n        if active_support_rejections:\n            reasons.append("unresolved support rejections remain")'
+          if old_reason not in text:
+              raise SystemExit('old gap reason condition missing')
+          text = text.replace(old_reason, new_reason, 1)
+          text = text.replace(
+              '"gap_semantics": "page_local_diagnostic_not_domain_blocker"',
+              '"gap_semantics": "unresolved_page_or_support_gap_blocks_domain_sufficiency"',
+              1,
+          )
+          text = text.replace(
+              '"schema_version": "mmm/research-domain-checkpoint-v5"',
+              '"schema_version": "mmm/research-domain-checkpoint-v6"',
+              1,
+          )
+          if '"_round_is_terminally_sufficient",' not in text:
+              text = text.replace(
+                  '"_round_has_verified_claims",\n]',
+                  '"_round_has_verified_claims",\n    "_round_is_terminally_sufficient",\n]',
+                  1,
+              )
+          corrective_path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Fix realistic fixture and add regression tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          quality = Path('tests/test_pre_design_rag_quality_contract.py')
+          text = quality.read_text(encoding='utf-8')
+          old = '"content": "persistent colony saved state implementation",'
+          new = '"content": "Minecraft Fabric persistent colony saved state implementation",'
+          if old not in text:
+              raise SystemExit('quality fixture marker missing')
+          quality.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          Path('tests/test_rag_correctness_hotfix.py').write_text('''from __future__ import annotations
+
+import json
+
+from minecraft_mod_ai import agentic_pre_design_rag as rag
+from minecraft_mod_ai import pre_design_rag_corrective as corrective
+
+
+def test_verified_claim_does_not_override_unresolved_gap_or_rejection():
+    summary = {"claims": [{"claim": "supported"}]}
+    assert corrective._round_has_verified_claims(summary) is True
+    assert corrective._round_is_terminally_sufficient(summary) is True
+    assert corrective._round_is_terminally_sufficient(
+        summary, page_gaps=["missing persistence evidence"]
+    ) is False
+    assert corrective._round_is_terminally_sufficient(
+        summary, support_rejections=["candidate unsupported"]
+    ) is False
+
+
+def test_bounded_json_fence_is_recovered_without_second_model_call():
+    class Agentic:
+        class SpecValidationError(ValueError):
+            pass
+
+    class Router:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_text(self, *args, **kwargs):
+            self.calls += 1
+            return "```json\\n{\\"queries\\":[\\"minecraft colony persistence\\"]}\\n```"
+
+    router = Router()
+    value = rag._generate_bounded(
+        Agentic,
+        router,
+        messages=[{"role": "user", "content": "x"}],
+        response_schema={"type": "object"},
+        parser=json.loads,
+        progress_label="regression",
+    )
+    assert value == {"queries": ["minecraft colony persistence"]}
+    assert router.calls == 1
+
+
+def test_checkpoint_protocol_versions_invalidate_old_success_cache():
+    assert rag._DOMAIN_CHECKPOINT_SCHEMA.endswith("-v6")
+    assert rag._PAGE_PROTOCOL_SCHEMA.endswith("-v4")
+    assert corrective._QUALITY_SCHEMA.endswith("-v4")
+''', encoding='utf-8')
+          PY
+
+      - name: Validate patched planner and RAG
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          tests=(
+            tests/test_agentic_research_game_design.py
+            tests/test_pre_design_rag_quality_contract.py
+            tests/test_rag_correctness_hotfix.py
+          )
+          for optional in tests/test_agentic_pre_design_rag.py tests/test_pre_design_rag_fusion.py; do
+            if [ -f "$optional" ]; then tests+=("$optional"); fi
+          done
+          python -m pytest -q "${tests[@]}"
+
+      - name: Commit tested source fix to main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/rag-correctness-hotfix.yml
+          git rm -f .github/workflows/native-rag-protocol-refactor.yml
+          git add minecraft_mod_ai/agentic_research_game_design.py minecraft_mod_ai/agentic_pre_design_rag.py minecraft_mod_ai/pre_design_rag_corrective.py minecraft_mod_ai/pre_design_rag_fusion.py tests/test_agentic_research_game_design.py tests/test_pre_design_rag_quality_contract.py tests/test_rag_correctness_hotfix.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fix: fail closed on incomplete pre-design RAG'
+          git push origin HEAD:main
