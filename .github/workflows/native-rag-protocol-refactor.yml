@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   refactor:
-    if: contains(github.event.head_commit.message, 'chore: run native RAG protocol refactor')
+    if: "contains(github.event.head_commit.message, 'chore: run native RAG protocol refactor')"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
