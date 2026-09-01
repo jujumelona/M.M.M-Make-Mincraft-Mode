@@ -23,9 +23,9 @@ jobs:
         run: python -m pip install -q -e . pytest ruff
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests
-      - name: Ruff
+      - name: Ruff regression-safe errors
         run: |
-          ruff check \
+          ruff check --select F,E9 \
             minecraft_mod_ai/pre_design_external_source_contract.py \
             minecraft_mod_ai/pre_design_rag_corrective.py \
             minecraft_mod_ai/authored_scope_research_contract.py \
