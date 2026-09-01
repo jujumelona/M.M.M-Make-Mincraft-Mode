@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """CodePlan-style implementation graph, artifact plan and acceptance boundary.
 
-Gameplay requirement causality is propagated into implementation dependencies in addition to
-local consumes/provides edges. Task-local integrity checks are separated from user-facing
-acceptance. Architecture-derived resources are explicit artifact obligations rather than an
-empty assets list or an implicit Java-only plan.
+Requirement causality is compiled into the same consumes/provides dataflow used by the
+implementation graph. There is one DAG-edge authority: ``_bind_consumes_dependencies``.
+Task-local integrity checks are separated from user-facing acceptance. Architecture-derived
+resources are explicit artifact obligations rather than an empty assets list or an implicit
+Java-only plan.
 """
 
 from collections.abc import Mapping, Sequence
@@ -20,11 +21,17 @@ _INSTALLED = False
 _REQUIREMENT_DEPS: ContextVar[dict[str, tuple[str, ...]]] = ContextVar(
     "mmm_requirement_dependency_context", default={}
 )
+_REQUIREMENT_PROVIDES: ContextVar[dict[str, tuple[str, ...]]] = ContextVar(
+    "mmm_requirement_provides_context", default={}
+)
 
 
 def _capture_requirement_graph(catalog: Mapping[str, Any]) -> None:
+    """Capture authoritative requirement causality and its semantic dataflow tokens."""
+
     requirements = catalog.get("requirements")
     graph: dict[str, tuple[str, ...]] = {}
+    provides: dict[str, tuple[str, ...]] = {}
     if isinstance(requirements, list):
         for raw in requirements:
             if not isinstance(raw, Mapping):
@@ -33,16 +40,29 @@ def _capture_requirement_graph(catalog: Mapping[str, Any]) -> None:
             if not req_id:
                 continue
             values = raw.get("depends_on")
-            deps = tuple(
-                str(value).strip()
-                for value in values
-                if str(value).strip()
-            ) if isinstance(values, list) else ()
+            deps = (
+                tuple(
+                    str(value).strip()
+                    for value in values
+                    if str(value).strip()
+                )
+                if isinstance(values, list)
+                else ()
+            )
             graph[req_id] = tuple(dict.fromkeys(deps))
+            semantic_provides = tuple(_planning._strings(raw.get("provides")))
+            if not semantic_provides:
+                capability = str(raw.get("capability") or "").strip()
+                if capability:
+                    semantic_provides = (_planning._canonical_capability(capability),)
+            provides[req_id] = tuple(dict.fromkeys(semantic_provides))
     _REQUIREMENT_DEPS.set(graph)
+    _REQUIREMENT_PROVIDES.set(provides)
 
 
-def _normalize_ownership(game_design: Mapping[str, Any], ownership: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_ownership(
+    game_design: Mapping[str, Any], ownership: Mapping[str, Any]
+) -> dict[str, Any]:
     value = dict(ownership)
     raw_module = str(value.get("module_id") or ":").strip()
     value["gradle_project_path"] = (
@@ -75,7 +95,11 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
         "build_config": "build_configuration",
         "loader_module": "loader_module_binding",
     }
-    for raw in task.get("owned_anchors", []) if isinstance(task.get("owned_anchors"), list) else []:
+    for raw in (
+        task.get("owned_anchors", [])
+        if isinstance(task.get("owned_anchors"), list)
+        else []
+    ):
         if not isinstance(raw, Mapping):
             continue
         anchor_kind = str(raw.get("kind") or "").strip()
@@ -104,11 +128,17 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     if "needs_datagen" in predicates:
         extra.append(("generated_data_resource", "datagen output and reference closure"))
     if "needs_client_render" in predicates:
-        extra.append(("client_visual_or_ui_resource", "client model/texture/UI resource contract"))
+        extra.append(
+            ("client_visual_or_ui_resource", "client model/texture/UI resource contract")
+        )
     if "needs_worldgen" in predicates:
-        extra.append(("worldgen_data", "world-generation configured/placed/binding data"))
+        extra.append(
+            ("worldgen_data", "world-generation configured/placed/binding data")
+        )
     if "needs_persistence" in predicates:
-        extra.append(("persistence_schema", "serialized state schema and compatibility contract"))
+        extra.append(
+            ("persistence_schema", "serialized state schema and compatibility contract")
+        )
     if "needs_network" in predicates:
         extra.append(("network_protocol", "payload/codec/validation contract"))
     for artifact_kind, purpose in extra:
@@ -133,28 +163,6 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _task_terminals(tasks: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
-    groups: dict[str, list[str]] = {}
-    by_id: dict[str, Mapping[str, Any]] = {}
-    for task in tasks:
-        task_id = str(task.get("task_id") or "")
-        by_id[task_id] = task
-        refs = list(_planning._strings(task.get("requirement_refs")))
-        for ref in refs:
-            groups.setdefault(ref, []).append(task_id)
-    terminals: dict[str, list[str]] = {}
-    for req, ids in groups.items():
-        id_set = set(ids)
-        consumed_as_dependency = {
-            dep
-            for task_id in ids
-            for dep in _planning._strings(by_id[task_id].get("depends_on"))
-            if dep in id_set
-        }
-        terminals[req] = [task_id for task_id in ids if task_id not in consumed_as_dependency]
-    return terminals
-
-
 def _task_roots(tasks: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     by_id = {str(task.get("task_id") or ""): task for task in tasks}
@@ -168,10 +176,89 @@ def _task_roots(tasks: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
             task_id
             for task_id in ids
             if not any(
-                dep in id_set for dep in _planning._strings(by_id[task_id].get("depends_on"))
+                dep in id_set
+                for dep in _planning._strings(by_id[task_id].get("depends_on"))
             )
         ]
     return roots
+
+
+def _project_requirement_dataflow(
+    tasks: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Project requirement causality into consumes, then let one binder own DAG edges.
+
+    A requirement with implementation tasks exposes its approved semantic ``provides``
+    through those tasks. A retained requirement has no task and therefore its approved
+    provides are host-root inputs. Child requirement roots consume the parent's approved
+    provides. The ordinary dataflow binder then creates exactly the dependency edges that
+    the validator independently reconstructs; no second edge compiler exists.
+    """
+
+    result = [dict(task) for task in tasks]
+    req_deps = dict(_REQUIREMENT_DEPS.get())
+    req_provides = dict(_REQUIREMENT_PROVIDES.get())
+    roots = _task_roots(result)
+    task_requirements = {
+        ref
+        for task in result
+        for ref in _planning._strings(task.get("requirement_refs"))
+    }
+    root_provides = {"target:frozen"}
+    for req_id, provided in req_provides.items():
+        if req_id not in task_requirements:
+            root_provides.update(provided)
+
+    by_id = {str(task.get("task_id") or ""): task for task in result}
+    for req_id, parents in req_deps.items():
+        for root_id in roots.get(req_id, ()): 
+            task = by_id[root_id]
+            consumes = list(_planning._strings(task.get("consumes")))
+            for parent_req in parents:
+                parent_tokens = req_provides.get(parent_req, ())
+                if not parent_tokens:
+                    raise _planning.EvidencePlanError(
+                        f"Requirement {req_id} depends on {parent_req} without an approved provide token."
+                    )
+                for token in parent_tokens:
+                    if token not in consumes:
+                        consumes.append(token)
+            task["consumes"] = consumes
+            task["task_sha256"] = ""
+            task["task_sha256"] = _planning._hash_without(task, "task_sha256")
+
+    bound = [
+        dict(task)
+        for task in _planning._bind_consumes_dependencies(
+            result,
+            root_provides=root_provides,
+        )
+    ]
+    provider_requirement = {
+        str(task.get("task_id") or ""): next(
+            iter(_planning._strings(task.get("requirement_refs"))), ""
+        )
+        for task in bound
+    }
+    for task in bound:
+        req_refs = tuple(_planning._strings(task.get("requirement_refs")))
+        req_id = req_refs[0] if req_refs else ""
+        parent_requirements = set(req_deps.get(req_id, ()))
+        reasons: dict[str, dict[str, str]] = {}
+        for dep in _planning._strings(task.get("depends_on")):
+            parent_req = provider_requirement.get(dep, "")
+            if parent_req in parent_requirements:
+                reasons[dep] = {
+                    "kind": "requirement_dataflow",
+                    "requirement_ref": parent_req,
+                }
+            else:
+                reasons[dep] = {"kind": "implementation_dataflow"}
+        task["dependency_reasons"] = reasons
+        task["task_sha256"] = ""
+        task["task_sha256"] = _planning._hash_without(task, "task_sha256")
+    _planning._topological(bound)
+    return tuple(bound)
 
 
 def _postprocess_tasks(
@@ -190,7 +277,9 @@ def _postprocess_tasks(
         req_refs = list(_planning._strings(task.get("requirement_refs")))
         req = req_refs[0] if req_refs else ""
         legacy_acceptance = list(_planning._strings(task.get("acceptance")))
-        public = [item for item in legacy_acceptance if _planning._is_public_acceptance(item)]
+        public = [
+            item for item in legacy_acceptance if _planning._is_public_acceptance(item)
+        ]
         internal = [item for item in legacy_acceptance if item not in public]
         if not internal:
             internal = [
@@ -198,8 +287,6 @@ def _postprocess_tasks(
             ]
         task["internal_invariants"] = internal
         task["public_acceptance"] = public
-        # Backward-compatible field is deliberately internal-only so serializer consumers
-        # cannot accidentally mix task integrity with player-facing release acceptance.
         task["acceptance"] = internal
         gap = gap_by_req.get(req, {})
         gap_acceptance = list(_planning._strings(gap.get("acceptance")))
@@ -216,62 +303,47 @@ def _postprocess_tasks(
         task["impact_domains"] = list(
             dict.fromkeys(
                 [
-                    "source" if item.get("kind") == "source_code" else
-                    "resources" if "resource" in str(item.get("kind")) or "worldgen" in str(item.get("kind")) else
-                    "state" if item.get("kind") == "persistence_schema" else
-                    "network" if item.get("kind") == "network_protocol" else
-                    "build" if "build" in str(item.get("kind")) or "loader" in str(item.get("kind")) else
-                    "verification" if item.get("kind") == "verification_artifact" else
-                    "registry"
+                    "source"
+                    if item.get("kind") == "source_code"
+                    else "resources"
+                    if "resource" in str(item.get("kind"))
+                    or "worldgen" in str(item.get("kind"))
+                    else "state"
+                    if item.get("kind") == "persistence_schema"
+                    else "network"
+                    if item.get("kind") == "network_protocol"
+                    else "build"
+                    if "build" in str(item.get("kind"))
+                    or "loader" in str(item.get("kind"))
+                    else "verification"
+                    if item.get("kind") == "verification_artifact"
+                    else "registry"
                     for item in task["artifact_obligations"]
                 ]
             )
         )
-        task["dependency_reasons"] = {
-            dep: {"kind": "implementation_dataflow"}
-            for dep in _planning._strings(task.get("depends_on"))
-        }
         task["task_sha256"] = ""
         task["task_sha256"] = _planning._hash_without(task, "task_sha256")
         result.append(task)
 
-    req_deps = dict(_REQUIREMENT_DEPS.get())
-    terminals = _task_terminals(result)
-    roots = _task_roots(result)
-    by_id = {str(task["task_id"]): task for task in result}
-    for req, parents in req_deps.items():
-        for root_id in roots.get(req, []):
-            task = by_id[root_id]
-            dependencies = list(_planning._strings(task.get("depends_on")))
-            reasons = dict(task.get("dependency_reasons") or {})
-            for parent_req in parents:
-                parent_terminals = terminals.get(parent_req, [])
-                if not parent_terminals:
-                    # A retained parent requirement has no task edge; its component/release
-                    # binding remains the satisfied prerequisite instead of fabricating a task.
-                    continue
-                for parent_task in parent_terminals:
-                    if parent_task not in dependencies:
-                        dependencies.append(parent_task)
-                    reasons[parent_task] = {
-                        "kind": "requirement_causality",
-                        "requirement_ref": parent_req,
-                    }
-            task["depends_on"] = dependencies
-            task["dependency_reasons"] = reasons
-            task["task_sha256"] = ""
-            task["task_sha256"] = _planning._hash_without(task, "task_sha256")
-    _planning._topological(result)
-    return tuple(result)
+    return _project_requirement_dataflow(result)
 
 
-def _artifact_plan(plan: Mapping[str, Any], game_design: Mapping[str, Any]) -> dict[str, Any]:
+def _artifact_plan(
+    plan: Mapping[str, Any], game_design: Mapping[str, Any]
+) -> dict[str, Any]:
     required: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for task in plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []:
+    for task in (
+        plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []
+    ):
         if not isinstance(task, Mapping):
             continue
-        for artifact in task.get("artifact_obligations", []) if isinstance(task.get("artifact_obligations"), list) else []:
+        for artifact in (
+            task.get("artifact_obligations", [])
+            if isinstance(task.get("artifact_obligations"), list)
+            else []
+        ):
             if not isinstance(artifact, Mapping):
                 continue
             artifact_id = str(artifact.get("artifact_id") or "")
@@ -280,15 +352,16 @@ def _artifact_plan(plan: Mapping[str, Any], game_design: Mapping[str, Any]) -> d
             seen.add(artifact_id)
             required.append(dict(artifact))
 
-    supplied_assets = [
-        dict(item)
-        for item in game_design.get("assets", [])
-        if isinstance(item, Mapping)
-    ] if isinstance(game_design.get("assets"), list) else []
+    supplied_assets = (
+        [dict(item) for item in game_design.get("assets", []) if isinstance(item, Mapping)]
+        if isinstance(game_design.get("assets"), list)
+        else []
+    )
     resource_required = [
         item
         for item in required
-        if item.get("kind") in {
+        if item.get("kind")
+        in {
             "data_or_client_resource",
             "generated_data_resource",
             "client_visual_or_ui_resource",
@@ -318,7 +391,9 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
     alternatives: list[dict[str, Any]] = []
     obligations: list[dict[str, Any]] = []
     seen_alt: set[tuple[str, str]] = set()
-    for task in plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []:
+    for task in (
+        plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []
+    ):
         if not isinstance(task, Mapping):
             continue
         refs = list(_planning._strings(task.get("requirement_refs")))
@@ -332,20 +407,28 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                 seen_alt.add(key)
                 alternatives.append(
                     {
-                        "decision_id": _planning._stable_id("design", "menu_screen_contract", key),
+                        "decision_id": _planning._stable_id(
+                            "design", "menu_screen_contract", key
+                        ),
                         "provenance_role": "selected_design_alternative",
                         "requirement_refs": refs,
                         "selection": "menu_screen_contract",
                         "reason": "client-render architecture branch requires an interactive presentation contract",
                     }
                 )
-        for artifact in task.get("artifact_obligations", []) if isinstance(task.get("artifact_obligations"), list) else []:
+        for artifact in (
+            task.get("artifact_obligations", [])
+            if isinstance(task.get("artifact_obligations"), list)
+            else []
+        ):
             if isinstance(artifact, Mapping):
                 obligations.append(
                     {
                         "obligation_id": artifact.get("artifact_id"),
                         "provenance_role": "implementation_obligation",
-                        "requirement_refs": list(artifact.get("requirement_refs") or refs),
+                        "requirement_refs": list(
+                            artifact.get("requirement_refs") or refs
+                        ),
                         "kind": artifact.get("kind"),
                         "reason": "required by the selected task architecture",
                     }
@@ -364,7 +447,9 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
 def _acceptance_boundary(plan: Mapping[str, Any]) -> dict[str, Any]:
     public = []
     request = plan.get("request_catalog")
-    requirements = request.get("requirements", []) if isinstance(request, Mapping) else []
+    requirements = (
+        request.get("requirements", []) if isinstance(request, Mapping) else []
+    )
     for req in requirements if isinstance(requirements, list) else []:
         if not isinstance(req, Mapping):
             continue
@@ -376,7 +461,9 @@ def _acceptance_boundary(plan: Mapping[str, Any]) -> dict[str, Any]:
             }
         )
     internal = []
-    for task in plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []:
+    for task in (
+        plan.get("tasks", []) if isinstance(plan.get("tasks"), list) else []
+    ):
         if not isinstance(task, Mapping):
             continue
         internal.append(
@@ -399,55 +486,68 @@ def install_task_artifact_contract() -> None:
 
     current_catalog = _planning.build_request_catalog
     if not getattr(current_catalog, "_mmm_capture_requirement_causality", False):
+
         @wraps(current_catalog)
         def build_request_catalog(*args: Any, **kwargs: Any):
             catalog = current_catalog(*args, **kwargs)
             if isinstance(catalog, Mapping):
                 _capture_requirement_graph(catalog)
             return catalog
+
         build_request_catalog._mmm_capture_requirement_causality = True
         _planning.build_request_catalog = build_request_catalog
 
     current_ownership = _planning._ownership_context
     if not getattr(current_ownership, "_mmm_logical_module_identity", False):
+
         @wraps(current_ownership)
         def ownership(game_design: Mapping[str, Any]):
             return _normalize_ownership(game_design, current_ownership(game_design))
+
         ownership._mmm_logical_module_identity = True
         _planning._ownership_context = ownership
 
     current_tasks = _planning._compile_tasks
     if not getattr(current_tasks, "_mmm_codeplan_task_graph", False):
+
         @wraps(current_tasks)
         def compile_tasks(gaps, reuse, target, branches, ownership):
             return _postprocess_tasks(
                 current_tasks(gaps, reuse, target, branches, ownership), gaps
             )
+
         compile_tasks._mmm_codeplan_task_graph = True
         _planning._compile_tasks = compile_tasks
 
     current_validate = _planning.validate_evidence_first_plan
     if not getattr(current_validate, "_mmm_requirement_context_validation", False):
+
         @wraps(current_validate)
         def validate(plan: Mapping[str, Any], *, prompt: str | None = None):
             request = plan.get("request_catalog")
-            token = None
+            previous_deps = _REQUIREMENT_DEPS.get()
+            previous_provides = _REQUIREMENT_PROVIDES.get()
+            captured = False
             if isinstance(request, Mapping):
-                previous = _REQUIREMENT_DEPS.get()
                 _capture_requirement_graph(request)
-                token = previous
+                captured = True
             try:
                 return current_validate(plan, prompt=prompt)
             finally:
-                if token is not None:
-                    _REQUIREMENT_DEPS.set(token)
+                if captured:
+                    _REQUIREMENT_DEPS.set(previous_deps)
+                    _REQUIREMENT_PROVIDES.set(previous_provides)
+
         validate._mmm_requirement_context_validation = True
         _planning.validate_evidence_first_plan = validate
 
     current_compile = _planning.compile_evidence_first_plan
     if not getattr(current_compile, "_mmm_artifact_acceptance_boundary", False):
+
         @wraps(current_compile)
-        def compile_plan(prompt: str, game_design: Mapping[str, Any], **kwargs: Any):
+        def compile_plan(
+            prompt: str, game_design: Mapping[str, Any], **kwargs: Any
+        ):
             plan = dict(current_compile(prompt, game_design, **kwargs))
             plan["artifact_plan"] = _artifact_plan(plan, game_design)
             plan["design_resolution"] = _design_resolution(plan)
@@ -456,6 +556,7 @@ def install_task_artifact_contract() -> None:
             plan["plan_sha256"] = _planning._hash_without(plan, "plan_sha256")
             _planning.validate_evidence_first_plan(plan, prompt=prompt)
             return plan
+
         compile_plan._mmm_artifact_acceptance_boundary = True
         _planning.compile_evidence_first_plan = compile_plan
 
