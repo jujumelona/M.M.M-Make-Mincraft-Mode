@@ -444,7 +444,6 @@ def _install_bidirectional_relation_search(rag_index_module: Any) -> None:
 
 def install() -> None:
     from . import (
-        agentic_pre_design_rag,
         custom_generation_search_contract,
         custom_module_generator,
         production_tools,
@@ -454,7 +453,6 @@ def install() -> None:
     _install_anchor_compaction(custom_module_generator)
     _install_structural_repair_bypass(custom_generation_search_contract)
     _install_explicit_semantic_index_policy(production_tools)
-    _install_pre_design_rag_cascade(agentic_pre_design_rag)
     _install_bidirectional_relation_search(rag_index)
 
 
