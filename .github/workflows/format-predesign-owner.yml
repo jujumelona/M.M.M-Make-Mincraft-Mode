@@ -1,0 +1,39 @@
+name: One-shot Format Pre-design Owner
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/format-predesign-owner.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Format only pre-design owner
+        run: |
+          python -m pip install 'ruff==0.16.5'
+          python -m ruff format minecraft_mod_ai/pre_design_grounded_rag.py
+          python -m ruff check minecraft_mod_ai/pre_design_grounded_rag.py --select F,E7,E9 --fix
+          python -m ruff check minecraft_mod_ai/pre_design_grounded_rag.py --select F,E7,E9
+      - name: Commit formatting to main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/pre_design_grounded_rag.py
+          if ! git diff --cached --quiet; then
+            git commit -m 'style: format pre-design grounded RAG owner'
+            git push origin HEAD:main
+          fi
