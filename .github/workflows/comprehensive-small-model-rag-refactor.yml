@@ -1,6 +1,6 @@
 name: Small-model host-owned pre-design redesign
 
-# v2 execution trigger
+# v3 execution trigger
 on:
   push:
     branches: [main]
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   refactor:
-    if: contains(github.event.head_commit.message, 'chore: apply small-model host redesign v2')
+    if: "${{ contains(github.event.head_commit.message, 'chore: apply small-model host redesign v3') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
