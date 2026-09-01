@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-_PROTOCOL = "mmm/small-model-predesign-evidence-v1"
+_PROTOCOL = "mmm/small-model-predesign-evidence-v2"
 _STOP = {
     "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with",
     "minecraft", "fabric", "mod", "mods", "mode", "requested", "user",
@@ -158,6 +158,36 @@ def _load_grounded(document: Mapping[str, Any]) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _source_body_count(evidence: Mapping[str, Any]) -> int:
+    """Count claim-bearing source bodies without trusting a generated envelope."""
+    grounded = evidence.get("grounded_rag")
+    queries = grounded.get("queries") if isinstance(grounded, Mapping) else None
+    count = 0
+    for query in queries if isinstance(queries, list) else []:
+        if not isinstance(query, Mapping):
+            continue
+        records = query.get("evidence_records")
+        for record in records if isinstance(records, list) else []:
+            if not isinstance(record, Mapping):
+                continue
+            if str(record.get("content") or record.get("body") or record.get("text") or "").strip():
+                count += 1
+    return count
+
+
+def _authoritative_requirements(domain: Mapping[str, Any]) -> list[str]:
+    result: list[str] = []
+    for value in domain.get("requirements", ()):
+        text = " ".join(str(value or "").split()).strip()
+        if text and text not in result:
+            result.append(text)
+    if not result:
+        objective = " ".join(str(domain.get("objective") or "").split()).strip()
+        if objective:
+            result.append(objective)
+    return result
+
+
 def _document_receipt(project_rag: Any, document: Mapping[str, Any]) -> dict[str, Any]:
     receipt = getattr(project_rag, "_prompt_document_receipt", None)
     if callable(receipt):
@@ -170,6 +200,7 @@ def _document_receipt(project_rag: Any, document: Mapping[str, Any]) -> dict[str
         "page_count": int(document.get("page_count") or 0),
         "raw_path": str(document.get("raw_path") or ""),
         "pages_path": str(document.get("pages_path") or ""),
+        "model_unit_count": int(document.get("model_unit_count") or 0),
     }
 
 
@@ -188,12 +219,14 @@ def research_document_domain(
 
     working_document = dict(document)
     evidence = _load_grounded(document)
+    source_body_count = _source_body_count(evidence)
     grounded = evidence.get("grounded_rag") if isinstance(evidence, Mapping) else None
-    if isinstance(grounded, Mapping):
+    if source_body_count > 0 and isinstance(grounded, Mapping):
         try:
             from .pre_design_rag_quality_contract import fuse_grounded_domain_evidence
 
             evidence["grounded_rag"] = fuse_grounded_domain_evidence(domain, grounded)
+            source_body_count = _source_body_count(evidence)
             working_document = project_rag._materialize_domain_evidence_document(
                 domain_id, evidence
             )
@@ -204,12 +237,10 @@ def research_document_domain(
         document.clear()
         document.update(working_document)
 
-    projection_is_empty = (
-        "model_unit_count" in working_document
-        and int(working_document.get("model_unit_count") or 0) == 0
-    )
+    model_unit_count = int(working_document.get("model_unit_count") or 0)
+    projection_is_empty = source_body_count == 0 or model_unit_count == 0
     if projection_is_empty:
-        pages = []
+        pages: list[dict[str, Any]] = []
     else:
         try:
             pages = project_rag._read_evidence_pages(working_document)
@@ -218,7 +249,7 @@ def research_document_domain(
 
     claims: list[dict[str, Any]] = []
     diagnostics: list[str] = (
-        ["no_claim_bearing_source_bodies"] if projection_is_empty else []
+        ["no_claim_bearing_source_bodies;model_not_called"] if projection_is_empty else []
     )
     for page in _candidate_pages(pages, domain):
         extracted, page_diagnostics = _extract_page(router, domain=domain, page=page)
@@ -241,6 +272,7 @@ def research_document_domain(
         if str(page.get("page_ref") or "").strip()
     ]
     evidence_status = "supported" if unique else "no_relevant_external_evidence"
+    requirement_fallback = [] if unique else _authoritative_requirements(domain)
     return {
         "domain_id": domain_id,
         "claims": unique,
@@ -251,6 +283,9 @@ def research_document_domain(
         "fixed_point": False,
         "research_mode": "advisory_predesign",
         "research_evidence_status": evidence_status,
+        "authoritative_requirement_fallback": requirement_fallback,
+        "source_body_count": source_body_count,
+        "model_called": bool(pages),
         "page_local_diagnostics": list(dict.fromkeys(diagnostics)),
         "evidence_page_refs": page_refs,
         "evidence_document": _document_receipt(project_rag, working_document),
@@ -264,9 +299,10 @@ def research_document_domain(
             "model_corrective_queries": False,
             "page_local_uncertainty_blocks_design": False,
             "missing_external_evidence_blocks_design": False,
+            "zero_source_body_model_calls": 0,
         },
         "checkpoint": {
-            "schema_version": "mmm/research-domain-checkpoint-v7",
+            "schema_version": "mmm/research-domain-checkpoint-v8",
             "status": "complete",
         },
     }
