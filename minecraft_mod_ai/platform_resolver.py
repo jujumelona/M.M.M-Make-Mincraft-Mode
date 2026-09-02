@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Platform selection DTOs, parsing, and proposal binding.
+
+Actual optimisation lives in platform_evidence_pipeline through the canonical
+platform_selection_pipeline. This module performs no search, retry, or ranking itself.
+"""
+
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -13,27 +19,14 @@ from .platform_catalog import (
     executable_loaders,
     provider_for_loader,
 )
-from .platform_optimizer import (
-    PlatformOptimization,
-    TargetResearchFn,
-    optimize_platform,
-)
+from .platform_evidence_pipeline import PlatformOptimization, TargetResearchFn
 from .spec import PlatformLock, Proposal, SpecValidationError
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
 _ASCII_WORD = r"A-Za-z0-9_"
-_FABRIC_RE = re.compile(
-    rf"(?<![{_ASCII_WORD}])fabric(?![{_ASCII_WORD}])|패브릭",
-    re.IGNORECASE,
-)
-_NEOFORGE_RE = re.compile(
-    rf"(?<![{_ASCII_WORD}])neoforge(?![{_ASCII_WORD}])|네오포지",
-    re.IGNORECASE,
-)
-_FORGE_RE = re.compile(
-    rf"(?<![{_ASCII_WORD}])forge(?![{_ASCII_WORD}])|(?<!네오)포지",
-    re.IGNORECASE,
-)
+_FABRIC_RE = re.compile(rf"(?<![{_ASCII_WORD}])fabric(?![{_ASCII_WORD}])|패브릭", re.IGNORECASE)
+_NEOFORGE_RE = re.compile(rf"(?<![{_ASCII_WORD}])neoforge(?![{_ASCII_WORD}])|네오포지", re.IGNORECASE)
+_FORGE_RE = re.compile(rf"(?<![{_ASCII_WORD}])forge(?![{_ASCII_WORD}])|(?<!네오)포지", re.IGNORECASE)
 _MIGRATION_RE = re.compile(
     r"마이그레이션|버전\s*(?:변경|업|올려|내려)|업데이트\s*해|포팅|이식|"
     r"migrat|port\s+(?:to|from)|upgrade\s+to|downgrade\s+to",
@@ -58,7 +51,7 @@ class PlatformSelection:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "schema_version": "mmm/platform-selection-v4",
+            "schema_version": "mmm/platform-selection-v5",
             "adapter_id": self.adapter.adapter_id,
             "source": self.source,
             "reason": self.reason,
@@ -94,6 +87,7 @@ class PlatformSelection:
 
 
 def lock_from_adapter(adapter: PlatformAdapter) -> PlatformLock:
+    adapter.validate()
     return PlatformLock(
         edition=adapter.edition,
         loader=adapter.loader,
@@ -117,86 +111,19 @@ def resolve_platform(
     router: Any | None = None,
     target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformSelection:
-    """Resolve a target after reuse/capability evaluation, never by version preselection.
-
-    A version mentioned in a new-build or migration prompt is non-binding evidence.
-    The host optimizer still evaluates executable candidates and chooses the target
-    after reuse, dependency and verification costs are known. The one intentional
-    exception is an existing project without a migration request: its current target
-    is preserved because changing it would itself be a migration.
-    """
+    """Compatibility entrypoint routed only to the canonical fail-closed selector."""
 
     del router
-    text = str(prompt or "")
-    explicit_version = _explicit_minecraft_version(text)
-    explicit_loader = _explicit_loader(text)
-    migration_requested = bool(existing_version and _MIGRATION_RE.search(text))
-    kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
+    from .platform_selection_pipeline import resolve_platform_fail_closed
 
-    if explicit_loader:
-        try:
-            provider_for_loader(explicit_loader)
-        except ValueError as exc:
-            raise SpecValidationError(str(exc)) from exc
-
-    if existing_version and not migration_requested:
-        adapter = _existing_adapter(existing_version, existing_loader)
-        _require_supported_kinds(adapter, kinds, explicit=True)
-        return PlatformSelection(
-            adapter=adapter,
-            source="existing_project_target",
-            reason=(
-                f"Revise 입력 프로젝트의 Minecraft {adapter.minecraft_version} "
-                f"{adapter.loader} target을 그대로 유지합니다."
-            ),
-            explicit_version=False,
-            explicit_loader=False,
-            preserved_existing_target=True,
-        )
-
-    optimization = _optimize(
-        text,
+    return resolve_platform_fail_closed(
+        prompt,
         design=design,
-        module_kinds=kinds,
-        loader_constraint=explicit_loader,
-        version_constraint=None,
+        module_kinds=module_kinds,
+        existing_version=existing_version,
+        existing_loader=existing_loader,
         target_research_fn=target_research_fn,
     )
-    return _optimized_selection(
-        optimization,
-        source=(
-            "host_reuse_optimizer_with_version_hint"
-            if explicit_version
-            else "host_reuse_optimizer"
-        ),
-        explicit_version=bool(explicit_version),
-        explicit_loader=bool(explicit_loader),
-        migration_requested=migration_requested,
-    )
-
-
-def _optimize(
-    prompt: str,
-    *,
-    design: dict[str, Any] | None,
-    module_kinds: Iterable[str],
-    loader_constraint: str | None = None,
-    version_constraint: str | None = None,
-    target_research_fn: TargetResearchFn | None = None,
-) -> PlatformOptimization:
-    """Run host optimization without using a Minecraft version as a candidate gate."""
-    del version_constraint
-    try:
-        return optimize_platform(
-            prompt,
-            design=design,
-            module_kinds=module_kinds,
-            loader_constraint=loader_constraint,
-            version_constraint=None,
-            target_research_fn=target_research_fn,
-        )
-    except ValueError as exc:
-        raise SpecValidationError(str(exc)) from exc
 
 
 def _optimized_selection(
@@ -209,22 +136,14 @@ def _optimized_selection(
 ) -> PlatformSelection:
     adapter = optimization.selected
     evidence = optimization.evidence
-    version_note = (
-        " 프롬프트의 버전 표기는 후보 고정에 사용하지 않았습니다."
-        if explicit_version
-        else ""
-    )
     return PlatformSelection(
         adapter=adapter,
         source=source,
         reason=(
-            f"실행 provider gate를 통과한 후보를 비교해 {adapter.minecraft_version}/"
-            f"{adapter.loader}을 선택했습니다: 필수 capability "
-            f"{len(evidence.covered_capabilities)}/{len(evidence.requested_capabilities)}, "
-            f"검증 reuse {evidence.reuse_coverage}, residual {evidence.residual_cost}, "
-            f"dependency closure {'complete' if evidence.dependency_closure_complete else 'incomplete'}. "
-            "최신성은 마지막 tie-breaker로만 사용됩니다."
-            f"{version_note}"
+            f"Verified evidence selected {adapter.minecraft_version}/{adapter.loader}: "
+            f"reuse {evidence.reuse_coverage}/{len(evidence.requested_capabilities)}, "
+            f"residual {evidence.residual_cost}, dependency closure "
+            f"{'complete' if evidence.dependency_closure_complete else 'incomplete'}."
         ),
         explicit_version=explicit_version,
         explicit_loader=explicit_loader,
@@ -350,3 +269,13 @@ def executable_target_names() -> tuple[str, ...]:
         for candidate_loader, version in discover_target_keys(loader=loader, limit_per_loader=32)
         if candidate_loader == loader
     )
+
+
+__all__ = [
+    "PlatformSelection",
+    "executable_target_names",
+    "lock_from_adapter",
+    "resolve_platform",
+    "retarget_proposal",
+    "supported_target_summary",
+]
