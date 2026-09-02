@@ -1907,11 +1907,21 @@ def generate_with_tools(
                     f"(allowed tools: {sorted(allowed_phase_tools)})."
                 )
                 state.record_failure(call.name, err_msg)
+                if (
+                    call.name in _MUTATION_ACT_TOOLS
+                    and implementation_requires_mutation
+                    and state.mutation_context is not None
+                    and state.mutation_context.is_mutation_ready
+                ):
+                    # The target is already localized. A stale mutation emitted during
+                    # OBSERVE needs a phase correction, not another retrieval round.
+                    state.phase = LoopPhase.ACT
                 print(f"  [!] PHASE VIOLATION: {call.name} -> {err_msg}", flush=True)
                 return call, {
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
+                    "failure_code": "PHASE_PROTOCOL_VIOLATION",
                     "error": err_msg,
                 }
 
@@ -1955,6 +1965,7 @@ def generate_with_tools(
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
+                    "failure_code": target_error.partition(":")[0],
                     "error": target_error,
                 }
 
@@ -2028,7 +2039,23 @@ def generate_with_tools(
                 elif bool(payload.get("ok")):
                     turn_made_progress = True
                 else:
-                    if all_exposed_names & _READ_OBSERVE_TOOLS:
+                    failure_code = str(payload.get("failure_code") or "")
+                    authority_retry = bool(
+                        failure_code
+                        in {
+                            "MUTATION_TARGET_DRIFT",
+                            "MUTATION_TARGET_UNBOUND",
+                            "MUTATION_TARGET_CREATION_CONFLICT",
+                            "PHASE_PROTOCOL_VIOLATION",
+                        }
+                        and state.mutation_context is not None
+                        and state.mutation_context.is_mutation_ready
+                    )
+                    if authority_retry:
+                        # Retrieval cannot expand write authority. Reissue the same
+                        # single mutation action against the host-pinned target.
+                        state.phase = LoopPhase.ACT
+                    elif all_exposed_names & _READ_OBSERVE_TOOLS:
                         state.phase = LoopPhase.OBSERVE
                     state.record_failure(call.name, payload.get("error", "mutation failed"))
                 continue
@@ -2071,9 +2098,10 @@ def generate_with_tools(
                     )
                 )
 
-                initial_evidence_progress = recorded and len(state.evidence_fingerprints) == 1
-
-                if ctx_progress or initial_evidence_progress or (not implementation_requires_mutation and recorded):
+                # For implementation, novelty alone is not progress: evidence must
+                # advance file/symbol/body localization. This prevents an unrelated
+                # first RAG hit from resetting a blocked mutation retry.
+                if ctx_progress or (not implementation_requires_mutation and recorded):
                     turn_made_progress = True
                     if (
                         state.phase == LoopPhase.OBSERVE
@@ -2098,7 +2126,12 @@ def generate_with_tools(
         model_calls_info = [{"name": c.name, "arguments": dict(c.arguments)} for c in turn.tool_calls]
         query_sigs = [retrieval_query_signature(c.name, c.arguments) for c in turn.tool_calls]
         results_info = [
-            {"name": call.name, "ok": payload.get("ok"), "error": payload.get("error")}
+            {
+                "name": call.name,
+                "ok": payload.get("ok"),
+                "failure_code": payload.get("failure_code"),
+                "error": payload.get("error"),
+            }
             for call, payload in executed
         ]
 

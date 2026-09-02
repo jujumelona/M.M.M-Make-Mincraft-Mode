@@ -134,6 +134,13 @@ class CompleteGameDesignPlanner:
             acceptance_tests=tuple(compiled.acceptance_tests),
             existing_input_sha256=existing_input_sha256,
         )
+        # Bind each verified reuse decision to its exact production owner before
+        # live-target lowering. Without this handoff the planner can discover and
+        # verify a donor while generation receives only the semantic task and is
+        # forced to reimplement the capability from scratch.
+        from .resource_asset_production import bind_reuse_plan
+
+        proposal = bind_reuse_plan(proposal)
         from .live_module_lowering import lower_live_modules
 
         return lower_live_modules(self, proposal)

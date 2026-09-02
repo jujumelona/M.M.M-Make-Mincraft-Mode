@@ -409,6 +409,90 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     assert "search_code_rag" in seen_phases[1]
 
 
+def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
+    """Authority drift stays in ACT because retrieval cannot authorize a new path."""
+    router = MagicMock()
+    router._generation_scope.return_value = nullcontext()
+    router._agent_require_fresh_evidence = False
+
+    config = MagicMock()
+    config.adapter = "llama_cpp"
+    config.max_context = 16384
+    config.max_input_tokens = 0
+    config.max_new_tokens = 4096
+    config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+    turns = [
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="wrong_path",
+                    name="apply_source_edit",
+                    arguments={
+                        "operation": "create_file",
+                        "path": "src/Wrong.java",
+                        "content": "public class Wrong {}",
+                    },
+                ),
+            )
+        ),
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="right_path",
+                    name="apply_source_edit",
+                    arguments={
+                        "operation": "create_file",
+                        "path": "src/Right.java",
+                        "content": "public class Right {}",
+                    },
+                ),
+            )
+        ),
+        GenerationResponse(content="Created the exact task-owned source file."),
+    ]
+    adapter = MagicMock()
+    adapter.generate_turn.side_effect = turns
+    runtime = MagicMock()
+    runtime.call.return_value = _applied_patch_payload("src/Right.java")
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "user",
+                "content": (
+                    '{"phase":"implement_module","operation":"create_file",'
+                    '"path":"src/Right.java"}'
+                ),
+            },
+        ),
+        tools=(
+            _tool_schema("search_code_rag"),
+            _tool_schema("apply_source_edit"),
+        ),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    result = generate_with_tools(
+        router,
+        config=config,
+        adapter=adapter,
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
+
+    assert result == "Created the exact task-owned source file."
+    exposed = [
+        [schema["function"]["name"] for schema in call.args[0].tools]
+        for call in adapter.generate_turn.call_args_list
+    ]
+    assert exposed[:2] == [["apply_source_edit"], ["apply_source_edit"]]
+    assert runtime.call.call_count == 1
+    assert runtime.call.call_args.args[1] == "apply_source_edit"
+
+
 def test_filter_tools_for_phase_hierarchical_localization_stages() -> None:
     """The host controller dynamically filters read tools per hierarchical localization stage."""
     from minecraft_mod_ai.progress_aware_tool_loop import (
@@ -792,8 +876,6 @@ def test_extract_mutation_context_from_rag_hit_source_path_and_text() -> None:
     assert "onInitialize" in str(ctx.source_body)
     assert ctx.localization_stage == LocalizationStage.READY
     assert ctx.is_mutation_ready is True
-
-
 
 
 

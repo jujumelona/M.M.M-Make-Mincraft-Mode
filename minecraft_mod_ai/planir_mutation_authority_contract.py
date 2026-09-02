@@ -436,6 +436,31 @@ def _internal_coder_authority_message(
                 "config": {"evidence_task": dict(evidence_task)},
             },
         }
+        reuse_binding = (
+            evidence_bindings.get("approved_reuse_source")
+            if isinstance(evidence_bindings, Mapping)
+            else None
+        )
+        if isinstance(reuse_binding, Mapping):
+            reuse_receipt = reuse_binding.get("receipt")
+            request_field = str(reuse_binding.get("request_field") or "").strip()
+            request_value = payload.get(request_field) if request_field else None
+            request_materialization = (
+                request_value.get("materialization")
+                if isinstance(request_value, Mapping)
+                else None
+            )
+            if (
+                request_field == "approved_reuse_context"
+                and isinstance(reuse_receipt, Mapping)
+                and request_materialization == reuse_receipt
+                and _approved_donor_authority(
+                    ({"role": "developer", "content": reuse_receipt},)
+                )
+            ):
+                # Promote only the compact host materialization receipt. Donor source
+                # text remains model context, never mutation authority.
+                canonical["reuse_materialization"] = dict(reuse_receipt)
         writable, _creatable = _owned_anchor_sets(canonical, loop_module)
         if primary_path not in writable:
             continue

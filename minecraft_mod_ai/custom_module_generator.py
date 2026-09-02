@@ -8,7 +8,7 @@ import shutil
 import stat
 import tempfile
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path, PurePosixPath
@@ -28,6 +28,142 @@ from .source_patch import SourcePatchError, TransactionalSourcePatcher
 
 class CustomModuleGenerationError(RuntimeError):
     pass
+
+
+_APPROVED_REUSE_CONTEXT_SCHEMA = "mmm/approved-reuse-context-v1"
+_APPROVED_REUSE_CONTEXT_BYTES = 12 * 1024
+
+
+def _owned_reuse_plan(module: ProductionModule) -> Mapping[str, Any] | None:
+    config = module.config if isinstance(module.config, dict) else {}
+    value = config.get("_owned_reuse_plan")
+    return value if isinstance(value, Mapping) else None
+
+
+def _source_donor_decisions(
+    plan: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(plan, Mapping):
+        return ()
+    raw = plan.get("capabilities")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        return ()
+    return tuple(
+        item
+        for item in raw
+        if isinstance(item, Mapping)
+        and str(item.get("mode") or "").strip().casefold()
+        in {"source_transplant", "adapt"}
+        and isinstance(item.get("donor"), Mapping)
+    )
+
+
+def _materialize_owned_reuse_context(
+    project_root: Path,
+    module: ProductionModule,
+    *,
+    byte_budget: int = _APPROVED_REUSE_CONTEXT_BYTES,
+) -> dict[str, Any] | None:
+    """Materialize selected donors and return bounded code-bearing coder context.
+
+    Retrieval/selection stays host-owned and evidence-first. The small coder receives
+    only the already-selected source slices, not the global reuse plan or another donor
+    search problem. ``read_reuse_source`` remains available for bounded pagination.
+    """
+
+    plan = _owned_reuse_plan(module)
+    decisions = _source_donor_decisions(plan)
+    if not decisions:
+        return None
+
+    from .production_tools import ProductionToolService
+    from .source_transplant import SourceTransplantError, materialize_source_slices
+
+    try:
+        materialization = materialize_source_slices(project_root, plan)
+    except (OSError, ValueError, SourceTransplantError) as exc:
+        raise CustomModuleGenerationError(
+            f"Approved reuse donor materialization failed: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    donors = materialization.get("donors")
+    if (
+        not isinstance(donors, list)
+        or materialization.get("count") != len(donors)
+        or len(donors) != len(decisions)
+    ):
+        raise CustomModuleGenerationError(
+            "Approved reuse plan did not materialize every selected source donor."
+        )
+
+    effective_budget = max(1024, int(byte_budget))
+    remaining = effective_budget
+    snippets: list[dict[str, Any]] = []
+    service = ProductionToolService(workspace_root=project_root)
+    try:
+        for donor in donors:
+            files = donor.get("files") if isinstance(donor, Mapping) else None
+            if not isinstance(files, list):
+                raise CustomModuleGenerationError(
+                    "Materialized reuse donor receipt has no authorized files."
+                )
+            for file_receipt in files:
+                if not isinstance(file_receipt, Mapping) or remaining <= 0:
+                    continue
+                path = str(file_receipt.get("path") or "")
+                if not path:
+                    continue
+                chunk_limit = min(8 * 1024, remaining)
+                try:
+                    source = service.read_reuse_source(
+                        ".",
+                        path,
+                        limit_bytes=chunk_limit,
+                    )
+                except (OSError, ValueError) as exc:
+                    raise CustomModuleGenerationError(
+                        "Approved reuse source could not be read: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                content = str(source.get("content") or "")
+                used = len(content.encode("utf-8"))
+                remaining = max(0, remaining - used)
+                snippets.append(
+                    {
+                        "repository": source.get("repository"),
+                        "commit_sha": source.get("commit_sha"),
+                        "license_id": source.get("license_id"),
+                        "capability": source.get("capability"),
+                        "path": source.get("path"),
+                        "sha256": source.get("sha256"),
+                        "offset_bytes": source.get("offset_bytes"),
+                        "next_offset_bytes": source.get("next_offset_bytes"),
+                        "eof": source.get("eof"),
+                        "content": content,
+                    }
+                )
+                if remaining <= 0:
+                    break
+            if remaining <= 0:
+                break
+    finally:
+        service.close()
+
+    if not snippets:
+        raise CustomModuleGenerationError(
+            "Approved reuse donors materialized without any readable source context."
+        )
+    return {
+        "schema_version": _APPROVED_REUSE_CONTEXT_SCHEMA,
+        "materialization": materialization,
+        "snippets": snippets,
+        "byte_budget": effective_budget,
+        "bytes_used": effective_budget - remaining,
+        "policy": (
+            "Adapt only these host-selected, commit-pinned source slices to the exact "
+            "task target; preserve license/provenance and never edit donor files."
+        ),
+    }
 
 
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
@@ -400,6 +536,21 @@ class CustomModuleGenerator:
                 )
                 checkpoint_resumed = False
 
+        approved_reuse_context = _materialize_owned_reuse_context(
+            staged_root,
+            module,
+        )
+        if approved_reuse_context is not None:
+            evidence_bindings = dict(host_grounding.get("evidence_bindings") or {})
+            evidence_bindings["approved_reuse_source"] = {
+                "request_field": "approved_reuse_context",
+                "receipt": approved_reuse_context["materialization"],
+            }
+            host_grounding = {
+                **host_grounding,
+                "evidence_bindings": evidence_bindings,
+            }
+
         if minecraft_version:
             os.environ["MMM_MINECRAFT_VERSION"] = str(minecraft_version).strip()
         if loader:
@@ -440,6 +591,18 @@ class CustomModuleGenerator:
                 "Use only the selected Minecraft/loader/mappings/Java target and preserve project conventions.",
             ],
         }
+        if approved_reuse_context is not None:
+            request["approved_reuse_context"] = approved_reuse_context
+            request["rules"][2:2] = [
+                (
+                    "Adapt the pinned approved_reuse_context donor snippets before "
+                    "attempting fresh implementation."
+                ),
+                (
+                    "Donor files are read-only evidence; write only the exact "
+                    "task-owned target path."
+                ),
+            ]
         initial_messages = [
             {
                 "role": "system",

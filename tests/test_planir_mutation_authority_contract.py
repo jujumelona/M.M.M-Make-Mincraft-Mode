@@ -11,7 +11,6 @@ from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.production_tools import ProductionToolService
 from minecraft_mod_ai.spec import SpecValidationError
 
-
 JAVA_PATH = "src/main/java/example/Foo.java"
 
 
@@ -240,6 +239,67 @@ def test_internal_custom_module_envelope_restores_host_reserved_java_target(tmp_
         )
         is None
     )
+
+
+def test_host_materialized_donor_receipt_enables_bounded_reuse_read(tmp_path: Path) -> None:
+    messages = _internal_coder_messages()
+    request = json.loads(messages[-1]["content"])
+    donor_path = (
+        tmp_path
+        / ".minecraft_ai"
+        / "reuse"
+        / "donors"
+        / "donor-key"
+        / "src/main/java/donor/AlienCombatCapability.java"
+    )
+    materialization = {
+        "schema_version": "mmm/reuse-materialization-v1",
+        "donors": [
+            {
+                "repository": "example/alien-combat",
+                "commit_sha": "a" * 40,
+                "license_id": "MIT",
+                "capability": "alien.combat",
+                "files": [
+                    {
+                        "path": str(donor_path),
+                        "sha256": "sha256:" + "b" * 64,
+                        "size_bytes": 128,
+                    }
+                ],
+            }
+        ],
+        "count": 1,
+    }
+    request["approved_reuse_context"] = {
+        "schema_version": "mmm/approved-reuse-context-v1",
+        "materialization": materialization,
+        "snippets": [],
+    }
+    request["host_grounding"]["evidence_bindings"]["approved_reuse_source"] = {
+        "request_field": "approved_reuse_context",
+        "receipt": materialization,
+    }
+    messages[-1]["content"] = json.dumps(request)
+    router = SimpleNamespace(
+        _agent_require_fresh_evidence=True,
+        _agent_workspace_root=tmp_path,
+    )
+    runtime = SimpleNamespace(workspace_root=str(tmp_path))
+
+    authority = authority_contract._internal_coder_authority_message(
+        messages,
+        router=router,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+        loop_module=tool_loop,
+    )
+
+    assert authority is not None
+    payload = json.loads(authority["content"])
+    assert payload["reuse_materialization"] == materialization
+    assert tool_loop._approved_donor_source_authority([authority]) is True
 
 
 def test_internal_authority_requires_bound_fresh_evidence_workspace(tmp_path: Path) -> None:
