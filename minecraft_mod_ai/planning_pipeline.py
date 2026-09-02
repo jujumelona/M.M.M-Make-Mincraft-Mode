@@ -391,8 +391,8 @@ class PlanningPipeline:
         design: dict[str, Any],
         base_proposal: Proposal,
     ) -> tuple[dict[str, Any], Proposal, dict[str, Any], dict[str, Any]]:
-        from .platform_central_ai_contract import _target_research_callback
         from .platform_selection_pipeline import resolve_platform_fail_closed
+        from .platform_target_research import target_research_callback
 
         existing_version = getattr(self.router, "_mmm_existing_minecraft_version", None)
         existing_loader = getattr(self.router, "_mmm_existing_loader", None)
@@ -410,7 +410,7 @@ class PlanningPipeline:
                 PlanningStage.PLATFORM,
                 "semantic design did not produce a research brief",
             )
-        target_research = _target_research_callback(research_brief)
+        target_research = target_research_callback(research_brief)
         selection = resolve_platform_fail_closed(
             effective_prompt,
             design=design,
