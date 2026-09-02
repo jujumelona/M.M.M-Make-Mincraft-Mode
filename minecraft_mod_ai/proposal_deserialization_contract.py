@@ -51,6 +51,46 @@ def _string_list(
     return result
 
 
+def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception]) -> None:
+    string_fields = {
+        'edition',
+        'loader',
+        'minecraft_version',
+        'java_version',
+        'yarn_mappings',
+        'fabric_loader',
+        'fabric_api',
+        'fabric_loom',
+        'gradle',
+        'adapter_id',
+        'mappings_kind',
+        'mappings_version',
+        'gradle_sha256',
+        'gradle_distribution_url',
+        'data_pack_version',
+        'resource_pack_version',
+        'release_metadata_url',
+        'source_api_family',
+    }
+    typed_fields = {'resource_pack_format', 'deterministic_module_kinds'}
+    unknown = sorted(set(platform) - string_fields - typed_fields)
+    if unknown:
+        raise error_type(f'spec.platform contains unsupported fields: {unknown[:8]}')
+    for key in string_fields:
+        if key in platform:
+            _require_string(platform[key], f'spec.platform.{key}', error_type)
+    if 'resource_pack_format' in platform:
+        value = platform['resource_pack_format']
+        if type(value) is not int or value <= 0:
+            raise error_type('spec.platform.resource_pack_format must be a positive JSON integer.')
+    if 'deterministic_module_kinds' in platform:
+        _string_list(
+            platform['deterministic_module_kinds'],
+            'spec.platform.deterministic_module_kinds',
+            error_type,
+        )
+
+
 def _json_native(value: Any) -> Any:
     """Normalize internal dataclass containers into JSON-native values."""
     if isinstance(value, Enum):
@@ -228,8 +268,7 @@ def install(spec_module: Any, complete_spec_module: Any) -> None:
             ):
                 _require_string(spec.get(field), f'spec.{field}', error)
             platform = _require_dict(spec.get('platform'), 'spec.platform', error)
-            for key, value in platform.items():
-                _require_string(value, f'spec.platform.{key}', error)
+            _validate_platform_json(platform, error)
             contents = _require_list(spec.get('contents'), 'spec.contents', error)
             for index, item in enumerate(contents):
                 content = _require_dict(item, f'spec.contents[{index}]', error)
