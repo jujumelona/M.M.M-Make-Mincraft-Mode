@@ -78,7 +78,6 @@ def finalize_runtime() -> None:
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planner_design_readiness_contract import install as install_planner_design_readiness
-        from .planner_requirement_traceability_contract import install as install_planner_requirement_traceability
         from .prefill_calibration_strictness_contract import install as install_prefill_calibration_strictness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
@@ -141,7 +140,6 @@ def finalize_runtime() -> None:
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
         install_planner_design_readiness()
-        install_planner_requirement_traceability()
         install_deep_design_execution()
         install_evidence_obligation_contract()
         install_authored_scope_research()
