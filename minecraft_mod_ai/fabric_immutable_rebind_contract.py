@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .spec import platform_receipt_sha256
+
 _INSTALLED = False
 
 
@@ -137,10 +139,18 @@ def _literal_dependency_versions(root: Path) -> dict[str, set[str]]:
 
 
 def _write_full_platform_lock(root: Path, adapter: Any, receipt: dict[str, Any]) -> None:
+    """Persist the complete approval-bound receipt after scaffold rebind.
+
+    This is the final writer in the live Fabric bootstrap path. It must therefore emit
+    every field required by the offline execution lock contract, including the canonical
+    receipt digest. Writing a legacy v2/v3 lock here would overwrite a complete lock from
+    an earlier boundary and make the immediately following adapter_from_project() fail.
+    """
+
     target = root / ".minecraft_ai" / "platform-lock.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": "mmm/generated-platform-lock-v3",
+        "schema_version": "mmm/generated-platform-lock-v4",
         "adapter_id": adapter.adapter_id,
         "edition": adapter.edition,
         "loader": adapter.loader,
@@ -163,8 +173,9 @@ def _write_full_platform_lock(root: Path, adapter: Any, receipt: dict[str, Any])
         "release_metadata_url": adapter.release_metadata_url,
         "source_api_family": adapter.source_api_family,
         "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
-        "bootstrap": receipt,
     }
+    payload["receipt_sha256"] = platform_receipt_sha256(payload)
+    payload["bootstrap"] = dict(receipt)
     target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -348,4 +359,4 @@ def install() -> None:
     _INSTALLED = True
 
 
-__all__ = ["_rebind_scaffold", "install"]
+__all__ = ["_rebind_scaffold", "_write_full_platform_lock", "install"]
