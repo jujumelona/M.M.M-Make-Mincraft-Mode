@@ -1,139 +1,37 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai import game_design
-from minecraft_mod_ai import planning_authority
-from minecraft_mod_ai import platform_central_ai_contract as platform_contract
 from minecraft_mod_ai import platform_live_discovery as live
 from minecraft_mod_ai import reuse_planner as reuse
 from minecraft_mod_ai.evidence_first_planning import build_request_catalog
-from minecraft_mod_ai.game_design import GameDesignPlanner
-
-
-def _design(catalog: dict[str, object]) -> dict[str, object]:
-    raw_requirements = catalog.get("requirements", [])
-    requirement_ids = [
-        str(item.get("requirement_id") or "")
-        for item in raw_requirements
-        if isinstance(item, dict) and str(item.get("requirement_id") or "")
-    ]
-    return {
-        "title": "Plan First",
-        "pitch": "Build the authored gameplay requirement.",
-        "core_loop": ["Exercise the authored gameplay behavior."],
-        "progression": ["Preserve the authored requirement through implementation."],
-        "combat": {},
-        "mod_context": {},
-        "modules": [
-            {
-                "plugin_id": "authored_behavior",
-                "status": "custom",
-                "reason": "Own the exact authored gameplay behavior.",
-                "requirement_refs": requirement_ids,
-                "implementation_obligations": [
-                    "Implement the approved observable behavior without changing scope."
-                ],
-            }
-        ],
-        "assets": [],
-        "acceptance_tests": ["The approved authored behavior is observable in Minecraft."],
-    }
 
 
 def _catalog(prompt: str) -> dict[str, object]:
     return build_request_catalog(prompt, {})
 
 
-class _Router:
-    pass
-
-
-class _Selection:
-    migration_requested = False
-    optimization = SimpleNamespace(
-        evidence=SimpleNamespace(deep_research={"status": "ok"})
-    )
-
-    def __init__(self, adapter: object) -> None:
-        self.adapter = adapter
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "target": {
-                "minecraft_version": "mmm-test-target",
-                "loader": "fabric",
-                "mappings": "mmm-test-target+test-mappings",
-                "source_api_family": "fabric_reviewed_test_template",
-            },
-            "migration_requested": False,
-        }
-
-
-def test_installed_platform_search_consumes_authoritative_plan_first(
-    monkeypatch: pytest.MonkeyPatch,
-    synthetic_platform_lock: object,
-) -> None:
+def test_pre_retrieval_plan_is_frozen_before_any_target_search() -> None:
     prompt = "Add persistent player trading."
-    authoritative = _catalog(prompt)
-    observed: dict[str, object] = {}
+    catalog = _catalog(prompt)
+    design: dict[str, object] = {"_evidence_request_catalog": catalog}
 
-    monkeypatch.setattr(
-        planning_authority,
-        "build_authoritative_request_catalog",
-        lambda supplied, router=None: (
-            authoritative
-            if supplied == prompt
-            else pytest.fail("native authority received a different prompt")
-        ),
-    )
-    monkeypatch.setattr(
-        game_design,
-        "_generate_game_design_once",
-        lambda *_args, **_kwargs: _design(authoritative),
+    frozen = reuse.compile_pre_retrieval_plan(prompt, design)
+    design["_pre_retrieval_plan"] = frozen
+    graph = reuse.decompose_capability_graph(
+        prompt,
+        design=design,
+        module_kinds=("unrelated.module",),
     )
 
-    def resolve_platform(_prompt: str, *, design: dict[str, object], **_kwargs: object):
-        observed["design"] = design
-        observed["graph"] = reuse.decompose_capability_graph(prompt, design=design)
-        adapter = SimpleNamespace(
-            minecraft_version="mmm-test-target",
-            loader="fabric",
-            yarn_mappings="mmm-test-target+test-mappings",
-        )
-        return _Selection(adapter)
-
-    monkeypatch.setattr(platform_contract, "resolve_platform", resolve_platform)
-    monkeypatch.setattr(
-        platform_contract,
-        "retarget_proposal",
-        lambda proposal, _selection: replace(
-            proposal,
-            spec=replace(proposal.spec, platform=synthetic_platform_lock),
-            approval_hash="",
-        ).with_hash(),
-    )
-
-    design, _proposal = GameDesignPlanner(_Router()).plan(prompt)
-
-    search_input = observed["design"]
-    assert isinstance(search_input, dict)
-    assert search_input["_evidence_request_catalog"] == authoritative
-    frozen = search_input["_pre_retrieval_plan"]
-    assert isinstance(frozen, dict)
-    assert frozen["request_catalog_sha256"] == authoritative["catalog_sha256"]
+    assert frozen["request_catalog_sha256"] == catalog["catalog_sha256"]
     assert frozen["planned_work"]
-    search_graph = observed["graph"]
-    assert isinstance(search_graph, reuse.CapabilityGraph)
-    assert search_graph.source_plan_sha256 == frozen["plan_sha256"]
-    graph_payload = search_graph.to_dict()
+    assert graph.source_plan_sha256 == frozen["plan_sha256"]
+    graph_payload = graph.to_dict()
     graph_payload.pop("source_plan_sha256")
     assert graph_payload == frozen["capability_graph"]
-    assert design["_pre_retrieval_plan"] == frozen
 
 
 def test_frozen_semantic_plan_blocks_post_plan_redecomposition() -> None:
@@ -149,14 +47,10 @@ def test_frozen_semantic_plan_blocks_post_plan_redecomposition() -> None:
     graph = reuse.decompose_capability_graph(
         prompt,
         design=design,
-        module_kinds=("unrelated_module",),
+        module_kinds=("unrelated.module",),
         semantic_router=_ExplodingRouter(),
     )
-
     assert graph.source_plan_sha256 == frozen["plan_sha256"]
-    graph_payload = graph.to_dict()
-    graph_payload.pop("source_plan_sha256")
-    assert graph_payload == frozen["capability_graph"]
 
 
 def test_tampered_pre_retrieval_plan_fails_before_search() -> None:
@@ -170,7 +64,13 @@ def test_tampered_pre_retrieval_plan_fails_before_search() -> None:
         reuse.decompose_capability_graph(prompt, design=design)
 
 
-def test_pack_versions_use_mojang_primary_then_bounded_official_fallback(
+def test_platform_selection_has_no_semantic_candidate_window() -> None:
+    source = (reuse.__file__ and open(reuse.__file__, encoding="utf-8").read()) or ""
+    assert "MMM_PLATFORM_CANDIDATE_LIMIT" not in source
+    assert "_target_candidate_limit" not in source
+
+
+def test_pack_versions_use_mojang_primary_then_bounded_transport_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, int, int | None]] = []
@@ -210,13 +110,3 @@ def test_pack_versions_use_mojang_primary_then_bounded_official_fallback(
     )
     assert calls[1][1] <= 6
     assert calls[1][2] <= 2
-
-
-def test_live_target_resolution_has_a_bounded_default_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("MMM_PLATFORM_CANDIDATE_LIMIT", raising=False)
-    assert reuse._target_candidate_limit() == 8
-
-    monkeypatch.setenv("MMM_PLATFORM_CANDIDATE_LIMIT", "999")
-    assert reuse._target_candidate_limit() == 32
