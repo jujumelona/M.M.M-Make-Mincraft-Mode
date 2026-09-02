@@ -69,6 +69,7 @@ def finalize_runtime() -> None:
         from .external_mcp_binding_concurrency_contract import install as install_external_mcp_binding_concurrency
         from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .fabric_immutable_rebind_contract import install as install_fabric_immutable_rebind
+        from .generation_boundary_reconciliation import install as install_generation_boundary_reconciliation
         from .generation_concurrency_safety import install as install_generation_safety
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
@@ -175,6 +176,7 @@ def finalize_runtime() -> None:
         install_fabric_immutable_rebind()
         install_planner_graph_integrity()
         install_runtime_regression_reconciliation()
+        install_generation_boundary_reconciliation()
 
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
