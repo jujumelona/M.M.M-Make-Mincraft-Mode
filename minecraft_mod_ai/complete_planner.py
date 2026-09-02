@@ -16,7 +16,6 @@ from .evidence_first_planning import compile_evidence_first_plan, task_batches
 from .model_router import ModelRouter
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
-from .spec import SpecValidationError
 
 
 @dataclass(frozen=True)
