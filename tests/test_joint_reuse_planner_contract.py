@@ -1,173 +1,65 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import component_registry
-from minecraft_mod_ai.project_inventory import inspect_project_inventory
-from minecraft_mod_ai.reuse_planner import (
-    ReuseDecision,
-    _declared_same_project_capabilities,
-    _plan_target,
-    decompose_capability_graph,
-)
+from minecraft_mod_ai.reuse_planner import ReuseDecision, decompose_capability_graph
 from minecraft_mod_ai.source_transplant import _target_compatibility
 
 
-def test_capability_graph_uses_behavior_not_whole_mod_theme() -> None:
-    graph = decompose_capability_graph(
-        "메이플스토리 같은 모드",
-        design={"systems": [{"id": "trade"}, {"id": "shop"}]},
-    )
-    assert "trade.transaction" in graph.nodes
-    assert "trade.validation" in graph.nodes
-    assert "ui.shop_menu" in graph.nodes
-    assert all("maple" not in item and "메이플" not in item for item in graph.nodes)
-
-
-def test_capability_graph_merges_prompt_requirements_missing_from_design() -> None:
-    graph = decompose_capability_graph(
-        "Add trade and quests.",
-        design={"systems": [{"id": "trade"}]},
-    )
-
-    assert "trade.transaction" in graph.nodes
-    assert "quest.state" in graph.nodes
-    assert "quest.progression" in graph.nodes
-    assert "quest.reward" in graph.nodes
-
-
-def test_evidence_catalog_capability_is_not_prefixed_or_rewritten() -> None:
-    capability = "interdimensional_player_owned_energy_distribution_network_audited_access"
-    prompt = capability.replace("_", " ") + "."
-    catalog = {
+def _catalog(*capabilities: str) -> dict:
+    return {
         "requirements": [
             {
-                "requirement_id": "req-custom",
+                "requirement_id": f"req-{index:03d}",
                 "capability": capability,
-                "statement": prompt,
                 "provides": [f"capability:{capability}"],
+                "statement": capability.replace(".", " "),
+                "depends_on": [],
             }
+            for index, capability in enumerate(capabilities)
         ]
     }
 
+
+def test_approved_request_catalog_is_the_capability_authority() -> None:
+    design = {
+        "_evidence_request_catalog": _catalog(
+            "trade.transaction",
+            "quest.state",
+        )
+    }
     graph = decompose_capability_graph(
-        prompt,
-        design={"_evidence_request_catalog": catalog},
+        "Prompt contains unrelated words that must not enlarge semantic scope.",
+        design=design,
     )
+    assert graph.nodes == ("trade.transaction", "quest.state")
+    assert all(source.startswith("request_catalog.") for _, source in graph.sources)
 
-    assert graph.nodes == (capability,)
+
+def test_raw_prompt_without_approved_catalog_fails_closed() -> None:
+    with pytest.raises(ValueError, match="approved request catalog or explicit module kinds"):
+        decompose_capability_graph("Infer a whole mod from this raw sentence")
 
 
-def test_approved_evidence_catalog_is_a_hard_prompt_inference_barrier() -> None:
+def test_explicit_module_kinds_are_lossless_without_prompt_inference() -> None:
     graph = decompose_capability_graph(
-        "Add trade and quests.",
-        design={
-            "_evidence_request_catalog": {
-                "requirements": [
-                    {
-                        "requirement_id": "req-trade",
-                        "capability": "trade.transaction",
-                        "statement": "trade",
-                        "provides": ["capability:trade.transaction"],
-                    }
-                ]
-            }
-        },
+        "ignore this prompt",
+        module_kinds=("feature.alpha", "feature.beta"),
     )
-
-    assert graph.nodes == ("trade.transaction",)
-    assert all(not node.startswith("quest.") for node in graph.nodes)
-    assert all(
-        source.startswith("evidence_request_catalog.")
-        for _, source in graph.sources
-    )
-
-
-def test_underscore_structured_capability_is_not_ontology_rewritten() -> None:
-    capability = "interdimensional_player_owned_energy_distribution_network"
-
-    graph = decompose_capability_graph(
-        capability.replace("_", " "),
-        design={"systems": [{"id": capability}]},
-    )
-
-    assert graph.nodes == (capability,)
+    assert graph.nodes == ("feature.alpha", "feature.beta")
+    assert graph.edges == ()
 
 
 def test_capability_graph_has_no_default_logical_project_size_cap() -> None:
-    systems = [{"id": f"feature.system_{index:03d}"} for index in range(96)]
+    capabilities = tuple(f"feature.system_{index:03d}" for index in range(96))
     graph = decompose_capability_graph(
-        "Implement the declared systems.",
-        design={"systems": systems},
+        "Implement the approved requirements.",
+        design={"_evidence_request_catalog": _catalog(*capabilities)},
     )
-    assert graph.nodes == tuple(
-        f"feature.system_{index:03d}" for index in range(96)
-    )
-
-
-def test_design_claim_alone_cannot_admit_same_project_reuse() -> None:
-    assert _declared_same_project_capabilities(
-        {
-            "existing_capabilities": ["weather_compass"],
-            "same_project_capabilities": ["network.sync"],
-        }
-    ) == set()
-
-
-def test_validated_project_receipt_admits_exact_same_project_capability(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "settings.gradle.kts").write_text(
-        'rootProject.name = "reuse-evidence"\n',
-        encoding="utf-8",
-    )
-    source = tmp_path / "src/main/java/example/WeatherCompass.java"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "package example; public final class WeatherCompass {}\n",
-        encoding="utf-8",
-    )
-    inventory = inspect_project_inventory(tmp_path).to_dict()
-
-    capabilities = _declared_same_project_capabilities(
-        {"_existing_project_inventory": inventory}
-    )
-
-    assert "weather_compass" in capabilities
-
-
-def test_planner_materializes_same_project_reuse_as_a_proof_bound_bundle(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "settings.gradle").write_text("rootProject.name = 'reuse'\n", encoding="utf-8")
-    source = tmp_path / "src/main/java/example/WeatherCompass.java"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        "package example; public final class WeatherCompass {}\n",
-        encoding="utf-8",
-    )
-    inventory = inspect_project_inventory(tmp_path).to_dict()
-
-    from minecraft_mod_ai.platform_catalog import adapter_for_target
-
-    plan = _plan_target(
-        adapter_for_target("1.21.1", "fabric"),
-        capabilities=("weather_compass",),
-        design={"_existing_project_inventory": inventory},
-        platform_evidence=None,
-        registry=(),
-        same_project={"weather_compass"},
-        discovery_client=None,
-        allow_network=False,
-    )
-
-    decision = plan.capabilities[0]
-    assert decision.donor_slice is None
-    assert decision.artifact_bundle is not None
-    assert decision.artifact_bundle.proof_receipt["proof_level"] == "HOST_VERIFIED"
-    assert plan.selected_composition is not None
-    assert plan.selected_composition.bundles == (decision.artifact_bundle,)
+    assert graph.nodes == capabilities
 
 
 def test_reuse_value_is_saved_work_not_reuse_count() -> None:
