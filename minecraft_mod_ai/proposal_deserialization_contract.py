@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import fields
 from enum import Enum
 from functools import wraps
 from typing import Any
+
+from .spec import PlatformLock
 
 
 def _require_dict(value: Any, field: str, error_type: type[Exception]) -> dict[str, Any]:
@@ -52,28 +55,10 @@ def _string_list(
 
 
 def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception]) -> None:
-    string_fields = {
-        'edition',
-        'loader',
-        'minecraft_version',
-        'java_version',
-        'yarn_mappings',
-        'fabric_loader',
-        'fabric_api',
-        'fabric_loom',
-        'gradle',
-        'adapter_id',
-        'mappings_kind',
-        'mappings_version',
-        'gradle_sha256',
-        'gradle_distribution_url',
-        'data_pack_version',
-        'resource_pack_version',
-        'release_metadata_url',
-        'source_api_family',
-    }
     typed_fields = {'resource_pack_format', 'deterministic_module_kinds'}
-    unknown = sorted(set(platform) - string_fields - typed_fields)
+    canonical_fields = {item.name for item in fields(PlatformLock)}
+    string_fields = canonical_fields - typed_fields
+    unknown = sorted(set(platform) - canonical_fields)
     if unknown:
         raise error_type(f'spec.platform contains unsupported fields: {unknown[:8]}')
     for key in string_fields:
