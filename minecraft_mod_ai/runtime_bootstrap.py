@@ -164,7 +164,6 @@ def _install_platform_contracts() -> None:
     )
     from .minecraft_domain_correctness_contract import install as install_minecraft_domain_correctness
     from .mod_scope_contract import install as install_mod_scope
-    from .platform_central_ai_contract import install as install_platform_central_ai
     from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
@@ -194,10 +193,6 @@ def _install_platform_contracts() -> None:
     )
     install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
-    install_platform_central_ai(
-        game_design_module=game_design,
-        complete_planner_module=complete_planner,
-    )
     install_mod_scope(complete_spec, complete_planner)
     install_platform_custom_coder(custom_module_generator)
     install_source_patch_preconditions(custom_module_generator)
@@ -344,15 +339,11 @@ def _install_post_bootstrap_contracts() -> None:
     from .temporary_skill_contract import install as install_temporary_skill
     from .unified_trajectory_memory_contract import install as install_unified_trajectory_memory
 
-    # Research retrieval is no longer runtime-patched. The new pre-design owner executes
-    # Modrinth/CurseForge/GitHub/local discovery directly and isolates provider failures.
     install_agent_security(
         pre_design_rag_module=None,
         agentic_research_module=None,
         model_router_module=model_router,
     )
-    # The canonical progress-aware loop already exposes the phase-valid ACI.  Do not
-    # rerank that host-authorized tool frontier through an unrelated heuristic top-k.
     small_model_max_agent_contract._install_repair_context(
         repair_engine,
         agentic_optimization_contract,
