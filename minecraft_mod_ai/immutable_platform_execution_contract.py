@@ -339,9 +339,9 @@ def install() -> None:
     from functools import wraps
 
     @wraps(original_write_contract)
-    def write_contract(self, root: Path, spec_value) -> None:
-        original_write_contract(self, root, spec_value)
-        lock = spec_value.platform
+    def write_contract(self, root: Path, spec) -> None:
+        original_write_contract(self, root, spec)
+        lock = spec.platform
         if not _full_receipt_present(lock):
             raise SpecValidationError(
                 "Generation requires the complete approval-bound execution platform receipt."
