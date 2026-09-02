@@ -143,12 +143,10 @@ def _install_generation_contracts() -> None:
 
 def _install_platform_contracts() -> None:
     from . import (
-        central_research,
         complete_orchestrator,
         complete_planner,
         complete_spec,
         custom_module_generator,
-        game_design,
         geckolib_generator,
         generator,
         mineflayer_bridge,
@@ -168,7 +166,6 @@ def _install_platform_contracts() -> None:
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
     from .platform_live_rag_contract import install as install_platform_live_rag
-    from .platform_planning_contract import install as install_platform_planning
     from .platform_repair_target_contract import install as install_platform_repair
     from .platform_runtime_contract import install as install_platform_runtime
     from .platform_specialized_generator_contract import install as install_specialized_generator_guards
@@ -186,11 +183,6 @@ def _install_platform_contracts() -> None:
     install_proposal_deserialization(spec, complete_spec)
     install_platform_generation(generator)
     install_platform_validation(validator)
-    install_platform_planning(
-        game_design_module=game_design,
-        complete_planner_module=complete_planner,
-        central_research_module=central_research,
-    )
     install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
     install_mod_scope(complete_spec, complete_planner)
