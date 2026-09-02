@@ -36,6 +36,97 @@ def _task(task_id, req, *, depends=(), acceptance=(), predicates=(), anchor_kind
     }
 
 
+def _requirement(req_id: str, capability: str, acceptance: str) -> dict:
+    return {
+        "requirement_id": req_id,
+        "capability": capability,
+        "provides": [f"capability:{capability}"],
+        "acceptance": [acceptance],
+    }
+
+
+def test_acceptance_preconditions_derive_requirement_causality_without_domain_hardcoding():
+    catalog = {
+        "requirements": [
+            _requirement(
+                "req_resource",
+                "space_mode_resource_gathering",
+                "Given the player is in the mode; when the player gathers resources; then resources are gathered.",
+            ),
+            _requirement(
+                "req_currency",
+                "space_mode_currency_accumulation",
+                "Given the player is in the mode; when the player accumulates currency; then currency is accumulated.",
+            ),
+            _requirement(
+                "req_construct",
+                "space_module_construction",
+                "Given the player has gathered resources and currency; when the player constructs modules; then modules are built.",
+            ),
+            _requirement(
+                "req_upgrade",
+                "space_vessel_upgrade_purchase",
+                "Given the player has gathered resources and currency; when the player upgrades the vessel; then the vessel is upgraded.",
+            ),
+            _requirement(
+                "req_travel",
+                "space_travel",
+                "Given the player has constructed and upgraded the vessel; when the player departs; then the player travels to space.",
+            ),
+            _requirement(
+                "req_mineral",
+                "alien_planet_special_mineral_gathering",
+                "Given the player has traveled to another planet; when the player gathers special minerals; then special minerals are gathered.",
+            ),
+        ],
+        "catalog_sha256": "",
+    }
+
+    result = contract._derive_requirement_causality(catalog)
+    by_id = {item["requirement_id"]: item for item in result["requirements"]}
+
+    assert set(by_id["req_construct"]["depends_on"]) == {"req_resource", "req_currency"}
+    assert set(by_id["req_upgrade"]["depends_on"]) == {"req_resource", "req_currency"}
+    assert set(by_id["req_travel"]["depends_on"]) == {"req_construct", "req_upgrade"}
+    assert by_id["req_mineral"]["depends_on"] == ["req_travel"]
+    assert all(
+        reason["kind"] == "acceptance_precondition_dataflow"
+        for requirement in by_id.values()
+        for reason in requirement.get("dependency_reasons", {}).values()
+    )
+
+
+def test_common_acceptance_vocabulary_does_not_create_dense_false_dependencies():
+    catalog = {
+        "requirements": [
+            _requirement(
+                "req_a",
+                "space_alpha",
+                "Given the player is in space; when alpha occurs; then alpha completes in space.",
+            ),
+            _requirement(
+                "req_b",
+                "space_beta",
+                "Given the player is in space; when beta occurs; then beta completes in space.",
+            ),
+            _requirement(
+                "req_c",
+                "space_gamma",
+                "Given the player is in space; when gamma occurs; then gamma completes in space.",
+            ),
+            _requirement(
+                "req_d",
+                "space_delta",
+                "Given the player is in space; when delta occurs; then delta completes in space.",
+            ),
+        ],
+        "catalog_sha256": "",
+    }
+
+    result = contract._derive_requirement_causality(catalog)
+    assert all(not item["depends_on"] for item in result["requirements"])
+
+
 def test_task_acceptance_is_split_into_public_and_internal_fields():
     task = _task(
         "task_child",
