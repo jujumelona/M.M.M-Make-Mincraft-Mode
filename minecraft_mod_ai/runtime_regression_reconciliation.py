@@ -38,7 +38,7 @@ def _discover_donor_candidates(
     if not ordered:
         return ()
     results: list[Any | None] = [None] * len(ordered)
-    with ThreadPoolExecutor(max_workers=reuse._workers()) as executor:
+    with ThreadPoolExecutor(max_workers=_workers()) as executor:
         futures = {
             executor.submit(
                 reuse.inspect_repository_slice,
@@ -430,7 +430,6 @@ def install() -> None:
     platform_resolver.resolve_platform = resolve_platform
 
     reuse.inspect_repository_slice = source_transplant.inspect_repository_slice
-    reuse._workers = _workers
     reuse._discover_donor_candidates = _discover_donor_candidates
     reuse._discover_best_donor = _discover_best_donor
     reuse.decompose_capability_graph = decompose_capability_graph
