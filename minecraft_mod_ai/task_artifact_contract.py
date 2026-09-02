@@ -9,6 +9,8 @@ resources are explicit artifact obligations rather than an empty assets list or 
 Java-only plan.
 """
 
+import math
+import re
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
@@ -25,6 +27,152 @@ _REQUIREMENT_PROVIDES: ContextVar[dict[str, tuple[str, ...]]] = ContextVar(
     "mmm_requirement_provides_context", default={}
 )
 
+_FLOW_RE = re.compile(
+    r"\bgiven\b(?P<given>.*?)\bwhen\b(?P<when>.*?)\bthen\b(?P<then>.*?)(?:$|\n)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CAUSAL_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can",
+        "does", "for", "from", "has", "have", "in", "into", "is", "it", "its", "of",
+        "on", "or", "player", "requested", "respective", "section", "sections", "the",
+        "their", "then", "to", "when", "with",
+    }
+)
+
+
+def _causal_token_variants(value: Any) -> set[str]:
+    """Return conservative lexical variants for requirement-state matching.
+
+    This is deliberately domain-neutral.  It normalizes simple English inflection used by
+    generated Given/When/Then acceptance without inventing gameplay semantics.  Ambiguous
+    semantic relations remain unbound instead of being guessed.
+    """
+
+    result: set[str] = set()
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9_]*", str(value or "").casefold()):
+        token = raw.strip("_")
+        if len(token) < 3 or token in _CAUSAL_STOPWORDS:
+            continue
+        variants = {token}
+        if token.endswith("ies") and len(token) > 4:
+            variants.add(token[:-3] + "y")
+        elif token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+            variants.add(token[:-1])
+        if token.endswith("ing") and len(token) > 5:
+            variants.add(token[:-3])
+            variants.add(token[:-3] + "e")
+        if token.endswith("ed") and len(token) > 4:
+            variants.add(token[:-2])
+            variants.add(token[:-1])
+        if token.endswith("tion") and len(token) > 6:
+            variants.add(token[:-3])
+        result.update(item for item in variants if len(item) >= 3)
+    return result
+
+
+def _acceptance_flow(requirement: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    """Extract prerequisite and produced-state tokens from public acceptance evidence."""
+
+    given: set[str] = set()
+    produced: set[str] = set()
+    for acceptance in _planning._strings(requirement.get("acceptance")):
+        match = _FLOW_RE.search(acceptance.replace(";", " "))
+        if match is None:
+            continue
+        given.update(_causal_token_variants(match.group("given")))
+        produced.update(_causal_token_variants(match.group("then")))
+    produced.update(_causal_token_variants(requirement.get("capability")))
+    produced.update(
+        token
+        for provide in _planning._strings(requirement.get("provides"))
+        for token in _causal_token_variants(provide)
+    )
+    return given, produced
+
+
+def _derive_requirement_causality(catalog: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive a conservative authored-order prerequisite DAG from observable states.
+
+    CodePlan-style edit chains need requirement causality before file-level work is compiled.
+    The base catalog previously emitted independent requirements, so every generic custom task
+    consumed only ``target:frozen``.  Here a child Given-state may consume an earlier
+    requirement only when the earlier requirement's observable Then/provide vocabulary matches
+    informative prerequisite vocabulary.  Corpus-common words are down-weighted by document
+    frequency, so generic terms cannot create dense false dependencies.
+    """
+
+    raw_requirements = catalog.get("requirements")
+    if not isinstance(raw_requirements, list) or not raw_requirements:
+        return dict(catalog)
+    requirements = [dict(item) for item in raw_requirements if isinstance(item, Mapping)]
+    if len(requirements) != len(raw_requirements):
+        return dict(catalog)
+
+    flows = [_acceptance_flow(requirement) for requirement in requirements]
+    produced_frequency: dict[str, int] = {}
+    for _given, produced in flows:
+        for token in produced:
+            produced_frequency[token] = produced_frequency.get(token, 0) + 1
+    informative_limit = max(2, int(math.ceil(len(requirements) * 0.35)))
+
+    for child_index, requirement in enumerate(requirements):
+        existing = tuple(_planning._strings(requirement.get("depends_on")))
+        if existing:
+            requirement["depends_on"] = list(existing)
+            continue
+        needed, _produced = flows[child_index]
+        if not needed or child_index == 0:
+            requirement["depends_on"] = []
+            requirement["dependency_reasons"] = {}
+            continue
+
+        candidates: list[tuple[int, int, str, tuple[str, ...]]] = []
+        for parent_index in range(child_index):
+            parent_id = str(requirements[parent_index].get("requirement_id") or "").strip()
+            if not parent_id:
+                continue
+            parent_produced = flows[parent_index][1]
+            overlap = needed & parent_produced
+            informative = tuple(
+                sorted(
+                    token
+                    for token in overlap
+                    if produced_frequency.get(token, 0) <= informative_limit
+                )
+            )
+            if not informative:
+                continue
+            # Prefer more matched state tokens, then the closest earlier producer.  We keep
+            # every tied semantic producer only when it contributes a distinct needed token.
+            candidates.append((len(informative), parent_index, parent_id, informative))
+
+        selected: list[tuple[str, tuple[str, ...]]] = []
+        covered_tokens: set[str] = set()
+        for _score, _index, parent_id, matched in sorted(
+            candidates, key=lambda item: (-item[0], -item[1], item[2])
+        ):
+            novel = tuple(token for token in matched if token not in covered_tokens)
+            if not novel:
+                continue
+            selected.append((parent_id, novel))
+            covered_tokens.update(novel)
+
+        requirement["depends_on"] = [parent_id for parent_id, _matched in selected]
+        requirement["dependency_reasons"] = {
+            parent_id: {
+                "kind": "acceptance_precondition_dataflow",
+                "matched_terms": list(matched),
+            }
+            for parent_id, matched in selected
+        }
+
+    result = dict(catalog)
+    result["requirements"] = requirements
+    result["catalog_sha256"] = ""
+    result["catalog_sha256"] = _planning._hash_without(result, "catalog_sha256")
+    return result
+
 
 def _capture_requirement_graph(catalog: Mapping[str, Any]) -> None:
     """Capture authoritative requirement causality and its semantic dataflow tokens."""
@@ -33,6 +181,11 @@ def _capture_requirement_graph(catalog: Mapping[str, Any]) -> None:
     graph: dict[str, tuple[str, ...]] = {}
     provides: dict[str, tuple[str, ...]] = {}
     if isinstance(requirements, list):
+        known = {
+            str(item.get("requirement_id") or "").strip()
+            for item in requirements
+            if isinstance(item, Mapping) and str(item.get("requirement_id") or "").strip()
+        }
         for raw in requirements:
             if not isinstance(raw, Mapping):
                 continue
@@ -49,7 +202,17 @@ def _capture_requirement_graph(catalog: Mapping[str, Any]) -> None:
                 if isinstance(values, list)
                 else ()
             )
-            graph[req_id] = tuple(dict.fromkeys(deps))
+            deps = tuple(dict.fromkeys(deps))
+            unknown = tuple(item for item in deps if item not in known)
+            if unknown:
+                raise _planning.EvidencePlanError(
+                    f"Requirement {req_id} references unknown causal dependencies: {list(unknown)}"
+                )
+            if req_id in deps:
+                raise _planning.EvidencePlanError(
+                    f"Requirement {req_id} may not depend on itself."
+                )
+            graph[req_id] = deps
             semantic_provides = tuple(_planning._strings(raw.get("provides")))
             if not semantic_provides:
                 capability = str(raw.get("capability") or "").strip()
@@ -211,7 +374,7 @@ def _project_requirement_dataflow(
 
     by_id = {str(task.get("task_id") or ""): task for task in result}
     for req_id, parents in req_deps.items():
-        for root_id in roots.get(req_id, ()): 
+        for root_id in roots.get(req_id, ()):
             task = by_id[root_id]
             consumes = list(_planning._strings(task.get("consumes")))
             for parent_req in parents:
@@ -491,6 +654,7 @@ def install_task_artifact_contract() -> None:
         def build_request_catalog(*args: Any, **kwargs: Any):
             catalog = current_catalog(*args, **kwargs)
             if isinstance(catalog, Mapping):
+                catalog = _derive_requirement_causality(catalog)
                 _capture_requirement_graph(catalog)
             return catalog
 
