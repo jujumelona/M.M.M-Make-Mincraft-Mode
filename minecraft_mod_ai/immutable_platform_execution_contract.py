@@ -281,7 +281,6 @@ def install() -> None:
             )
         write_project_platform_lock(root, _adapter_from_receipt(lock))
 
-    platform_resolver.PlatformLock = PlatformLock
     platform_resolver.lock_from_adapter = lock_from_adapter
     platform_catalog.adapter_for_lock_values = adapter_for_lock_values
     platform_catalog.adapter_from_project = adapter_from_project
