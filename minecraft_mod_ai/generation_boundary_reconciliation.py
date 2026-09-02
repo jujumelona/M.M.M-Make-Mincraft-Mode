@@ -19,6 +19,23 @@ _THINK_BLOCK_RE = re.compile(
     r"<\s*think\b[^>]*>.*?<\s*/\s*think\s*>",
     re.IGNORECASE | re.DOTALL,
 )
+_MODEL_PREAMBLE_META_RE = re.compile(
+    r"(?:"
+    r"<\s*/?\s*think\b"
+    r"|^\s*(?:thinking\s+process|analysis|reasoning|internal\s+reasoning|"
+    r"analyze\s+the\s+request|drafting\s+content|formatting\s+check|"
+    r"final\s+review(?:\s+of\s+constraints)?|plan)\s*:"
+    r"|\bi\s+need\s+to\b"
+    r"|\bi\s+should\b"
+    r"|\bthe\s+user\s+wants\b"
+    r"|\bbranch[- ]policy\b"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CONTENT_LABEL_RE = re.compile(
+    r"^\s*Content(?:\s*[:\-–—]\s*|\s+(?=[^\x00-\x7F]))",
+    re.IGNORECASE,
+)
 _IDENTITY_WRAPPERS = {
     "title": (
         re.compile(
@@ -43,19 +60,60 @@ _IDENTITY_WRAPPERS = {
 }
 
 
-def _sanitize_design_body(raw: Any, field: str) -> str:
-    """Remove only balanced hidden-reasoning blocks and narrow identity wrappers.
+def _normalize_heading_for_boundary(value: str) -> str:
+    value = value.strip().strip("`").casefold()
+    return re.sub(r"[^a-z0-9]+", "_", value).strip("_")
 
-    Unbalanced ``<think>`` markers are deliberately left untouched so the existing
-    ``assert_design_field_clean`` guard still rejects/falls back rather than guessing where
-    model reasoning ended. Balanced blocks are safe to remove because their boundaries are
-    explicit; all authored bullets before/after the block are preserved verbatim.
+
+def _sanitize_section_output(raw: Any, fields: Any) -> str:
+    """Drop only a clearly model-meta preamble before the first approved section heading.
+
+    The host-owned section parser already treats text before the first approved heading as
+    non-field content. This function makes that boundary explicit for Qwen variants that
+    emit ``Thinking Process:`` and an orphan closing ``</think>`` before their Markdown
+    answer. Arbitrary prose is not stripped merely because it precedes a heading: at least
+    one known internal-meta marker must be present. Once an approved heading begins, no
+    meta content is hidden; the canonical field validator remains fail-closed.
+    """
+
+    text = str(raw or "")
+    expected = {
+        _normalize_heading_for_boundary(str(field))
+        for field in fields
+        if str(field).strip()
+    }
+    lines = text.splitlines()
+    first_heading_index: int | None = None
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s*##\s+(.+?)\s*$", line)
+        if match and _normalize_heading_for_boundary(match.group(1)) in expected:
+            first_heading_index = index
+            break
+    if first_heading_index is None or first_heading_index <= 0:
+        return text
+    preamble = "\n".join(lines[:first_heading_index])
+    if not _MODEL_PREAMBLE_META_RE.search(preamble):
+        return text
+    return "\n".join(lines[first_heading_index:])
+
+
+def _sanitize_design_body(raw: Any, field: str) -> str:
+    """Remove bounded scaffolding while leaving semantic field validation unchanged.
+
+    Balanced ``<think>...</think>`` blocks have explicit boundaries and can be removed
+    without guessing. Unbalanced markers *inside an actual field* are deliberately kept so
+    ``assert_design_field_clean`` rejects/falls back. Identity fields also accept a narrow
+    set of model-added labels. The bare ``Content`` label is stripped only when followed
+    by non-ASCII content (the exact Qwen artefact observed in Korean design output) or an
+    explicit delimiter, avoiding corruption of legitimate English titles such as
+    ``Content Warning``.
     """
 
     body = str(raw or "")
     body = _THINK_BLOCK_RE.sub("", body)
     if field in _IDENTITY_WRAPPERS:
         stripped = body.strip()
+        stripped = _CONTENT_LABEL_RE.sub("", stripped, count=1).strip()
         for pattern in _IDENTITY_WRAPPERS[field]:
             candidate = pattern.sub("", stripped, count=1).strip()
             if candidate != stripped:
@@ -104,7 +162,8 @@ def install() -> None:
 
         @wraps(original_section_field_body)
         def section_field_body(raw: Any, field: str, fields: Any) -> str:
-            body = original_section_field_body(raw, field, fields)
+            sanitized_raw = _sanitize_section_output(raw, fields)
+            body = original_section_field_body(sanitized_raw, field, fields)
             return _sanitize_design_body(body, field)
 
         section_field_body._mmm_meta_sanitized_boundary = True
