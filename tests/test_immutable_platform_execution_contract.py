@@ -32,7 +32,7 @@ def _adapter() -> PlatformAdapter:
         resource_pack_format=100,
         release_metadata_url="https://www.minecraft.net/en-us/article/minecraft-java-edition-27-0",
         source_api_family="fabric_live_ai",
-        deterministic_module_kinds=frozenset(),
+        deterministic_module_kinds=frozenset({"item"}),
     )
 
 
