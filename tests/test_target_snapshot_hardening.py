@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import api, complete_orchestrator, complete_planner
-from minecraft_mod_ai.project_inventory import inspect_project_inventory
 from minecraft_mod_ai.spec import SpecValidationError
 
 
