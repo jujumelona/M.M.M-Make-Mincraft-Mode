@@ -405,33 +405,14 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    from . import game_design
-    from . import reuse_planner as reuse
-    from . import semantic_requirement_authority as semantic
-
+    # Keep exactly one reviewed late binding here: the host-owned cross-system DAG
+    # binder. Semantic decomposition, game-design prompting, and retrieval-facet logic
+    # remain available as helpers but are not rebound at runtime.
     original_compile = _evidence._compile_tasks
     if not getattr(original_compile, "_mmm_cross_system_dependencies", False):
         _compile_tasks_with_cross_system_dependencies.__wrapped__ = original_compile
         _compile_tasks_with_cross_system_dependencies._mmm_cross_system_dependencies = True
         _evidence._compile_tasks = _compile_tasks_with_cross_system_dependencies
-
-    original_semantic = semantic._call_semantic_model
-    if not getattr(original_semantic, "_mmm_deep_semantic_leaf_planning", False):
-        _semantic_model_with_leaf_decomposition.__wrapped__ = original_semantic
-        _semantic_model_with_leaf_decomposition._mmm_deep_semantic_leaf_planning = True
-        semantic._call_semantic_model = _semantic_model_with_leaf_decomposition
-
-    original_prompt = game_design._system_prompt
-    if not getattr(original_prompt, "_mmm_production_depth_game_design", False):
-        _production_depth_game_design_prompt.__wrapped__ = original_prompt
-        _production_depth_game_design_prompt._mmm_production_depth_game_design = True
-        game_design._system_prompt = _production_depth_game_design_prompt
-
-    original_plan = reuse.compile_pre_retrieval_plan
-    if not getattr(original_plan, "_mmm_design_facet_retrieval", False):
-        _compile_pre_retrieval_plan_with_design_facets.__wrapped__ = original_plan
-        _compile_pre_retrieval_plan_with_design_facets._mmm_design_facet_retrieval = True
-        reuse.compile_pre_retrieval_plan = _compile_pre_retrieval_plan_with_design_facets
 
     _INSTALLED = True
 
