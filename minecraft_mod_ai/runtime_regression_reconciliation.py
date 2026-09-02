@@ -188,6 +188,76 @@ def install() -> None:
             migration_requested=migration_requested,
         )
 
+    original_decompose = reuse.decompose_capability_graph
+
+    def decompose_capability_graph(
+        prompt: str,
+        *,
+        design: Mapping[str, Any] | None = None,
+        module_kinds: Iterable[str] = (),
+        semantic_router: Any = None,
+    ):
+        # Frozen request-catalog/pre-retrieval receipts remain the highest authority.
+        if isinstance(design, Mapping) and (
+            isinstance(design.get("_pre_retrieval_plan"), Mapping)
+            or isinstance(design.get("_evidence_request_catalog"), Mapping)
+        ):
+            return original_decompose(
+                prompt,
+                design=design,
+                module_kinds=module_kinds,
+                semantic_router=semantic_router,
+            )
+
+        # A design's explicit capability list is authoritative scope. Do not add prompt
+        # words as extra nodes and thereby inflate a reviewed design.
+        if isinstance(design, Mapping):
+            raw_capabilities = design.get("capabilities")
+            if isinstance(raw_capabilities, Sequence) and not isinstance(
+                raw_capabilities, (str, bytes, bytearray)
+            ):
+                nodes = tuple(
+                    dict.fromkeys(
+                        capability
+                        for raw in raw_capabilities
+                        if (capability := reuse._capability_id(raw))
+                    )
+                )
+                if nodes:
+                    return reuse.CapabilityGraph(
+                        nodes=nodes,
+                        edges=(),
+                        sources=tuple(
+                            (capability, "design.capabilities") for capability in nodes
+                        ),
+                        search_terms=tuple(
+                            (capability, (capability.replace(".", " "),))
+                            for capability in nodes
+                        ),
+                    )
+
+        kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
+        if kinds:
+            return original_decompose(
+                prompt,
+                design=None,
+                module_kinds=kinds,
+                semantic_router=semantic_router,
+            )
+
+        # Raw prompt text has not yet been approved as semantic identity. Preserve it as
+        # exactly one provisional opaque requirement rather than guessing capabilities.
+        opaque = reuse._capability_id(prompt)
+        if not opaque:
+            raise ValueError("Capability decomposition requires non-empty request text.")
+        capability = f"provisional:{opaque}"
+        return reuse.CapabilityGraph(
+            nodes=(capability,),
+            edges=(),
+            sources=((capability, "prompt_resolution.provisional_opaque"),),
+            search_terms=((capability, (str(prompt).strip(),)),),
+        )
+
     original_to_dict = reuse.TargetImplementationPlan.to_dict
 
     def target_plan_to_dict(self):
@@ -285,8 +355,7 @@ def install() -> None:
     reuse._workers = _workers
     reuse._discover_donor_candidates = _discover_donor_candidates
     reuse._discover_best_donor = _discover_best_donor
-    # Capability decomposition is already receipt-native in reuse_planner. Do not
-    # override its approved-catalog authority or raw-prompt fail-closed behavior here.
+    reuse.decompose_capability_graph = decompose_capability_graph
     reuse.TargetImplementationPlan.to_dict = target_plan_to_dict
     reuse.optimize_platform_and_reuse = optimize_platform_and_reuse
 
