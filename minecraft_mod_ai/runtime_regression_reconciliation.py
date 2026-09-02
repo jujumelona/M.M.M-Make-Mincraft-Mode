@@ -54,8 +54,6 @@ def _discover_donor_candidates(
             try:
                 results[index] = future.result()
             except Exception:
-                # Individual donor evidence may be unusable. The full frontier is still
-                # inspected and only verified slices are admitted.
                 results[index] = None
     return tuple(item for item in results if item is not None)
 
@@ -111,8 +109,6 @@ def install() -> None:
         version_hint: str | None = None,
         target_research_fn: Any | None = None,
     ):
-        # Explicit versions are migration intent/hints, not authority. The evidence
-        # optimiser still chooses the executable provider receipt.
         del version_hint
         return platform_evidence_pipeline.optimize_platform_evidence(
             prompt,
@@ -197,20 +193,37 @@ def install() -> None:
         module_kinds: Iterable[str] = (),
         semantic_router: Any = None,
     ):
-        # Frozen request-catalog/pre-retrieval receipts remain the highest authority.
         if isinstance(design, Mapping) and (
             isinstance(design.get("_pre_retrieval_plan"), Mapping)
             or isinstance(design.get("_evidence_request_catalog"), Mapping)
         ):
-            return original_decompose(
+            graph = original_decompose(
                 prompt,
                 design=design,
                 module_kinds=module_kinds,
                 semantic_router=semantic_router,
             )
+            normalized_sources = tuple(
+                (
+                    capability,
+                    (
+                        "evidence_request_catalog." + source.removeprefix("request_catalog.")
+                        if source.startswith("request_catalog.")
+                        else source
+                    ),
+                )
+                for capability, source in graph.sources
+            )
+            if normalized_sources != graph.sources:
+                graph = reuse.CapabilityGraph(
+                    nodes=graph.nodes,
+                    edges=graph.edges,
+                    sources=normalized_sources,
+                    search_terms=graph.search_terms,
+                    source_plan_sha256=graph.source_plan_sha256,
+                )
+            return graph
 
-        # A design's explicit capability list is authoritative scope. Do not add prompt
-        # words as extra nodes and thereby inflate a reviewed design.
         if isinstance(design, Mapping):
             raw_capabilities = design.get("capabilities")
             if isinstance(raw_capabilities, Sequence) and not isinstance(
@@ -245,17 +258,13 @@ def install() -> None:
                 semantic_router=semantic_router,
             )
 
-        # Raw prompt text has not yet been approved as semantic identity. Preserve it as
-        # exactly one provisional opaque requirement rather than guessing capabilities.
-        opaque = reuse._capability_id(prompt)
-        if not opaque:
-            raise ValueError("Capability decomposition requires non-empty request text.")
-        capability = f"provisional:{opaque}"
-        return reuse.CapabilityGraph(
-            nodes=(capability,),
-            edges=(),
-            sources=((capability, "prompt_resolution.provisional_opaque"),),
-            search_terms=((capability, (str(prompt).strip(),)),),
+        # Raw prompt text is not approved semantic authority. Production retrieval must
+        # fail closed until evidence-first planning freezes a request catalog.
+        return original_decompose(
+            prompt,
+            design=None,
+            module_kinds=(),
+            semantic_router=semantic_router,
         )
 
     original_to_dict = reuse.TargetImplementationPlan.to_dict
@@ -296,8 +305,6 @@ def install() -> None:
         discovery_client: Any | None = None,
         semantic_router: Any = None,
     ):
-        # Keep these names in the executable contract: grounded donor receipts remain
-        # available independently of optional public discovery.
         grounded_donors_available = "__mmm_grounded_donors__"
         evidence_discovery_enabled = discovery_client is not None
         client = discovery_client
