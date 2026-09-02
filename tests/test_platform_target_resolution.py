@@ -10,8 +10,8 @@ from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.knowledge import evidence_for_target
 from minecraft_mod_ai.platform_catalog import adapter_from_project
+from minecraft_mod_ai.platform_evidence_pipeline import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
-from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
 from minecraft_mod_ai.spec import (
     ContentKind,
