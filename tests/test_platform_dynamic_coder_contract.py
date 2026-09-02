@@ -12,7 +12,7 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
-from minecraft_mod_ai.platform_optimizer import PlatformOptimization, TargetEvidence
+from minecraft_mod_ai.platform_evidence_pipeline import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_resolver import resolve_platform
 
 
