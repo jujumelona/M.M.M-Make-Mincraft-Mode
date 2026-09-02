@@ -26,14 +26,12 @@ def runtime_initialized() -> bool:
 
 
 def _install_runtime_contracts() -> None:
-    from .reuse_asset_upgrade_contract import install_postbootstrap, install_prebootstrap
     from .runtime_wrapper_integrity import verify_installed_wrappers
 
     _contract_composer.compose_contract_stages(
         owner_name="package-runtime-bootstrap",
         state_owner=_contract_composer,
         stages=(
-            _contract_composer.ContractStage("prebootstrap", install_prebootstrap),
             _contract_composer.ContractStage("core", _install_core_contracts),
             _contract_composer.ContractStage("model-runtime", _install_model_runtime_contracts),
             _contract_composer.ContractStage("validation", _install_validation_contracts),
@@ -44,7 +42,6 @@ def _install_runtime_contracts() -> None:
             _contract_composer.ContractStage("late-safety", _install_late_safety_contracts),
             _contract_composer.ContractStage("public-boundary", _install_public_boundary_contracts),
             _contract_composer.ContractStage("post-bootstrap", _install_post_bootstrap_contracts),
-            _contract_composer.ContractStage("postbootstrap", install_postbootstrap),
             _contract_composer.ContractStage("integrity", verify_installed_wrappers),
         ),
     )
