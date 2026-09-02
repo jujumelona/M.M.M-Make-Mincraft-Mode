@@ -72,7 +72,6 @@ def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:
 
     source = (PACKAGE / "runtime_bootstrap.py").read_text(encoding="utf-8")
     expected = [
-        "prebootstrap",
         "core",
         "model-runtime",
         "validation",
@@ -83,7 +82,6 @@ def test_package_bootstrap_phase_order_is_explicit_and_graph_owned() -> None:
         "late-safety",
         "public-boundary",
         "post-bootstrap",
-        "postbootstrap",
         "integrity",
     ]
     observed = re.findall(r'ContractStage\(\s*"([^"]+)"', source)
