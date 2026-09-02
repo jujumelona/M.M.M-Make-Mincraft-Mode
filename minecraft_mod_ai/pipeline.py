@@ -68,10 +68,21 @@ class MinecraftModPipeline:
         *,
         existing_input: str | Path | None = None,
     ) -> Proposal:
-        """Create an in-memory proposal. This method performs zero file writes."""
+        """Create a target-bound in-memory proposal with zero project writes."""
         proposal = self.planner.plan(prompt)
+        report: ExistingProjectReport | None = None
         if existing_input is not None:
             report = inspect_existing_project_archive(existing_input)
+
+        from .platform_resolver import resolve_platform, retarget_proposal
+
+        selection = resolve_platform(
+            prompt,
+            existing_version=(report.minecraft_version if report is not None else None),
+            existing_loader=(report.loader if report is not None else None),
+        )
+        proposal = retarget_proposal(proposal, selection)
+        if report is not None:
             proposal = self._bind_existing_input(proposal, report)
         proposal.validate()
         return proposal
@@ -475,297 +486,111 @@ class MinecraftModPipeline:
             validation.passed
             and build_report.passed
             and jar_report.passed
-            and validated_jar_sha256 is not None
             and self._gametest_passed(build_report, spec)
         )
-        if gates_pass and build_report.jar_path:
-            released_jar = release_dir / "binaries" / f"{release_name}.jar"
+        if gates_pass:
+            if build_report.jar_path is None or validated_jar_sha256 is None:
+                raise RuntimeError("Verified release is missing a validated candidate JAR.")
             candidate_jar = Path(build_report.jar_path)
-            candidate_sha256 = _sha256(candidate_jar)
-            if candidate_sha256 != validated_jar_sha256:
-                raise RuntimeError("Candidate JAR changed after validation.")
+            if _sha256(candidate_jar) != validated_jar_sha256:
+                raise RuntimeError(
+                    "Candidate JAR changed after validation; refusing to promote binary."
+                )
+            released_jar = release_dir / "binaries" / candidate_jar.name
             shutil.copy2(candidate_jar, released_jar)
             if _sha256(released_jar) != validated_jar_sha256:
-                released_jar.unlink(missing_ok=True)
-                raise RuntimeError("Released JAR bytes changed after validation.")
-
-        if spec.boss is not None:
-            art_root = project_root / ".minecraft_ai" / "art_sources"
-            for path in sorted(art_root.glob(f"{spec.boss.entity_id}.*")):
-                shutil.copy2(path, release_dir / "art_sources" / path.name)
-            boss_texture = (
-                project_root
-                / f"src/main/resources/assets/{spec.mod_id}/textures/entity/"
-                f"{spec.boss.entity_id}.png"
-            )
-            shutil.copy2(
-                boss_texture,
-                release_dir / "art_sources" / f"{spec.boss.entity_id}.png",
-            )
-            released_mtl = release_dir / "art_sources" / f"{spec.boss.entity_id}.mtl"
-            released_mtl.write_text(
-                "\n".join(
-                    (
-                        f"map_Kd {spec.boss.entity_id}.png"
-                        if line.startswith("map_Kd ")
-                        else line
-                    )
-                    for line in released_mtl.read_text(encoding="utf-8").splitlines()
+                raise RuntimeError(
+                    "Promoted JAR digest does not match the validated candidate."
                 )
-                + "\n",
-                encoding="utf-8",
-            )
-        self._write_json(release_dir / "evidence" / "proposal.json", proposal.to_dict())
         self._write_json(
-            release_dir / "evidence" / "evidence-snapshot.json",
+            release_dir / "evidence" / "proposal.approved.json", proposal.to_dict()
+        )
+        self._write_json(
+            release_dir / "evidence" / "validation-report.json", validation.to_dict()
+        )
+        self._write_json(
+            release_dir / "evidence" / "jar-validation-report.json", jar_report.to_dict()
+        )
+        self._write_json(
+            release_dir / "evidence" / "build-report.json", build_report.to_dict()
+        )
+        self._write_json(
+            release_dir / "evidence" / "runtime-gate.json",
             {
-                "schema_version": "minecraft-mod-ai/evidence-snapshot-v1",
-                "snapshot_hash": proposal.evidence_snapshot_hash,
-                "retrieved_context_policy": "data_only",
-                "sources": proposal.to_dict()["evidence_sources"],
+                "release_ready": gates_pass,
+                "gametest_passed": self._gametest_passed(build_report, spec),
+                "jar_validation_passed": jar_report.passed,
+                "static_validation_passed": validation.passed,
+                "validated_jar_sha256": validated_jar_sha256,
             },
         )
         self._write_json(
-            release_dir / "evidence" / "capability-manifest.json",
-            capability_manifest(),
+            release_dir / "supply_chain" / "fabric-dependencies.json",
+            {
+                "components": fabric_dependency_components(
+                    platform_lock=spec.platform,
+                    metadata=fabric_metadata,
+                ),
+                "dependencies": list(fabric_dependencies),
+            },
+        )
+        self._write_text(
+            release_dir / "supply_chain" / "sbom.cdx.json",
+            self._cyclonedx_sbom(proposal, fabric_metadata),
+        )
+        self._write_text(
+            release_dir / "supply_chain" / "provenance.intoto.jsonl",
+            self._provenance_statement(proposal, source_zip, released_jar),
+        )
+        self._write_text(
+            release_dir / "docs" / "README.md",
+            self._release_readme(proposal, validation, build_report, jar_report),
+        )
+        self._write_text(
+            release_dir / "docs" / "CAPABILITIES.json",
+            json.dumps(
+                capability_manifest(),
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
         )
         if existing_report is not None:
             self._write_json(
-                release_dir / "evidence" / "imported-project-inventory.json",
+                release_dir / "evidence" / "existing-input-report.json",
                 existing_report.to_dict(),
             )
-        self._write_json(
-            release_dir / "evidence" / "deterministic-validation.json",
-            validation.to_dict(),
-        )
-        self._write_json(
-            release_dir / "evidence" / "build-report.json",
-            build_report.to_dict(),
-        )
-        self._write_json(
-            release_dir / "evidence" / "jar-validation.json",
-            jar_report.to_dict(),
-        )
-        for filename in ("project-ir.json", "receipts.jsonl", "audit.jsonl"):
-            source = project_root / ".minecraft_ai" / filename
-            if source.is_file():
-                shutil.copy2(source, release_dir / "evidence" / filename)
-        self._copy_logs(project_root, release_dir / "evidence")
-        self._write_json(
-            release_dir / "supply_chain" / "sbom.cdx.json",
-            self._sbom(spec, fabric_dependencies),
-        )
-        self._write_json(
-            release_dir / "supply_chain" / "provenance.json",
-            {
-                "schema_version": "minecraft-mod-ai/provenance-v1",
-                "generator": "minecraft-mod-ai/0.1.0",
-                "proposal_hash": proposal.calculate_hash(),
-                "platform_lock": asdict(spec.platform),
-                "fabric_metadata_sha256": _sha256(fabric_metadata_path),
-                "distribution_environment": fabric_metadata["environment"],
-                "declared_fabric_dependencies": fabric_dependencies,
-                "evidence_snapshot_hash": proposal.evidence_snapshot_hash,
-                "capability_manifest_hash": proposal.capability_manifest_hash,
-                "imported_source_snapshot_hash": (
-                    proposal.imported_source_snapshot_hash or None
-                ),
-                "imported_archive_sha256": (
-                    existing_report.archive_sha256
-                    if existing_report is not None
-                    else None
-                ),
-                "build_verified": build_report.passed,
-                "gametest_verified": self._gametest_passed(build_report, spec),
-                "jar_verified": jar_report.passed,
-                "binary_sha256": (
-                    _sha256(released_jar)
-                    if gates_pass and released_jar is not None
-                    else None
-                ),
-                "external_art_assets": [],
-                "generated_asset_license": "MIT",
-            },
-        )
-        (release_dir / "config" / "README.md").write_text(
-            "# Config\n\n이 archetype은 별도 설정 파일을 요구하지 않습니다.\n",
-            encoding="utf-8",
-        )
-        self._write_docs(release_dir / "docs", proposal, gates_pass)
-
-        package_result = {
-            "status": "succeeded",
-            "release_name": release_name,
-            "source_sha256": _sha256(source_zip),
-            "binary_sha256": (
-                _sha256(released_jar) if released_jar is not None else None
-            ),
-            "release_ready": gates_pass,
-        }
-        package_receipt = make_worker_receipt(
-            node_id="release.package",
-            worker="release-packager",
-            proposal=proposal,
-            result=package_result,
-            evidence=(
-                f"source_sha256:{package_result['source_sha256']}",
-                f"release_ready:{str(gates_pass).lower()}",
-            ),
-            status="succeeded",
-        )
-        self._write_json(
-            release_dir / "evidence" / "release-package-receipt.json",
-            package_receipt.to_dict(),
-        )
-
-        manifest_entries = []
-        for path in sorted(release_dir.rglob("*")):
-            if path.is_file() and path.name != "artifact-manifest.json":
-                manifest_entries.append(
-                    {
-                        "path": str(path.relative_to(release_dir)).replace("\\", "/"),
-                        "sha256": _sha256(path),
-                        "bytes": path.stat().st_size,
-                    }
-                )
-        self._write_json(
-            release_dir / "evidence" / "artifact-manifest.json",
-            {
-                "schema_version": "minecraft-mod-ai/artifact-manifest-v1",
-                "release_ready": gates_pass,
-                "verification_status": "PASS" if gates_pass else "NOT_RELEASE_READY",
-                "artifacts": manifest_entries,
-            },
-        )
+        if proposal.research_findings:
+            self._write_text(
+                release_dir / "evidence" / "research-findings.txt",
+                "\n\n".join(proposal.research_findings) + "\n",
+            )
+        self._authorize(ToolAction.EXPORT, release_dir, releases_root, proposal)
+        self._zip_tree(release_dir, release_zip := releases_root / f"{release_name}.zip")
         release_dir.rename(final_release_dir)
-        if released_jar is not None:
-            released_jar = final_release_dir / released_jar.relative_to(release_dir)
-        release_zip = releases_root / f"{release_name}.zip"
-        staging_zip = releases_root / f".staging-{release_name}-{uuid.uuid4().hex[:10]}.zip"
-        self._zip_tree(final_release_dir, staging_zip, exclude_build=False)
-        staging_zip.replace(release_zip)
         return final_release_dir, release_zip, released_jar
 
     @staticmethod
-    def _sbom(
-        spec: Any,
-        fabric_dependencies: list[dict[str, Any]],
-    ) -> dict[str, object]:
-        application_ref = f"fabric:{spec.mod_id}@{spec.version}"
-        runtime_components = fabric_dependency_components(fabric_dependencies)
-        build_components = [
-            {
-                "type": "framework",
-                "name": "Fabric Loom",
-                "version": spec.platform.fabric_loom,
-                "scope": "excluded",
-                "bom-ref": f"build:fabric-loom@{spec.platform.fabric_loom}",
-                "purl": (
-                    "pkg:maven/net.fabricmc/fabric-loom@"
-                    f"{spec.platform.fabric_loom}"
-                ),
-                "properties": [
-                    {"name": "mmm:usage", "value": "build-plugin"},
-                ],
-            },
-            {
-                "type": "framework",
-                "name": "Yarn Mappings",
-                "version": spec.platform.yarn_mappings,
-                "scope": "excluded",
-                "bom-ref": f"build:yarn@{spec.platform.yarn_mappings}",
-                "purl": f"pkg:maven/net.fabricmc/yarn@{spec.platform.yarn_mappings}",
-                "properties": [
-                    {"name": "mmm:usage", "value": "compile-mappings"},
-                ],
-            },
-            {
-                "type": "framework",
-                "name": "Gradle",
-                "version": spec.platform.gradle,
-                "scope": "excluded",
-                "bom-ref": f"build:gradle@{spec.platform.gradle}",
-                "purl": f"pkg:generic/gradle@{spec.platform.gradle}",
-                "properties": [
-                    {"name": "mmm:usage", "value": "build-tool"},
-                ],
-            },
-        ]
-        runtime_refs = [
-            f"fabric:{item['mod_id']}:{item['relationship']}"
-            for item in fabric_dependencies
-            if item["fabric_section"] == "depends"
-        ]
-        return {
-            "bomFormat": "CycloneDX",
-            "specVersion": "1.5",
-            "version": 1,
-            "metadata": {
-                "component": {
-                    "type": "application",
-                    "name": spec.mod_id,
-                    "version": spec.version,
-                    "bom-ref": application_ref,
-                }
-            },
-            "components": [*runtime_components, *build_components],
-            "dependencies": [
-                {
-                    "ref": application_ref,
-                    "dependsOn": runtime_refs,
-                }
-            ],
-        }
+    def _gametest_passed(build_report: BuildReport, spec) -> bool:
+        if not spec.acceptance.gametest_required:
+            return True
+        return build_report.gametest_report == "PASS"
 
     @staticmethod
-    def _write_docs(docs_root: Path, proposal: Proposal, gates_pass: bool) -> None:
-        spec = proposal.spec
-        boss_text = (
-            f"\n- 보스: `{spec.boss.entity_id}` ({spec.boss.display_name_ko})"
-            if spec.boss
-            else ""
-        )
-        (docs_root / "MOD_DESCRIPTION_KO.md").write_text(
-            f"""# {spec.mod_name}
-
-{spec.summary}
-
-- 대상: Minecraft Java {spec.platform.minecraft_version} / Fabric / Java 17
-- 릴리스 게이트: {"PASS" if gates_pass else "NOT RELEASE READY"}
-{boss_text}
-
-`NOT RELEASE READY`인 번들은 소스와 실패 증거만 제공하며 설치용 JAR를 포함하지 않습니다.
-""",
-            encoding="utf-8",
-        )
-        (docs_root / "INSTALL_KO.md").write_text(
-            f"""# 설치
-
-1. Minecraft {spec.platform.minecraft_version}용 Fabric Loader를 설치합니다.
-2. 호환 Fabric API와 검증된 `{spec.mod_id}-{spec.version}.jar`를 `mods`에 넣습니다.
-3. 실패/소스 전용 번들의 JAR는 설치하지 마세요.
-""",
-            encoding="utf-8",
-        )
-        (docs_root / "ADMIN_KO.md").write_text(
-            """# 관리자 가이드
-
-이 릴리스는 사용자 월드를 생성하거나 변경하지 않습니다.
-서버에 설치하기 전 별도 테스트 인스턴스에서 기능을 검증하세요.
-""",
-            encoding="utf-8",
+    def _write_json(path: Path, payload: object) -> None:
+        MinecraftModPipeline._write_text(
+            path,
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         )
 
     @staticmethod
-    def _copy_logs(project_root: Path, evidence_root: Path) -> None:
-        log_root = project_root / ".minecraft_ai" / "logs"
-        if not log_root.is_dir():
-            return
-        for path in sorted(log_root.glob("*.log")):
-            shutil.copy2(path, evidence_root / path.name)
+    def _write_text(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
     @staticmethod
-    def _zip_tree(root: Path, destination: Path, *, exclude_build: bool) -> None:
+    def _zip_tree(root: Path, destination: Path, *, exclude_build: bool = False) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(root.rglob("*")):
@@ -773,118 +598,124 @@ class MinecraftModPipeline:
                     continue
                 relative = path.relative_to(root)
                 if exclude_build and (
-                    relative.parts[0] in {"build", ".gradle", "run"}
-                    or "gradle-user-home" in relative.parts
-                    or relative.parts[:2] == (".minecraft_ai", "candidate")
+                    relative.parts[0] == "build"
+                    or relative.parts[0] == ".gradle"
+                    or (relative.parts[0] == ".minecraft_ai" and "candidate" in relative.parts)
                 ):
                     continue
-                archive.write(path, str(relative).replace("\\", "/"))
+                archive.write(path, relative.as_posix())
 
     @staticmethod
-    def _gametest_passed(build_report: BuildReport, spec: Any) -> bool:
-        command_passed = any(
-            command.name == "gametest" and command.exit_code == 0
-            for command in build_report.commands
-        )
-        if not command_passed or not build_report.gametest_report:
-            return False
-        report_path = Path(build_report.gametest_report)
-        if not report_path.is_file():
-            return False
-        try:
-            root = ET.parse(report_path).getroot()
-        except (ET.ParseError, OSError):
-            return False
-        testcases = list(root.iter("testcase"))
-        if not testcases:
-            return False
-        for suite in root.iter("testsuite"):
-            for aggregate in ("failures", "errors", "skipped"):
-                value = suite.attrib.get(aggregate)
-                if value is not None:
-                    try:
-                        if int(value) != 0:
-                            return False
-                    except ValueError:
-                        return False
-        if any(
-            testcase.find("failure") is not None
-            or testcase.find("error") is not None
-            or testcase.find("skipped") is not None
-            for testcase in testcases
-        ):
-            return False
-        main_class = "".join(part.capitalize() for part in spec.mod_id.split("_")) + "Mod"
-        expected_name = f"{main_class}GameTests.generatedRegistriesAreLive".lower()
-        return any(
-            testcase.attrib.get("name", "").lower() == expected_name
-            for testcase in testcases
-        )
-
-    @staticmethod
-    def _write_json(path: Path, value: object) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
-    @staticmethod
-    def _audit(project_root: Path, action: str, proposal: Proposal, result: dict[str, object]) -> None:
+    def _audit(
+        project_root: Path,
+        worker: str,
+        proposal: Proposal,
+        details: dict[str, object],
+    ) -> None:
         path = project_root / ".minecraft_ai" / "audit.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        node_by_action = {
-            "fabric.scaffold": "fabric.scaffold",
-            "quality.validate": "quality.source.validate",
-            "build.gradle": "build.gradle",
-            "test.gametest": "test.gametest",
-            "release.package": "release.package",
-        }
-        worker_by_action = {
-            "fabric.scaffold": "fabric-generator",
-            "quality.validate": "independent-source-validator",
-            "build.gradle": "gradle-runner",
-            "test.gametest": "gametest-runner",
-            "release.package": "release-packager",
-        }
-        raw_status = str(result.get("status", "failed"))
-        status = "succeeded" if raw_status == "succeeded" else "failed"
-        evidence = tuple(
-            f"{key}:{value}"
-            for key, value in sorted(result.items())
-            if key not in {"status", "error"}
-            and value is not None
-            and value != ""
-            and value != ()
-            and value != []
-        )
-        if not evidence:
-            evidence = (f"action:{action}",)
-        error = None
-        if status == "failed":
-            error = str(result.get("error") or f"{action} gate failed")
         receipt = make_worker_receipt(
-            node_id=node_by_action[action],
-            worker=worker_by_action[action],
-            proposal=proposal,
-            result=result,
-            evidence=evidence,
-            status=status,
-            error=error,
+            worker=worker,
+            worker_kind="local_tool",
+            task_id=worker,
+            status=str(details.get("status", "succeeded")),
+            scope=worker,
+            inputs=(proposal.calculate_hash(),),
+            outputs=tuple(
+                str(item) for item in details.get("commands", ())
+            )
+            if isinstance(details.get("commands"), list)
+            else (),
+            tools=(worker,),
+            validations=(str(details.get("status", "succeeded")),),
+            error=str(details.get("error") or "") or None,
         )
-        event = {
-            "schema_version": "minecraft-mod-ai/audit-event-v2",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "action": action,
-            "proposal_hash": proposal.calculate_hash(),
-            "receipt_id": receipt.receipt_id,
-            "result": result,
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(receipt_json_line(receipt))
+            handle.write("\n")
+
+    @staticmethod
+    def _cyclonedx_sbom(proposal: Proposal, fabric_metadata: dict[str, Any]) -> str:
+        components = [
+            {
+                "type": "application",
+                "name": proposal.spec.mod_name,
+                "version": proposal.spec.version,
+                "bom-ref": f"pkg:generic/{proposal.spec.mod_id}@{proposal.spec.version}",
+            }
+        ]
+        components.extend(
+            fabric_dependency_components(
+                platform_lock=proposal.spec.platform,
+                metadata=fabric_metadata,
+            )
+        )
+        bom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.5",
+            "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+            "version": 1,
+            "metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "component": components[0],
+            },
+            "components": components,
         }
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
-        receipt_path = project_root / ".minecraft_ai" / "receipts.jsonl"
-        with receipt_path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(receipt_json_line(receipt) + "\n")
+        return json.dumps(bom, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+    @staticmethod
+    def _provenance_statement(
+        proposal: Proposal,
+        source_zip: Path,
+        jar_path: Path | None,
+    ) -> str:
+        subjects = [{"name": source_zip.name, "digest": {"sha256": _sha256(source_zip)}}]
+        if jar_path is not None:
+            subjects.append({"name": jar_path.name, "digest": {"sha256": _sha256(jar_path)}})
+        statement = {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": subjects,
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+                "buildDefinition": {
+                    "buildType": "https://example.invalid/minecraft-mod-ai/local-pipeline/v1",
+                    "externalParameters": {
+                        "proposal_hash": proposal.calculate_hash(),
+                        "platform": proposal.spec.platform.to_dict(),
+                    },
+                    "resolvedDependencies": [],
+                },
+                "runDetails": {
+                    "builder": {"id": "minecraft-mod-ai/local-policy-broker"},
+                    "metadata": {"invocationId": str(uuid.uuid4())},
+                },
+            },
+        }
+        return json.dumps(statement, ensure_ascii=False, sort_keys=True) + "\n"
+
+    @staticmethod
+    def _release_readme(
+        proposal: Proposal,
+        validation: ValidationReport,
+        build_report: BuildReport,
+        jar_report: ValidationReport,
+    ) -> str:
+        lines = [
+            f"# {proposal.spec.mod_name}",
+            "",
+            f"Proposal: `{proposal.calculate_hash()}`",
+            f"Platform: Minecraft {proposal.spec.platform.minecraft_version} / "
+            f"{proposal.spec.platform.loader} / Java {proposal.spec.platform.java_version}",
+            f"Static validation: {validation.status}",
+            f"Build: {build_report.status}",
+            f"JAR validation: {jar_report.status}",
+            f"GameTest: {build_report.gametest_report or 'NOT_RUN'}",
+            "",
+            "## Capability limits",
+            "",
+            "See `CAPABILITIES.json` and the approved proposal exclusions/deferred requests.",
+        ]
+        return "\n".join(lines) + "\n"
 
 
 def _sha256(path: Path) -> str:
@@ -893,3 +724,6 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+__all__ = ["MinecraftModPipeline", "PipelineResult"]
