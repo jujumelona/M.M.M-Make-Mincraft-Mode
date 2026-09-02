@@ -480,6 +480,43 @@ class MinecraftModPipeline:
 
         source_zip = release_dir / "source" / f"{release_name}-source.zip"
         self._zip_tree(project_root, source_zip, exclude_build=True)
+
+        art_source_root = project_root / ".minecraft_ai" / "art_sources"
+        if art_source_root.is_dir() and not art_source_root.is_symlink():
+            for source in sorted(art_source_root.iterdir()):
+                if not source.is_file() or source.is_symlink():
+                    continue
+                destination = release_dir / "art_sources" / source.name
+                if source.suffix.casefold() == ".mtl" and spec.boss is not None:
+                    texture_name = f"{spec.boss.entity_id}.png"
+                    original = source.read_text(encoding="utf-8")
+                    rewritten = "\n".join(
+                        (
+                            f"map_Kd {texture_name}"
+                            if line.lstrip().startswith("map_Kd ")
+                            else line
+                        )
+                        for line in original.splitlines()
+                    )
+                    if original.endswith("\n"):
+                        rewritten += "\n"
+                    self._write_text(destination, rewritten)
+                else:
+                    shutil.copy2(source, destination)
+        if spec.boss is not None:
+            boss_texture = (
+                project_root
+                / "src/main/resources/assets"
+                / spec.mod_id
+                / "textures/entity"
+                / f"{spec.boss.entity_id}.png"
+            )
+            if boss_texture.is_file() and not boss_texture.is_symlink():
+                shutil.copy2(
+                    boss_texture,
+                    release_dir / "art_sources" / boss_texture.name,
+                )
+
         released_jar: Path | None = None
         gates_pass = (
             validation.passed
@@ -534,6 +571,21 @@ class MinecraftModPipeline:
             release_dir / "supply_chain" / "sbom.cdx.json",
             self._cyclonedx_sbom(proposal, fabric_metadata),
         )
+        self._write_json(
+            release_dir / "supply_chain" / "provenance.json",
+            {
+                "schema_version": "mmm/distribution-provenance-v1",
+                "source_sha256": "sha256:" + _sha256(source_zip),
+                "binary_sha256": (
+                    "sha256:" + _sha256(released_jar)
+                    if released_jar is not None
+                    else None
+                ),
+                "platform_lock": spec.platform.to_dict(),
+                "environment": fabric_metadata.get("environment"),
+                "declared_fabric_dependencies": list(fabric_dependencies),
+            },
+        )
         self._write_text(
             release_dir / "supply_chain" / "provenance.intoto.jsonl",
             self._provenance_statement(proposal, source_zip, released_jar),
@@ -553,11 +605,15 @@ class MinecraftModPipeline:
             + "\n",
         )
         if existing_report is not None:
+            inventory = existing_report.to_dict()
             self._write_json(
                 release_dir / "evidence" / "existing-input-report.json",
-                existing_report.to_dict(),
+                inventory,
             )
-        self._authorize(ToolAction.EXPORT, release_dir, releases_root, proposal)
+            self._write_json(
+                release_dir / "evidence" / "imported-project-inventory.json",
+                inventory,
+            )
         self._zip_tree(release_dir, release_zip := releases_root / f"{release_name}.zip")
         release_dir.rename(final_release_dir)
         return final_release_dir, release_zip, released_jar
