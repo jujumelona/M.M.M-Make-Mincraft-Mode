@@ -68,8 +68,10 @@ def finalize_runtime() -> None:
         from .execution_feedback_owner_precision_contract import install as install_execution_feedback_owner_precision
         from .external_mcp_binding_concurrency_contract import install as install_external_mcp_binding_concurrency
         from .external_mcp_binding_contract import install as install_external_mcp_binding
+        from .fabric_immutable_rebind_contract import install as install_fabric_immutable_rebind
         from .generation_concurrency_safety import install as install_generation_safety
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
+        from .immutable_platform_execution_contract import install as install_immutable_platform_execution
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_server_response_resilience import install as install_llama_server_response_resilience
@@ -80,6 +82,7 @@ def finalize_runtime() -> None:
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
+        from .planner_graph_integrity_contract import install as install_planner_graph_integrity
         from .prefill_calibration_strictness_contract import install as install_prefill_calibration_strictness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
@@ -90,6 +93,7 @@ def finalize_runtime() -> None:
         from .runtime_hot_path_contract import install as install_runtime_hot_paths
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
+        from .runtime_regression_reconciliation import install as install_runtime_regression_reconciliation
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .target_grounding_contract import install_target_grounding_contract
@@ -164,6 +168,13 @@ def finalize_runtime() -> None:
             orchestrator_module=complete_orchestrator,
             work_graph_module=work_graph,
         )
+
+        # Approval-bound execution contracts are deliberately finalized here, after the
+        # baseline runtime has been composed. This file is the sole approved late owner.
+        install_immutable_platform_execution()
+        install_fabric_immutable_rebind()
+        install_planner_graph_integrity()
+        install_runtime_regression_reconciliation()
 
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
