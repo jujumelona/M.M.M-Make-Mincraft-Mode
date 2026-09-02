@@ -93,7 +93,12 @@ def _internal_coder_messages() -> list[dict]:
         "initial_exact_source_context": {
             "schema_version": "mmm/source-observation-context-v1",
             "ledger_receipt": dict(source_receipt),
-            "global_anchors": [],
+            "global_anchors": [
+                {
+                    "path": "build.gradle",
+                    "text": "plugins { id 'fabric-loom' }",
+                }
+            ],
             "page_observations": [],
         },
         "host_grounding": {
@@ -129,7 +134,7 @@ def test_owned_anchors_are_exact_file_authority_not_abstract_locator_guesses() -
     assert all("module:" not in path for path in writable)
 
 
-def test_host_planir_owned_path_survives_unrelated_localization_pin() -> None:
+def test_host_planir_owned_path_preempts_unrelated_initial_source_context() -> None:
     messages = [
         {
             "role": "user",
@@ -146,19 +151,17 @@ def test_host_planir_owned_path_survives_unrelated_localization_pin() -> None:
 
     assert tool_loop.is_mutation_ready(messages, state) is True
     assert state.mutation_context is not None
-    assert state.mutation_context.target_path == "build.gradle"
-    assert "build.gradle" not in state.mutation_context.writable_paths
-    assert JAVA_PATH in state.mutation_context.writable_paths
+    assert state.mutation_context.target_path == JAVA_PATH
+    assert state.mutation_context.target_pinned is True
     assert JAVA_PATH in state.mutation_context.creatable_paths
 
-    assert (
-        tool_loop._mutation_target_error(
-            "apply_source_edit",
-            {"operation": "replace_file", "path": "build.gradle"},
-            state.mutation_context,
-        )
-        is None
+    build_drift = tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {"operation": "replace_file", "path": "build.gradle"},
+        state.mutation_context,
     )
+    assert build_drift is not None
+    assert "MUTATION_TARGET_DRIFT" in build_drift
     assert (
         tool_loop._mutation_target_error(
             "apply_source_edit",
@@ -167,13 +170,34 @@ def test_host_planir_owned_path_survives_unrelated_localization_pin() -> None:
         )
         is None
     )
-    drift = tool_loop._mutation_target_error(
-        "apply_source_edit",
-        {"operation": "create_file", "path": "src/main/java/example/NotOwned.java"},
-        state.mutation_context,
+
+
+def test_pinned_fresh_target_survives_unrelated_rag_entrypoint_evidence() -> None:
+    state = tool_loop.HostRunState()
+    authority = {"role": "system", "content": json.dumps(_task_payload())}
+    assert tool_loop.is_mutation_ready([authority], state) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.target_path == JAVA_PATH
+
+    absolute_checkpoint_entrypoint = (
+        "/content/mmm-output/run/.minecraft_ai/.mmm-custom-checkpoints/abc/project/"
+        "src/main/java/example/ModEntrypoint.java"
     )
-    assert drift is not None
-    assert "MUTATION_TARGET_DRIFT" in drift
+    recorded = state.record_evidence(
+        {
+            "hits": [
+                {
+                    "path": absolute_checkpoint_entrypoint,
+                    "text": "package example; public final class ModEntrypoint {}",
+                }
+            ]
+        },
+        usable=True,
+    )
+    assert recorded is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.target_path == JAVA_PATH
+    assert state.mutation_context.target_pinned is True
 
 
 def test_internal_custom_module_envelope_restores_host_reserved_java_target(tmp_path: Path) -> None:
@@ -196,6 +220,8 @@ def test_internal_custom_module_envelope_restores_host_reserved_java_target(tmp_
     assert authority is not None
     assert authority["role"] == "developer"
     authority_payload = json.loads(authority["content"])
+    assert authority_payload["mutation_target"]["path"] == JAVA_PATH
+    assert authority_payload["mutation_target"]["symbol"] == "Foo"
     writable, creatable = tool_loop._planir_owned_anchor_sets(authority_payload)
     assert writable == (JAVA_PATH,)
     assert creatable == (JAVA_PATH,)
@@ -205,6 +231,7 @@ def test_internal_custom_module_envelope_restores_host_reserved_java_target(tmp_
     assert state.mutation_context is not None
     assert state.mutation_context.target_path == JAVA_PATH
     assert state.mutation_context.is_new_file is True
+    assert state.mutation_context.target_pinned is True
     assert (
         tool_loop._mutation_target_error(
             "apply_source_edit",
