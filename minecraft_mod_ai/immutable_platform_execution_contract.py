@@ -2,50 +2,21 @@ from __future__ import annotations
 
 """Freeze the complete executable platform receipt across approval and execution.
 
-Resolution may use live provider evidence. Once an adapter is selected, however, every
-coordinate needed by generation/build validation is copied into the approval-bound lock.
-Downstream reconstruction uses only that receipt and therefore cannot silently drift when
-Fabric/Minecraft metadata changes later.
+Resolution may use live provider evidence. Once an adapter is selected, every coordinate
+needed by generation/build validation is copied into the canonical approval-bound
+``PlatformLock``. Downstream reconstruction uses only that receipt and therefore cannot
+silently drift when Fabric/Minecraft metadata changes later.
 """
 
-import hashlib
 import json
 import re
-from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+
+from .spec import PlatformLock, SpecValidationError, platform_receipt_sha256
 
 _INSTALLED = False
-_RECEIPT_HASH_FIELDS = (
-    "adapter_id",
-    "edition",
-    "loader",
-    "minecraft_version",
-    "java_version",
-    "yarn_mappings",
-    "mappings_kind",
-    "mappings_version",
-    "fabric_loader",
-    "fabric_api",
-    "fabric_loom",
-    "gradle",
-    "gradle_sha256",
-    "gradle_distribution_url",
-    "data_pack_version",
-    "resource_pack_version",
-    "resource_pack_format",
-    "release_metadata_url",
-    "source_api_family",
-    "deterministic_module_kinds",
-)
-
-
-def _version_tuple(value: str) -> tuple[int, ...]:
-    parts = str(value or "").split(".")
-    if not parts or not all(part.isdigit() for part in parts):
-        return ()
-    return tuple(int(part) for part in parts)
 
 
 def _receipt_value(value: Any, name: str, default: Any = "") -> Any:
@@ -58,56 +29,9 @@ def _gradle_distribution_url(version: str) -> str:
     return f"https://services.gradle.org/distributions/gradle-{version}-bin.zip"
 
 
-def _canonical_receipt_payload(value: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    for field in _RECEIPT_HASH_FIELDS:
-        item = _receipt_value(value, field, None)
-        if field == "deterministic_module_kinds":
-            item = sorted(str(entry) for entry in (item or ()))
-        payload[field] = item
-    return payload
-
-
-def _receipt_sha256(value: Any) -> str:
-    raw = json.dumps(
-        _canonical_receipt_payload(value),
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _validate_cross_coordinate_consistency(lock: Any) -> None:
-    from .spec import SpecValidationError
-
-    minecraft = str(lock.minecraft_version)
-    java = str(lock.java_version)
-    yarn = str(lock.yarn_mappings)
-    fabric_api = str(lock.fabric_api)
-
-    mc_tuple = _version_tuple(minecraft)
-    if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5) and int(java) < 21:
-        raise SpecValidationError(
-            f"Minecraft {minecraft} requires a Java 21+ execution target; got Java {java}."
-        )
-
-    if yarn.casefold() not in {"mojang", "official", "official_mojang"}:
-        match = re.match(r"^(\d+(?:\.\d+){1,2})\+", yarn)
-        if match and match.group(1) != minecraft:
-            raise SpecValidationError(
-                "Platform lock mappings coordinate disagrees with minecraft_version."
-            )
-
-    api_match = re.search(r"\+(\d+(?:\.\d+){1,2})$", fabric_api)
-    if api_match and api_match.group(1) != minecraft:
-        raise SpecValidationError(
-            "Platform lock Fabric API coordinate disagrees with minecraft_version."
-        )
-
-
 def _full_receipt_present(value: Any) -> bool:
+    if isinstance(value, PlatformLock):
+        return value.has_full_execution_receipt()
     required_nonempty = (
         "adapter_id",
         "mappings_kind",
@@ -126,40 +50,16 @@ def _full_receipt_present(value: Any) -> bool:
         for name in required_nonempty
     ):
         return False
-    # An empty deterministic-module list is meaningful for live targets, so require
-    # field presence rather than truthiness.
     return _receipt_value(value, "deterministic_module_kinds", None) is not None
 
 
-def _any_extended_receipt_field(value: Any) -> bool:
-    scalar_fields = (
-        "adapter_id",
-        "mappings_kind",
-        "mappings_version",
-        "gradle_sha256",
-        "gradle_distribution_url",
-        "data_pack_version",
-        "resource_pack_version",
-        "resource_pack_format",
-        "release_metadata_url",
-        "source_api_family",
-        "receipt_sha256",
-    )
-    if any(_receipt_value(value, name, None) not in (None, "", 0) for name in scalar_fields):
-        return True
-    # Empty is the default for the extended dataclass and must not turn every legacy
-    # lock into a partial receipt. Non-empty values still count as extended metadata.
-    module_kinds = _receipt_value(value, "deterministic_module_kinds", None)
-    return bool(module_kinds)
-
-
 def _validate_receipt_digest(value: Any) -> None:
-    from .spec import SpecValidationError
-
     supplied = str(_receipt_value(value, "receipt_sha256", "")).casefold()
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", supplied):
-        raise SpecValidationError("Platform lock receipt_sha256 must be a full SHA-256 receipt.")
-    expected = _receipt_sha256(value)
+        raise SpecValidationError(
+            "Platform lock receipt_sha256 must be a full SHA-256 receipt."
+        )
+    expected = platform_receipt_sha256(value)
     if supplied != expected:
         raise SpecValidationError(
             "Platform lock receipt SHA-256 does not match its immutable provider coordinates."
@@ -168,13 +68,15 @@ def _validate_receipt_digest(value: Any) -> None:
 
 def _adapter_from_receipt(value: Any):
     from .platform_catalog import PlatformAdapter
-    from .spec import SpecValidationError
 
     if not _full_receipt_present(value):
         raise SpecValidationError(
             "Execution platform receipt is incomplete; live provider re-resolution is forbidden."
         )
-    _validate_receipt_digest(value)
+    if hasattr(value, "validate"):
+        value.validate()
+    else:
+        _validate_receipt_digest(value)
 
     gradle = str(_receipt_value(value, "gradle"))
     expected_url = _gradle_distribution_url(gradle)
@@ -229,92 +131,7 @@ def install() -> None:
         platform_runtime_contract,
         platform_validation_contract,
         runner,
-        spec,
     )
-    from .spec import SpecValidationError
-
-    LegacyPlatformLock = spec.PlatformLock
-
-    @dataclass(frozen=True)
-    class ExecutionPlatformLock(LegacyPlatformLock):
-        adapter_id: str = ""
-        mappings_kind: str = ""
-        mappings_version: str = ""
-        gradle_sha256: str = ""
-        gradle_distribution_url: str = ""
-        data_pack_version: str = ""
-        resource_pack_version: str = ""
-        resource_pack_format: int = 0
-        release_metadata_url: str = ""
-        source_api_family: str = ""
-        deterministic_module_kinds: tuple[str, ...] = ()
-        receipt_sha256: str = ""
-
-        def validate(self) -> None:
-            super().validate()
-            _validate_cross_coordinate_consistency(self)
-
-            if _any_extended_receipt_field(self) and not _full_receipt_present(self):
-                raise SpecValidationError(
-                    "Execution platform receipt is partial; all immutable provider fields are required."
-                )
-            if not _full_receipt_present(self):
-                return
-
-            _validate_receipt_digest(self)
-            if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256.casefold()):
-                raise SpecValidationError("Platform lock gradle_sha256 must be a full SHA-256.")
-            if self.gradle_distribution_url != _gradle_distribution_url(self.gradle):
-                raise SpecValidationError(
-                    "Platform lock Gradle distribution URL disagrees with the pinned version."
-                )
-            parsed = urlparse(self.gradle_distribution_url)
-            if parsed.scheme != "https" or parsed.hostname != "services.gradle.org":
-                raise SpecValidationError(
-                    "Platform lock Gradle distribution URL must use the official HTTPS host."
-                )
-            if self.mappings_kind not in {"mojang", "yarn"}:
-                raise SpecValidationError("Platform lock mappings_kind must be mojang or yarn.")
-            if self.mappings_version != self.yarn_mappings:
-                raise SpecValidationError(
-                    "Platform lock mappings_version must equal the executable mappings coordinate."
-                )
-            if any(not str(item).strip() for item in self.deterministic_module_kinds):
-                raise SpecValidationError(
-                    "Platform lock deterministic_module_kinds contains an empty capability."
-                )
-            if len(set(self.deterministic_module_kinds)) != len(self.deterministic_module_kinds):
-                raise SpecValidationError(
-                    "Platform lock deterministic_module_kinds must not contain duplicates."
-                )
-            if type(self.resource_pack_format) is not int or self.resource_pack_format <= 0:
-                raise SpecValidationError(
-                    "Platform lock resource_pack_format must be a positive integer."
-                )
-            try:
-                resource_major = int(self.resource_pack_version.split(".", 1)[0])
-            except ValueError as exc:
-                raise SpecValidationError(
-                    "Platform lock resource_pack_version must start with a numeric major."
-                ) from exc
-            if resource_major != self.resource_pack_format:
-                raise SpecValidationError(
-                    "Platform lock resource pack format disagrees with resource_pack_version."
-                )
-            release = urlparse(self.release_metadata_url)
-            if release.scheme != "https" or release.hostname not in {
-                "www.minecraft.net",
-                "feedback.minecraft.net",
-                "piston-meta.mojang.com",
-                "launcher.mojang.com",
-            }:
-                raise SpecValidationError(
-                    "Platform lock release metadata must be an official Minecraft/Mojang HTTPS URL."
-                )
-
-    ExecutionPlatformLock.__name__ = "PlatformLock"
-    ExecutionPlatformLock.__qualname__ = "PlatformLock"
-    ExecutionPlatformLock.__module__ = spec.__name__
 
     def lock_from_adapter(adapter):
         adapter.validate()
@@ -340,16 +157,16 @@ def install() -> None:
             "source_api_family": adapter.source_api_family,
             "deterministic_module_kinds": tuple(sorted(adapter.deterministic_module_kinds)),
         }
-        values["receipt_sha256"] = _receipt_sha256(values)
-        lock = ExecutionPlatformLock(**values)
+        values["receipt_sha256"] = platform_receipt_sha256(values)
+        lock = PlatformLock(**values)
         lock.validate()
         return lock
 
     original_adapter_from_project = platform_catalog.adapter_from_project
 
     def adapter_for_lock_values(value):
-        # This function is an execution boundary. Missing receipt fields are not
-        # rediscovered from mutable provider state after approval.
+        # This is an execution boundary. Missing receipt fields are never rediscovered
+        # from mutable provider state after approval.
         if hasattr(value, "validate"):
             value.validate()
         return _adapter_from_receipt(value)
@@ -367,7 +184,12 @@ def install() -> None:
         # approval. Once MMM writes a lock, that lock is authoritative and fail-closed.
         return original_adapter_from_project(project_root)
 
-    def write_project_platform_lock(project_root: Path, adapter, *, extra: dict[str, Any] | None = None) -> None:
+    def write_project_platform_lock(
+        project_root: Path,
+        adapter,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         target = Path(project_root) / ".minecraft_ai" / "platform-lock.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -393,7 +215,7 @@ def install() -> None:
             "source_api_family": adapter.source_api_family,
             "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
         }
-        payload["receipt_sha256"] = _receipt_sha256(payload)
+        payload["receipt_sha256"] = platform_receipt_sha256(payload)
         if extra:
             payload.update(extra)
         target.write_text(
@@ -402,8 +224,6 @@ def install() -> None:
         )
 
     original_write_contract = generator.FabricProjectGenerator._write_contract
-
-    from functools import wraps
 
     @wraps(original_write_contract)
     def write_contract(self, root: Path, spec) -> None:
@@ -415,8 +235,7 @@ def install() -> None:
             )
         write_project_platform_lock(root, _adapter_from_receipt(lock))
 
-    spec.PlatformLock = ExecutionPlatformLock
-    platform_resolver.PlatformLock = ExecutionPlatformLock
+    platform_resolver.PlatformLock = PlatformLock
     platform_resolver.lock_from_adapter = lock_from_adapter
     platform_catalog.adapter_for_lock_values = adapter_for_lock_values
     platform_catalog.adapter_from_project = adapter_from_project
