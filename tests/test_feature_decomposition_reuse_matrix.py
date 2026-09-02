@@ -32,7 +32,11 @@ def test_capability_graph_decomposition_and_search_terms() -> None:
         "MapleStory-style mod -> mobs -> bosses -> items -> "
         "level progression -> upgrade system"
     )
-    graph = decompose_capability_graph(prompt)
+    catalog = build_request_catalog(prompt, {})
+    graph = decompose_capability_graph(
+        prompt,
+        design={"_evidence_request_catalog": catalog},
+    )
 
     assert len(graph.nodes) >= 4
     node_set = set(graph.nodes)
@@ -105,6 +109,7 @@ def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None
 
 
 def test_curseforge_failure_does_not_break_provider_discovery(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
     monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "broken-key")
 
     class FailingClient:
@@ -118,17 +123,17 @@ def test_curseforge_failure_does_not_break_provider_discovery(monkeypatch) -> No
         search=lambda provider, query, **kwargs: {
             "candidates": [{"repository": "owner/modrinth-boss"}]
         }
+        if provider == "modrinth"
+        else {"candidates": []}
     )
-
-    results = reuse_discovery.discover_repositories_for_graph(
-        ["boss.entity"],
+    result = reuse_discovery.discover_repositories_for_graph(
+        ("boss.combat",),
         client,
         capability_graph={
+            "nodes": ["boss.combat"],
             "search_terms": [
-                {"capability": "boss.entity", "terms": ["boss mod"]}
-            ]
+                {"capability": "boss.combat", "terms": ["boss combat"]}
+            ],
         },
     )
-
-    assert "boss.entity" in results
-    assert "owner/modrinth-boss" in results["boss.entity"]
+    assert result["boss.combat"] == ("owner/modrinth-boss",)
