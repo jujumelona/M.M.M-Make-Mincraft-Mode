@@ -8,6 +8,7 @@ Downstream reconstruction uses only that receipt and therefore cannot silently d
 Fabric/Minecraft metadata changes later.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -16,6 +17,28 @@ from typing import Any
 from urllib.parse import urlparse
 
 _INSTALLED = False
+_RECEIPT_HASH_FIELDS = (
+    "adapter_id",
+    "edition",
+    "loader",
+    "minecraft_version",
+    "java_version",
+    "yarn_mappings",
+    "mappings_kind",
+    "mappings_version",
+    "fabric_loader",
+    "fabric_api",
+    "fabric_loom",
+    "gradle",
+    "gradle_sha256",
+    "gradle_distribution_url",
+    "data_pack_version",
+    "resource_pack_version",
+    "resource_pack_format",
+    "release_metadata_url",
+    "source_api_family",
+    "deterministic_module_kinds",
+)
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -33,6 +56,27 @@ def _receipt_value(value: Any, name: str, default: Any = "") -> Any:
 
 def _gradle_distribution_url(version: str) -> str:
     return f"https://services.gradle.org/distributions/gradle-{version}-bin.zip"
+
+
+def _canonical_receipt_payload(value: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for field in _RECEIPT_HASH_FIELDS:
+        item = _receipt_value(value, field, None)
+        if field == "deterministic_module_kinds":
+            item = sorted(str(entry) for entry in (item or ()))
+        payload[field] = item
+    return payload
+
+
+def _receipt_sha256(value: Any) -> str:
+    raw = json.dumps(
+        _canonical_receipt_payload(value),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _validate_cross_coordinate_consistency(lock: Any) -> None:
@@ -75,6 +119,7 @@ def _full_receipt_present(value: Any) -> bool:
         "resource_pack_format",
         "release_metadata_url",
         "source_api_family",
+        "receipt_sha256",
     )
     if not all(
         _receipt_value(value, name, None) not in (None, "", 0)
@@ -98,6 +143,7 @@ def _any_extended_receipt_field(value: Any) -> bool:
         "resource_pack_format",
         "release_metadata_url",
         "source_api_family",
+        "receipt_sha256",
     )
     if any(_receipt_value(value, name, None) not in (None, "", 0) for name in scalar_fields):
         return True
@@ -105,6 +151,19 @@ def _any_extended_receipt_field(value: Any) -> bool:
     # lock into a partial receipt. Non-empty values still count as extended metadata.
     module_kinds = _receipt_value(value, "deterministic_module_kinds", None)
     return bool(module_kinds)
+
+
+def _validate_receipt_digest(value: Any) -> None:
+    from .spec import SpecValidationError
+
+    supplied = str(_receipt_value(value, "receipt_sha256", "")).casefold()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", supplied):
+        raise SpecValidationError("Platform lock receipt_sha256 must be a full SHA-256 receipt.")
+    expected = _receipt_sha256(value)
+    if supplied != expected:
+        raise SpecValidationError(
+            "Platform lock receipt SHA-256 does not match its immutable provider coordinates."
+        )
 
 
 def _adapter_from_receipt(value: Any):
@@ -115,6 +174,7 @@ def _adapter_from_receipt(value: Any):
         raise SpecValidationError(
             "Execution platform receipt is incomplete; live provider re-resolution is forbidden."
         )
+    _validate_receipt_digest(value)
 
     gradle = str(_receipt_value(value, "gradle"))
     expected_url = _gradle_distribution_url(gradle)
@@ -188,6 +248,7 @@ def install() -> None:
         release_metadata_url: str = ""
         source_api_family: str = ""
         deterministic_module_kinds: tuple[str, ...] = ()
+        receipt_sha256: str = ""
 
         def validate(self) -> None:
             super().validate()
@@ -200,6 +261,7 @@ def install() -> None:
             if not _full_receipt_present(self):
                 return
 
+            _validate_receipt_digest(self)
             if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256.casefold()):
                 raise SpecValidationError("Platform lock gradle_sha256 must be a full SHA-256.")
             if self.gradle_distribution_url != _gradle_distribution_url(self.gradle):
@@ -256,28 +318,30 @@ def install() -> None:
 
     def lock_from_adapter(adapter):
         adapter.validate()
-        lock = ExecutionPlatformLock(
-            edition=adapter.edition,
-            loader=adapter.loader,
-            minecraft_version=adapter.minecraft_version,
-            java_version=adapter.java_version,
-            yarn_mappings=adapter.yarn_mappings,
-            fabric_loader=adapter.fabric_loader,
-            fabric_api=adapter.fabric_api,
-            fabric_loom=adapter.fabric_loom,
-            gradle=adapter.gradle,
-            adapter_id=adapter.adapter_id,
-            mappings_kind=adapter.mappings_kind,
-            mappings_version=adapter.mappings_version,
-            gradle_sha256=adapter.gradle_sha256,
-            gradle_distribution_url=_gradle_distribution_url(adapter.gradle),
-            data_pack_version=adapter.data_pack_version,
-            resource_pack_version=adapter.resource_pack_version,
-            resource_pack_format=adapter.resource_pack_format,
-            release_metadata_url=adapter.release_metadata_url,
-            source_api_family=adapter.source_api_family,
-            deterministic_module_kinds=tuple(sorted(adapter.deterministic_module_kinds)),
-        )
+        values = {
+            "edition": adapter.edition,
+            "loader": adapter.loader,
+            "minecraft_version": adapter.minecraft_version,
+            "java_version": adapter.java_version,
+            "yarn_mappings": adapter.yarn_mappings,
+            "fabric_loader": adapter.fabric_loader,
+            "fabric_api": adapter.fabric_api,
+            "fabric_loom": adapter.fabric_loom,
+            "gradle": adapter.gradle,
+            "adapter_id": adapter.adapter_id,
+            "mappings_kind": adapter.mappings_kind,
+            "mappings_version": adapter.mappings_version,
+            "gradle_sha256": adapter.gradle_sha256,
+            "gradle_distribution_url": _gradle_distribution_url(adapter.gradle),
+            "data_pack_version": adapter.data_pack_version,
+            "resource_pack_version": adapter.resource_pack_version,
+            "resource_pack_format": adapter.resource_pack_format,
+            "release_metadata_url": adapter.release_metadata_url,
+            "source_api_family": adapter.source_api_family,
+            "deterministic_module_kinds": tuple(sorted(adapter.deterministic_module_kinds)),
+        }
+        values["receipt_sha256"] = _receipt_sha256(values)
+        lock = ExecutionPlatformLock(**values)
         lock.validate()
         return lock
 
@@ -307,7 +371,7 @@ def install() -> None:
         target = Path(project_root) / ".minecraft_ai" / "platform-lock.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": "mmm/generated-platform-lock-v3",
+            "schema_version": "mmm/generated-platform-lock-v4",
             "adapter_id": adapter.adapter_id,
             "edition": adapter.edition,
             "loader": adapter.loader,
@@ -329,6 +393,7 @@ def install() -> None:
             "source_api_family": adapter.source_api_family,
             "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
         }
+        payload["receipt_sha256"] = _receipt_sha256(payload)
         if extra:
             payload.update(extra)
         target.write_text(
