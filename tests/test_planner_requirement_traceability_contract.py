@@ -1,148 +1,75 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from minecraft_mod_ai.planner_requirement_traceability_contract import (
-    enforce_requirement_design_traceability,
-)
-from minecraft_mod_ai.spec import SpecValidationError
+from minecraft_mod_ai.reuse_planner import compile_pre_retrieval_plan, validate_pre_retrieval_plan
 
 
-def _plan(*, source: str, label: str, detail: str) -> dict:
-    capability = "design.module.test" if source.startswith("game_design.modules") else "design.loop.test"
+def _design() -> dict[str, object]:
     return {
-        "schema_version": "mmm/pre-retrieval-semantic-plan-v1",
-        "planned_work": [
-            {
-                "work_id": "work_alpha",
-                "requirement_ref": "req_alpha",
-                "objective": "mine lunar crystal",
-                "capabilities": ["resource.mining", capability],
-                "acceptance": ["player can mine lunar crystal"],
-            },
-            {
-                "work_id": "work_beta",
-                "requirement_ref": "req_beta",
-                "objective": "trade credits at colony market",
-                "capabilities": ["economy.trade"],
-                "acceptance": ["player can trade credits"],
-            },
-        ],
-        "capability_graph": {
-            "nodes": ["resource.mining", "economy.trade", capability],
-            "edges": [{"from": "resource.mining", "to": capability}],
-            "sources": [],
-            "search_terms": [],
-        },
-        "design_retrieval_facets": [
-            {
-                "capability": capability,
-                "work_id": "work_alpha",
-                "requirement_ref": "req_alpha",
-                "source": source,
-                "label": label,
-                "detail": detail,
-            }
-        ],
-        "plan_sha256": "placeholder",
-    }
-
-
-def _capabilities_by_requirement(plan: dict) -> dict[str, list[str]]:
-    return {
-        str(item["requirement_ref"]): list(item["capabilities"])
-        for item in plan["planned_work"]
-    }
-
-
-def test_explicit_module_requirement_refs_override_wrong_prior_owner() -> None:
-    plan = _plan(
-        source="game_design.modules[0]",
-        label="colony market",
-        detail="implement colony market transactions",
-    )
-    design = {
-        "modules": [
-            {
-                "plugin_id": "colony_market",
-                "requirement_refs": ["req_beta"],
-                "implementation_obligations": ["persist offers and execute credit trades"],
-            }
-        ]
-    }
-
-    traced = enforce_requirement_design_traceability(plan, design)
-    owned = _capabilities_by_requirement(traced)
-
-    assert "design.module.test" not in owned["req_alpha"]
-    assert "design.module.test" in owned["req_beta"]
-    assert traced["design_retrieval_facets"] == [
-        {
-            "capability": "design.module.test",
-            "work_id": "work_beta",
-            "requirement_ref": "req_beta",
-            "source": "game_design.modules[0]",
-            "label": "colony market",
-            "detail": "implement colony market transactions",
-            "binding_basis": "explicit_module_requirement_refs",
+        "_evidence_request_catalog": {
+            "catalog_sha256": "sha256:test-catalog",
+            "purpose": "trace authored requirements",
+            "requirements": [
+                {
+                    "requirement_id": "req_alpha",
+                    "capability": "resource.mining",
+                    "provides": ["capability:resource.mining"],
+                    "semantic_statement": "mine lunar crystal",
+                    "acceptance": ["player can mine lunar crystal"],
+                    "depends_on": [],
+                },
+                {
+                    "requirement_id": "req_beta",
+                    "capability": "economy.trade",
+                    "provides": ["capability:economy.trade"],
+                    "semantic_statement": "trade credits at colony market",
+                    "acceptance": ["player can trade credits"],
+                    "depends_on": ["req_alpha"],
+                },
+            ],
         }
+    }
+
+
+def test_each_planned_work_item_keeps_exact_authored_requirement_identity(monkeypatch) -> None:
+    from minecraft_mod_ai import evidence_first_planning
+
+    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+    design = _design()
+    plan = compile_pre_retrieval_plan("trace requirements", design)
+
+    assert [item["requirement_ref"] for item in plan["planned_work"]] == [
+        "req_alpha",
+        "req_beta",
     ]
-    assert {tuple(edge.values()) for edge in traced["capability_graph"]["edges"]} == {
-        ("economy.trade", "design.module.test")
-    }
+    by_ref = {item["requirement_ref"]: item for item in plan["planned_work"]}
+    assert by_ref["req_beta"]["depends_on"] == [by_ref["req_alpha"]["work_id"]]
 
 
-def test_unrelated_facet_is_preserved_under_all_requirements_not_positionally_guessed() -> None:
-    plan = _plan(
-        source="game_design.core_loop[0]",
-        label="ritual",
-        detail="activate the astral beacon",
-    )
+def test_unknown_authored_dependency_fails_closed(monkeypatch) -> None:
+    from minecraft_mod_ai import evidence_first_planning
 
-    traced = enforce_requirement_design_traceability(plan, {"modules": []})
-    owned = _capabilities_by_requirement(traced)
-
-    assert "design.loop.test" in owned["req_alpha"]
-    assert "design.loop.test" in owned["req_beta"]
-    rows = traced["design_retrieval_facets"]
-    assert {row["requirement_ref"] for row in rows} == {"req_alpha", "req_beta"}
-    assert {row["binding_basis"] for row in rows} == {"conservative_all_requirements"}
-    assert {tuple(edge.values()) for edge in traced["capability_graph"]["edges"]} == {
-        ("resource.mining", "design.loop.test"),
-        ("economy.trade", "design.loop.test"),
-    }
+    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+    design = _design()
+    design["_evidence_request_catalog"]["requirements"][1]["depends_on"] = ["req_missing"]
+    with pytest.raises(ValueError, match="unknown dependencies"):
+        compile_pre_retrieval_plan("trace requirements", design)
 
 
-def test_positive_lexical_evidence_binds_without_fallback_order() -> None:
-    plan = _plan(
-        source="game_design.progression[0]",
-        label="market trade",
-        detail="trade credits at colony market",
-    )
+def test_tampering_with_requirement_binding_invalidates_plan(monkeypatch) -> None:
+    from minecraft_mod_ai import evidence_first_planning
 
-    traced = enforce_requirement_design_traceability(plan, {"modules": []})
-    owned = _capabilities_by_requirement(traced)
-
-    assert "design.loop.test" not in owned["req_alpha"]
-    assert "design.loop.test" in owned["req_beta"]
-    assert traced["design_retrieval_facets"][0]["binding_basis"] == "positive_lexical_evidence"
+    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+    design = _design()
+    plan = compile_pre_retrieval_plan("trace requirements", design)
+    plan["planned_work"][0]["requirement_ref"] = "req_beta"
+    with pytest.raises(ValueError, match="hash mismatch"):
+        validate_pre_retrieval_plan(plan, prompt="trace requirements", design=design)
 
 
-def test_unknown_explicit_requirement_ref_fails_closed() -> None:
-    plan = _plan(
-        source="game_design.modules[0]",
-        label="colony market",
-        detail="implement colony market transactions",
-    )
-    design = {
-        "modules": [
-            {
-                "plugin_id": "colony_market",
-                "requirement_refs": ["req_missing"],
-                "implementation_obligations": ["execute trades"],
-            }
-        ]
-    }
-
-    with pytest.raises(SpecValidationError, match="unknown requirement ids"):
-        enforce_requirement_design_traceability(plan, design)
+def test_retired_requirement_traceability_monkeypatch_owner_is_absent() -> None:
+    package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    assert not (package / "planner_requirement_traceability_contract.py").exists()
