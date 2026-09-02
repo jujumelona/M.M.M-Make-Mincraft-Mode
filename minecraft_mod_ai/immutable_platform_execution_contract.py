@@ -87,22 +87,24 @@ def _full_receipt_present(value: Any) -> bool:
 
 
 def _any_extended_receipt_field(value: Any) -> bool:
-    return any(
-        _receipt_value(value, name, None) not in (None, "", 0)
-        for name in (
-            "adapter_id",
-            "mappings_kind",
-            "mappings_version",
-            "gradle_sha256",
-            "gradle_distribution_url",
-            "data_pack_version",
-            "resource_pack_version",
-            "resource_pack_format",
-            "release_metadata_url",
-            "source_api_family",
-            "deterministic_module_kinds",
-        )
+    scalar_fields = (
+        "adapter_id",
+        "mappings_kind",
+        "mappings_version",
+        "gradle_sha256",
+        "gradle_distribution_url",
+        "data_pack_version",
+        "resource_pack_version",
+        "resource_pack_format",
+        "release_metadata_url",
+        "source_api_family",
     )
+    if any(_receipt_value(value, name, None) not in (None, "", 0) for name in scalar_fields):
+        return True
+    # Empty is the default for the extended dataclass and must not turn every legacy
+    # lock into a partial receipt. Non-empty values still count as extended metadata.
+    module_kinds = _receipt_value(value, "deterministic_module_kinds", None)
+    return bool(module_kinds)
 
 
 def _adapter_from_receipt(value: Any):
@@ -282,7 +284,7 @@ def install() -> None:
     original_adapter_from_project = platform_catalog.adapter_from_project
 
     def adapter_for_lock_values(value):
-        # This function is an execution boundary.  Missing receipt fields are not
+        # This function is an execution boundary. Missing receipt fields are not
         # rediscovered from mutable provider state after approval.
         if hasattr(value, "validate"):
             value.validate()
@@ -298,7 +300,7 @@ def install() -> None:
                 )
             return _adapter_from_receipt(raw)
         # A foreign/existing project without an MMM lock may still be inspected before
-        # approval.  Once MMM writes a lock, that lock is authoritative and fail-closed.
+        # approval. Once MMM writes a lock, that lock is authoritative and fail-closed.
         return original_adapter_from_project(project_root)
 
     def write_project_platform_lock(project_root: Path, adapter, *, extra: dict[str, Any] | None = None) -> None:
