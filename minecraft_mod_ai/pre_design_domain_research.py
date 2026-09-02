@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -71,6 +72,26 @@ def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
     return selected, max(0, int(_score))
 
 
+def _source_unit(page: Mapping[str, Any]) -> dict[str, Any]:
+    """Recover the host-materialized source unit carried inside one evidence page."""
+
+    raw = str(page.get("content") or "")
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        value = None
+    if isinstance(value, Mapping) and str(value.get("content") or "").strip():
+        return dict(value)
+    return {
+        "source_id": "",
+        "source_type": "",
+        "url": "",
+        "title": "",
+        "content_sha256": "",
+        "content": raw,
+    }
+
+
 def _grounded_evidence_cards(
     project_rag: Any,
     document: Mapping[str, Any],
@@ -79,8 +100,8 @@ def _grounded_evidence_cards(
     """Build host-verified evidence cards from every materialized source page.
 
     These cards are not semantic claims. They are exact excerpts that keep retrieval
-    evidence visible to a small model even when its strict extraction line format fails.
-    No page is silently dropped by a semantic top-k shortlist.
+    evidence and source identity visible to a small model even when its strict extraction
+    line format fails. No page is silently dropped by a semantic top-k shortlist.
     """
 
     reader = getattr(project_rag, "_read_evidence_pages", None)
@@ -97,16 +118,22 @@ def _grounded_evidence_cards(
         if not isinstance(raw, Mapping):
             continue
         page_ref = str(raw.get("page_ref") or "").strip()
-        content = str(raw.get("content") or "")
-        if not page_ref or page_ref in seen_refs or not content.strip():
+        unit = _source_unit(raw)
+        source_content = str(unit.get("content") or "")
+        if not page_ref or page_ref in seen_refs or not source_content.strip():
             continue
-        excerpt, score = _exact_excerpt(content, wanted)
+        excerpt, score = _exact_excerpt(source_content, wanted)
         if not excerpt:
             continue
         seen_refs.add(page_ref)
         cards.append(
             {
                 "page_ref": page_ref,
+                "source_id": str(unit.get("source_id") or ""),
+                "source_type": str(unit.get("source_type") or ""),
+                "source_url": str(unit.get("url") or ""),
+                "source_title": str(unit.get("title") or ""),
+                "source_content_sha256": str(unit.get("content_sha256") or ""),
                 "exact_excerpt": excerpt,
                 "domain_term_overlap": score,
                 "verification": "host_exact_substring_from_materialized_source_page",
