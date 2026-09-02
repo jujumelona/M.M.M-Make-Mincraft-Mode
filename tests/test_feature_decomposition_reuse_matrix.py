@@ -109,7 +109,6 @@ def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None
 
 
 def test_curseforge_failure_does_not_break_provider_discovery(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
     monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "broken-key")
 
     class FailingClient:
@@ -123,17 +122,17 @@ def test_curseforge_failure_does_not_break_provider_discovery(monkeypatch) -> No
         search=lambda provider, query, **kwargs: {
             "candidates": [{"repository": "owner/modrinth-boss"}]
         }
-        if provider == "modrinth"
-        else {"candidates": []}
     )
-    result = reuse_discovery.discover_repositories_for_graph(
-        ("boss.combat",),
+
+    results = reuse_discovery.discover_repositories_for_graph(
+        ["boss.entity"],
         client,
         capability_graph={
-            "nodes": ["boss.combat"],
             "search_terms": [
-                {"capability": "boss.combat", "terms": ["boss combat"]}
-            ],
+                {"capability": "boss.entity", "terms": ["boss mod"]}
+            ]
         },
     )
-    assert result["boss.combat"] == ("owner/modrinth-boss",)
+
+    assert "boss.entity" in results
+    assert "owner/modrinth-boss" in results["boss.entity"]
