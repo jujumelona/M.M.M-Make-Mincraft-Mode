@@ -6,6 +6,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
 from .json_stream import canonical_json_sha256
 
@@ -14,6 +15,41 @@ PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PLATFORM_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:-]*$")
+_PLATFORM_RECEIPT_HASH_FIELDS = (
+    "adapter_id",
+    "edition",
+    "loader",
+    "minecraft_version",
+    "java_version",
+    "yarn_mappings",
+    "mappings_kind",
+    "mappings_version",
+    "fabric_loader",
+    "fabric_api",
+    "fabric_loom",
+    "gradle",
+    "gradle_sha256",
+    "gradle_distribution_url",
+    "data_pack_version",
+    "resource_pack_version",
+    "resource_pack_format",
+    "release_metadata_url",
+    "source_api_family",
+    "deterministic_module_kinds",
+)
+_PLATFORM_EXTENDED_FIELDS = (
+    "adapter_id",
+    "mappings_kind",
+    "mappings_version",
+    "gradle_sha256",
+    "gradle_distribution_url",
+    "data_pack_version",
+    "resource_pack_version",
+    "resource_pack_format",
+    "release_metadata_url",
+    "source_api_family",
+    "receipt_sha256",
+)
 JAVA_RESERVED_WORDS = frozenset(
     {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
@@ -72,6 +108,33 @@ def _validate_platform_token(field_name: str, value: str) -> None:
         )
 
 
+def _platform_receipt_value(value: Any, field_name: str, default: Any = "") -> Any:
+    if isinstance(value, dict):
+        return value.get(field_name, default)
+    return getattr(value, field_name, default)
+
+
+def platform_receipt_payload(value: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for field_name in _PLATFORM_RECEIPT_HASH_FIELDS:
+        item = _platform_receipt_value(value, field_name, None)
+        if field_name == "deterministic_module_kinds":
+            item = sorted(str(entry) for entry in (item or ()))
+        payload[field_name] = item
+    return payload
+
+
+def platform_receipt_sha256(value: Any) -> str:
+    return canonical_json_sha256(platform_receipt_payload(value))
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = str(value or "").split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return ()
+    return tuple(int(part) for part in parts)
+
+
 @dataclass(frozen=True)
 class PlatformLock:
     """Immutable coordinates copied from one already-validated provider receipt.
@@ -90,6 +153,18 @@ class PlatformLock:
     fabric_api: str = ""
     fabric_loom: str = ""
     gradle: str = ""
+    adapter_id: str = ""
+    mappings_kind: str = ""
+    mappings_version: str = ""
+    gradle_sha256: str = ""
+    gradle_distribution_url: str = ""
+    data_pack_version: str = ""
+    resource_pack_version: str = ""
+    resource_pack_format: int = 0
+    release_metadata_url: str = ""
+    source_api_family: str = ""
+    deterministic_module_kinds: tuple[str, ...] = ()
+    receipt_sha256: str = ""
 
     def is_unresolved(self) -> bool:
         return not any(
@@ -104,6 +179,12 @@ class PlatformLock:
                 self.fabric_loom,
                 self.gradle,
             )
+        )
+
+    def has_full_execution_receipt(self) -> bool:
+        return all(
+            _platform_receipt_value(self, field_name, None) not in (None, "", 0)
+            for field_name in _PLATFORM_EXTENDED_FIELDS
         )
 
     def validate(self) -> None:
@@ -138,6 +219,97 @@ class PlatformLock:
             raise SpecValidationError(
                 "Platform lock java_version must be a positive Java major version."
             )
+
+        extended_present = any(
+            _platform_receipt_value(self, field_name, None) not in (None, "", 0)
+            for field_name in _PLATFORM_EXTENDED_FIELDS
+        ) or bool(self.deterministic_module_kinds)
+        if not extended_present:
+            return
+        if not self.has_full_execution_receipt():
+            raise SpecValidationError(
+                "Execution platform receipt is partial; all immutable provider fields are required."
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256.casefold()):
+            raise SpecValidationError("Platform lock gradle_sha256 must be a full SHA-256.")
+        if not SHA256_PATTERN.fullmatch(self.receipt_sha256.casefold()):
+            raise SpecValidationError(
+                "Platform lock receipt_sha256 must be a lowercase SHA-256 receipt."
+            )
+        if self.receipt_sha256.casefold() != platform_receipt_sha256(self):
+            raise SpecValidationError(
+                "Platform lock receipt SHA-256 does not match its immutable provider coordinates."
+            )
+        expected_gradle_url = (
+            f"https://services.gradle.org/distributions/gradle-{self.gradle}-bin.zip"
+        )
+        if self.gradle_distribution_url != expected_gradle_url:
+            raise SpecValidationError(
+                "Platform lock Gradle distribution URL disagrees with the pinned version."
+            )
+        parsed_gradle = urlparse(self.gradle_distribution_url)
+        if parsed_gradle.scheme != "https" or parsed_gradle.hostname != "services.gradle.org":
+            raise SpecValidationError(
+                "Platform lock Gradle distribution URL must use the official HTTPS host."
+            )
+        if self.mappings_kind not in {"mojang", "yarn"}:
+            raise SpecValidationError("Platform lock mappings_kind must be mojang or yarn.")
+        if self.mappings_version != self.yarn_mappings:
+            raise SpecValidationError(
+                "Platform lock mappings_version must equal the executable mappings coordinate."
+            )
+        if any(not str(item).strip() for item in self.deterministic_module_kinds):
+            raise SpecValidationError(
+                "Platform lock deterministic_module_kinds contains an empty capability."
+            )
+        if len(set(self.deterministic_module_kinds)) != len(self.deterministic_module_kinds):
+            raise SpecValidationError(
+                "Platform lock deterministic_module_kinds must not contain duplicates."
+            )
+        if type(self.resource_pack_format) is not int or self.resource_pack_format <= 0:
+            raise SpecValidationError(
+                "Platform lock resource_pack_format must be a positive integer."
+            )
+        try:
+            resource_major = int(self.resource_pack_version.split(".", 1)[0])
+        except ValueError as exc:
+            raise SpecValidationError(
+                "Platform lock resource_pack_version must start with a numeric major."
+            ) from exc
+        if resource_major != self.resource_pack_format:
+            raise SpecValidationError(
+                "Platform lock resource pack format disagrees with resource_pack_version."
+            )
+        release = urlparse(self.release_metadata_url)
+        if release.scheme != "https" or release.hostname not in {
+            "www.minecraft.net",
+            "feedback.minecraft.net",
+            "piston-meta.mojang.com",
+            "launcher.mojang.com",
+        }:
+            raise SpecValidationError(
+                "Platform lock release metadata must be an official Minecraft/Mojang HTTPS URL."
+            )
+        mc_tuple = _version_tuple(self.minecraft_version)
+        if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5) and int(self.java_version) < 21:
+            raise SpecValidationError(
+                f"Minecraft {self.minecraft_version} requires a Java 21+ execution target; "
+                f"got Java {self.java_version}."
+            )
+        if self.mappings_kind == "yarn":
+            mapping_match = re.match(r"^(\d+(?:\.\d+){1,2})\+", self.yarn_mappings)
+            if mapping_match and mapping_match.group(1) != self.minecraft_version:
+                raise SpecValidationError(
+                    "Platform lock mappings coordinate disagrees with minecraft_version."
+                )
+        api_match = re.search(r"\+(\d+(?:\.\d+){1,2})$", self.fabric_api)
+        if api_match and api_match.group(1) != self.minecraft_version:
+            raise SpecValidationError(
+                "Platform lock Fabric API coordinate disagrees with minecraft_version."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
