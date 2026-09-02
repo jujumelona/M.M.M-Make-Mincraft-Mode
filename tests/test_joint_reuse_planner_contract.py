@@ -36,7 +36,10 @@ def test_approved_request_catalog_is_the_capability_authority() -> None:
         design=design,
     )
     assert graph.nodes == ("trade.transaction", "quest.state")
-    assert all(source.startswith("request_catalog.") for _, source in graph.sources)
+    assert all(
+        source.startswith("evidence_request_catalog.")
+        for _, source in graph.sources
+    )
 
 
 def test_raw_prompt_without_approved_catalog_fails_closed() -> None:
