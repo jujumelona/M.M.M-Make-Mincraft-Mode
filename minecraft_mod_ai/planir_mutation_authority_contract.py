@@ -12,11 +12,14 @@ from typing import Any
 
 _MARKER = "_mmm_planir_mutation_authority_v1"
 _DONOR_TOOL = "read_reuse_source"
+_ARCHIVE_IMPORT_TOOL = "inspect_existing_mod"
 _HOST_ROLES = frozenset({"system", "tool", "developer"})
 _HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _HEX_SHA256 = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
 _DONOR_ROOT_FRAGMENT = ".minecraft_ai/reuse/donors/"
 _CONTINUATION_REASON = "previous_tool_enabled_page_exhausted_output"
+_INTERNAL_GROUNDING_SCHEMA = "mmm/host-owned-coder-grounding-v1"
+_SOURCE_OBSERVATION_SCHEMA = "mmm/source-observation-receipt-v1"
 
 
 def _structured_payload(content: Any) -> Any | None:
@@ -256,6 +259,171 @@ def _filter_donor_tool_schemas(schemas: Sequence[Any]) -> tuple[Any, ...]:
     return tuple(schema for schema in schemas if _tool_name(schema) != _DONOR_TOOL)
 
 
+def _filter_generation_tool_schemas(
+    schemas: Sequence[Any], *, allow_donor: bool
+) -> tuple[Any, ...]:
+    """Keep archive-import inspection out of an already-materialized coder workspace."""
+
+    blocked = {_ARCHIVE_IMPORT_TOOL}
+    if not allow_donor:
+        blocked.add(_DONOR_TOOL)
+    return tuple(schema for schema in schemas if _tool_name(schema) not in blocked)
+
+
+def _matching_receipt(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    keys = (
+        "schema_version",
+        "project_sha256",
+        "query_sha256",
+        "observation_count",
+        "observations_sha256",
+    )
+    return all(left.get(key) == right.get(key) for key in keys)
+
+
+def _internal_coder_authority_message(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    router: Any,
+    runtime: Any,
+    stage: str,
+    role: str,
+    loop_module: Any,
+) -> dict[str, str] | None:
+    """Promote only the host-constructed custom-module envelope to write authority.
+
+    ``CustomModuleGenerator`` transports its task-local request as role=user because that
+    content is also the model instruction. The authority, however, originates from the
+    approved evidence task. Promotion is therefore permitted only at the internal
+    generation boundary where the router is bound to a fresh-evidence workspace and the
+    host grounding/source-observation receipts agree. Arbitrary user PlanIR still cannot
+    cross this boundary or expand the writable exact-set.
+    """
+
+    if str(stage) != "generation" or role not in {"coder", "coder_safe"}:
+        return None
+    if not bool(getattr(router, "_agent_require_fresh_evidence", False)):
+        return None
+    bound_root = str(getattr(router, "_agent_workspace_root", "") or "")
+    runtime_root = str(getattr(runtime, "workspace_root", "") or "")
+    if not bound_root or not runtime_root or bound_root != runtime_root:
+        return None
+
+    for message in reversed(tuple(messages)):
+        if str(message.get("role") or "").strip().casefold() != "user":
+            continue
+        payload = _structured_payload(message.get("content"))
+        if not isinstance(payload, Mapping):
+            continue
+        if str(payload.get("phase") or "").strip() != "implement_module":
+            continue
+        if str(payload.get("workspace_project_root") or "").strip() != ".":
+            continue
+
+        grounding = payload.get("host_grounding")
+        source_receipt = payload.get("source_observation_receipt")
+        initial = payload.get("initial_exact_source_context")
+        if (
+            not isinstance(grounding, Mapping)
+            or grounding.get("schema_version") != _INTERNAL_GROUNDING_SCHEMA
+            or grounding.get("stage") != "generation"
+            or grounding.get("model_role") != "coder"
+            or not isinstance(source_receipt, Mapping)
+            or source_receipt.get("schema_version") != _SOURCE_OBSERVATION_SCHEMA
+            or not isinstance(initial, Mapping)
+        ):
+            continue
+        policy = grounding.get("policy")
+        if not isinstance(policy, Mapping) or not (
+            policy.get("resolved_before_first_coder_decode") is True
+            and policy.get("baseline_grounding_owned_by_host") is True
+            and policy.get("writes_still_require_approved_pipeline") is True
+        ):
+            continue
+        evidence_bindings = grounding.get("evidence_bindings")
+        project_binding = (
+            evidence_bindings.get("project_exact_rag")
+            if isinstance(evidence_bindings, Mapping)
+            else None
+        )
+        bound_receipt = (
+            project_binding.get("receipt")
+            if isinstance(project_binding, Mapping)
+            else None
+        )
+        initial_receipt = initial.get("ledger_receipt")
+        if (
+            not isinstance(bound_receipt, Mapping)
+            or not isinstance(initial_receipt, Mapping)
+            or not _matching_receipt(source_receipt, bound_receipt)
+            or not _matching_receipt(source_receipt, initial_receipt)
+        ):
+            continue
+
+        module = payload.get("module")
+        if not isinstance(module, Mapping):
+            continue
+        module_id = str(module.get("module_id") or "").strip()
+        if not module_id:
+            continue
+        evidence_task = module.get("evidence_task")
+        if not isinstance(evidence_task, Mapping):
+            config = module.get("config")
+            evidence_task = (
+                config.get("evidence_task") if isinstance(config, Mapping) else None
+            )
+        if not isinstance(evidence_task, Mapping):
+            continue
+        task_id = str(evidence_task.get("task_id") or "").strip()
+        if not task_id or task_id != module_id:
+            continue
+        bindings = evidence_task.get("production_bindings")
+        if not isinstance(bindings, Sequence) or isinstance(
+            bindings, (str, bytes, bytearray)
+        ):
+            continue
+        matching_bindings = tuple(
+            binding
+            for binding in bindings
+            if isinstance(binding, Mapping)
+            and str(binding.get("task_ref") or "").strip() == task_id
+        )
+        if not matching_bindings:
+            continue
+        canonical = {
+            "schema_version": "mmm/host-task-authority-v1",
+            "phase": "implement_module",
+            "task_id": task_id,
+            "module": {
+                "module_id": module_id,
+                "kind": str(module.get("kind") or "custom_java"),
+                "config": {"evidence_task": dict(evidence_task)},
+            },
+        }
+        writable, _creatable = _owned_anchor_sets(canonical, loop_module)
+        if not writable:
+            continue
+        return {
+            "role": "developer",
+            "content": json.dumps(
+                canonical,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        }
+    return None
+
+
+def _insert_host_authority(
+    messages: Sequence[Mapping[str, Any]], authority: Mapping[str, Any]
+) -> tuple[Mapping[str, Any], ...]:
+    items = list(messages)
+    insert_at = 1 if items and str(items[0].get("role") or "").casefold() == "system" else 0
+    items.insert(insert_at, dict(authority))
+    return tuple(items)
+
+
 def install(loop_module: Any) -> None:
     if getattr(loop_module, _MARKER, False):
         return
@@ -430,13 +598,40 @@ def install(loop_module: Any) -> None:
         stage,
         role,
     ):
-        if role in {"coder", "coder_safe"} and not _approved_donor_authority(request.messages):
-            if _forced_tool_name(request.tool_choice) == _DONOR_TOOL:
+        coder = role in {"coder", "coder_safe"}
+        messages = tuple(request.messages)
+        if coder:
+            authority = _internal_coder_authority_message(
+                messages,
+                router=router,
+                runtime=runtime,
+                stage=stage,
+                role=role,
+                loop_module=loop_module,
+            )
+            if authority is not None:
+                messages = _insert_host_authority(messages, authority)
+
+            donor_authorized = _approved_donor_authority(messages)
+            forced = _forced_tool_name(request.tool_choice)
+            if forced == _ARCHIVE_IMPORT_TOOL:
+                raise loop_module.ModelConfigurationError(
+                    "ARCHIVE_IMPORT_TOOL_UNAVAILABLE: inspect_existing_mod accepts only "
+                    "a host-supplied .zip import and is not a coder workspace-localization tool."
+                )
+            if forced == _DONOR_TOOL and not donor_authorized:
                 raise loop_module.ModelConfigurationError(
                     "DONOR_SOURCE_UNAUTHORIZED: read_reuse_source cannot be forced "
                     "without an approved host materialized donor receipt/path."
                 )
-            request = replace(request, tools=_filter_donor_tool_schemas(request.tools))
+            request = replace(
+                request,
+                messages=messages,
+                tools=_filter_generation_tool_schemas(
+                    request.tools,
+                    allow_donor=donor_authorized,
+                ),
+            )
         return original_generate(
             router,
             config=config,
