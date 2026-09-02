@@ -135,7 +135,7 @@ class CompleteGameDesignPlanner:
             acceptance_tests=tuple(compiled.acceptance_tests),
             existing_input_sha256=existing_input_sha256,
         )
-        from .platform_central_ai_contract import lower_live_modules
+        from .live_module_lowering import lower_live_modules
 
         return lower_live_modules(self, proposal)
 
@@ -196,7 +196,10 @@ class CompleteGameDesignPlanner:
                 and str(raw.get("module_id") or "") not in known_module_ids
             ]
             if not accepted_modules:
-                accepted_modules = [_module(raw) for raw in skeleton["modules"]]
+                raise PlanningStageError(
+                    PlanningStage.EVIDENCE,
+                    f"production batch {batch.batch_id!r} produced no valid modules",
+                )
 
             for module in accepted_modules:
                 modules.append(module)
@@ -220,23 +223,19 @@ class CompleteGameDesignPlanner:
             )
 
         if not modules and not evidence_mode:
-            fallback = build_batch_skeleton(
-                batch_id="core_features",
-                scope="Implement the complete requested mod behavior.",
-                deliverables=("requested_mod_behavior_complete",),
-                exports=("core_features",),
+            raise PlanningStageError(
+                PlanningStage.EVIDENCE,
+                "production DAG contains no modules and no verified retain-only evidence",
             )
-            modules = [_module(raw) for raw in fallback["modules"]]
-            tests.extend(_unique_strings(fallback["acceptance_tests"]))
 
         tests = list(dict.fromkeys(test for test in tests if test))
-        if not tests:
+        if not tests and modules:
             tests = [f"test_{module.module_id}_registers" for module in modules]
         return tuple(modules), tuple(assets), tuple(tests)
 
 
 def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
-    """Legacy compatibility helper for stored callers without evidence PlanIR."""
+    """Compatibility helper for stored callers without evidence PlanIR."""
     raw_modules = game_design.get("modules")
     exports: list[str] = []
     seen: set[str] = set()
@@ -250,29 +249,22 @@ def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_Product
             seen.add(module_id)
             exports.append(module_id)
 
-    if exports:
-        catalog = ", ".join(exports)
-        return (
-            _ProductionBatch(
-                batch_id="requested_features",
-                scope=(
-                    "Implement every requested capability in this host-owned production "
-                    f"template: {catalog}."
-                ),
-                depends_on_batches=(),
-                deliverables=tuple(f"{module_id}_complete" for module_id in exports),
-                exports=tuple(exports),
-            ),
+    if not exports:
+        raise PlanningStageError(
+            PlanningStage.DESIGN,
+            "stored design has no explicit production modules",
         )
-
-    summary = " ".join(str(prompt).strip().split())[:240] or "requested mod features"
+    catalog = ", ".join(exports)
     return (
         _ProductionBatch(
-            batch_id="core_features",
-            scope=f"Implement the complete requested mod behavior: {summary}",
+            batch_id="requested_features",
+            scope=(
+                "Implement every requested capability in this host-owned production "
+                f"template: {catalog}."
+            ),
             depends_on_batches=(),
-            deliverables=("requested_mod_behavior_complete",),
-            exports=("core_features",),
+            deliverables=tuple(f"{module_id}_complete" for module_id in exports),
+            exports=tuple(exports),
         ),
     )
 
