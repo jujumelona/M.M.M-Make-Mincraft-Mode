@@ -7,7 +7,7 @@ import pytest
 
 from minecraft_mod_ai import api
 from minecraft_mod_ai.platform_catalog import adapter_for_target, provider_for_loader
-from minecraft_mod_ai.platform_optimizer import TargetEvidence
+from minecraft_mod_ai.platform_evidence_pipeline import TargetEvidence
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "minecraft_mod_ai"
@@ -15,6 +15,10 @@ PACKAGE = ROOT / "minecraft_mod_ai"
 
 def _evidence(adapter, *, coverage: int, requested: int, freshness: float) -> TargetEvidence:
     capabilities = tuple(f"cap-{index}" for index in range(requested))
+    composition_modes = tuple(
+        (capability, "reuse" if index < coverage else "fresh")
+        for index, capability in enumerate(capabilities)
+    )
     return TargetEvidence(
         adapter=adapter,
         requested_capabilities=capabilities,
@@ -30,6 +34,7 @@ def _evidence(adapter, *, coverage: int, requested: int, freshness: float) -> Ta
         integration_risk=0.0,
         residual_cost=requested - coverage,
         dependency_complexity=0,
+        composition_modes=composition_modes,
     )
 
 
@@ -76,11 +81,10 @@ def test_no_historical_constructor_placeholder_or_newest_fallback() -> None:
     assert not (PACKAGE / "platform_selection_efficiency_contract.py").exists()
 
 
-def test_platform_planning_only_binds_legacy_pipeline_target() -> None:
-    source = (PACKAGE / "platform_planning_contract.py").read_text(encoding="utf-8")
-    assert "_install_pipeline_target_binding" in source
-    assert "platform_resolver.resolve_platform" in source
-    assert "platform_resolver.retarget_proposal" in source
-    assert "GameDesignPlanner.plan =" not in source
-    assert "_platform_evidence" in source
-    assert "platform_prompt_contract" in source  # behavior is folded here, not imported
+def test_retired_runtime_platform_planning_owner_is_absent() -> None:
+    assert not (PACKAGE / "platform_planning_contract.py").exists()
+    resolver = (PACKAGE / "platform_resolver.py").read_text(encoding="utf-8")
+    selector = (PACKAGE / "platform_selection_pipeline.py").read_text(encoding="utf-8")
+    assert "platform_optimizer" not in resolver
+    assert "platform_optimizer" not in selector
+    assert "platform_evidence_pipeline" in selector
