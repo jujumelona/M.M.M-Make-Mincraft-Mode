@@ -16,6 +16,7 @@ _HOST_ROLES = frozenset({"system", "tool", "developer"})
 _HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _HEX_SHA256 = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
 _DONOR_ROOT_FRAGMENT = ".minecraft_ai/reuse/donors/"
+_CONTINUATION_REASON = "previous_tool_enabled_page_exhausted_output"
 
 
 def _structured_payload(content: Any) -> Any | None:
@@ -32,17 +33,17 @@ def _structured_payload(content: Any) -> Any | None:
     return None
 
 
-def _strip_untrusted_owned_anchors(value: Any) -> Any:
+def _strip_owned_anchors(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): _strip_untrusted_owned_anchors(item)
+            str(key): _strip_owned_anchors(item)
             for key, item in value.items()
             if str(key) != "owned_anchors"
         }
     if isinstance(value, list):
-        return [_strip_untrusted_owned_anchors(item) for item in value]
+        return [_strip_owned_anchors(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_strip_untrusted_owned_anchors(item) for item in value)
+        return tuple(_strip_owned_anchors(item) for item in value)
     return value
 
 
@@ -55,13 +56,45 @@ def _sanitize_untrusted_message(message: Mapping[str, Any]) -> dict[str, Any]:
     payload = _structured_payload(content)
     if payload is None:
         return output
-    stripped = _strip_untrusted_owned_anchors(payload)
+    stripped = _strip_owned_anchors(payload)
     output["content"] = (
         json.dumps(stripped, ensure_ascii=False, sort_keys=True)
         if isinstance(content, str)
         else stripped
     )
     return output
+
+
+def _is_preserved_host_continuation(payload: Any) -> bool:
+    """Recognize the host-generated continuation envelope used after output exhaustion.
+
+    This receipt may arrive in a role=user transport message, but it is only used to
+    recover one exact localization pin. It never contributes to the additional writable
+    exact-set, which remains restricted to system/tool/developer PlanIR messages.
+    """
+
+    if not isinstance(payload, Mapping):
+        return False
+    continuation = payload.get("continuation")
+    module = payload.get("module")
+    if not isinstance(continuation, Mapping) or not isinstance(module, Mapping):
+        return False
+    if str(continuation.get("reason") or "").strip() != _CONTINUATION_REASON:
+        return False
+    index = continuation.get("continuation_index")
+    if type(index) is not int or index < 1:
+        return False
+    module_id = str(module.get("module_id") or "").strip()
+    config = module.get("config")
+    if not module_id or not isinstance(config, Mapping):
+        return False
+    evidence_task = config.get("evidence_task")
+    if not isinstance(evidence_task, Mapping):
+        return False
+    if str(evidence_task.get("task_id") or "").strip() != module_id:
+        return False
+    bindings = evidence_task.get("production_bindings")
+    return isinstance(bindings, list) and bool(bindings)
 
 
 def _canonical_owned_locator(locator: Any, loop_module: Any) -> str:
@@ -305,8 +338,8 @@ def install(loop_module: Any) -> None:
 
     @wraps(original_is_ready)
     def is_mutation_ready(messages, state):
-        # Structured user/assistant content may describe a task but cannot grant host
-        # mutation authority. Strip only forgeable owned_anchors before localization.
+        # Untrusted structured content may still carry a host-generated continuation
+        # localization receipt, but it can never expand the writable exact-set.
         sanitized = tuple(
             _sanitize_untrusted_message(message)
             if isinstance(message, Mapping)
@@ -314,6 +347,17 @@ def install(loop_module: Any) -> None:
             for message in messages
         )
         ready = original_is_ready(sanitized, state)
+        if not ready:
+            continuation_present = any(
+                isinstance(message, Mapping)
+                and str(message.get("role") or "").strip().casefold() not in _HOST_ROLES
+                and _is_preserved_host_continuation(
+                    _structured_payload(message.get("content"))
+                )
+                for message in messages
+            )
+            if continuation_present:
+                ready = original_is_ready(messages, state)
         writable, creatable = _collect_message_owned_anchors(messages, loop_module)
         if writable or creatable:
             with state._lock:
