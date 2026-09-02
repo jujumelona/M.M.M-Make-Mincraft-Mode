@@ -59,19 +59,9 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
 
 
 def _platform_lock_from_adapter(adapter):
-    from minecraft_mod_ai.spec import PlatformLock
+    from minecraft_mod_ai.platform_resolver import lock_from_adapter
 
-    return PlatformLock(
-        edition=adapter.edition,
-        loader=adapter.loader,
-        minecraft_version=adapter.minecraft_version,
-        java_version=adapter.java_version,
-        yarn_mappings=adapter.yarn_mappings,
-        fabric_loader=adapter.fabric_loader,
-        fabric_api=adapter.fabric_api,
-        fabric_loom=adapter.fabric_loom,
-        gradle=adapter.gradle,
-    )
+    return lock_from_adapter(adapter)
 
 
 def _complete_partial_test_target(target):
