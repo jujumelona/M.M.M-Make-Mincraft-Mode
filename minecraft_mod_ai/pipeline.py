@@ -572,9 +572,16 @@ class MinecraftModPipeline:
 
     @staticmethod
     def _gametest_passed(build_report: BuildReport, spec) -> bool:
-        if not spec.acceptance.gametest_required:
+        del spec
+        gametest_commands = tuple(
+            command for command in build_report.commands if command.name == "gametest"
+        )
+        if not gametest_commands:
             return True
-        return build_report.gametest_report == "PASS"
+        return all(
+            command.exit_code == 0 and not command.timed_out
+            for command in gametest_commands
+        ) and bool(build_report.gametest_report)
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
