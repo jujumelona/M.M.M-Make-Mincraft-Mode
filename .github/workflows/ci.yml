@@ -51,14 +51,12 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Reviewed surface: inherited main was already at 424; Worker 03 adds one
-          # requirement-traceability owner, pre-design external source acquisition adds
-          # one explicit _forced_rag_bundle owner, prose-first deep-design compatibility
-          # adds one installer owner, prose requirement traceability adds one host-only
-          # module-row parser owner, and one host-only stable accounting hash owner bridges
-          # research receipts without changing the model response format. Total: 429.
-          # Any further runtime rebinding is a hard CI failure until deliberately reviewed.
-          budget = 429
+          # Reviewed surface: inherited main was already at 429. The generation-boundary
+          # reconciliation deliberately adds exactly two late owners: one sanitizes balanced
+          # model <think> blocks before the existing fail-closed design validator, and one
+          # routes Fabric official bootstrap lock writes through the immutable v4 writer.
+          # Total: 431. Any further runtime rebinding is a hard CI failure until reviewed.
+          budget = 431
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
