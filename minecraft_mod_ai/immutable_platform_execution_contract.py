@@ -29,6 +29,40 @@ def _gradle_distribution_url(version: str) -> str:
     return f"https://services.gradle.org/distributions/gradle-{version}-bin.zip"
 
 
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = str(value or "").split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return ()
+    return tuple(int(part) for part in parts)
+
+
+def _validate_base_coordinate_consistency(lock: PlatformLock) -> None:
+    """Reject mixed target tuples even for older narrow persisted locks."""
+
+    minecraft = str(lock.minecraft_version)
+    java = str(lock.java_version)
+    mc_tuple = _version_tuple(minecraft)
+    if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5):
+        if java.isdigit() and int(java) < 21:
+            raise SpecValidationError(
+                f"Minecraft {minecraft} requires a Java 21+ execution target; got Java {java}."
+            )
+
+    yarn = str(lock.yarn_mappings)
+    if yarn.casefold() not in {"mojang", "official", "official_mojang"}:
+        mapping_match = re.match(r"^(\d+(?:\.\d+){1,2})\+", yarn)
+        if mapping_match and mapping_match.group(1) != minecraft:
+            raise SpecValidationError(
+                "Platform lock mappings coordinate disagrees with minecraft_version."
+            )
+
+    api_match = re.search(r"\+(\d+(?:\.\d+){1,2})$", str(lock.fabric_api))
+    if api_match and api_match.group(1) != minecraft:
+        raise SpecValidationError(
+            "Platform lock Fabric API coordinate disagrees with minecraft_version."
+        )
+
+
 def _full_receipt_present(value: Any) -> bool:
     if isinstance(value, PlatformLock):
         return value.has_full_execution_receipt()
@@ -132,6 +166,18 @@ def install() -> None:
         platform_validation_contract,
         runner,
     )
+
+    current_platform_validate = PlatformLock.validate
+    if not getattr(current_platform_validate, "_mmm_base_coordinate_consistency", False):
+
+        @wraps(current_platform_validate)
+        def validate_platform_lock(self: PlatformLock) -> None:
+            _validate_base_coordinate_consistency(self)
+            current_platform_validate(self)
+
+        validate_platform_lock._mmm_base_coordinate_consistency = True
+        validate_platform_lock.__wrapped__ = current_platform_validate
+        PlatformLock.validate = validate_platform_lock
 
     def lock_from_adapter(adapter):
         adapter.validate()
