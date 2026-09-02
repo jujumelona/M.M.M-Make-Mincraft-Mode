@@ -526,10 +526,7 @@ class MinecraftModPipeline:
         self._write_json(
             release_dir / "supply_chain" / "fabric-dependencies.json",
             {
-                "components": fabric_dependency_components(
-                    platform_lock=spec.platform,
-                    metadata=fabric_metadata,
-                ),
+                "components": fabric_dependency_components(fabric_dependencies),
                 "dependencies": list(fabric_dependencies),
             },
         )
@@ -578,10 +575,42 @@ class MinecraftModPipeline:
         )
         if not gametest_commands:
             return True
-        return all(
+        if not all(
             command.exit_code == 0 and not command.timed_out
             for command in gametest_commands
-        ) and bool(build_report.gametest_report)
+        ):
+            return False
+        if not build_report.gametest_report:
+            return False
+        report_path = Path(build_report.gametest_report)
+        if not report_path.is_file() or report_path.is_symlink():
+            return False
+        try:
+            from xml.etree import ElementTree
+
+            root = ElementTree.parse(report_path).getroot()
+        except (OSError, ElementTree.ParseError):
+            return False
+
+        testcases = 0
+        for element in root.iter():
+            tag = str(element.tag).rsplit("}", 1)[-1]
+            if tag == "testcase":
+                testcases += 1
+            elif tag in {"failure", "error", "skipped"}:
+                return False
+        for element in root.iter():
+            tag = str(element.tag).rsplit("}", 1)[-1]
+            if tag not in {"testsuite", "testsuites"}:
+                continue
+            for field in ("failures", "errors", "skipped"):
+                raw = str(element.attrib.get(field, "0") or "0").strip()
+                try:
+                    if int(raw) != 0:
+                        return False
+                except ValueError:
+                    return False
+        return testcases > 0
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
@@ -650,12 +679,11 @@ class MinecraftModPipeline:
                 "bom-ref": f"pkg:generic/{proposal.spec.mod_id}@{proposal.spec.version}",
             }
         ]
-        components.extend(
-            fabric_dependency_components(
-                platform_lock=proposal.spec.platform,
-                metadata=fabric_metadata,
-            )
+        dependencies = dependency_inventory_from_metadata(
+            fabric_metadata,
+            platform_lock=proposal.spec.platform,
         )
+        components.extend(fabric_dependency_components(dependencies))
         bom = {
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
