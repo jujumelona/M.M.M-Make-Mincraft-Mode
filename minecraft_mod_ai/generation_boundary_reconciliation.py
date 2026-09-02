@@ -25,14 +25,20 @@ _IDENTITY_WRAPPERS = {
             r"^\s*(?:here(?:'s| is)|below is)\s+(?:the\s+)?title\s*[:\-–—]\s*",
             re.IGNORECASE,
         ),
-        re.compile(r"^\s*(?:the\s+)?title\s*(?:is|:)\s*", re.IGNORECASE),
+        re.compile(
+            r"^\s*(?:the\s+)?title\s*(?:is\s*[:\-–—]?|[:\-–—])\s*",
+            re.IGNORECASE,
+        ),
     ),
     "pitch": (
         re.compile(
             r"^\s*(?:here(?:'s| is)|below is)\s+(?:the\s+)?pitch\s*[:\-–—]\s*",
             re.IGNORECASE,
         ),
-        re.compile(r"^\s*(?:the\s+)?pitch\s*(?:is|:)\s*", re.IGNORECASE),
+        re.compile(
+            r"^\s*(?:the\s+)?pitch\s*(?:is\s*[:\-–—]?|[:\-–—])\s*",
+            re.IGNORECASE,
+        ),
     ),
 }
 
@@ -91,16 +97,19 @@ def install() -> None:
     from . import agentic_research_game_design as agentic
     from . import fabric_official_template_provider as fabric_provider
 
-    original_parse_field_output = agentic._parse_field_output
-    if not getattr(original_parse_field_output, "_mmm_meta_sanitized_boundary", False):
+    # Keep the canonical field parser/validator strict and independently testable. Cleanup
+    # belongs at the model-output extraction boundary immediately before that parser runs.
+    original_section_field_body = agentic._section_field_body
+    if not getattr(original_section_field_body, "_mmm_meta_sanitized_boundary", False):
 
-        @wraps(original_parse_field_output)
-        def parse_field_output(raw: Any, field: str) -> Any:
-            return original_parse_field_output(_sanitize_design_body(raw, field), field)
+        @wraps(original_section_field_body)
+        def section_field_body(raw: Any, field: str, fields: Any) -> str:
+            body = original_section_field_body(raw, field, fields)
+            return _sanitize_design_body(body, field)
 
-        parse_field_output._mmm_meta_sanitized_boundary = True
-        parse_field_output.__wrapped__ = original_parse_field_output
-        agentic._parse_field_output = parse_field_output
+        section_field_body._mmm_meta_sanitized_boundary = True
+        section_field_body.__wrapped__ = original_section_field_body
+        agentic._section_field_body = section_field_body
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):

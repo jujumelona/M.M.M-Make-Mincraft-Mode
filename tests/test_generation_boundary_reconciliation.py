@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from minecraft_mod_ai import agentic_research_game_design as agentic
 from minecraft_mod_ai import fabric_official_template_provider as fabric_provider
 from minecraft_mod_ai import platform_catalog
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
+from minecraft_mod_ai.spec import SpecValidationError
 
 
 def _adapter() -> PlatformAdapter:
@@ -32,14 +35,20 @@ def _adapter() -> PlatformAdapter:
     )
 
 
+def _parse_runtime_field(body: str, field: str):
+    raw = f"## {field}\n{body}"
+    extracted = agentic._section_field_body(raw, field, (field,))
+    return agentic._parse_field_output(extracted, field)
+
+
 def test_balanced_think_block_is_removed_without_losing_core_loop() -> None:
-    raw = """
+    body = """
 <think>I need to reason about ordering before answering.</think>
 - Gather ore and trade it for credits.
 - Buy hull parts and assemble the ship.
 - Upgrade the drive, launch, and travel to another planet.
 """
-    assert agentic._parse_field_output(raw, "core_loop") == [
+    assert _parse_runtime_field(body, "core_loop") == [
         "Gather ore and trade it for credits.",
         "Buy hull parts and assemble the ship.",
         "Upgrade the drive, launch, and travel to another planet.",
@@ -47,12 +56,9 @@ def test_balanced_think_block_is_removed_without_losing_core_loop() -> None:
 
 
 def test_identity_wrapper_is_removed_but_semantic_title_and_pitch_are_kept() -> None:
+    assert _parse_runtime_field("Here is the title: Starbound Foundry", "title") == "Starbound Foundry"
     assert (
-        agentic._parse_field_output("Here is the title: Starbound Foundry", "title")
-        == "Starbound Foundry"
-    )
-    assert (
-        agentic._parse_field_output(
+        _parse_runtime_field(
             "The pitch is: Mine, trade, build, upgrade, and explore "
             "as one continuous progression loop.",
             "pitch",
@@ -61,13 +67,17 @@ def test_identity_wrapper_is_removed_but_semantic_title_and_pitch_are_kept() -> 
     )
 
 
-def test_unbalanced_think_marker_still_fails_closed() -> None:
-    try:
-        agentic._parse_field_output("<think>I need to hide this\n- Gather ore", "core_loop")
-    except Exception as exc:
-        assert "internal model reasoning/meta output" in str(exc)
-    else:  # pragma: no cover - contract failure
-        raise AssertionError("unbalanced hidden reasoning must remain fail-closed")
+def test_canonical_parser_still_rejects_internal_meta_directly() -> None:
+    with pytest.raises(SpecValidationError, match="internal model reasoning/meta output"):
+        agentic._parse_field_output(
+            "<think>check internals</think> Space Colony",
+            "title",
+        )
+
+
+def test_unbalanced_think_marker_still_fails_closed_at_runtime_boundary() -> None:
+    with pytest.raises(SpecValidationError, match="internal model reasoning/meta output"):
+        _parse_runtime_field("<think>I need to hide this\n- Gather ore", "core_loop")
 
 
 def test_official_bootstrap_writer_preserves_full_immutable_receipt(tmp_path) -> None:
