@@ -86,102 +86,12 @@ def _discover_best_donor(
     )
 
 
-def _catalog_graph(reuse: Any, prompt: str, catalog: Mapping[str, Any], *, prompt_origin: bool):
-    from . import evidence_first_planning as evidence
-
-    requirements = catalog.get("requirements")
-    if not isinstance(requirements, list) or not requirements:
-        raise ValueError("Request catalog contains no requirements.")
-
-    nodes: list[str] = []
-    sources: list[tuple[str, str]] = []
-    terms: list[tuple[str, tuple[str, ...]]] = []
-    by_requirement: dict[str, tuple[str, ...]] = {}
-    dependencies: dict[str, tuple[str, ...]] = {}
-
-    for raw in requirements:
-        if not isinstance(raw, Mapping):
-            raise TypeError("Request requirements must be objects.")
-        requirement_id = str(raw.get("requirement_id") or raw.get("id") or "").strip()
-        if not requirement_id:
-            raise ValueError("Every request requirement must have a stable identifier.")
-        capabilities = list(reuse._requirement_capabilities(raw))
-        statement = str(
-            raw.get("semantic_statement")
-            or raw.get("statement")
-            or raw.get("capability")
-            or requirement_id
-        ).strip()
-        if prompt_origin:
-            resolution = evidence.resolve_capabilities_from_phrase_structured(statement)
-            explicit = tuple(
-                node.capability_id
-                for node in resolution.nodes
-                if node.origin == "explicit"
-                and not node.capability_id.startswith("unresolved:")
-            )
-            if not explicit and capabilities:
-                capabilities[0] = "provisional:" + capabilities[0].removeprefix("provisional:")
-        capability_tuple = tuple(dict.fromkeys(capabilities))
-        by_requirement[requirement_id] = capability_tuple
-        raw_deps = raw.get("depends_on", ())
-        dependencies[requirement_id] = (
-            tuple(str(item).strip() for item in raw_deps if str(item).strip())
-            if isinstance(raw_deps, Sequence)
-            and not isinstance(raw_deps, (str, bytes, bytearray))
-            else ()
-        )
-        for capability in capability_tuple:
-            if capability in nodes:
-                continue
-            nodes.append(capability)
-            source = (
-                "prompt_resolution.provisional_opaque"
-                if prompt_origin and capability.startswith("provisional:")
-                else f"evidence_request_catalog.{requirement_id}"
-            )
-            sources.append((capability, source))
-            terms.append(
-                (
-                    capability,
-                    tuple(
-                        dict.fromkeys(
-                            (
-                                statement,
-                                capability.removeprefix("provisional:").replace(".", " "),
-                            )
-                        )
-                    ),
-                )
-            )
-
-    known = set(by_requirement)
-    edges: list[tuple[str, str]] = []
-    for child, raw_deps in dependencies.items():
-        unknown = sorted(set(raw_deps) - known)
-        if unknown:
-            raise ValueError(f"Request requirement {child} has unknown dependencies: {unknown}.")
-        for parent in raw_deps:
-            for child_cap in by_requirement[child]:
-                for parent_cap in by_requirement[parent]:
-                    edge = (child_cap, parent_cap)
-                    if child_cap != parent_cap and edge not in edges:
-                        edges.append(edge)
-    return reuse.CapabilityGraph(
-        nodes=tuple(nodes),
-        edges=tuple(edges),
-        sources=tuple(sources),
-        search_terms=tuple(terms),
-    )
-
-
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
     from . import (
-        evidence_first_planning as evidence,
         orchestration,
         pipeline,
         platform_evidence_pipeline,
@@ -278,64 +188,6 @@ def install() -> None:
             migration_requested=migration_requested,
         )
 
-    original_decompose = reuse.decompose_capability_graph
-
-    def decompose_capability_graph(
-        prompt: str,
-        *,
-        design: Mapping[str, Any] | None = None,
-        module_kinds: Iterable[str] = (),
-        semantic_router: Any = None,
-    ):
-        del semantic_router
-        if isinstance(design, Mapping):
-            frozen = design.get("_pre_retrieval_plan")
-            if isinstance(frozen, Mapping):
-                return original_decompose(
-                    prompt,
-                    design=design,
-                    module_kinds=module_kinds,
-                    semantic_router=None,
-                )
-            catalog = design.get("_evidence_request_catalog")
-            if isinstance(catalog, Mapping):
-                return _catalog_graph(reuse, prompt, catalog, prompt_origin=False)
-            raw_capabilities = design.get("capabilities")
-            if isinstance(raw_capabilities, Sequence) and not isinstance(
-                raw_capabilities, (str, bytes, bytearray)
-            ):
-                nodes = tuple(
-                    dict.fromkeys(
-                        capability
-                        for item in raw_capabilities
-                        if (capability := reuse._capability_id(item))
-                    )
-                )
-                if nodes:
-                    return reuse.CapabilityGraph(
-                        nodes=nodes,
-                        edges=(),
-                        sources=tuple(
-                            (capability, f"design.capabilities[{index}]")
-                            for index, capability in enumerate(nodes)
-                        ),
-                        search_terms=tuple(
-                            (capability, (capability.replace(".", " "),))
-                            for capability in nodes
-                        ),
-                    )
-            # An authoritative design without a frozen catalog must not gain prompt noise.
-            raise TypeError(
-                "Authoritative request catalog must be frozen before retrieval planning."
-            )
-
-        kinds = tuple(str(item).strip() for item in module_kinds if str(item).strip())
-        if kinds:
-            return original_decompose(prompt, module_kinds=kinds, semantic_router=None)
-
-        catalog = evidence.build_request_catalog(prompt, {})
-        return _catalog_graph(reuse, prompt, catalog, prompt_origin=True)
-
     original_to_dict = reuse.TargetImplementationPlan.to_dict
 
     def target_plan_to_dict(self):
@@ -430,9 +282,11 @@ def install() -> None:
     platform_resolver.resolve_platform = resolve_platform
 
     reuse.inspect_repository_slice = source_transplant.inspect_repository_slice
+    reuse._workers = _workers
     reuse._discover_donor_candidates = _discover_donor_candidates
     reuse._discover_best_donor = _discover_best_donor
-    reuse.decompose_capability_graph = decompose_capability_graph
+    # Capability decomposition is already receipt-native in reuse_planner. Do not
+    # override its approved-catalog authority or raw-prompt fail-closed behavior here.
     reuse.TargetImplementationPlan.to_dict = target_plan_to_dict
     reuse.optimize_platform_and_reuse = optimize_platform_and_reuse
 
