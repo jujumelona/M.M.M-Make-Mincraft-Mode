@@ -46,6 +46,7 @@ def finalize_runtime() -> None:
             planner_template_schema,
             production_contract,
             production_tools,
+            progress_aware_tool_loop,
             quality_evidence,
             repository_grounding,
             research_rag_performance,
@@ -77,6 +78,7 @@ def finalize_runtime() -> None:
         from .model_adapters import llama_cpp_adapter
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
+        from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
         from .prefill_calibration_strictness_contract import install as install_prefill_calibration_strictness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
@@ -118,6 +120,7 @@ def finalize_runtime() -> None:
         )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
+        install_planir_mutation_authority(progress_aware_tool_loop)
         install_retrieval_residency(model_router_module=model_router)
 
         retrieval_cpu_budget_contract._install_live_hybrid_budget(
