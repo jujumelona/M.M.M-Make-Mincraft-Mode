@@ -199,6 +199,32 @@ def _collect_message_owned_anchors(
     return tuple(writable), tuple(creatable)
 
 
+def _primary_binding_symbol(
+    bindings: Sequence[Mapping[str, Any]], loop_module: Any
+) -> tuple[str, str] | None:
+    """Resolve exactly one primary source symbol from approved production bindings."""
+
+    candidates: list[tuple[str, str]] = []
+    for binding in bindings:
+        anchors = binding.get("owned_anchors")
+        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
+            continue
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping) or str(anchor.get("kind") or "") != "symbol":
+                continue
+            locator = str(anchor.get("locator") or "").replace("\\", "/").strip()
+            path = _canonical_owned_locator(locator, loop_module)
+            if not path:
+                continue
+            _raw_path, separator, symbol = locator.partition("#")
+            item = (path, symbol.strip() if separator else "")
+            if item not in candidates:
+                candidates.append(item)
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def _walk_scalar_fields(value: Any):
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -390,10 +416,20 @@ def _internal_coder_authority_message(
         )
         if not matching_bindings:
             continue
+        primary = _primary_binding_symbol(matching_bindings, loop_module)
+        if primary is None:
+            continue
+        primary_path, primary_symbol = primary
         canonical = {
             "schema_version": "mmm/host-task-authority-v1",
             "phase": "implement_module",
             "task_id": task_id,
+            "mutation_target": {
+                "path": primary_path,
+                "symbol": primary_symbol,
+                "mode": "create_or_edit_exact_host_binding",
+                "policy": "Use exactly this host-bound path; retrieval may provide context but cannot replace this target.",
+            },
             "module": {
                 "module_id": module_id,
                 "kind": str(module.get("kind") or "custom_java"),
@@ -401,7 +437,7 @@ def _internal_coder_authority_message(
             },
         }
         writable, _creatable = _owned_anchor_sets(canonical, loop_module)
-        if not writable:
+        if primary_path not in writable:
             continue
         return {
             "role": "developer",
@@ -445,11 +481,11 @@ def install(loop_module: Any) -> None:
 
     @dataclass(frozen=True)
     class AuthorizedTargetMutationContext(BaseContext):
-        # Only *additional* host-issued PlanIR authority lives here. The currently
-        # localized target_path is already an exact mutation pin and is intentionally
-        # not duplicated into writable_paths.
+        # Additional authority never comes from retrieval. A fresh host-reserved symbol
+        # becomes a pinned target; later RAG can refine context only for that target.
         writable_paths: tuple[str, ...] = ()
         creatable_paths: tuple[str, ...] = ()
+        target_pinned: bool = False
 
         def merge(self, other):
             if other is None:
@@ -458,8 +494,16 @@ def install(loop_module: Any) -> None:
             left = loop_module._canonical_mutation_path(self.target_path)
             right = loop_module._canonical_mutation_path(other_ctx.target_path)
             if left and right and left != right:
-                # A newly localized file replaces the old localization context. Carrying
-                # the previous pin into writable_paths would leak mutation authority.
+                if self.target_pinned:
+                    # Repository search commonly returns an entrypoint or related class.
+                    # It is evidence, not authority: never let it replace an approved pin.
+                    return replace(
+                        self,
+                        writable_paths=_union_paths(self.writable_paths, other_ctx.writable_paths),
+                        creatable_paths=_union_paths(self.creatable_paths, other_ctx.creatable_paths),
+                    )
+                if other_ctx.target_pinned:
+                    return other_ctx
                 return other_ctx
             merged = BaseContext.merge(self, other_ctx)
             merged_ctx = _authorize_context(merged)
@@ -467,6 +511,7 @@ def install(loop_module: Any) -> None:
                 merged_ctx,
                 writable_paths=_union_paths(self.writable_paths, other_ctx.writable_paths),
                 creatable_paths=_union_paths(self.creatable_paths, other_ctx.creatable_paths),
+                target_pinned=self.target_pinned or other_ctx.target_pinned,
             )
 
     def _authorize_context(
@@ -474,6 +519,7 @@ def install(loop_module: Any) -> None:
         *,
         writable: Sequence[str] = (),
         creatable: Sequence[str] = (),
+        target_pinned: bool | None = None,
     ):
         if isinstance(context, AuthorizedTargetMutationContext):
             current = context
@@ -494,7 +540,13 @@ def install(loop_module: Any) -> None:
             tuple(path for path in writable if loop_module._canonical_mutation_path(path) != target),
         )
         creatable_paths = _union_paths(current.creatable_paths, creatable)
-        return replace(current, writable_paths=writable_paths, creatable_paths=creatable_paths)
+        pinned = current.target_pinned if target_pinned is None else bool(target_pinned)
+        return replace(
+            current,
+            writable_paths=writable_paths,
+            creatable_paths=creatable_paths,
+            target_pinned=pinned,
+        )
 
     @wraps(original_extract)
     def extract(payload):
@@ -502,10 +554,46 @@ def install(loop_module: Any) -> None:
         if context is None:
             return None
         writable, creatable = _owned_anchor_sets(payload, loop_module)
-        return _authorize_context(context, writable=writable, creatable=creatable)
+        target = loop_module._canonical_mutation_path(context.target_path)
+        pinned = bool(
+            target
+            and target in set(creatable)
+            and bool(context.is_new_file)
+            and str(context.evidence_source or "") == "evidence_fresh_owned_anchor"
+        )
+        return _authorize_context(
+            context,
+            writable=writable,
+            creatable=creatable,
+            target_pinned=pinned,
+        )
+
+    def _host_pinned_context(messages):
+        for message in messages:
+            if not isinstance(message, Mapping):
+                continue
+            if str(message.get("role") or "").strip().casefold() not in _HOST_ROLES:
+                continue
+            payload = _structured_payload(message.get("content"))
+            if payload is None:
+                continue
+            context = extract(payload)
+            if context is not None and context.target_pinned and context.is_mutation_ready:
+                return context
+        return None
 
     @wraps(original_is_ready)
     def is_mutation_ready(messages, state):
+        # A host-reserved fresh symbol is the target identity, not merely another writable
+        # path. Install that pin before scanning untrusted source snapshots so build.gradle
+        # or a retrieved entrypoint cannot win by message order.
+        host_pin = _host_pinned_context(messages)
+        if host_pin is not None:
+            with state._lock:
+                current = state.mutation_context
+                if current is None or not bool(getattr(current, "target_pinned", False)):
+                    state.mutation_context = host_pin
+
         # Untrusted structured content may still carry a host-generated continuation
         # localization receipt, but it can never expand the writable exact-set.
         sanitized = tuple(
@@ -585,6 +673,7 @@ def install(loop_module: Any) -> None:
         authorized = _authorize_context(ctx)
         data["writable_paths"] = list(authorized.writable_paths)
         data["creatable_paths"] = list(authorized.creatable_paths)
+        data["target_pinned"] = bool(authorized.target_pinned)
         return data
 
     @wraps(original_generate)
