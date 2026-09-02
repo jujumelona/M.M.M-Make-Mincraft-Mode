@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai import platform_selection_pipeline as strict_platform
+from minecraft_mod_ai import platform_evidence_pipeline as evidence
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline, PlanningStageError
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, PlatformProvider
 from minecraft_mod_ai.spec import PlatformLock, SpecValidationError
@@ -37,11 +37,19 @@ def _adapter(version: str) -> PlatformAdapter:
     )
 
 
-def test_complete_planner_uses_canonical_pipeline_not_legacy_game_design_planner() -> None:
+def test_deleted_legacy_planner_files_are_physically_absent() -> None:
+    assert not (PACKAGE / "platform_optimizer.py").exists()
+    assert not (PACKAGE / "platform_central_ai_contract.py").exists()
+    assert not (ROOT / "tests" / "test_platform_failure_recovery.py").exists()
+
+
+def test_complete_planner_uses_canonical_pipeline_and_no_synthetic_module_fallback() -> None:
     source = (PACKAGE / "complete_planner.py").read_text(encoding="utf-8")
     assert "PlanningPipeline(self.router).prepare" in source
     assert "GameDesignPlanner(self.router).plan" not in source
     assert "research-unavailable" not in source
+    assert "Implement the complete requested mod behavior" not in source
+    assert "from .live_module_lowering import lower_live_modules" in source
 
 
 def test_unavailable_evidence_cannot_advance() -> None:
@@ -77,7 +85,19 @@ def test_platform_lock_validation_is_offline_and_does_not_reresolve(
     lock.validate()
 
 
-def test_candidate_receipt_is_resolved_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_capability_decomposition_does_not_semantically_truncate_at_twelve() -> None:
+    design = {
+        "features": [
+            {"name": f"capability_{index}"}
+            for index in range(30)
+        ]
+    }
+    queries = evidence.capability_queries("make the requested mod", design=design)
+    assert len(queries) == 30
+    assert queries[-1] == "capability 29"
+
+
+def test_frontier_provider_receipt_is_resolved_once(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     def resolve(version: str) -> PlatformAdapter:
@@ -87,46 +107,51 @@ def test_candidate_receipt_is_resolved_exactly_once(monkeypatch: pytest.MonkeyPa
     provider = PlatformProvider(
         loader="fabric",
         provider_id="fixture",
-        discover_versions=lambda limit: ("1.21.1", "1.21.2")[:limit],
+        discover_versions=lambda _limit: (),
         resolve=resolve,
     )
-    monkeypatch.setattr(strict_platform, "executable_loaders", lambda: ("fabric",))
-    monkeypatch.setattr(strict_platform, "provider_for_loader", lambda _loader: provider)
+    monkeypatch.setattr(evidence, "provider_for_loader", lambda _loader: provider)
 
-    adapters = strict_platform._resolved_candidates(
-        loader_constraint=None,
-        version_constraint=None,
-        page_size=2,
+    adapters, errors = evidence._resolve_frontier(
+        (("fabric", "1.21.1"), ("fabric", "1.21.1"), ("fabric", "1.21.2"))
     )
-
+    assert errors == ()
     assert [item.minecraft_version for item in adapters] == ["1.21.1", "1.21.2"]
     assert calls == ["1.21.1", "1.21.2"]
 
 
-def test_deep_evidence_failure_is_not_converted_to_fresh_only(
+def test_target_research_failure_cannot_be_ranked_as_fresh_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = _adapter("1.21.1")
+    provider = PlatformProvider(
+        loader="fabric",
+        provider_id="fixture",
+        discover_versions=lambda _limit: (),
+        resolve=lambda version: _adapter(version),
+    )
+    monkeypatch.setattr(evidence, "provider_for_loader", lambda _loader: provider)
+    monkeypatch.setattr(evidence, "executable_loaders", lambda: ("fabric",))
 
-    def fail(*_args, **_kwargs):
-        raise RuntimeError("inspection backend unavailable")
+    def fail(_adapter: PlatformAdapter):
+        raise RuntimeError("research backend unavailable")
 
-    monkeypatch.setattr(strict_platform.legacy_optimizer, "_deep_evidence", fail)
-    with pytest.raises(SpecValidationError, match="Refusing fresh-only fallback"):
-        strict_platform._parallel_deep_fail_closed(
-            (adapter,),
-            queries=("gameplay.core",),
-            matrix={adapter.adapter_id: {}},
-            client=object(),
-            target_research_fn=None,
-            inherited_errors=(),
-            shallow_candidate_count=0,
+    with pytest.raises(SpecValidationError, match="failed closed"):
+        evidence.optimize_platform_evidence(
+            "Minecraft 1.21.1 Fabric test mod",
+            version_constraint="1.21.1",
+            loader_constraint="fabric",
+            target_research_fn=fail,
         )
 
 
-def test_strict_platform_path_contains_no_post_admission_skip_or_rediscovery() -> None:
-    source = (PACKAGE / "platform_selection_pipeline.py").read_text(encoding="utf-8")
-    assert "discover_target_keys" not in source
-    assert "adapter_for_target" not in source
-    assert "target resolution skipped" not in source
-    assert "using fresh-only evidence" not in source
+def test_canonical_platform_sources_contain_no_legacy_recovery_or_optimizer_import() -> None:
+    selection = (PACKAGE / "platform_selection_pipeline.py").read_text(encoding="utf-8")
+    evidence_source = (PACKAGE / "platform_evidence_pipeline.py").read_text(encoding="utf-8")
+    resolver = (PACKAGE / "platform_resolver.py").read_text(encoding="utf-8")
+    combined = "\n".join((selection, evidence_source, resolver))
+    assert "platform_optimizer" not in combined
+    assert "target resolution skipped" not in combined
+    assert "using fresh-only evidence" not in combined
+    assert "_DEPENDENCY_NODE_BUDGET" not in combined
+    assert "root_ids[:" not in combined
+    assert "top_k" not in combined
