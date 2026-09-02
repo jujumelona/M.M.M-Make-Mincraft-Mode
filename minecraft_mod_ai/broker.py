@@ -14,6 +14,7 @@ class ToolAction(str, Enum):
     GRADLE_BUILD = "build.gradle"
     GAME_TEST = "test.gametest"
     PACKAGE = "release.package"
+    EXPORT = "release.package"
 
 
 class PolicyDenied(PermissionError):
