@@ -326,11 +326,11 @@ def install(loop_module: Any) -> None:
         return None
 
     @wraps(original_context_dict)
-    def mutation_context_dict(context):
-        data = original_context_dict(context)
-        if context is None:
+    def mutation_context_dict(ctx):
+        data = original_context_dict(ctx)
+        if ctx is None:
             return data
-        authorized = _authorize_context(context)
+        authorized = _authorize_context(ctx)
         data["writable_paths"] = list(authorized.writable_paths)
         data["creatable_paths"] = list(authorized.creatable_paths)
         return data
