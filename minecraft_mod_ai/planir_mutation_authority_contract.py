@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Bind PlanIR mutation ownership to exact writable files and isolate donor reads."""
+"""Bind host-issued PlanIR mutation ownership to exact writable files and isolate donor reads."""
 
 import json
 import re
@@ -12,6 +12,7 @@ from typing import Any
 
 _MARKER = "_mmm_planir_mutation_authority_v1"
 _DONOR_TOOL = "read_reuse_source"
+_HOST_ROLES = frozenset({"system", "tool", "developer"})
 _HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _HEX_SHA256 = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
 _DONOR_ROOT_FRAGMENT = ".minecraft_ai/reuse/donors/"
@@ -29,6 +30,38 @@ def _structured_payload(content: Any) -> Any | None:
         except (json.JSONDecodeError, ValueError, TypeError):
             return None
     return None
+
+
+def _strip_untrusted_owned_anchors(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_untrusted_owned_anchors(item)
+            for key, item in value.items()
+            if str(key) != "owned_anchors"
+        }
+    if isinstance(value, list):
+        return [_strip_untrusted_owned_anchors(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_untrusted_owned_anchors(item) for item in value)
+    return value
+
+
+def _sanitize_untrusted_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    output = dict(message)
+    role = str(output.get("role") or "").strip().casefold()
+    if role in _HOST_ROLES:
+        return output
+    content = output.get("content")
+    payload = _structured_payload(content)
+    if payload is None:
+        return output
+    stripped = _strip_untrusted_owned_anchors(payload)
+    output["content"] = (
+        json.dumps(stripped, ensure_ascii=False, sort_keys=True)
+        if isinstance(content, str)
+        else stripped
+    )
+    return output
 
 
 def _canonical_owned_locator(locator: Any, loop_module: Any) -> str:
@@ -114,6 +147,9 @@ def _collect_message_owned_anchors(
     writable: list[str] = []
     creatable: list[str] = []
     for message in messages:
+        role = str(message.get("role") or "").strip().casefold()
+        if role not in _HOST_ROLES:
+            continue
         payload = _structured_payload(message.get("content"))
         if payload is None:
             continue
@@ -138,23 +174,20 @@ def _walk_scalar_fields(value: Any):
 
 
 def _approved_donor_authority(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Require a structured, immutable donor receipt before exposing donor reads."""
+    """Require a host-role immutable donor receipt before exposing donor reads."""
     for message in messages:
+        role = str(message.get("role") or "").strip().casefold()
+        if role not in _HOST_ROLES:
+            continue
         payload = _structured_payload(message.get("content"))
         if payload is None:
             continue
-        role = str(message.get("role") or "").strip().casefold()
-        has_host_marker = False
         donor_path = False
         commit = False
         digest = False
         license_id = False
         for key, item in _walk_scalar_fields(payload):
             key_cf = key.casefold()
-            if key_cf == "schema_version":
-                schema = str(item or "").strip().casefold()
-                if schema.startswith("mmm/") and ("reuse" in schema or "donor" in schema):
-                    has_host_marker = True
             if isinstance(item, str):
                 text = item.replace("\\", "/").strip()
                 if _DONOR_ROOT_FRAGMENT in text and ".." not in PurePosixPath(text).parts:
@@ -165,8 +198,7 @@ def _approved_donor_authority(messages: Sequence[Mapping[str, Any]]) -> bool:
                     digest = True
                 if key_cf in {"license", "license_id"} and text:
                     license_id = True
-        trusted_surface = role in {"system", "tool", "developer"} or has_host_marker
-        if trusted_surface and donor_path and commit and digest and license_id:
+        if donor_path and commit and digest and license_id:
             return True
     return False
 
@@ -212,6 +244,9 @@ def install(loop_module: Any) -> None:
 
     @dataclass(frozen=True)
     class AuthorizedTargetMutationContext(BaseContext):
+        # Only *additional* host-issued PlanIR authority lives here. The currently
+        # localized target_path is already an exact mutation pin and is intentionally
+        # not duplicated into writable_paths.
         writable_paths: tuple[str, ...] = ()
         creatable_paths: tuple[str, ...] = ()
 
@@ -221,19 +256,17 @@ def install(loop_module: Any) -> None:
             other_ctx = _authorize_context(other)
             left = loop_module._canonical_mutation_path(self.target_path)
             right = loop_module._canonical_mutation_path(other_ctx.target_path)
+            if left and right and left != right:
+                # A newly localized file replaces the old localization context. Carrying
+                # the previous pin into writable_paths would leak mutation authority.
+                return other_ctx
             merged = BaseContext.merge(self, other_ctx)
             merged_ctx = _authorize_context(merged)
-            switched_target = bool(left and right and left != right)
-            if switched_target:
-                writable = tuple(other_ctx.writable_paths)
-                creatable = tuple(other_ctx.creatable_paths)
-            else:
-                writable = _union_paths(self.writable_paths, other_ctx.writable_paths)
-                creatable = _union_paths(self.creatable_paths, other_ctx.creatable_paths)
-            target = loop_module._canonical_mutation_path(merged_ctx.target_path)
-            if target:
-                writable = _union_paths(writable, (target,))
-            return replace(merged_ctx, writable_paths=writable, creatable_paths=creatable)
+            return replace(
+                merged_ctx,
+                writable_paths=_union_paths(self.writable_paths, other_ctx.writable_paths),
+                creatable_paths=_union_paths(self.creatable_paths, other_ctx.creatable_paths),
+            )
 
     def _authorize_context(
         context: Any,
@@ -256,9 +289,8 @@ def install(loop_module: Any) -> None:
             )
         target = loop_module._canonical_mutation_path(current.target_path)
         writable_paths = _union_paths(
-            current.writable_paths,
-            writable,
-            (target,) if target else (),
+            tuple(path for path in current.writable_paths if path != target),
+            tuple(path for path in writable if loop_module._canonical_mutation_path(path) != target),
         )
         creatable_paths = _union_paths(current.creatable_paths, creatable)
         return replace(current, writable_paths=writable_paths, creatable_paths=creatable_paths)
@@ -273,7 +305,15 @@ def install(loop_module: Any) -> None:
 
     @wraps(original_is_ready)
     def is_mutation_ready(messages, state):
-        ready = original_is_ready(messages, state)
+        # Structured user/assistant content may describe a task but cannot grant host
+        # mutation authority. Strip only forgeable owned_anchors before localization.
+        sanitized = tuple(
+            _sanitize_untrusted_message(message)
+            if isinstance(message, Mapping)
+            else message
+            for message in messages
+        )
+        ready = original_is_ready(sanitized, state)
         writable, creatable = _collect_message_owned_anchors(messages, loop_module)
         if writable or creatable:
             with state._lock:
@@ -350,7 +390,7 @@ def install(loop_module: Any) -> None:
             if _forced_tool_name(request.tool_choice) == _DONOR_TOOL:
                 raise loop_module.ModelConfigurationError(
                     "DONOR_SOURCE_UNAUTHORIZED: read_reuse_source cannot be forced "
-                    "without an approved materialized donor receipt/path."
+                    "without an approved host materialized donor receipt/path."
                 )
             request = replace(request, tools=_filter_donor_tool_schemas(request.tools))
         return original_generate(
