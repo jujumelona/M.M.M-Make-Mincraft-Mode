@@ -97,6 +97,7 @@ def install() -> None:
         reuse_planner as reuse,
         source_transplant,
     )
+    from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
     from .platform_catalog import provider_for_loader
     from .spec import SpecValidationError
 
@@ -258,13 +259,39 @@ def install() -> None:
                 semantic_router=semantic_router,
             )
 
-        # Raw prompt text is not approved semantic authority. Production retrieval must
-        # fail closed until evidence-first planning freezes a request catalog.
-        return original_decompose(
-            prompt,
-            design=None,
-            module_kinds=(),
-            semantic_router=semantic_router,
+        text = str(prompt or "").strip()
+        lowered = text.casefold()
+        if lowered.startswith(("infer ", "guess ", "deduce ", "derive ", "expand ")):
+            return original_decompose(
+                prompt,
+                design=None,
+                module_kinds=(),
+                semantic_router=semantic_router,
+            )
+
+        resolution = resolve_capabilities_from_phrase_structured(text)
+        recognized = tuple(
+            node.capability_id
+            for node in resolution.nodes
+            if node.capability_id and not node.capability_id.startswith("unresolved:")
+        )
+        if recognized:
+            return original_decompose(
+                prompt,
+                design=None,
+                module_kinds=(),
+                semantic_router=semantic_router,
+            )
+
+        opaque = reuse._capability_id(text)
+        if not opaque:
+            raise ValueError("Capability decomposition requires non-empty request text.")
+        capability = f"provisional:{opaque}"
+        return reuse.CapabilityGraph(
+            nodes=(capability,),
+            edges=(),
+            sources=((capability, "prompt_resolution.provisional_opaque"),),
+            search_terms=((capability, (text,)),),
         )
 
     original_to_dict = reuse.TargetImplementationPlan.to_dict
