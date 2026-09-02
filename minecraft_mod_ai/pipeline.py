@@ -557,11 +557,6 @@ class MinecraftModPipeline:
                 release_dir / "evidence" / "existing-input-report.json",
                 existing_report.to_dict(),
             )
-        if proposal.research_findings:
-            self._write_text(
-                release_dir / "evidence" / "research-findings.txt",
-                "\n\n".join(proposal.research_findings) + "\n",
-            )
         self._authorize(ToolAction.EXPORT, release_dir, releases_root, proposal)
         self._zip_tree(release_dir, release_zip := releases_root / f"{release_name}.zip")
         release_dir.rename(final_release_dir)
