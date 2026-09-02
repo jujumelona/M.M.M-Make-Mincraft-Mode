@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from .platform_catalog import adapter_for_lock_values
-
 
 def fabric_dependency_predicates(platform: Any) -> dict[str, str]:
     """Return exact dependency predicates from one host-selected provider receipt."""
 
+    from . import platform_catalog
+
     platform.validate()
-    adapter_for_lock_values(platform)
+    # Resolve through the live module attribute so late immutable-receipt installation
+    # cannot leave this validator pinned to a stale pre-approval alias.
+    platform_catalog.adapter_for_lock_values(platform)
     values = {
         "fabricloader": platform.fabric_loader,
         "minecraft": platform.minecraft_version,
