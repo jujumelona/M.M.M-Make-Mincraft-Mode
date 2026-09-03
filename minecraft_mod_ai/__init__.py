@@ -1,9 +1,19 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .runtime_bootstrap import initialize_runtime
-from .runtime_finalization import finalize_runtime
 
 initialize_runtime()
+
+# Capture fresh PlanIR task mutation authority directly from the host-owned
+# ProductionModule call before finalization installs the generic tool-loop contracts.
+# The later PlanIR wrapper consumes this developer-role authority as an exact pin;
+# RAG observations remain read context and cannot silently become the write target.
+from .direct_task_mutation_authority_contract import install as _install_direct_task_mutation_authority
+
+_install_direct_task_mutation_authority()
+
+from .runtime_finalization import finalize_runtime
+
 finalize_runtime()
 
 from .api import (
