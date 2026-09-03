@@ -733,7 +733,14 @@ def materialize_source_slices(
                 destination.relative_to(donor_root.resolve())
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(raw)
-                written.append({"path": str(destination), "sha256": actual, "size_bytes": len(raw)})
+                written.append(
+                    {
+                        "path": str(destination),
+                        "sha256": actual,
+                        "size_bytes": len(raw),
+                        "symbols": list(item.get("symbols") or ()),
+                    }
+                )
             manifest = {
                 "repository": repository,
                 "commit_sha": commit_sha,

@@ -427,6 +427,13 @@ class PlanningPipeline:
                 "minecraft_version": str(existing_version),
                 "loader": str(existing_loader or "unknown").strip().casefold(),
             }
+        # Convert only host-grounded GitHub evidence into executable donor source.
+        # This runs after the target is frozen and before PlanIR compilation so the
+        # small coder receives code bytes, not another repository-search problem.
+        from .grounded_source_reuse import build_repository_reuse_plan
+
+        reuse_design = {**design, "_platform_selection": selection_dict}
+        selection_dict["reuse_plan"] = build_repository_reuse_plan(reuse_design)
         target = dict(selection_dict["target"])
         bound_brief = {**research_brief, "_mmm_platform_target": target}
 

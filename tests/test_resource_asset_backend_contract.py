@@ -337,6 +337,16 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
                 "source_id": "owner/trade-mod",
                 "component_refs": ["trade_candidate"],
                 "donor": donor,
+                "proof_receipt": {
+                    "schema_version": "mmm/reuse-proof-receipt-v1",
+                    "candidate_id": "owner/trade-mod@" + "a" * 40,
+                    "capability": "trade",
+                    "commit_sha": "a" * 40,
+                    "proof_level": "COMPILE_VERIFIED",
+                    "authoritative_compile": True,
+                    "compile_passed": True,
+                    "verified_artifacts": ["src/main/java/example/Trade.java"],
+                },
             }
         ],
     }

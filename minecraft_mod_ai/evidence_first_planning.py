@@ -1335,7 +1335,32 @@ def _validated_external_reuse(
             return False
         if type(item.get("size_bytes")) is not int or item["size_bytes"] < 0:
             return False
-    return True
+    proof = raw.get("proof_receipt")
+    if not isinstance(proof, Mapping):
+        return False
+    from .proof_level import ProofLevel
+
+    if proof.get("schema_version") != "mmm/reuse-proof-receipt-v1":
+        return False
+    if not ProofLevel.from_value(proof.get("proof_level")).is_verified():
+        return False
+    if proof.get("authoritative_compile") is not True or proof.get("compile_passed") is not True:
+        return False
+    if str(proof.get("commit_sha") or "") != str(donor.get("commit_sha") or ""):
+        return False
+    if _canonical_capability(proof.get("capability")) != _canonical_capability(capability):
+        return False
+    verified_artifacts = {
+        str(item).replace("\\", "/")
+        for item in proof.get("verified_artifacts", ())
+        if str(item).strip()
+    }
+    donor_artifacts = {
+        str(item.get("path") or "").replace("\\", "/")
+        for item in files
+        if isinstance(item, Mapping)
+    }
+    return bool(donor_artifacts and donor_artifacts <= verified_artifacts)
 
 
 def _branch_predicates(

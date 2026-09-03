@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -32,6 +33,32 @@ class CustomModuleGenerationError(RuntimeError):
 
 _APPROVED_REUSE_CONTEXT_SCHEMA = "mmm/approved-reuse-context-v1"
 _APPROVED_REUSE_CONTEXT_BYTES = 12 * 1024
+_CODE_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{2,}")
+_REUSE_BOILERPLATE = frozenset(
+    {
+        "abstract",
+        "boolean",
+        "class",
+        "default",
+        "extends",
+        "final",
+        "import",
+        "implements",
+        "interface",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "record",
+        "return",
+        "static",
+        "string",
+        "super",
+        "this",
+        "throws",
+        "void",
+    }
+)
 
 
 def _owned_reuse_plan(module: ProductionModule) -> Mapping[str, Any] | None:
@@ -139,6 +166,7 @@ def _materialize_owned_reuse_context(
                         "offset_bytes": source.get("offset_bytes"),
                         "next_offset_bytes": source.get("next_offset_bytes"),
                         "eof": source.get("eof"),
+                        "symbols": list(file_receipt.get("symbols") or ()),
                         "content": content,
                     }
                 )
@@ -164,6 +192,104 @@ def _materialize_owned_reuse_context(
             "task target; preserve license/provenance and never edit donor files."
         ),
     }
+
+
+def _reuse_code_tokens(value: Any) -> tuple[str, ...]:
+    return tuple(
+        token
+        for token in _CODE_IDENTIFIER.findall(str(value or ""))
+        if token.casefold() not in _REUSE_BOILERPLATE
+    )
+
+
+def _reuse_shingles(tokens: Sequence[str], width: int = 5) -> set[tuple[str, ...]]:
+    folded = tuple(token.casefold() for token in tokens)
+    if len(folded) < width:
+        return set()
+    return {
+        folded[index : index + width]
+        for index in range(len(folded) - width + 1)
+    }
+
+
+def _verify_reuse_application(
+    context: Mapping[str, Any],
+    staged_root: Path,
+    touched_paths: Sequence[str],
+) -> dict[str, Any]:
+    """Prove that generated source actually incorporates the approved donor code."""
+
+    snippets = context.get("snippets")
+    if not isinstance(snippets, list) or not snippets:
+        raise CustomModuleGenerationError(
+            "Approved reuse context has no code snippets to verify after generation."
+        )
+    donor_tokens: list[str] = []
+    declared_symbols: set[str] = set()
+    donor_hashes: list[str] = []
+    for snippet in snippets:
+        if not isinstance(snippet, Mapping):
+            continue
+        donor_tokens.extend(_reuse_code_tokens(snippet.get("content")))
+        declared_symbols.update(
+            str(item).strip()
+            for item in snippet.get("symbols", ())
+            if str(item).strip()
+        )
+        digest = str(snippet.get("sha256") or "").strip()
+        if digest:
+            donor_hashes.append(digest)
+
+    target_tokens: list[str] = []
+    verified_paths: list[str] = []
+    for raw_path in touched_paths:
+        normalized = PurePosixPath(str(raw_path).replace("\\", "/")).as_posix()
+        target = (staged_root / normalized).resolve()
+        try:
+            target.relative_to(staged_root.resolve())
+        except ValueError:
+            continue
+        if not target.is_file() or target.is_symlink():
+            continue
+        text = target.read_text(encoding="utf-8", errors="replace")
+        target_tokens.extend(_reuse_code_tokens(text))
+        verified_paths.append(normalized)
+
+    donor_folded = {token.casefold(): token for token in donor_tokens}
+    target_folded = {token.casefold() for token in target_tokens}
+    matched_identifiers = sorted(
+        donor_folded[key]
+        for key in donor_folded.keys() & target_folded
+        if len(key) >= 4
+    )
+    matched_symbols = sorted(
+        symbol
+        for symbol in declared_symbols
+        if symbol.casefold() in target_folded
+    )
+    shingle_count = len(
+        _reuse_shingles(donor_tokens) & _reuse_shingles(target_tokens)
+    )
+    applied = bool(matched_symbols or shingle_count)
+    receipt = {
+        "schema_version": "mmm/reuse-application-receipt-v1",
+        "status": "APPLIED" if applied else "NOT_APPLIED",
+        "donor_sha256": list(dict.fromkeys(donor_hashes)),
+        "touched_paths": verified_paths,
+        "matched_declared_symbols": matched_symbols,
+        "matched_identifiers": matched_identifiers[:64],
+        "matched_token_shingles": shingle_count,
+        "policy": (
+            "At least one declared donor symbol or one five-token donor code shingle "
+            "must survive in generated source; loose identifier overlap is diagnostic only."
+        ),
+    }
+    if not applied:
+        raise CustomModuleGenerationError(
+            "REUSE_NOT_APPLIED: approved donor code was supplied, but generated changes "
+            "contain no attributable donor symbol or code structure."
+        )
+    return receipt
 
 
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
@@ -602,6 +728,10 @@ class CustomModuleGenerator:
                     "Donor files are read-only evidence; write only the exact "
                     "task-owned target path."
                 ),
+                (
+                    "The final source must retain an attributable verified donor symbol "
+                    "or concrete donor code structure; a fresh rewrite is not reuse."
+                ),
             ]
         initial_messages = [
             {
@@ -712,6 +842,13 @@ class CustomModuleGenerator:
 
         self._validate_operations(operations)
         self._validate_total_patch_bytes(operations)
+        reuse_application_receipt = None
+        if approved_reuse_context is not None:
+            reuse_application_receipt = _verify_reuse_application(
+                approved_reuse_context,
+                staged_root,
+                touched_paths,
+            )
         receipt = TransactionalSourcePatcher(root).apply(operations)
         if self._cached_index is not None:
             try:
@@ -727,7 +864,7 @@ class CustomModuleGenerator:
             checkpoint_root=checkpoint_root,
             checkpoint_lease=checkpoint_lease,
         )
-        return {
+        result = {
             "schema_version": "mmm/custom-module-result-v3",
             "module_id": module.module_id,
             "kind": module.kind,
@@ -751,6 +888,9 @@ class CustomModuleGenerator:
             },
             "required_gates": ["JDT", "Gradle", "GameTest", *module.required_gates],
         }
+        if reuse_application_receipt is not None:
+            result["reuse_application_receipt"] = reuse_application_receipt
+        return result
 
     def _register_generation_checkpoint_cleanup(
         self,

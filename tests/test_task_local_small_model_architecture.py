@@ -5,12 +5,16 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
 from minecraft_mod_ai import runtime_bootstrap
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import (
+    CustomModuleGenerationError,
     _materialize_owned_reuse_context,
     _task_local_module_contract,
+    _verify_reuse_application,
 )
 
 
@@ -123,3 +127,65 @@ def test_selected_donor_becomes_bounded_code_context(monkeypatch, tmp_path: Path
     assert context["snippets"][0]["sha256"] == digest
     assert context["bytes_used"] <= 2048
     assert "_owned_reuse_plan" not in repr(context)
+
+
+def test_reuse_application_receipt_requires_donor_code_in_generated_source(tmp_path: Path) -> None:
+    target = tmp_path / "src/main/java/example/Connected.java"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "final class Connected { TradeEngine engine; int settleTrade() { return engine.commitTrade(); } }\n",
+        encoding="utf-8",
+    )
+    context = {
+        "snippets": [
+            {
+                "sha256": "sha256:" + "a" * 64,
+                "symbols": ["TradeEngine"],
+                "content": (
+                    "public final class TradeEngine { "
+                    "int settleTrade() { return commitTrade(); } }"
+                ),
+            }
+        ]
+    }
+
+    receipt = _verify_reuse_application(
+        context,
+        tmp_path,
+        ["src/main/java/example/Connected.java"],
+    )
+
+    assert receipt["status"] == "APPLIED"
+    assert receipt["matched_declared_symbols"] == ["TradeEngine"]
+    assert receipt["touched_paths"] == ["src/main/java/example/Connected.java"]
+
+
+def test_reuse_application_rejects_fresh_rewrite_that_ignored_donor(tmp_path: Path) -> None:
+    target = tmp_path / "src/main/java/example/Unrelated.java"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        (
+            "final class Unrelated { int settleTrade; "
+            "int commitTrade() { return completelyDifferent(); } }\n"
+        ),
+        encoding="utf-8",
+    )
+    context = {
+        "snippets": [
+            {
+                "sha256": "sha256:" + "a" * 64,
+                "symbols": ["TradeEngine"],
+                "content": (
+                    "final class TradeEngine { "
+                    "int settleTrade() { return commitTrade(); } }"
+                ),
+            }
+        ]
+    }
+
+    with pytest.raises(CustomModuleGenerationError, match="REUSE_NOT_APPLIED"):
+        _verify_reuse_application(
+            context,
+            tmp_path,
+            ["src/main/java/example/Unrelated.java"],
+        )
