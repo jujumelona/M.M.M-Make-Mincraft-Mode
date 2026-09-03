@@ -13,10 +13,21 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 TOMBSTONED_OWNER_MODULES = (
     "minecraft_mod_ai/colab_mtp_server.py",
+    "minecraft_mod_ai/composition_solver.py",
     "minecraft_mod_ai/execution_efficiency_contract.py",
+    "minecraft_mod_ai/final_project_assembler.py",
     "minecraft_mod_ai/max_efficiency_runtime_contract.py",
+    "minecraft_mod_ai/pipeline_hardening_v3.py",
+    "minecraft_mod_ai/pipeline_hardening_v5.py",
+    "minecraft_mod_ai/pipeline_hardening_v6.py",
+    "minecraft_mod_ai/pre_design_local_project_evidence.py",
+    "minecraft_mod_ai/pre_design_phase_contract.py",
     "minecraft_mod_ai/production_stream_resume_contract.py",
+    "minecraft_mod_ai/repository_reuse_pipeline.py",
+    "minecraft_mod_ai/research_note_protocol.py",
+    "minecraft_mod_ai/resource_merge_registry.py",
     "minecraft_mod_ai/scheduler_connection_reuse_contract.py",
+    "minecraft_mod_ai/semantic_single_pass_contract.py",
 )
 
 _TRANSIENT_WORKFLOW_MARKERS = (
@@ -309,10 +320,13 @@ def audit_workflow_definitions() -> list[str]:
     for path in _workflow_paths():
         relative = path.relative_to(ROOT)
         normalized_name = path.stem.casefold()
+        source = path.read_text(encoding="utf-8")
         if any(marker in normalized_name for marker in _TRANSIENT_WORKFLOW_MARKERS):
             errors.append(f"TRANSIENT_WORKFLOW_FORBIDDEN {relative}")
+        if "git push" in source:
+            errors.append(f"SELF_MUTATING_WORKFLOW_FORBIDDEN {relative}")
         try:
-            node = yaml.compose(path.read_text(encoding="utf-8"))
+            node = yaml.compose(source)
         except yaml.YAMLError as exc:
             mark = getattr(exc, "problem_mark", None)
             location = ""

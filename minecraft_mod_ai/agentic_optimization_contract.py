@@ -396,7 +396,7 @@ def _install_balanced_work_claims(work_graph_module: Any) -> None:
     claim_ready_balanced._mmm_balanced_resource_claim = True
     cls.claim_ready = claim_ready_balanced
 
-def install(*, complete_planner_module: Any, repair_module: Any, work_graph_module: Any) -> None:
+def install(*, repair_module: Any, work_graph_module: Any) -> None:
     """Install repair search and balanced execution without planner mutation.
 
     * repair: verifier-guided candidates, parallel JDT checks and verified memory;
@@ -407,9 +407,6 @@ def install(*, complete_planner_module: Any, repair_module: Any, work_graph_modu
     Existing MTP, conditional semantic review, staged commits and fail-closed quality
     evidence remain authoritative and are intentionally not replaced here.
     """
-    # Kept as a keyword-only compatibility hook for the shared installer contract.
-    # This module intentionally does not mutate planner authority.
-    del complete_planner_module
     _install_repair_search_and_memory(repair_module)
     _install_balanced_work_claims(work_graph_module)
 __all__ = ['install']

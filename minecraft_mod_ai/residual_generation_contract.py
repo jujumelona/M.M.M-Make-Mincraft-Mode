@@ -309,7 +309,7 @@ def validate_residual_write_against_contracts(
 def load_residual_generation_contracts(
     project_root: str | Path,
 ) -> tuple[ResidualGenerationContract, ...]:
-    """Load the planner-owned residual policy persisted by FinalProjectAssembler."""
+    """Load the planner-owned residual policy persisted in the workspace manifest."""
 
     path = Path(project_root) / _WORKSPACE_CONTRACT_PATH
     if not path.exists():

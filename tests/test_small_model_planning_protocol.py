@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import authored_scope_research_contract as retrieval
-from minecraft_mod_ai import planning_authority
 from minecraft_mod_ai import semantic_requirement_authority as semantic
 from minecraft_mod_ai.forced_tool_execution_contract import _native_protocol_failure
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
@@ -76,7 +75,7 @@ def test_semantic_compiler_is_one_structured_batch_for_many_clauses() -> None:
         {"clause_index": 1, "text": "Players trade crystals."},
     ]
 
-    payload = planning_authority._call_semantic_compiler(router, clauses)
+    payload = semantic._call_semantic_model(router, clauses)
 
     assert payload == _semantic_payload()
     assert [call["tool_name"] for call in router.calls] == [
@@ -157,7 +156,7 @@ def test_retrieval_planner_is_host_deterministic_for_many_requirements() -> None
     ]
     router = _StructuredRouter({})
 
-    raw = planning_authority._call_retrieval_planner(
+    raw = retrieval._call_retrieval_planner(
         router,
         "Build a spacecraft, then launch it.",
         requirements,
@@ -179,16 +178,6 @@ def test_retrieval_planner_is_host_deterministic_for_many_requirements() -> None
         for item in normalized.values()
         for query in item["search_queries"]
     )
-
-
-def test_retrieval_schema_requires_exact_requirement_cardinality() -> None:
-    schema = retrieval._retrieval_plan_schema(["req-a", "req-b", "req-c"])
-    requirements = schema["properties"]["requirements"]
-
-    assert requirements["minItems"] == 3
-    assert requirements["maxItems"] == 3
-    requirement_id = requirements["items"]["properties"]["requirement_id"]
-    assert requirement_id["enum"] == ["req-a", "req-b", "req-c"]
 
 
 def test_retrieval_normalizer_rejects_missing_requirement() -> None:
@@ -259,7 +248,7 @@ def test_semantic_schema_keeps_host_clause_index_bounded() -> None:
 def test_exact_logged_qwen_parser_failure_uses_bounded_argument_fallback() -> None:
     outer = RuntimeError("model backend failed")
     outer.cause = ToolCallValidationError(
-        "Qwen tool 'plan_requirement_retrieval' emitted invalid array value "
+        "Qwen tool 'compile_semantic_requirements' emitted invalid array value "
         "for parameter 'requirements'"
     )
 

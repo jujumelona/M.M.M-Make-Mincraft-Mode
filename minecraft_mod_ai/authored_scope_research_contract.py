@@ -11,7 +11,6 @@ that frozen catalog with two things the retrieval layer actually needs:
 The raw user prompt remains provenance.  It is never used as an external search query.
 """
 
-import json
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -51,134 +50,6 @@ def _is_english_retrieval_query(value: str) -> bool:
         return False
     words = _QUERY_WORD.findall(query)
     return 2 <= len(words) <= 24
-
-
-def _semantic_interpretation_messages(
-    clauses: Sequence[Mapping[str, Any]],
-) -> list[dict[str, str]]:
-    """Legacy helper retained for compatibility; semantic authority owns live prompts."""
-
-    system = (
-        "Interpret the supplied authored Minecraft-mod request semantically, even when it "
-        "contains typos, missing punctuation, repeated spaces, shorthand, or a language "
-        "different from English. The host owns the original UTF-8 text and exact offsets: "
-        "never rewrite provenance, but normalize the MEANING in semantic_statement and "
-        "capability_id. Return every independently observable player-facing behavior. "
-        "Split long run-on clauses by actions, state changes, resource flows, construction, "
-        "purchases, upgrades, travel stages, encounters, exploration, and progression. "
-        "Do not add an umbrella requirement merely because several concrete leaves share a "
-        "theme; add a mode/integration requirement only when that mode itself has distinct "
-        "observable behavior. Preserve authored causal and temporal structure inside "
-        "Given/When/Then: if the request says one outcome enables another, make the latter "
-        "behavior's Given condition state that prerequisite clearly. This semantic pass does "
-        "not emit graph edges; a later host-bound planner derives edges only between these "
-        "approved requirements. capability_id must be a concise lower-case dotted English "
-        "gameplay semantic identifier, not a translation of a typo and not an implementation "
-        "primitive. source_anchor must remain a short locator supported by the ORIGINAL host "
-        "clause, including its original language/typo when necessary for grounding. Do not "
-        "choose APIs, classes, networking, persistence, UI architecture, libraries, donor "
-        "mods, or other implementation alternatives unless explicitly authored. Return one "
-        "concrete Given/When/Then contract per independent behavior. Do not omit behavior "
-        "just because the request has no punctuation."
-    )
-    payload = {
-        "host_owned_clauses": [
-            {
-                "source_clause_index": int(clause["clause_index"]),
-                "text": str(clause["text"]),
-            }
-            for clause in clauses
-        ],
-    }
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
-    ]
-
-
-def _retrieval_plan_schema(requirement_ids: Sequence[str]) -> dict[str, Any]:
-    ids = list(dict.fromkeys(str(item) for item in requirement_ids if str(item)))
-    return {
-        "type": "object",
-        "properties": {
-            "requirements": {
-                "type": "array",
-                "minItems": len(ids),
-                "maxItems": len(ids),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "requirement_id": {"type": "string", "enum": ids},
-                        "depends_on": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": ids},
-                            "uniqueItems": True,
-                            "maxItems": max(0, len(ids) - 1),
-                        },
-                        "search_queries": {
-                            "type": "array",
-                            "minItems": 2,
-                            "maxItems": 5,
-                            "items": {"type": "string", "minLength": 4, "maxLength": 180},
-                            "uniqueItems": True,
-                        },
-                    },
-                    "required": ["requirement_id", "depends_on", "search_queries"],
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "required": ["requirements"],
-        "additionalProperties": False,
-    }
-
-
-def _retrieval_plan_messages(
-    prompt: str,
-    requirements: Sequence[Mapping[str, Any]],
-) -> list[dict[str, str]]:
-    frozen = []
-    for raw in requirements:
-        span = raw.get("source_span")
-        frozen.append(
-            {
-                "requirement_id": str(raw.get("requirement_id") or ""),
-                "capability": str(raw.get("capability") or ""),
-                "semantic_statement": str(raw.get("semantic_statement") or ""),
-                "observable_behavior": dict(raw.get("observable_behavior") or {})
-                if isinstance(raw.get("observable_behavior"), Mapping)
-                else {},
-                "source_text": str(span.get("text") or "")
-                if isinstance(span, Mapping)
-                else "",
-            }
-        )
-    system = (
-        "Plan retrieval for an already-approved Minecraft-mod requirement graph. "
-        "Do not add, delete, merge, rename, or reinterpret requirements. "
-        "For depends_on, reference another supplied requirement only when the authored "
-        "behavior or its observable Given/When/Then makes that requirement a genuine "
-        "player-visible prerequisite. Preserve explicit authored ordering such as build "
-        "before launch, launch before planet exploration, or earning currency before a "
-        "purchase when the supplied requirements actually state that relationship. "
-        "Do not invent implementation/API dependencies. "
-        "For search_queries, rewrite each semantic requirement into 2-5 concise ENGLISH "
-        "information-retrieval queries suitable for public Minecraft mod ecosystems, "
-        "GitHub source search, and implementation/reference discovery. Translate the "
-        "meaning; do not copy the user's raw sentence, typo, spacing, or language. "
-        "Use concrete mechanic nouns and useful ecosystem terms such as minecraft, mod, "
-        "source, implementation, vehicle, economy, planet, colony, NPC, crafting, etc. "
-        "Do not fabricate a specific mod/project name. Queries must describe what evidence "
-        "to find, not what answer to generate."
-    )
-    payload = {
-        "authoritative_request_for_context_only": prompt,
-        "approved_requirements": frozen,
-    }
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
-    ]
 
 
 def _call_retrieval_planner(
@@ -365,8 +236,9 @@ def _enrich_catalog_with_retrieval_plan(
         "edges": edges,
     }
     audit = dict(enriched.get("semantic_audit") or {})
-    audit["normal_model_turns"] = int(audit.get("normal_model_turns") or 1) + 1
-    audit["retrieval_query_planning"] = "english_multi_query_rewrite"
+    audit["normal_model_turns"] = int(audit.get("normal_model_turns") or 1)
+    audit["retrieval_model_turns"] = 0
+    audit["retrieval_query_planning"] = "host_deterministic_all_requirements"
     audit["dependency_edge_count"] = len(edges)
     enriched["semantic_audit"] = audit
     enriched["catalog_sha256"] = ""

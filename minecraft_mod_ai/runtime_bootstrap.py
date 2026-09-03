@@ -216,7 +216,6 @@ def _install_architecture_contracts() -> None:
         agentic_optimization_contract,
         atomic_requirement_contract,
         complete_orchestrator,
-        complete_planner,
         custom_module_generator,
         production_contract,
         quality_evidence,
@@ -249,7 +248,6 @@ def _install_architecture_contracts() -> None:
     install_clean_room(complete_orchestrator, quality_evidence, validation_execution_contract)
     install_work_graph_state_transitions(work_graph)
     agentic_optimization_contract.install(
-        complete_planner_module=complete_planner,
         repair_module=repair_engine,
         work_graph_module=work_graph,
     )

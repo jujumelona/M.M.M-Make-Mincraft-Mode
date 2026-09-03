@@ -3,12 +3,12 @@ from __future__ import annotations
 """Small-model request and retrieval-planning authority.
 
 The host owns source text, source offsets, stable requirement IDs, grounding validation,
-request-graph integrity, and the active planning scope. The model is used only for the two
-semantic operations that genuinely require language interpretation:
+request-graph integrity, and the active planning scope. Planning has one model-owned
+operation and one host-owned operation:
 
 1. one constrained batch that maps all authored clauses to approved semantic leaves;
-2. one constrained batch that maps the frozen requirement graph to dependency hints and
-   English public-retrieval queries.
+2. the host deterministically maps the frozen graph to dependency hints and public
+   retrieval queries without a second model turn.
 
 This module deliberately does not perform clause-by-clause leaf discovery, leaf-by-leaf
 Given/When/Then generation, or requirement-by-requirement query generation. Those O(N)
@@ -16,7 +16,7 @@ model-call paths duplicate the batch authorities in ``semantic_requirement_autho
 ``authored_scope_research_contract`` and are especially harmful for small local models.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
@@ -25,15 +25,6 @@ from . import authored_scope_research_contract as _retrieval
 from . import evidence_first_planning as _evidence
 from . import evidence_request_guard as _guard
 from . import semantic_requirement_authority as _semantic
-
-
-def _call_semantic_compiler(
-    router: Any,
-    clauses: Sequence[Mapping[str, Any]],
-) -> Any:
-    """Compatibility seam: execute exactly one constrained semantic batch."""
-
-    return _semantic._call_semantic_model(router, clauses)
 
 
 def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]:
@@ -68,22 +59,12 @@ def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]
     return catalog
 
 
-def _call_retrieval_planner(
-    router: Any,
-    prompt: str,
-    requirements: Sequence[Mapping[str, Any]],
-) -> Any:
-    """Compatibility seam: execute exactly one constrained retrieval-planning batch."""
-
-    return _retrieval._call_retrieval_planner(router, prompt, requirements)
-
-
 def _enrich_retrieval_plan(
     prompt: str,
     catalog: Mapping[str, Any],
     router: Any | None,
 ) -> dict[str, Any]:
-    """Enrich every frozen requirement in one retrieval-planning model turn."""
+    """Enrich every frozen requirement through host-owned retrieval planning."""
 
     if router is None:
         return dict(catalog)
@@ -92,7 +73,7 @@ def _enrich_retrieval_plan(
     if not isinstance(requirements, list) or not requirements:
         return dict(catalog)
 
-    payload = _call_retrieval_planner(router, prompt, requirements)
+    payload = _retrieval._call_retrieval_planner(router, prompt, requirements)
     plan = _retrieval._normalize_retrieval_plan(prompt, requirements, payload)
 
     enriched = deepcopy(dict(catalog))
@@ -117,9 +98,9 @@ def _enrich_retrieval_plan(
     semantic_turns = int(audit.get("semantic_model_turns") or 1)
     audit.update(
         {
-            "normal_model_turns": semantic_turns + 1,
-            "retrieval_model_turns": 1,
-            "retrieval_query_planning": "all_requirements_one_structured_batch",
+            "normal_model_turns": semantic_turns,
+            "retrieval_model_turns": 0,
+            "retrieval_query_planning": "host_deterministic_all_requirements",
             "max_requirements_per_query_turn": len(requirements),
             "model_owned_requirement_ids": False,
             "model_generated_planning_json": False,
@@ -139,8 +120,8 @@ def build_authoritative_request_catalog(
 ) -> dict[str, Any]:
     """Compile request meaning and retrieval intent before any design/RAG execution.
 
-    With a model router, normal planning performs exactly two bounded semantic model turns
-    regardless of requirement count: one semantic batch and one retrieval batch.
+    With a model router, normal planning performs exactly one bounded semantic model turn
+    regardless of requirement count. Retrieval planning is deterministic host work.
     """
 
     return _enrich_retrieval_plan(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from minecraft_mod_ai import planning_authority as authority
 
 
-def test_authoritative_catalog_uses_two_constant_batch_turns(monkeypatch):
+def test_authoritative_catalog_uses_one_constant_model_turn(monkeypatch):
     prompt = "build a rover; drive it to a launch pad"
     router = object()
     calls: list[str] = []
@@ -44,7 +44,7 @@ def test_authoritative_catalog_uses_two_constant_batch_turns(monkeypatch):
             "req-rover",
             "req-drive",
         ]
-        calls.append("retrieval_batch")
+        calls.append("host_retrieval_plan")
         return {"requirements": "opaque-to-authority"}
 
     monkeypatch.setattr(
@@ -92,44 +92,13 @@ def test_authoritative_catalog_uses_two_constant_batch_turns(monkeypatch):
 
     result = authority.build_authoritative_request_catalog(prompt, router)
 
-    assert calls == ["semantic_batch", "retrieval_batch"]
-    assert result["semantic_audit"]["normal_model_turns"] == 2
+    assert calls == ["semantic_batch", "host_retrieval_plan"]
+    assert result["semantic_audit"]["normal_model_turns"] == 1
     assert result["semantic_audit"]["semantic_model_turns"] == 1
     assert result["semantic_audit"]["semantic_detail_model_turns"] == 0
-    assert result["semantic_audit"]["retrieval_model_turns"] == 1
+    assert result["semantic_audit"]["retrieval_model_turns"] == 0
     assert result["semantic_audit"]["retrieval_query_planning"] == (
-        "all_requirements_one_structured_batch"
+        "host_deterministic_all_requirements"
     )
     assert result["requirement_graph"]["edges"] == [["req-rover", "req-drive"]]
     assert result["requirements"][1]["depends_on"] == ["req-rover"]
-
-
-def test_batch_compatibility_seams_delegate_once(monkeypatch):
-    semantic_calls: list[tuple[object, object]] = []
-    retrieval_calls: list[tuple[object, str, object]] = []
-    router = object()
-    clauses = [{"clause_index": 0, "text": "one"}]
-    requirements = [{"requirement_id": "req-one"}]
-
-    monkeypatch.setattr(
-        authority._semantic,
-        "_call_semantic_model",
-        lambda active_router, active_clauses: semantic_calls.append(
-            (active_router, active_clauses)
-        )
-        or {"requirements": []},
-    )
-    monkeypatch.setattr(
-        authority._retrieval,
-        "_call_retrieval_planner",
-        lambda active_router, prompt, active_requirements: retrieval_calls.append(
-            (active_router, prompt, active_requirements)
-        )
-        or {"requirements": []},
-    )
-
-    authority._call_semantic_compiler(router, clauses)
-    authority._call_retrieval_planner(router, "prompt", requirements)
-
-    assert semantic_calls == [(router, clauses)]
-    assert retrieval_calls == [(router, "prompt", requirements)]
