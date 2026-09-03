@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-"""Make approved PlanIR tasks the only writable world visible to the small coder.
+"""Bind a small coder to one host-approved PlanIR task.
 
-Repository retrieval is evidence, never mutation authority.  The complete planner already
-produces an immutable task with host-reserved anchors and production bindings, so the
-coder should not have to rediscover or reproduce a long repository path.  This contract
-is deliberately installed last: it captures the final composed generator/tool loop,
-binds one task capsule to the generation call with a ContextVar, narrows the visible edit
-schema, and canonicalizes every source-edit path back to a host-owned anchor before the
-existing security and transactional patch layers see the call.
-
-This follows the same separation used by repository-level coding systems: planning and
-localization are host concerns; the language model performs a bounded edit at an already
-selected code location.  It also compacts the task envelope so a small local model sees
-acceptance/dataflow/reuse facts rather than the complete planner provenance blob.
+Planning, localization, destination selection, and donor selection are host concerns.
+Repository retrieval is evidence only.  The model receives a compact task capsule and
+chooses semantic edits; any model-authored path is only a hint and is rebound to an exact
+owned anchor before the existing mutation/security pipeline executes it.
 """
 
 import contextvars
@@ -36,9 +28,12 @@ _ALLOWED_TARGET_PREFIXES = (
     "src/test/java/",
     "src/gametest/",
 )
+# Only task-local facts that can change the implementation belong in the coder request.
+# In particular semantic_outcome is essential; request_context/planner provenance is not.
 _COMPACT_TASK_FIELDS = (
     "task_id",
     "task_sha256",
+    "semantic_outcome",
     "requirement_refs",
     "gap_refs",
     "owned_anchors",
@@ -59,13 +54,12 @@ _COMPACT_TASK_FIELDS = (
     "asset_bindings",
 )
 _CURRENT_CAPSULE: contextvars.ContextVar["TaskCapsule | None"] = contextvars.ContextVar(
-    "mmm_small_model_task_capsule",
-    default=None,
+    "mmm_small_model_task_capsule", default=None
 )
 
 
 class TaskCapsuleContractError(RuntimeError):
-    """Raised when an approved semantic task cannot form an executable coder capsule."""
+    """Approved task ownership could not form an executable small-coder contract."""
 
 
 @dataclass(frozen=True)
@@ -83,18 +77,19 @@ class TaskAnchor:
         return self.path + (f"#{self.symbol}" if self.symbol else "")
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        result: dict[str, Any] = {
             "kind": self.kind,
             "locator": self.locator,
             "status": self.status,
         }
-        if self.ownership:
-            payload["ownership"] = self.ownership
-        if self.module_id:
-            payload["module_id"] = self.module_id
-        if self.source_set:
-            payload["source_set"] = self.source_set
-        return payload
+        for key, value in (
+            ("ownership", self.ownership),
+            ("module_id", self.module_id),
+            ("source_set", self.source_set),
+        ):
+            if value:
+                result[key] = value
+        return result
 
 
 @dataclass(frozen=True)
@@ -131,10 +126,7 @@ class TaskCapsule:
         )
 
     def anchor_for_path(self, path: str) -> TaskAnchor | None:
-        for anchor in self.anchors:
-            if anchor.path == path:
-                return anchor
-        return None
+        return next((anchor for anchor in self.anchors if anchor.path == path), None)
 
     def to_host_authority_payload(self) -> dict[str, Any]:
         primary = self.anchor_for_path(self.primary_path)
@@ -145,9 +137,7 @@ class TaskCapsule:
         task: dict[str, Any] = {
             "task_id": self.task_id,
             "owned_anchors": [anchor.to_dict() for anchor in self.anchors],
-            # Mutation authority is about the destination, not donor provenance.  The
-            # destination remains a fresh host-reserved target even when source reuse is
-            # selected, so the existing PlanIR pinning layer receives one canonical shape.
+            # Donor reuse changes implementation ingredients, never destination authority.
             "production_bindings": [
                 {
                     "task_ref": self.task_id,
@@ -168,8 +158,8 @@ class TaskCapsule:
                 "symbol": self.primary_symbol,
                 "mode": "host_bound_exact_task_target",
                 "policy": (
-                    "Model path text is non-authoritative. The host resolves every edit "
-                    "to this task's concrete owned-anchor set."
+                    "Model path text is non-authoritative. Every edit is rebound to this "
+                    "task's concrete owned-anchor set before execution."
                 ),
             },
             "module": {
@@ -242,7 +232,7 @@ def _matching_bindings(
 def _binding_symbol_candidates(
     bindings: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[str, str], ...]:
-    values: list[tuple[str, str]] = []
+    result: list[tuple[str, str]] = []
     for binding in bindings:
         raw_anchors = binding.get("owned_anchors")
         if not isinstance(raw_anchors, Sequence) or isinstance(
@@ -254,9 +244,9 @@ def _binding_symbol_candidates(
             if anchor is None or anchor.kind != "symbol":
                 continue
             item = (anchor.path, anchor.symbol)
-            if item not in values:
-                values.append(item)
-    return tuple(values)
+            if item not in result:
+                result.append(item)
+    return tuple(result)
 
 
 def _sha256(value: Mapping[str, Any]) -> str:
@@ -271,13 +261,7 @@ def _sha256(value: Mapping[str, Any]) -> str:
 
 
 def compile_task_capsule(module: Any) -> TaskCapsule | None:
-    """Compile one approved custom-Java PlanIR task into exact host edit authority.
-
-    Legacy direct callers without an evidence task remain on the legacy localization
-    path.  Once a module *does* carry approved PlanIR ownership, however, malformed or
-    ambiguous authority is fatal before the coder is invoked; there is no RAG fallback
-    from a broken task contract.
-    """
+    """Compile approved PlanIR authority; never fall back from malformed approved tasks."""
 
     if str(getattr(module, "kind", "") or "").strip() != "custom_java":
         return None
@@ -368,7 +352,7 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
 
 
 def compact_task_local_module_contract(module: Any) -> dict[str, Any]:
-    """Project PlanIR to the bounded facts the coder can actually act on."""
+    """Project PlanIR to task-local facts; remove whole-plan/research provenance noise."""
 
     task = _evidence_task(module)
     if task is None:
@@ -380,11 +364,8 @@ def compact_task_local_module_contract(module: Any) -> dict[str, Any]:
             "depends_on": list(getattr(module, "depends_on", ()) or ()),
             "required_gates": list(getattr(module, "required_gates", ()) or ()),
         }
-
     compact_task = {
-        key: copy.deepcopy(task[key])
-        for key in _COMPACT_TASK_FIELDS
-        if key in task
+        key: copy.deepcopy(task[key]) for key in _COMPACT_TASK_FIELDS if key in task
     }
     return {
         "module_id": str(getattr(module, "module_id", "")),
@@ -403,26 +384,26 @@ def _tool_name(schema: Any) -> str:
 
 
 def narrow_source_edit_schema(schema: Any, capsule: TaskCapsule) -> Any:
-    """Expose only exact task-owned paths to the model; host validation stays broader."""
+    """Show the model only task-owned paths; the host validator remains authoritative."""
 
     if _tool_name(schema) != _SOURCE_EDIT_TOOL or not isinstance(schema, Mapping):
         return schema
     narrowed = copy.deepcopy(dict(schema))
     function = narrowed.get("function")
-    if not isinstance(function, dict):
-        return narrowed
-    parameters = function.get("parameters")
-    if not isinstance(parameters, dict):
-        return narrowed
-    properties = parameters.get("properties")
+    parameters = function.get("parameters") if isinstance(function, dict) else None
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
     if not isinstance(properties, dict):
         return narrowed
     path_schema = dict(properties.get("path") or {"type": "string"})
-    path_schema["type"] = "string"
-    path_schema["enum"] = list(capsule.writable_paths)
-    path_schema["description"] = (
-        "Host-selected PlanIR target. Choose only one exact path from this enum; "
-        "repository retrieval cannot add write targets."
+    path_schema.update(
+        {
+            "type": "string",
+            "enum": list(capsule.writable_paths),
+            "description": (
+                "Host-selected PlanIR destination. Choose one exact path from this enum; "
+                "retrieval cannot add write targets."
+            ),
+        }
     )
     properties["path"] = path_schema
     for alias in _PATH_ALIASES:
@@ -447,37 +428,33 @@ def _resolve_model_path(arguments: Mapping[str, Any], capsule: TaskCapsule) -> s
 
     basename = PurePosixPath(raw).name if raw else ""
     if basename:
-        basename_matches = tuple(
+        matches = tuple(
             path for path in capsule.writable_paths if PurePosixPath(path).name == basename
         )
-        if len(basename_matches) == 1:
-            return basename_matches[0]
+        if len(matches) == 1:
+            return matches[0]
 
     hint = raw.casefold()
-    if (
-        "src/test/" in hint
-        or "/test/" in hint
-        or basename.casefold().endswith("test.java")
-    ):
+    if "src/test/" in hint or "/test/" in hint or basename.casefold().endswith("test.java"):
         if len(capsule.test_paths) == 1:
             return capsule.test_paths[0]
 
     suffix = PurePosixPath(raw).suffix.casefold() if raw else ""
     if suffix and suffix != ".java":
-        suffix_matches = tuple(
+        matches = tuple(
             path
             for path in capsule.writable_paths
             if PurePosixPath(path).suffix.casefold() == suffix
         )
-        if len(suffix_matches) == 1:
-            return suffix_matches[0]
+        if len(matches) == 1:
+            return matches[0]
     return capsule.primary_path
 
 
 def bind_source_edit_arguments(
     arguments: Mapping[str, Any], capsule: TaskCapsule
 ) -> dict[str, Any]:
-    """Turn model path text into a non-authoritative hint and bind the host path."""
+    """Treat model path text as a hint and bind the executable host-owned destination."""
 
     bound = dict(arguments)
     host_path = _resolve_model_path(bound, capsule)
@@ -488,12 +465,11 @@ def bind_source_edit_arguments(
     operation = str(bound.get("operation") or "").strip().casefold()
     if operation in {"create_java_type", "create_type", "create_class"}:
         anchor = capsule.anchor_for_path(host_path)
-        if host_path.startswith("src/main/java/"):
-            relative = host_path.removeprefix("src/main/java/")
-        elif host_path.startswith("src/test/java/"):
-            relative = host_path.removeprefix("src/test/java/")
-        else:
-            relative = ""
+        relative = ""
+        for prefix in ("src/main/java/", "src/test/java/"):
+            if host_path.startswith(prefix):
+                relative = host_path.removeprefix(prefix)
+                break
         if relative and "/" in relative:
             bound["package_name"] = relative.rsplit("/", 1)[0].replace("/", ".")
         if anchor is not None and anchor.symbol:
@@ -509,12 +485,14 @@ def _bind_tool_call(call: Any, capsule: TaskCapsule) -> Any:
     arguments = getattr(call, "arguments", None)
     if not isinstance(arguments, Mapping):
         arguments = {}
-    original_path = ""
-    for key in ("path", *_PATH_ALIASES):
-        value = arguments.get(key)
-        if isinstance(value, str) and value.strip():
-            original_path = value
-            break
+    original_path = next(
+        (
+            value
+            for key in ("path", *_PATH_ALIASES)
+            if isinstance((value := arguments.get(key)), str) and value.strip()
+        ),
+        "",
+    )
     bound = bind_source_edit_arguments(arguments, capsule)
     if original_path.replace("\\", "/").strip() != bound["path"]:
         print(
@@ -530,24 +508,27 @@ def _bind_tool_call(call: Any, capsule: TaskCapsule) -> Any:
             arguments=bound,
             raw_arguments=json.dumps(bound, ensure_ascii=False, separators=(",", ":")),
         )
-    except TypeError:
-        # Native adapters use the frozen ToolCall dataclass.  Keep a fail-closed error
-        # rather than executing an unbound third-party tool-call representation.
+    except TypeError as exc:
         raise TaskCapsuleContractError(
             "TASK_CAPSULE_TOOLCALL_UNSUPPORTED: cannot bind source-edit arguments."
-        )
+        ) from exc
 
 
 class _TaskBoundAdapter:
+    """Proxy generation while preserving the underlying adapter's optional capabilities."""
+
     def __init__(self, adapter: Any, capsule: TaskCapsule) -> None:
         self._adapter = adapter
         self._capsule = capsule
+        # progress_aware_tool_loop deliberately uses inspect.getattr_static to detect
+        # exact accounting support.  Do not define a class method that makes an adapter
+        # without this capability appear to support it.
+        counter = getattr(adapter, "input_context_accounting", None)
+        if callable(counter):
+            self.input_context_accounting = counter
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._adapter, name)
-
-    def input_context_accounting(self, request: Any) -> Any:
-        return self._adapter.input_context_accounting(request)
 
     def generate(self, request: Any) -> Any:
         return self._adapter.generate(request)
@@ -562,7 +543,7 @@ class _TaskBoundAdapter:
             return replace(response, tool_calls=calls)
         except TypeError as exc:
             raise TaskCapsuleContractError(
-                "TASK_CAPSULE_RESPONSE_UNSUPPORTED: native generation response is not replaceable."
+                "TASK_CAPSULE_RESPONSE_UNSUPPORTED: generation response is not replaceable."
             ) from exc
 
 
@@ -582,14 +563,6 @@ def _insert_authority_message(
     messages: Sequence[Mapping[str, Any]], capsule: TaskCapsule
 ) -> tuple[Mapping[str, Any], ...]:
     result = [dict(message) for message in messages]
-    result = [
-        message
-        for message in result
-        if not (
-            str(message.get("role") or "").strip().casefold() == "developer"
-            and _SCHEMA in str(message.get("content") or "")
-        )
-    ]
     insert_at = (
         1
         if result
@@ -601,13 +574,12 @@ def _insert_authority_message(
 
 
 def install() -> None:
-    """Install last so the capsule is outside every generic generation wrapper."""
+    """Install last so task authority remains outside all generic generation wrappers."""
 
     from . import custom_module_generator, progress_aware_tool_loop
 
     if getattr(progress_aware_tool_loop, _MARKER, False):
         return
-
     Generator = custom_module_generator.CustomModuleGenerator
     original_generate = Generator.generate
     original_loop = progress_aware_tool_loop.generate_with_tools
@@ -615,8 +587,7 @@ def install() -> None:
 
     @wraps(original_generate)
     def generate(self: Any, *args: Any, **kwargs: Any):
-        module = kwargs.get("module")
-        capsule = compile_task_capsule(module)
+        capsule = compile_task_capsule(kwargs.get("module"))
         token = _CURRENT_CAPSULE.set(capsule)
         try:
             return original_generate(self, *args, **kwargs)
@@ -645,15 +616,12 @@ def install() -> None:
                 stage=stage,
                 role=role,
             )
-
-        narrowed_tools = tuple(
-            narrow_source_edit_schema(schema, capsule)
-            for schema in tuple(request.tools)
-        )
         request = replace(
             request,
             messages=_insert_authority_message(request.messages, capsule),
-            tools=narrowed_tools,
+            tools=tuple(
+                narrow_source_edit_schema(schema, capsule) for schema in tuple(request.tools)
+            ),
         )
         print(
             "task capsule: active",
@@ -692,26 +660,26 @@ def install() -> None:
 def assert_installed() -> None:
     from . import custom_module_generator, progress_aware_tool_loop
 
-    if not getattr(progress_aware_tool_loop, _MARKER, False):
-        raise RuntimeError("Small-model task capsule contract is not installed.")
-    if not getattr(
-        progress_aware_tool_loop.generate_with_tools,
-        "_mmm_small_model_task_capsule",
-        False,
-    ):
-        raise RuntimeError("Task capsule tool-loop binding is not outermost/active.")
-    if not getattr(
-        custom_module_generator.CustomModuleGenerator.generate,
-        "_mmm_small_model_task_capsule",
-        False,
-    ):
-        raise RuntimeError("Task capsule generator scope is not outermost/active.")
-    if not getattr(
-        custom_module_generator._task_local_module_contract,
-        "_mmm_small_model_task_capsule",
-        False,
-    ):
-        raise RuntimeError("Task capsule compact coder projection is not active.")
+    checks = (
+        getattr(progress_aware_tool_loop, _MARKER, False),
+        getattr(
+            progress_aware_tool_loop.generate_with_tools,
+            "_mmm_small_model_task_capsule",
+            False,
+        ),
+        getattr(
+            custom_module_generator.CustomModuleGenerator.generate,
+            "_mmm_small_model_task_capsule",
+            False,
+        ),
+        getattr(
+            custom_module_generator._task_local_module_contract,
+            "_mmm_small_model_task_capsule",
+            False,
+        ),
+    )
+    if not all(checks):
+        raise RuntimeError("Small-model task capsule contract is not final/active.")
 
 
 __all__ = [
