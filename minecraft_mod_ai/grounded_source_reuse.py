@@ -17,9 +17,13 @@ from urllib.parse import urlparse
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .platform_catalog import PlatformAdapter, adapter_for_target
-from .proof_level import ProofLevel
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
-from .source_transplant import DonorSlice, inspect_repository_slice
+from .source_transplant import (
+    DonorSlice,
+    SourceTransplantError,
+    inspect_repository_slice,
+    validated_reuse_donor,
+)
 
 _SCHEMA = "mmm/grounded-repository-reuse-plan-v2"
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[가-힣]{2,}", re.IGNORECASE)
@@ -191,18 +195,17 @@ def _target_context(adapter: PlatformAdapter) -> dict[str, Any]:
 
 
 def _proof_admits(donor: DonorSlice, receipt: ReuseProofReceipt) -> bool:
-    level = ProofLevel.from_value(receipt.proof_level)
-    donor_paths = {item.path for item in donor.files}
-    return bool(
-        level.is_verified()
-        and receipt.authoritative_compile
-        and receipt.compile_passed
-        and receipt.commit_sha == donor.commit_sha
-        and receipt.capability == donor.capability
-        and donor.closure_complete
-        and donor_paths
-        and donor_paths <= set(receipt.verified_artifacts)
-    )
+    decision = {
+        "capability": donor.capability,
+        "mode": "source_transplant",
+        "donor": donor.to_dict(),
+        "proof_receipt": receipt.to_dict(),
+    }
+    try:
+        validated_reuse_donor(decision)
+    except (SourceTransplantError, ValueError):
+        return False
+    return True
 
 
 def _donor_rank(

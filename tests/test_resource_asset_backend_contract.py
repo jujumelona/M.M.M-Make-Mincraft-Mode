@@ -25,6 +25,7 @@ from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.spec import SpecValidationError
+from minecraft_mod_ai.source_transplant import DonorSlice, donor_closure_sha256
 
 
 def _asset() -> AssetRequest:
@@ -328,6 +329,7 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
             }
         ],
     }
+    closure_hash = donor_closure_sha256(DonorSlice.from_dict(donor))
     reuse = {
         "capability_graph": {"nodes": ["trade"], "edges": [], "sources": []},
         "capabilities": [
@@ -342,9 +344,11 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
                     "candidate_id": "owner/trade-mod@" + "a" * 40,
                     "capability": "trade",
                     "commit_sha": "a" * 40,
+                    "closure_hash": closure_hash,
                     "proof_level": "COMPILE_VERIFIED",
                     "authoritative_compile": True,
                     "compile_passed": True,
+                    "verified_capabilities": ["trade"],
                     "verified_artifacts": ["src/main/java/example/Trade.java"],
                 },
             }

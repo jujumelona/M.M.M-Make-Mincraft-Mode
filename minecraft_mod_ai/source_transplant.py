@@ -688,29 +688,31 @@ def materialize_source_slices(
     """Refetch pinned donor blobs, verify hashes, and expose them as immutable evidence."""
 
     root = Path(project_root).expanduser().resolve()
-    target_root = root / ".minecraft_ai" / "reuse" / "donors"
-    target_root.mkdir(parents=True, exist_ok=True)
     decisions = reuse_plan.get("capabilities") if isinstance(reuse_plan, Mapping) else None
     if not isinstance(decisions, Sequence) or isinstance(decisions, (str, bytes)):
         return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
+
+    validated: list[tuple[Mapping[str, Any], DonorSlice]] = []
+    for decision in decisions:
+        if not isinstance(decision, Mapping) or decision.get("mode") not in {"source_transplant", "adapt"}:
+            continue
+        validated.append((decision, validated_reuse_donor(decision)))
+    if not validated:
+        return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
+
+    # Validate every donor/proof receipt before creating any local evidence path.
+    target_root = root / ".minecraft_ai" / "reuse" / "donors"
+    target_root.mkdir(parents=True, exist_ok=True)
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     client = _github_client(token)
     receipts: list[dict[str, Any]] = []
     try:
-        for decision in decisions:
-            if not isinstance(decision, Mapping) or decision.get("mode") not in {"source_transplant", "adapt"}:
-                continue
-            donor = decision.get("donor")
-            if not isinstance(donor, Mapping):
-                continue
-            repository = str(donor.get("repository") or "")
-            commit_sha = str(donor.get("commit_sha") or "")
-            files = donor.get("files")
-            if repository.count("/") != 1 or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
-                raise SourceTransplantError("Reuse plan contains an unpinned donor.")
-            if not isinstance(files, Sequence) or isinstance(files, (str, bytes)):
-                raise SourceTransplantError("Reuse plan donor has no source-slice manifest.")
+        for decision, parsed_donor in validated:
+            donor = parsed_donor.to_dict()
+            repository = parsed_donor.repository
+            commit_sha = parsed_donor.commit_sha
+            files = donor["files"]
             donor_key = _donor_materialization_key(decision, donor, files)
             donor_root = target_root / donor_key
             donor_root.mkdir(parents=True, exist_ok=True)
@@ -724,10 +726,19 @@ def materialize_source_slices(
                 if not path or path.startswith("/") or ".." in path.split("/"):
                     raise SourceTransplantError("Unsafe donor source path.")
                 raw = _fetch_blob_bytes(client, repository, blob_sha)
+                if not raw:
+                    raise SourceTransplantError(
+                        f"Pinned donor blob is empty for {repository}@{commit_sha}:{path}."
+                    )
                 actual = "sha256:" + hashlib.sha256(raw).hexdigest()
                 if actual != expected:
                     raise SourceTransplantError(
                         f"Pinned donor hash mismatch for {repository}@{commit_sha}:{path}."
+                    )
+                expected_size = item.get("size_bytes")
+                if type(expected_size) is not int or len(raw) != expected_size:
+                    raise SourceTransplantError(
+                        f"Pinned donor size mismatch for {repository}@{commit_sha}:{path}."
                     )
                 destination = (donor_root / path).resolve()
                 destination.relative_to(donor_root.resolve())
@@ -736,6 +747,8 @@ def materialize_source_slices(
                 written.append(
                     {
                         "path": str(destination),
+                        "source_path": path,
+                        "blob_sha": blob_sha,
                         "sha256": actual,
                         "size_bytes": len(raw),
                         "symbols": list(item.get("symbols") or ()),
@@ -778,6 +791,7 @@ def _donor_materialization_key(
                 str(item.get("path") or ""),
                 str(item.get("blob_sha") or ""),
                 str(item.get("sha256") or ""),
+                int(item.get("size_bytes") or 0),
             ]
             for item in files
             if isinstance(item, Mapping)
@@ -979,6 +993,82 @@ def validate_donor_slice_manifest(donor_slice: DonorSlice) -> None:
         seen_paths.add(normalized)
 
 
+def donor_closure_sha256(donor_slice: DonorSlice) -> str:
+    """Bind proof identity to every immutable donor file attribute."""
+
+    payload = [
+        [item.path, item.blob_sha, item.sha256, item.size_bytes]
+        for item in sorted(donor_slice.files, key=lambda entry: entry.path)
+    ]
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def validated_reuse_donor(decision: Mapping[str, Any]) -> DonorSlice:
+    """Validate one source-reuse decision and its executable proof as one unit."""
+
+    if str(decision.get("mode") or "").strip().casefold() not in {
+        "source_transplant",
+        "adapt",
+    }:
+        raise SourceTransplantError("Reuse decision is not a source donor action.")
+    raw_donor = decision.get("donor")
+    if not isinstance(raw_donor, Mapping):
+        raise SourceTransplantError("Reuse decision has no donor manifest.")
+    if raw_donor.get("schema_version") != "mmm/source-transplant-slice-v1":
+        raise SourceTransplantError("Reuse donor schema is invalid.")
+    try:
+        donor = DonorSlice.from_dict(raw_donor)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise SourceTransplantError("Reuse donor manifest is malformed.") from exc
+    validate_donor_slice_manifest(donor)
+    if not donor.closure_complete or donor.target_compatibility not in {"exact", "adapt"}:
+        raise SourceTransplantError("Reuse donor closure or target compatibility is unverified.")
+
+    capability = str(decision.get("capability") or "").strip().casefold()
+    donor_capability = str(donor.capability or "").strip().casefold()
+    if capability.removeprefix("capability:") != donor_capability.removeprefix("capability:"):
+        raise SourceTransplantError("Reuse decision capability does not match its donor.")
+
+    proof = decision.get("proof_receipt")
+    if not isinstance(proof, Mapping):
+        raise SourceTransplantError("Reuse decision has no executable proof receipt.")
+    if proof.get("schema_version") != "mmm/reuse-proof-receipt-v1":
+        raise SourceTransplantError("Reuse proof schema is invalid.")
+    from .proof_level import ProofLevel
+
+    if not ProofLevel.from_value(proof.get("proof_level")).is_verified():
+        raise SourceTransplantError("Reuse proof level is not verified.")
+    if proof.get("authoritative_compile") is not True or proof.get("compile_passed") is not True:
+        raise SourceTransplantError("Reuse proof has no authoritative compile pass.")
+    candidate_id = f"{donor.repository}@{donor.commit_sha}"
+    if str(proof.get("candidate_id") or "") != candidate_id:
+        raise SourceTransplantError("Reuse proof candidate identity does not match its donor.")
+    if str(proof.get("commit_sha") or "") != donor.commit_sha:
+        raise SourceTransplantError("Reuse proof commit does not match its donor.")
+    proof_capability = str(proof.get("capability") or "").strip().casefold()
+    if proof_capability.removeprefix("capability:") != donor_capability.removeprefix("capability:"):
+        raise SourceTransplantError("Reuse proof capability does not match its donor.")
+    if str(proof.get("closure_hash") or "") != donor_closure_sha256(donor):
+        raise SourceTransplantError("Reuse proof closure hash does not match its donor manifest.")
+    verified_capabilities = {
+        str(item).strip().casefold().removeprefix("capability:")
+        for item in proof.get("verified_capabilities", ())
+        if str(item).strip()
+    }
+    if donor_capability.removeprefix("capability:") not in verified_capabilities:
+        raise SourceTransplantError("Reuse proof did not verify the selected capability.")
+    verified_artifacts = {
+        str(item).replace("\\", "/")
+        for item in proof.get("verified_artifacts", ())
+        if str(item).strip()
+    }
+    donor_paths = {item.path for item in donor.files}
+    if not donor_paths or not donor_paths <= verified_artifacts:
+        raise SourceTransplantError("Reuse proof did not verify the complete donor artifact set.")
+    return donor
+
+
 def materialize_pinned_donor(
     donor_slice: DonorSlice,
     discovery_client: Any = None,
@@ -1099,8 +1189,10 @@ __all__ = [
     "DonorFile",
     "DonorSlice",
     "SourceTransplantError",
+    "donor_closure_sha256",
     "inspect_repository_slice",
     "materialize_source_slices",
     "repository_from_candidate",
     "validate_donor_slice_manifest",
+    "validated_reuse_donor",
 ]

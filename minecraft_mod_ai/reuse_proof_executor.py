@@ -9,7 +9,6 @@ test with an exact JUnit XML identity and individual PASS result.
 """
 
 import hashlib
-import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ from .reuse_license import is_reusable_source_license
 from .source_transplant import (
     DonorSlice,
     SourceTransplantError,
+    donor_closure_sha256,
     validate_donor_slice_manifest,
 )
 
@@ -129,15 +129,6 @@ class ReuseProofReceipt:
                 else self.contract
             ),
         }
-
-
-def _closure_sha256(donor_slice: DonorSlice) -> str:
-    payload = [
-        [item.path, item.blob_sha, item.sha256, item.size_bytes]
-        for item in sorted(donor_slice.files, key=lambda entry: entry.path)
-    ]
-    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _residual_java_artifact_path(
@@ -411,7 +402,7 @@ def execute_reuse_proof(
     """Materialize one donor slice and execute fail-closed reuse verification."""
 
     candidate_id = f"{donor_slice.repository}@{donor_slice.commit_sha}"
-    closure_hash = _closure_sha256(donor_slice)
+    closure_hash = donor_closure_sha256(donor_slice)
     current_level = ProofLevel.DISCOVERED
 
     try:
@@ -1080,7 +1071,7 @@ def execute_candidate_fallback_loop(
         if str(candidate.capability or "").strip() != requested_capability:
             receipts.append(_rejected_receipt(
                 candidate, candidate_id=f"{candidate.repository}@{candidate.commit_sha}",
-                closure_hash=_closure_sha256(candidate), failure_code="CAPABILITY_MISMATCH",
+                closure_hash=donor_closure_sha256(candidate), failure_code="CAPABILITY_MISMATCH",
                 failure_message=(f"Candidate capability {candidate.capability!r} does not match "
                                  f"requested capability {requested_capability!r}."),
             ))

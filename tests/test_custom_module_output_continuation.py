@@ -46,6 +46,53 @@ def test_output_continuation_carries_preserved_source_state() -> None:
     assert "resume with normal source/RAG tools" in messages[0]["content"]
 
 
+def test_output_continuation_preserves_host_grounding_receipts() -> None:
+    receipt = {
+        "schema_version": "mmm/source-observation-receipt-v1",
+        "project_sha256": "sha256:" + "1" * 64,
+        "query_sha256": "sha256:" + "2" * 64,
+        "observation_count": 1,
+        "observations_sha256": "sha256:" + "3" * 64,
+    }
+    grounding = {
+        "schema_version": "mmm/host-owned-coder-grounding-v1",
+        "stage": "generation",
+        "model_role": "coder",
+        "evidence_bindings": {
+            "project_exact_rag": {"receipt": dict(receipt)}
+        },
+        "policy": {
+            "resolved_before_first_coder_decode": True,
+            "baseline_grounding_owned_by_host": True,
+            "writes_still_require_approved_pipeline": True,
+        },
+    }
+    module = ProductionModule(
+        module_id="task_example",
+        kind="custom_java",
+        config={"evidence_task": {"task_id": "task_example"}},
+    )
+
+    messages = _output_exhaustion_continuation_messages(
+        module=module,
+        minecraft_version="1.21.1",
+        loader="fabric",
+        mappings="1.21.1+build.3",
+        java_version=21,
+        continuation_index=1,
+        state_sha256="sha256:" + "4" * 64,
+        touched_paths=(),
+        discarded_paths=(),
+        source_observation_receipt=receipt,
+        host_grounding=grounding,
+    )
+
+    payload = json.loads(messages[1]["content"])
+    assert payload["source_observation_receipt"] == receipt
+    assert payload["initial_exact_source_context"]["ledger_receipt"] == receipt
+    assert payload["host_grounding"] == grounding
+
+
 def test_checkpoint_persists_staged_mutation_across_resume(tmp_path: Path) -> None:
     root = tmp_path / "project"
     source = root / "src/main/java/example/Example.java"

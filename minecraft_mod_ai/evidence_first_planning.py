@@ -1306,61 +1306,15 @@ def _validated_external_reuse(
         )
     if mode not in {"source_transplant", "adapt"}:
         return False
-    if donor.get("schema_version") != "mmm/source-transplant-slice-v1":
-        return False
     if _canonical_capability(donor.get("capability")) != _canonical_capability(capability):
         return False
-    if not str(donor.get("repository") or "").strip():
-        return False
-    if not re.fullmatch(r"[0-9a-f]{40,64}", str(donor.get("commit_sha") or "")):
-        return False
-    if str(donor.get("license_id") or "") not in {
-        "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unlicense", "CC0-1.0",
-    }:
-        return False
-    if donor.get("target_compatibility") not in {"exact", "adapt"}:
-        return False
-    files = donor.get("files")
-    if not isinstance(files, list) or not files:
-        return False
-    for item in files:
-        if not isinstance(item, Mapping):
-            return False
-        path = str(item.get("path") or "").replace("\\", "/")
-        if not path or path.startswith("/") or ".." in path.split("/"):
-            return False
-        if not _SHA_RE.fullmatch(str(item.get("sha256") or "")):
-            return False
-        if not re.fullmatch(r"[0-9a-f]{40,64}", str(item.get("blob_sha") or "")):
-            return False
-        if type(item.get("size_bytes")) is not int or item["size_bytes"] < 0:
-            return False
-    proof = raw.get("proof_receipt")
-    if not isinstance(proof, Mapping):
-        return False
-    from .proof_level import ProofLevel
+    from .source_transplant import SourceTransplantError, validated_reuse_donor
 
-    if proof.get("schema_version") != "mmm/reuse-proof-receipt-v1":
+    try:
+        validated_reuse_donor(raw)
+    except (SourceTransplantError, ValueError):
         return False
-    if not ProofLevel.from_value(proof.get("proof_level")).is_verified():
-        return False
-    if proof.get("authoritative_compile") is not True or proof.get("compile_passed") is not True:
-        return False
-    if str(proof.get("commit_sha") or "") != str(donor.get("commit_sha") or ""):
-        return False
-    if _canonical_capability(proof.get("capability")) != _canonical_capability(capability):
-        return False
-    verified_artifacts = {
-        str(item).replace("\\", "/")
-        for item in proof.get("verified_artifacts", ())
-        if str(item).strip()
-    }
-    donor_artifacts = {
-        str(item.get("path") or "").replace("\\", "/")
-        for item in files
-        if isinstance(item, Mapping)
-    }
-    return bool(donor_artifacts and donor_artifacts <= verified_artifacts)
+    return True
 
 
 def _branch_predicates(

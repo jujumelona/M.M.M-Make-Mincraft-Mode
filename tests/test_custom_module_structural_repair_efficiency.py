@@ -343,7 +343,12 @@ def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
     continuation = _implement_request(router.messages[1])
     assert continuation["continuation"]["continuation_index"] == 1
     assert continuation["continuation"]["preserved_path_count"] == 1
-    assert "initial_exact_source_context" not in continuation
+    assert continuation["initial_exact_source_context"]["global_anchors"] == []
+    assert continuation["initial_exact_source_context"]["page_observations"] == []
+    assert (
+        continuation["initial_exact_source_context"]["ledger_receipt"]
+        == continuation["source_observation_receipt"]
+    )
     assert any("bounded tool actions" in rule for rule in continuation["rules"])
 
 

@@ -79,6 +79,21 @@ def test_host_run_state_mutation_tracking() -> None:
     assert "apply_source_patch" in state.applied_mutations
 
 
+def test_unchanged_mutation_receipt_is_not_progress() -> None:
+    state = HostRunState()
+    unchanged = {
+        "ok": True,
+        "result": {
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "UNCHANGED",
+            "operations": [],
+        },
+    }
+
+    assert state.record_mutation("apply_source_edit", unchanged) is False
+    assert state.workspace_changed is False
+
+
 def test_no_progress_cutoff_at_two_streaks() -> None:
     router = MagicMock()
     router._generation_scope.return_value = nullcontext()
@@ -958,7 +973,6 @@ def test_extract_mutation_context_from_rag_hit_source_path_and_text() -> None:
     assert "onInitialize" in str(ctx.source_body)
     assert ctx.localization_stage == LocalizationStage.READY
     assert ctx.is_mutation_ready is True
-
 
 
 

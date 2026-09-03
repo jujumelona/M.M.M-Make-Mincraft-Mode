@@ -241,6 +241,47 @@ def test_internal_custom_module_envelope_restores_host_reserved_java_target(tmp_
     )
 
 
+def test_grounded_task_local_continuation_restores_same_java_authority(tmp_path: Path) -> None:
+    messages = _internal_coder_messages()
+    request = json.loads(messages[-1]["content"])
+    request["continuation"] = {
+        "reason": "previous_tool_enabled_page_exhausted_output",
+        "continuation_index": 1,
+        "preserved_path_count": 1,
+        "preserved_paths_preview": ["src/main/resources/example.mixins.json"],
+    }
+    request["initial_exact_source_context"] = {
+        "schema_version": "mmm/source-observation-context-v1",
+        "ledger_receipt": dict(request["source_observation_receipt"]),
+        "global_anchors": [],
+        "page_observations": [],
+    }
+    messages[-1]["content"] = json.dumps(request)
+    router = SimpleNamespace(
+        _agent_require_fresh_evidence=True,
+        _agent_workspace_root=tmp_path,
+    )
+    runtime = SimpleNamespace(workspace_root=str(tmp_path))
+
+    authority = authority_contract._internal_coder_authority_message(
+        messages,
+        router=router,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+        loop_module=tool_loop,
+    )
+
+    assert authority is not None
+    payload = json.loads(authority["content"])
+    assert payload["mutation_target"]["path"] == JAVA_PATH
+    state = tool_loop.HostRunState()
+    assert tool_loop.is_mutation_ready([authority], state) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.target_path == JAVA_PATH
+    assert state.mutation_context.target_pinned is True
+
+
 def test_host_materialized_donor_receipt_enables_bounded_reuse_read(tmp_path: Path) -> None:
     messages = _internal_coder_messages()
     request = json.loads(messages[-1]["content"])

@@ -4,11 +4,17 @@ import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import source_transplant
 from minecraft_mod_ai.evidence_first_planning import _validated_external_reuse
 from minecraft_mod_ai.grounded_source_reuse import build_repository_reuse_plan
 from minecraft_mod_ai.reuse_proof_executor import ReuseProofReceipt
-from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice
+from minecraft_mod_ai.source_transplant import (
+    DonorFile,
+    DonorSlice,
+    donor_closure_sha256,
+)
 
 _PATH = "src/main/java/donor/TradeEngine.java"
 
@@ -87,7 +93,7 @@ def _proof(*, verified: bool) -> ReuseProofReceipt:
         candidate_id="owner/trade-mod@" + "a" * 40,
         capability="trade.transaction",
         commit_sha="a" * 40,
-        closure_hash="sha256:" + "c" * 64,
+        closure_hash=donor_closure_sha256(_donor()),
         proof_level="COMPILE_VERIFIED" if verified else "MATERIALIZED",
         compile_passed=verified,
         tests_passed=False,
@@ -200,6 +206,7 @@ def test_selected_plan_refetches_exact_donor_bytes_and_preserves_symbols(
                 "capability": donor.capability,
                 "mode": "source_transplant",
                 "donor": donor.to_dict(),
+                "proof_receipt": _proof(verified=True).to_dict(),
             }
         ]
     }
@@ -209,5 +216,50 @@ def test_selected_plan_refetches_exact_donor_bytes_and_preserves_symbols(
     file_receipt = receipt["donors"][0]["files"][0]
     assert receipt["count"] == 1
     assert file_receipt["symbols"] == ["TradeEngine"]
+    assert file_receipt["source_path"] == _PATH
+    assert file_receipt["blob_sha"] == donor.files[0].blob_sha
     assert file_receipt["sha256"] == donor.files[0].sha256
     assert Path(file_receipt["path"]).read_bytes() == expected
+
+
+def test_reuse_proof_cannot_be_replayed_after_blob_manifest_changes() -> None:
+    donor = _donor()
+    decision = {
+        "capability": donor.capability,
+        "mode": "source_transplant",
+        "source_id": "host-donor:owner/trade-mod@" + "a" * 40,
+        "donor": donor.to_dict(),
+        "proof_receipt": _proof(verified=True).to_dict(),
+    }
+    decision["donor"]["files"][0]["blob_sha"] = "d" * 40
+
+    assert not _validated_external_reuse(
+        decision,
+        capability="trade.transaction",
+        target={"coordinates": {"minecraft_version": "1.21.1", "loader": "fabric"}},
+    )
+
+
+def test_invalid_reuse_proof_creates_no_local_donor_paths(tmp_path) -> None:
+    donor = _donor()
+    plan = {
+        "capabilities": [
+            {
+                "capability": donor.capability,
+                "mode": "source_transplant",
+                "donor": donor.to_dict(),
+                "proof_receipt": {
+                    **_proof(verified=True).to_dict(),
+                    "closure_hash": "sha256:" + "0" * 64,
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(
+        source_transplant.SourceTransplantError,
+        match="closure hash",
+    ):
+        source_transplant.materialize_source_slices(tmp_path, plan)
+
+    assert not (tmp_path / ".minecraft_ai" / "reuse" / "donors").exists()

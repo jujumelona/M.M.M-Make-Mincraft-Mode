@@ -211,7 +211,7 @@ def test_duplicate_queries_are_executed_once(monkeypatch):
     assert sorted(calls) == ["other query", "same query"]
 
 
-def test_ecosystem_evidence_skips_broad_github(monkeypatch):
+def test_ecosystem_metadata_without_source_still_searches_github(monkeypatch):
     body = "implementation body"
     monkeypatch.setattr(
         rag,
@@ -228,10 +228,27 @@ def test_ecosystem_evidence_skips_broad_github(monkeypatch):
             "metadata": {"source_url": ""},
         }], {"provider": "modrinth", "status": "available", "result_count": 1}),
     )
+    github_body = "source repository implementation body"
     monkeypatch.setattr(
         rag,
         "_search_github",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("broad GitHub fallback must be skipped")),
+        lambda *args, **kwargs: ([{
+            "source_id": "github:example/one-source",
+            "source_type": "github_repository_body",
+            "source_locator": "github:example/one-source",
+            "url": "https://github.com/example/one-source",
+            "title": "one-source",
+            "content": github_body,
+            "content_sha256": rag._sha256_text(github_body),
+            "body_retrieved": True,
+            "metadata": {"repository": "example/one-source"},
+        }], {
+            "provider": "github",
+            "status": "available",
+            "result_count": 1,
+            "search_requests": 1,
+            "source_requests": 1,
+        }),
     )
     monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
     monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
@@ -240,8 +257,11 @@ def test_ecosystem_evidence_skips_broad_github(monkeypatch):
         object(), {"domains": [{"domain_id": "request", "queries": ["one query"]}]}
     )
     row = bundle["domains"][0]["queries"][0]
-    assert row["external_rag"]["sources"]
-    assert row["external_rag"]["github_retrieval"]["provider_status"] == "skipped_sufficient_ecosystem_evidence"
+    source_ids = {
+        source["source_id"] for source in row["external_rag"]["sources"]
+    }
+    assert source_ids == {"modrinth:one", "github:example/one-source"}
+    assert row["external_rag"]["github_retrieval"]["provider_status"] == "available"
 
 
 def test_query_terms_do_not_drop_late_authored_terms():

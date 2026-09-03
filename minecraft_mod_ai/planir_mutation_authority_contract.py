@@ -88,10 +88,14 @@ def _is_preserved_host_continuation(payload: Any) -> bool:
     if type(index) is not int or index < 1:
         return False
     module_id = str(module.get("module_id") or "").strip()
-    config = module.get("config")
-    if not module_id or not isinstance(config, Mapping):
+    if not module_id:
         return False
-    evidence_task = config.get("evidence_task")
+    evidence_task = module.get("evidence_task")
+    if not isinstance(evidence_task, Mapping):
+        config = module.get("config")
+        evidence_task = (
+            config.get("evidence_task") if isinstance(config, Mapping) else None
+        )
     if not isinstance(evidence_task, Mapping):
         return False
     if str(evidence_task.get("task_id") or "").strip() != module_id:
@@ -137,6 +141,11 @@ def _active_task_ids(payload: Mapping[str, Any]) -> frozenset[str]:
                 task_id = str(evidence_task.get("task_id") or "").strip()
                 if task_id:
                     active.add(task_id)
+        direct_task = module.get("evidence_task")
+        if isinstance(direct_task, Mapping):
+            task_id = str(direct_task.get("task_id") or "").strip()
+            if task_id:
+                active.add(task_id)
     return frozenset(active)
 
 

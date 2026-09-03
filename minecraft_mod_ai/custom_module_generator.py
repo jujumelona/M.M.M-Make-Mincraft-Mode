@@ -819,6 +819,8 @@ class CustomModuleGenerator:
                     state_sha256=state_sha256,
                     touched_paths=progress_paths,
                     discarded_paths=discarded_paths,
+                    source_observation_receipt=observation_ledger["receipt"],
+                    host_grounding=host_grounding,
                 )
                 print(
                     "custom module: bounded output continuation",
@@ -1364,6 +1366,8 @@ def _output_exhaustion_continuation_messages(
     state_sha256: str,
     touched_paths: Iterable[str],
     discarded_paths: Iterable[str],
+    source_observation_receipt: Mapping[str, Any] | None = None,
+    host_grounding: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     touched = sorted({str(path) for path in touched_paths})
     discarded = sorted({str(path) for path in discarded_paths})
@@ -1393,6 +1397,16 @@ def _output_exhaustion_continuation_messages(
             "Do not repeat an exhausted action and do not put source code in the final summary.",
         ],
     }
+    if source_observation_receipt is not None and host_grounding is not None:
+        receipt = dict(source_observation_receipt)
+        request["source_observation_receipt"] = receipt
+        request["initial_exact_source_context"] = {
+            "schema_version": "mmm/source-observation-context-v1",
+            "ledger_receipt": receipt,
+            "global_anchors": [],
+            "page_observations": [],
+        }
+        request["host_grounding"] = dict(host_grounding)
     return [
         {
             "role": "system",

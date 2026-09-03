@@ -709,19 +709,30 @@ def _sequence_has_values(value: Any) -> bool:
     )
 
 
+def _evidence_task_from_module(module: Any) -> Mapping[str, Any] | None:
+    """Read the canonical task-local envelope and its legacy compatibility shape."""
+
+    if not isinstance(module, Mapping):
+        return None
+    direct = module.get("evidence_task")
+    if isinstance(direct, Mapping):
+        return direct
+    config = module.get("config")
+    if isinstance(config, Mapping):
+        nested = config.get("evidence_task")
+        if isinstance(nested, Mapping):
+            return nested
+    return None
+
+
 def _fresh_target_has_reuse_evidence(payload: Any) -> bool:
     """Fail closed when a nominally fresh binding also carries reuse evidence."""
 
     if not isinstance(payload, Mapping):
         return False
     module = payload.get("module")
-    if not isinstance(module, Mapping):
-        return False
-    config = module.get("config")
-    if not isinstance(config, Mapping):
-        return False
-    task = config.get("evidence_task")
-    if not isinstance(task, Mapping):
+    task = _evidence_task_from_module(module)
+    if task is None:
         return False
     bindings = task.get("production_bindings")
     if not isinstance(bindings, Sequence) or isinstance(
@@ -757,13 +768,8 @@ def _fresh_owned_symbol_context(payload: Any) -> TargetMutationContext | None:
     if not isinstance(payload, Mapping):
         return None
     module = payload.get("module")
-    if not isinstance(module, Mapping):
-        return None
-    config = module.get("config")
-    if not isinstance(config, Mapping):
-        return None
-    task = config.get("evidence_task")
-    if not isinstance(task, Mapping):
+    task = _evidence_task_from_module(module)
+    if task is None:
         return None
     bindings = task.get("production_bindings")
     if not isinstance(bindings, Sequence) or isinstance(
@@ -2068,7 +2074,13 @@ def generate_with_tools(
                     if all_exposed_names & _VERIFY_TOOLS:
                         state.phase = LoopPhase.VERIFY
                 elif bool(payload.get("ok")):
-                    turn_made_progress = True
+                    # A successful transport with an UNCHANGED/no-diff receipt is not
+                    # semantic progress. Counting it reset the fixed-point guard and
+                    # let small coders loop indefinitely on the same replacement.
+                    state.record_failure(
+                        call.name,
+                        "MUTATION_UNCHANGED: host receipt proved no source-byte change",
+                    )
                 else:
                     failure_code = str(payload.get("failure_code") or "")
                     authority_retry = bool(

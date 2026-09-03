@@ -102,6 +102,29 @@ def test_active_extractor_prioritizes_fresh_anchor_over_incidental_project_conte
     assert context.localization_stage == tool_loop.LocalizationStage.READY
 
 
+def test_task_local_envelope_prioritizes_java_anchor_over_incidental_resource() -> None:
+    """Regression for the production trace that pinned a mixins JSON instead of Java."""
+
+    request = _request(include_incidental_source=True)
+    evidence_task = request["module"].pop("config")["evidence_task"]
+    request["module"]["evidence_task"] = evidence_task
+    request["initial_exact_source_context"] = {
+        "records": [
+            {
+                "path": "src/main/resources/generated_mod.mixins.json",
+                "content": '{"required":true,"mixins":[]}',
+            }
+        ]
+    }
+
+    context = tool_loop._extract_mutation_context_from_payload(request)
+
+    assert context is not None
+    assert context.target_path == TARGET_PATH
+    assert context.target_path != "src/main/resources/generated_mod.mixins.json"
+    assert context.is_new_file is True
+
+
 def test_output_continuation_can_recover_fresh_target_from_module_receipt_alone() -> None:
     continuation = _request()
     continuation["task"] = (
@@ -121,6 +144,26 @@ def test_output_continuation_can_recover_fresh_target_from_module_receipt_alone(
     assert state.mutation_context is not None
     assert state.mutation_context.target_path == TARGET_PATH
     assert state.mutation_context.localization_stage == tool_loop.LocalizationStage.READY
+
+
+def test_task_local_output_continuation_recovers_fresh_target() -> None:
+    continuation = _request()
+    evidence_task = continuation["module"].pop("config")["evidence_task"]
+    continuation["module"]["evidence_task"] = evidence_task
+    continuation["continuation"] = {
+        "reason": "previous_tool_enabled_page_exhausted_output",
+        "continuation_index": 1,
+        "preserved_path_count": 1,
+        "preserved_paths_preview": ["src/main/resources/generated_mod.mixins.json"],
+    }
+    state = tool_loop.HostRunState()
+
+    assert tool_loop.is_mutation_ready(
+        [{"role": "user", "content": json.dumps(continuation)}], state
+    ) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.target_path == TARGET_PATH
+    assert state.mutation_context.target_pinned is True
 
 
 def test_adapt_task_still_requires_existing_source_localization() -> None:

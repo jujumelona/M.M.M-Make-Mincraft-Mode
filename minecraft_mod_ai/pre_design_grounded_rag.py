@@ -718,7 +718,11 @@ def _forced_rag_bundle(
         records.extend(linked)
         receipts["github"] = linked_receipt
 
-        if not records:
+        # Ecosystem descriptions are useful design evidence, but they are not source
+        # repositories.  Source-reuse mode must still search GitHub when Modrinth or
+        # CurseForge returned metadata without a linked repository; otherwise the
+        # downstream immutable donor pipeline is guaranteed to receive zero candidates.
+        if not linked:
             with github_fallback_lock:
                 try:
                     found, receipt = _search_github(
@@ -730,11 +734,6 @@ def _forced_rag_bundle(
                     receipt = _error("github", exc)
                     receipts["github"] = receipt
                     errors.append(receipt)
-        elif not linked:
-            receipts["github"] = {
-                **dict(linked_receipt),
-                "status": "skipped_sufficient_ecosystem_evidence",
-            }
 
         unique: list[dict[str, Any]] = []
         seen: set[str] = set()
