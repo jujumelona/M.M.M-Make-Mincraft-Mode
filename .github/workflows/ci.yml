@@ -51,12 +51,11 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Reviewed surface: inherited main was already at 429. The generation-boundary
-          # reconciliation deliberately adds exactly two late owners: one sanitizes balanced
-          # model <think> blocks before the existing fail-closed design validator, and one
-          # routes Fabric official bootstrap lock writes through the immutable v4 writer.
-          # Total: 431. Any further runtime rebinding is a hard CI failure until reviewed.
-          budget = 431
+          # Reviewed surface: the prior finalized runtime was 431. The small-model task
+          # capsule removes the obsolete pre-finalization authority install and adds the
+          # final outer task scope/tool binder plus compact task projection. The measured
+          # net reviewed surface is 433. Any further rebinding remains a hard CI failure.
+          budget = 433
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
               raise SystemExit(
