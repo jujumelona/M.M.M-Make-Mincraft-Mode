@@ -564,6 +564,37 @@ class HostRunState:
             self.last_failure_reason = None
             self.last_failure_digest = None
 
+    def record_no_progress_result(self, value: Any) -> int:
+        """Count only a repeated stable state/action/result as a fixed point.
+
+        Two different recoverable failures are not convergence.  In particular, an
+        authority rejection followed by a phase correction must leave a small model one
+        more turn to obey the corrected contract.  The global tool-round limit still
+        bounds alternating or otherwise non-convergent behavior.
+        """
+
+        stable = _stable_value(value, drop_volatile=True)
+        canonical = json.dumps(
+            stable,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        with self._lock:
+            if digest == self.last_result_digest:
+                self.no_progress_streak += 1
+            else:
+                self.last_result_digest = digest
+                self.no_progress_streak = 1
+            return self.no_progress_streak
+
+    def clear_no_progress_result(self) -> None:
+        with self._lock:
+            self.last_result_digest = None
+            self.no_progress_streak = 0
+
     def next_untried_internal_tool(
         self,
         exposed_tools: Sequence[str] | set[str] | frozenset[str],
@@ -2110,12 +2141,6 @@ def generate_with_tools(
                     ):
                         state.phase = LoopPhase.ACT
 
-        if turn_made_progress:
-            state.clear_failure()
-            state.no_progress_streak = 0
-        else:
-            state.no_progress_streak += 1
-
         phase_after = state.phase.value
         loc_stage_after = (
             state.mutation_context.localization_stage.value
@@ -2134,6 +2159,22 @@ def generate_with_tools(
             }
             for call, payload in executed
         ]
+
+        if turn_made_progress:
+            state.clear_failure()
+            state.clear_no_progress_result()
+        else:
+            state.record_no_progress_result(
+                {
+                    "phase_before": phase_before,
+                    "phase_after": phase_after,
+                    "localization_stage_before": loc_stage_before,
+                    "localization_stage_after": loc_stage_after,
+                    "mutation_context_after": ctx_after,
+                    "model_tool_calls": model_calls_info,
+                    "tool_results": results_info,
+                }
+            )
 
         trace_entry = ExecutionStepTrace(
             step_index=state.step_index,

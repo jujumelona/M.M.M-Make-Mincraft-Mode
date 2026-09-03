@@ -493,6 +493,88 @@ def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
     assert runtime.call.call_args.args[1] == "apply_source_edit"
 
 
+def test_distinct_contract_failures_do_not_fake_a_no_progress_fixed_point() -> None:
+    """A phase error and a target error need separate correction opportunities."""
+    router = MagicMock()
+    router._generation_scope.return_value = nullcontext()
+    router._agent_require_fresh_evidence = False
+
+    config = MagicMock()
+    config.adapter = "llama_cpp"
+    config.max_context = 16384
+    config.max_input_tokens = 0
+    config.max_new_tokens = 4096
+    config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+    adapter = MagicMock()
+    adapter.generate_turn.side_effect = [
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(id="phase_error", name="search_code_rag", arguments={"query": "wrong phase"}),
+            )
+        ),
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="target_error",
+                    name="apply_source_edit",
+                    arguments={
+                        "operation": "replace",
+                        "path": "src/Wrong.java",
+                        "content": "public class Wrong {}",
+                    },
+                ),
+            )
+        ),
+        GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="corrected",
+                    name="apply_source_edit",
+                    arguments={
+                        "operation": "replace",
+                        "path": "src/Right.java",
+                        "content": "public class Right { void fixed() {} }",
+                    },
+                ),
+            )
+        ),
+        GenerationResponse(content="Applied the corrected edit."),
+    ]
+    runtime = MagicMock()
+    runtime.call.return_value = _applied_patch_payload("src/Right.java")
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "user",
+                "content": (
+                    '{"phase":"implement_module","initial_exact_source_context":'
+                    '{"files":{"src/Right.java":"public class Right {}"}}}'
+                ),
+            },
+        ),
+        tools=(
+            _tool_schema("search_code_rag"),
+            _tool_schema("apply_source_edit"),
+        ),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    result = generate_with_tools(
+        router,
+        config=config,
+        adapter=adapter,
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
+
+    assert result == "Applied the corrected edit."
+    assert runtime.call.call_count == 1
+
+
 def test_filter_tools_for_phase_hierarchical_localization_stages() -> None:
     """The host controller dynamically filters read tools per hierarchical localization stage."""
     from minecraft_mod_ai.progress_aware_tool_loop import (
@@ -876,7 +958,6 @@ def test_extract_mutation_context_from_rag_hit_source_path_and_text() -> None:
     assert "onInitialize" in str(ctx.source_body)
     assert ctx.localization_stage == LocalizationStage.READY
     assert ctx.is_mutation_ready is True
-
 
 
 

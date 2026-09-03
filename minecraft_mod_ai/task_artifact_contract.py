@@ -50,24 +50,31 @@ def _causal_token_variants(value: Any) -> set[str]:
     """
 
     result: set[str] = set()
-    for raw in re.findall(r"[A-Za-z][A-Za-z0-9_]*", str(value or "").casefold()):
-        token = raw.strip("_")
-        if len(token) < 3 or token in _CAUSAL_STOPWORDS:
-            continue
-        variants = {token}
-        if token.endswith("ies") and len(token) > 4:
-            variants.add(token[:-3] + "y")
-        elif token.endswith("s") and not token.endswith("ss") and len(token) > 3:
-            variants.add(token[:-1])
-        if token.endswith("ing") and len(token) > 5:
-            variants.add(token[:-3])
-            variants.add(token[:-3] + "e")
-        if token.endswith("ed") and len(token) > 4:
-            variants.add(token[:-2])
-            variants.add(token[:-1])
-        if token.endswith("tion") and len(token) > 6:
-            variants.add(token[:-3])
-        result.update(item for item in variants if len(item) >= 3)
+    raw_tokens = re.findall(r"[A-Za-z][A-Za-z0-9_]*", str(value or "").casefold())
+    for raw in raw_tokens:
+        compound = raw.strip("_")
+        # Capabilities and provides are commonly canonicalized as snake_case while
+        # acceptance prose uses ordinary words.  Keep the compound for exact matching,
+        # but also normalize each semantic component so ``module_construction`` can
+        # conservatively match an authored Given-state such as ``constructed module``.
+        tokens = (compound, *(part for part in compound.split("_") if part != compound))
+        for token in tokens:
+            if len(token) < 3 or token in _CAUSAL_STOPWORDS:
+                continue
+            variants = {token}
+            if token.endswith("ies") and len(token) > 4:
+                variants.add(token[:-3] + "y")
+            elif token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+                variants.add(token[:-1])
+            if token.endswith("ing") and len(token) > 5:
+                variants.add(token[:-3])
+                variants.add(token[:-3] + "e")
+            if token.endswith("ed") and len(token) > 4:
+                variants.add(token[:-2])
+                variants.add(token[:-1])
+            if token.endswith("tion") and len(token) > 6:
+                variants.add(token[:-3])
+            result.update(item for item in variants if len(item) >= 3)
     return result
 
 
