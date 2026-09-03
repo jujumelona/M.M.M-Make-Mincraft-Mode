@@ -96,6 +96,8 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_regression_reconciliation import install as install_runtime_regression_reconciliation
         from .runtime_wrapper_integrity import verify_installed_wrappers
+        from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
+        from .small_model_task_capsule_contract import install as install_small_model_task_capsule
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .target_grounding_contract import install_target_grounding_contract
         from .task_artifact_contract import install_task_artifact_contract
@@ -177,6 +179,12 @@ def finalize_runtime() -> None:
         install_planner_graph_integrity()
         install_runtime_regression_reconciliation()
         install_generation_boundary_reconciliation()
+
+        # This must remain the outermost generation contract. The planner and generic
+        # RAG/localization layers are useful inputs, but they may never regain authority
+        # to select a different writable file or make a small coder reproduce long paths.
+        install_small_model_task_capsule()
+        assert_small_model_task_capsule()
 
         assert_runtime_hot_paths(
             mcp_transport_pool_module=mcp_transport_pool,
