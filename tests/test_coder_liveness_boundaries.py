@@ -6,7 +6,6 @@ import pytest
 
 from minecraft_mod_ai import generation_output_budget as budget
 from minecraft_mod_ai import llama_exact_context
-from minecraft_mod_ai import prefill_calibration_strictness_contract as prefill
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
@@ -64,45 +63,6 @@ def test_exact_context_never_clamps_tool_action_to_one_token(monkeypatch):
     assert "remaining_tokens=1" in str(caught.value)
     assert "required_output_tokens=128" in str(caught.value)
 
-
-def test_apply_template_strips_openai_v1_prefix(monkeypatch):
-    seen = {}
-
-    class _Response:
-        status_code = 200
-
-    class _Timeout:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    class _TimeoutException(Exception):
-        pass
-
-    def _post(url, *, json, timeout):
-        seen["url"] = url
-        seen["json"] = json
-        seen["timeout"] = timeout
-        return _Response()
-
-    fake_httpx = SimpleNamespace(
-        post=_post,
-        Timeout=_Timeout,
-        TimeoutException=_TimeoutException,
-    )
-    fake_module = SimpleNamespace(
-        _positive_env_float=lambda _name, default: default,
-        _DEFAULT_COMPLETION_TIMEOUT_SECONDS=120.0,
-        _DEFAULT_HTTPX_POST=object(),
-        httpx=fake_httpx,
-    )
-
-    response = prefill._post_apply_template(
-        fake_module,
-        "http://127.0.0.1:8910/v1",
-        {"messages": []},
-    )
-    assert response.status_code == 200
-    assert seen["url"] == "http://127.0.0.1:8910/apply-template"
 
 
 def test_recover_does_not_expose_verifiers():

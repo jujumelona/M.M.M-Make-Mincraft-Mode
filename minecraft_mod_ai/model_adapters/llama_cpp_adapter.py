@@ -315,6 +315,8 @@ def _normalize_assistant_prefill_suffix(
 def _assistant_prefill_calibration_payload(
     original: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Build a template-only request; calibration must never enter inference."""
+
     payload: dict[str, Any] = {
         "model": original.get("model", "local"),
         "messages": [
@@ -324,8 +326,6 @@ def _assistant_prefill_calibration_payload(
             },
             {"role": "assistant", "content": _PREFILL_CALIBRATION_SENTINEL},
         ],
-        "max_tokens": 0,
-        "temperature": 0.0,
     }
     for key in (
         "chat_template_kwargs",
@@ -339,44 +339,81 @@ def _assistant_prefill_calibration_payload(
     return payload
 
 
+def _assistant_prefill_apply_template_url(server_url: str) -> str:
+    origin = server_url.rstrip("/")
+    if origin.endswith("/v1"):
+        origin = origin[:-3].rstrip("/")
+    return f"{origin}/apply-template"
+
+
+def _post_apply_template(
+    server_url: str,
+    payload: Mapping[str, Any],
+) -> Any:
+    """Render llama.cpp's chat template without running model inference."""
+
+    read_timeout = _positive_env_float(
+        "MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS",
+        _DEFAULT_COMPLETION_TIMEOUT_SECONDS,
+    )
+    timeout = httpx.Timeout(
+        connect=30.0,
+        read=read_timeout,
+        write=30.0,
+        pool=30.0,
+    )
+    endpoint = _assistant_prefill_apply_template_url(server_url)
+    try:
+        if httpx.post is not _DEFAULT_HTTPX_POST:
+            return httpx.post(endpoint, json=dict(payload), timeout=timeout)
+        from ..llama_stream_efficiency_contract import _client
+
+        return _client(server_url).post(
+            endpoint,
+            json=dict(payload),
+            timeout=timeout,
+        )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(
+            "native llama-server apply-template made no readable progress for "
+            f"{read_timeout:.0f}s"
+        ) from exc
+
+
 def _calibrate_assistant_prefill_generation_prompt(
     server_url: str,
     original: Mapping[str, Any],
 ) -> str:
-    response = _post_completion(
+    response = _post_apply_template(
         server_url,
         _assistant_prefill_calibration_payload(original),
     )
     if response.status_code >= 400:
-        raise RuntimeError("assistant-prefill calibration request was rejected")
+        body = _bounded_response_body(response)
+        raise RuntimeError(
+            "assistant-prefill apply-template request was rejected"
+            + (f": {body}" if body else "")
+        )
     data = response.json()
     if not isinstance(data, Mapping):
-        raise TypeError("assistant-prefill calibration returned invalid JSON")
-    usage = data.get("usage")
-    if not isinstance(usage, Mapping) or usage.get("completion_tokens") != 0:
-        raise RuntimeError("assistant-prefill calibration generated model tokens")
-    choices = data.get("choices")
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise RuntimeError("assistant-prefill calibration returned invalid choices")
-    choice = choices[0]
-    if not isinstance(choice, Mapping):
-        raise TypeError("assistant-prefill calibration returned an invalid choice")
-    message = choice.get("message")
-    if not isinstance(message, Mapping):
-        raise TypeError("assistant-prefill calibration returned no message")
-    if message.get("tool_calls"):
-        raise RuntimeError("assistant-prefill calibration returned a tool call")
-    if message.get("reasoning_content") or message.get("reasoning"):
-        raise RuntimeError("assistant-prefill calibration returned reasoning")
-    content = message.get("content")
-    if not isinstance(content, str) or not content:
-        raise RuntimeError("assistant-prefill calibration prefix is empty or ambiguous")
-    encoded = content.encode("utf-8")
-    if len(encoded) > _MAX_PREFILL_TEMPLATE_BYTES:
-        raise RuntimeError("assistant-prefill calibration prefix is unexpectedly large")
-    if _PREFILL_CALIBRATION_SENTINEL in content:
-        raise RuntimeError("assistant-prefill calibration echoed the supplied prefill")
-    return content
+        raise TypeError("assistant-prefill apply-template returned invalid JSON")
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str):
+        raise TypeError("assistant-prefill apply-template returned no rendered prompt")
+    if prompt.count(_PREFILL_CALIBRATION_SENTINEL) != 1:
+        raise RuntimeError(
+            "assistant-prefill apply-template sentinel is missing or ambiguous"
+        )
+    suffix = prompt.split(_PREFILL_CALIBRATION_SENTINEL, 1)[1]
+    if not suffix:
+        raise RuntimeError(
+            "assistant-prefill template suffix is empty or ambiguous"
+        )
+    if len(suffix.encode("utf-8")) > _MAX_PREFILL_TEMPLATE_BYTES:
+        raise RuntimeError(
+            "assistant-prefill template suffix is unexpectedly large"
+        )
+    return suffix
 
 
 def _assistant_prefill_server_identity(server_url: str) -> str:

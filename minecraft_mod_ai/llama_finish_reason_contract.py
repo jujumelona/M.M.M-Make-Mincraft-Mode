@@ -21,7 +21,6 @@ from collections.abc import Mapping
 from typing import Any
 
 _MARKER = "_mmm_llama_finish_reason_classifier"
-_PREFILL_RESILIENCE_MARKER = "_mmm_nonfatal_prefill_calibration"
 CONTEXT_PRESSURE = "context_pressure"
 OUTPUT_EXHAUSTED = "output_exhausted"
 _CONTEXT_ERROR = (
@@ -223,48 +222,8 @@ def _length_error(
     )
 
 
-def _install_nonfatal_prefill_calibration(llama_cpp_module: Any) -> None:
-    """Make live assistant-prefill probing advisory rather than a fatal dependency.
-
-    Some llama.cpp/Qwen builds emit one or more model/template tokens even when the
-    calibration request uses ``max_tokens=0``. That server-specific behavior must not
-    turn an otherwise recoverable output boundary into a ModelBackendError. Tool turns
-    skip the zero-token probe entirely; non-tool turns retain the old probe but fall
-    back to the adapter's prefix normalization when it is unavailable.
-    """
-
-    original_calibration = getattr(
-        llama_cpp_module,
-        "_calibrate_assistant_prefill_generation_prompt",
-        None,
-    )
-    if not callable(original_calibration) or getattr(
-        original_calibration,
-        _PREFILL_RESILIENCE_MARKER,
-        False,
-    ):
-        return
-
-    def safe_calibration(
-        server_url: str,
-        original: Mapping[str, Any],
-    ) -> str:
-        if original.get("tools"):
-            return ""
-        try:
-            return str(original_calibration(server_url, original) or "")
-        except Exception:  # noqa: BLE001 - optional prefill calibration must not block inference
-            return ""
-
-    safe_calibration.__wrapped__ = original_calibration  # type: ignore[attr-defined]
-    setattr(safe_calibration, _PREFILL_RESILIENCE_MARKER, True)
-    llama_cpp_module._calibrate_assistant_prefill_generation_prompt = safe_calibration
-
-
 def install(llama_cpp_module: Any) -> None:
-    """Own completion decoding directly and install non-fatal prefill resilience."""
-
-    _install_nonfatal_prefill_calibration(llama_cpp_module)
+    """Own completion-boundary decoding without mutating prefill policy."""
     if bool(getattr(llama_cpp_module, _MARKER, False)):
         return
 

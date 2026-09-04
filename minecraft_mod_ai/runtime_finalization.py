@@ -84,7 +84,6 @@ def finalize_runtime() -> None:
         from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
         from .planner_graph_integrity_contract import install as install_planner_graph_integrity
-        from .prefill_calibration_strictness_contract import install as install_prefill_calibration_strictness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
         from .quality_public_acceptance_view_contract import install as install_quality_public_acceptance_view
@@ -143,7 +142,6 @@ def finalize_runtime() -> None:
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_tool_validation_surface()
         install_llama_finish_reason(llama_cpp_adapter)
-        install_prefill_calibration_strictness(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
         install_work_graph_receipt_integrity(work_graph)
 
