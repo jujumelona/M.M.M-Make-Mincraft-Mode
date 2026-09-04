@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from minecraft_mod_ai.llama_finish_reason_contract import (
     OUTPUT_EXHAUSTED,
     LlamaCompletionBoundaryError,
-    _install_nonfatal_prefill_calibration,
     completion_boundary_error,
     completion_boundary_kind,
 )
@@ -76,7 +73,7 @@ def test_atomic_recovery_instruction_forces_one_structural_edit() -> None:
     assert "never create a complete Java file" in instruction
 
 
-def test_atomic_stall_remains_recoverable_by_checkpoint_owner() -> None:
+def test_atomic_stall_preserves_typed_output_boundary() -> None:
     boundary = LlamaCompletionBoundaryError(
         "bounded output exhausted",
         kind=OUTPUT_EXHAUSTED,
@@ -92,14 +89,13 @@ def test_atomic_stall_remains_recoverable_by_checkpoint_owner() -> None:
     backend = ModelBackendError(role="coder", model_id="qwen", cause=stalled)
     backend.__cause__ = stalled
 
-    # Diagnostics retain the original typed llama boundary.
+    # The terminal owner can still classify and report the original boundary without
+    # starting a second generation loop or resetting HostRunState.
     assert completion_boundary_error(backend) is boundary
-    # The inner atomic retry is exhausted, but the outer custom-module owner can still
-    # persist workspace state and restart from its compact checkpoint.
     assert completion_boundary_kind(backend) == OUTPUT_EXHAUSTED
 
 
-def test_unrecovered_output_boundary_remains_recoverable() -> None:
+def test_unrecovered_output_boundary_remains_classifiable() -> None:
     boundary = LlamaCompletionBoundaryError(
         "bounded output exhausted",
         kind=OUTPUT_EXHAUSTED,
@@ -108,24 +104,3 @@ def test_unrecovered_output_boundary_remains_recoverable() -> None:
     )
 
     assert completion_boundary_kind(boundary) == OUTPUT_EXHAUSTED
-
-
-def test_tool_prefill_calibration_is_advisory_and_skips_zero_token_probe() -> None:
-    calls = []
-
-    def calibration(server_url: str, payload: dict) -> str:
-        calls.append((server_url, payload))
-        raise RuntimeError("assistant-prefill calibration generated model tokens")
-
-    module = SimpleNamespace(
-        _calibrate_assistant_prefill_generation_prompt=calibration,
-    )
-    _install_nonfatal_prefill_calibration(module)
-
-    value = module._calibrate_assistant_prefill_generation_prompt(
-        "http://localhost:8080",
-        {"tools": [_source_edit_schema()]},
-    )
-
-    assert value == ""
-    assert calls == []
