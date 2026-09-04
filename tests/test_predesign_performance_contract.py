@@ -8,6 +8,7 @@ from minecraft_mod_ai import pre_design_grounded_rag as rag
 
 
 def test_linked_github_readmes_are_fetched_concurrently(monkeypatch):
+    monkeypatch.setattr(rag, "_MAX_SOURCE_WORKERS", 2)
     barrier = threading.Barrier(2, timeout=2.0)
 
     def text(url: str, headers=None) -> str:
@@ -77,6 +78,8 @@ def test_predesign_code_rag_uses_lexical_hot_path(monkeypatch):
 
 def test_github_fallback_uses_bounded_parallel_slots(monkeypatch):
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.setattr(rag, "_MAX_QUERY_WORKERS", 2)
+    monkeypatch.setattr(rag, "_MAX_GITHUB_FALLBACK_WORKERS", 2)
     barrier = threading.Barrier(2, timeout=2.0)
     state_lock = threading.Lock()
     active = 0
@@ -129,4 +132,4 @@ def test_github_fallback_uses_bounded_parallel_slots(monkeypatch):
     bundle = rag._forced_rag_bundle(object(), brief)
 
     assert max_active == 2
-    assert bundle["github_fallback_workers"] == rag._MAX_GITHUB_FALLBACK_WORKERS
+    assert bundle["github_fallback_workers"] == 2
