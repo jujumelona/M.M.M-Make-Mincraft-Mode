@@ -16,6 +16,7 @@ from .external_mcp import ExternalMCPRegistry
 from .mcp_tools import MMMToolService
 from .model_registry import ModelRegistry
 from .production_tools import ProductionToolService
+from .root_cause_trace import traced_callable
 from .skill_catalog import validate_skill_catalog
 from .work_graph import DurableWorkLedger, WorkState
 
@@ -51,7 +52,8 @@ def _stage_tool() -> Callable[[F], F]:
         if stages is None:
             raise RuntimeError(f'MCP tool lacks a reviewed stage assignment: {function.__name__}')
         if MCP_STAGE == 'all' or MCP_STAGE in stages:
-            return mcp.tool()(function)
+            traced = traced_callable(function, stage=MCP_STAGE, operation=function.__name__)
+            return mcp.tool()(traced)
         return function
     return register
 
