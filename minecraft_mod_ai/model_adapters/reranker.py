@@ -46,6 +46,32 @@ def _request_digest(query: str, instruction: str) -> str:
     return _length_prefixed_digest((query, instruction))
 
 
+def _render_rerank_input(
+    tokenizer: Any,
+    *,
+    query: str,
+    instruction: str,
+    document: str,
+) -> str:
+    """Render one document without retaining prompt/message staging lists."""
+
+    prompt = (
+        f"<Instruct>: {instruction}\n"
+        f"<Query>: {query}\n"
+        f"<Document>: {document}"
+    )
+    return str(
+        tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    )
+
+
 class RerankerAdapter:
     """Instruction-aware Qwen reranker with shared residency and per-document reuse.
 
@@ -218,28 +244,14 @@ class RerankerAdapter:
                     missing = still_missing
                 if not missing:
                     return [scores_by_document[document] for document in docs]
-                prompts = [
-                    (
-                        f"<Instruct>: {instruction}\n"
-                        f"<Query>: {query}\n"
-                        f"<Document>: {document}"
+                rendered = [
+                    _render_rerank_input(
+                        backend.tokenizer,
+                        query=query,
+                        instruction=instruction,
+                        document=document,
                     )
                     for document in missing
-                ]
-                messages = [
-                    [
-                        {"role": "system", "content": _SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ]
-                    for prompt in prompts
-                ]
-                rendered = [
-                    backend.tokenizer.apply_chat_template(
-                        message,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                    for message in messages
                 ]
                 yes_id = backend.tokenizer.convert_tokens_to_ids("yes")
                 no_id = backend.tokenizer.convert_tokens_to_ids("no")
@@ -300,7 +312,8 @@ class RerankerAdapter:
                         cache_key = cache_keys[document]
                         _SCORE_CACHE[cache_key] = value
                         _SCORE_CACHE.move_to_end(cache_key)
-                    while len(_SCORE_CACHE) > _result_cache_limit():
+                    cache_limit = _result_cache_limit()
+                    while len(_SCORE_CACHE) > cache_limit:
                         _SCORE_CACHE.popitem(last=False)
             return [scores_by_document[document] for document in docs]
         except Exception as exc:
