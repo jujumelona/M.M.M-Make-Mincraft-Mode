@@ -221,7 +221,8 @@ class EmbeddingAdapter:
                         cache_key = cache_keys[text]
                         _VECTOR_CACHE[cache_key] = vector
                         _VECTOR_CACHE.move_to_end(cache_key)
-                    while len(_VECTOR_CACHE) > _result_cache_limit():
+                    cache_limit = _result_cache_limit()
+                    while len(_VECTOR_CACHE) > cache_limit:
                         _VECTOR_CACHE.popitem(last=False)
             return [list(vectors_by_text[text]) for text in cleaned]
         except Exception as exc:
