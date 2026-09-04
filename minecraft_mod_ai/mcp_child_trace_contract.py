@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
-from collections.abc import Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import Iterator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from typing import Any
 
 import anyio
@@ -13,6 +14,62 @@ from .root_cause_trace import emit_root_cause, exception_chain
 
 _INSTALL_LOCK = threading.Lock()
 _INSTALL_ATTR = "_mmm_child_trace_contract_installed"
+
+
+def _probe_fileno(stream: Any) -> tuple[int | None, str | None]:
+    """Return a usable OS descriptor without assuming notebook streams expose one."""
+
+    if stream is None:
+        return None, "stream is None"
+    try:
+        descriptor = stream.fileno()
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if not isinstance(descriptor, int) or descriptor < 0:
+        return None, f"invalid fileno: {descriptor!r}"
+    return descriptor, None
+
+
+@contextmanager
+def _subprocess_stderr_target() -> Iterator[tuple[Any, str, dict[str, str]]]:
+    """Choose a parent-visible stderr object that subprocess.Popen can actually use.
+
+    IPython/Colab replace ``sys.stderr`` with an OutStream whose ``fileno()`` raises
+    ``io.UnsupportedOperation``. Passing that object to MCP's stdio client therefore
+    fails before the child process exists. Prefer the active stderr when it is a real
+    fd-backed stream, then the interpreter's original stderr, and finally a duplicate
+    of process fd 2. The fd-2 duplicate keeps child/JDT diagnostics parent-visible and
+    avoids the old TemporaryFile behavior that swallowed the first root cause.
+    """
+
+    probe_failures: dict[str, str] = {}
+    candidates = (
+        ("parent_stderr", sys.stderr),
+        ("parent_dunder_stderr", getattr(sys, "__stderr__", None)),
+    )
+    for route, stream in candidates:
+        _descriptor, failure = _probe_fileno(stream)
+        if failure is None:
+            yield stream, route, probe_failures
+            return
+        probe_failures[route] = failure
+
+    try:
+        duplicate_fd = os.dup(2)
+        fallback = os.fdopen(duplicate_fd, "wb", buffering=0, closefd=True)
+    except Exception as exc:
+        detail = "; ".join(
+            f"{route}={reason}" for route, reason in probe_failures.items()
+        )
+        raise RuntimeError(
+            "No subprocess-compatible parent stderr is available"
+            + (f" ({detail})" if detail else "")
+        ) from exc
+
+    try:
+        yield fallback, "parent_fd2_duplicate", probe_failures
+    finally:
+        fallback.close()
 
 
 @asynccontextmanager
@@ -54,6 +111,22 @@ async def traced_stdio_session(
 
     started = time.monotonic()
     stack = AsyncExitStack()
+    try:
+        stderr_context = _subprocess_stderr_target()
+        stderr_target, stderr_route, stderr_probe_failures = stderr_context.__enter__()
+    except BaseException as exc:
+        emit_root_cause(
+            "mcp_transport_stderr_route_failure",
+            stage=stage,
+            operation="mcp_stdio_session",
+            gate="stderr_route",
+            result="FAIL",
+            reason=f"{type(exc).__name__}: {exc}",
+            details={"exception_chain": exception_chain(exc)},
+            exc=exc,
+        )
+        raise
+
     emit_root_cause(
         "mcp_transport_session_start",
         stage=stage,
@@ -65,7 +138,9 @@ async def traced_stdio_session(
             "module": "minecraft_mod_ai.mcp_server",
             "timeout_seconds": float(timeout_seconds),
             "child_env_keys": sorted(str(key) for key in env),
-            "stderr_route": "parent_stderr",
+            "stderr_route": stderr_route,
+            "stderr_probe_failures": stderr_probe_failures,
+            "stderr_stream_type": type(stderr_target).__name__,
         },
     )
     close_error: BaseException | None = None
@@ -76,10 +151,10 @@ async def traced_stdio_session(
             args=["-m", "minecraft_mod_ai.mcp_server"],
             env=dict(env),
         )
-        # This must stay parent-visible. The previous TemporaryFile swallowed the
-        # detailed child/JDT root-cause trace and forced another reproduction run.
+        # Keep child/JDT root-cause events parent-visible, but only pass a stream
+        # whose fileno() is valid for subprocess.Popen (not IPython OutStream).
         read_stream, write_stream = await stack.enter_async_context(
-            stdio_client(params, errlog=sys.stderr)
+            stdio_client(params, errlog=stderr_target)
         )
         emit_root_cause(
             "mcp_transport_process_ready",
@@ -89,7 +164,7 @@ async def traced_stdio_session(
             result="PASS",
             details={
                 "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-                "stderr_route": "parent_stderr",
+                "stderr_route": stderr_route,
             },
         )
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
@@ -123,7 +198,8 @@ async def traced_stdio_session(
             details={
                 "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
                 "exception_chain": exception_chain(exc),
-                "stderr_route": "parent_stderr",
+                "stderr_route": stderr_route,
+                "stderr_probe_failures": stderr_probe_failures,
             },
             exc=exc,
         )
@@ -146,23 +222,27 @@ async def traced_stdio_session(
             if active_error is None:
                 raise
         finally:
-            emit_root_cause(
-                "mcp_transport_session_closed",
-                stage=stage,
-                operation="mcp_stdio_session",
-                gate="transport_close",
-                result="FAIL" if close_error is not None else "PASS",
-                reason=(
-                    f"{type(close_error).__name__}: {close_error}"
-                    if close_error is not None
-                    else "MCP stdio session closed"
-                ),
-                details={
-                    "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-                    "had_active_error": active_error is not None,
-                    "stderr_route": "parent_stderr",
-                },
-            )
+            try:
+                stderr_context.__exit__(None, None, None)
+            finally:
+                emit_root_cause(
+                    "mcp_transport_session_closed",
+                    stage=stage,
+                    operation="mcp_stdio_session",
+                    gate="transport_close",
+                    result="FAIL" if close_error is not None else "PASS",
+                    reason=(
+                        f"{type(close_error).__name__}: {close_error}"
+                        if close_error is not None
+                        else "MCP stdio session closed"
+                    ),
+                    details={
+                        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+                        "had_active_error": active_error is not None,
+                        "stderr_route": stderr_route,
+                        "stderr_probe_failures": stderr_probe_failures,
+                    },
+                )
 
 
 def install(mcp_transport_pool_module: Any) -> None:
