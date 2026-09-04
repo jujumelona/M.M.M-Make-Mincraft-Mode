@@ -245,9 +245,12 @@ def generate_system_plugin(project_root: str, pack_id: str, mod_id: str, package
     return _production().generate_system_plugin(project_root=project_root, pack_id=pack_id, mod_id=mod_id, package_name=package_name, config=config, proposal=proposal, approval_hash=approval_hash)
 
 @_stage_tool()
-def java_diagnostics(project_root: str, relative_files: list[str] | None=None, timeout_seconds: int=60) -> dict[str, Any]:
-    """Run real Eclipse JDT LS diagnostics for a generated Java project."""
-    return _production().java_diagnostics(project_root, relative_files, timeout_seconds)
+def java_diagnostics(project_root: str | None = None, relative_files: list[str] | None = None, timeout_seconds: int = 60, diagnostics_path: str | None = None, file_path: str | None = None, diagnostics_command: str | None = None) -> dict[str, Any]:
+    """Run JDT LS diagnostics; legacy path/command fields are host-normalized."""
+    selected_path = diagnostics_path or file_path
+    if selected_path and relative_files is None:
+        relative_files = [selected_path]
+    return _production().java_diagnostics(project_root or ".", relative_files, timeout_seconds)
 
 @_stage_tool()
 def java_workspace_symbols(project_root: str, query: str, timeout_seconds: int=60) -> dict[str, Any]:
@@ -418,3 +421,4 @@ def main() -> None:
     mcp.run(transport='stdio')
 if __name__ == '__main__':
     main()
+
