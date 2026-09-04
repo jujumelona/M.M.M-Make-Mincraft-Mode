@@ -25,193 +25,162 @@ jobs:
           path = Path("minecraft_mod_ai/progress_aware_tool_loop.py")
           text = path.read_text(encoding="utf-8")
 
-          def replace_once(source: str, old: str, new: str, label: str) -> str:
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1 match, found {count}")
-              return source.replace(old, new, 1)
+          helper_lines = [
+              "_VERIFIER_UNAVAILABLE_STATUSES = frozenset({",
+              "    \"UNAVAILABLE\", \"NOT_RUN\", \"TIMEOUT\", \"TIMED_OUT\", \"UNHEALTHY\",",
+              "})",
+              "_VERIFIER_FAIL_STATUSES = frozenset({\"FAIL\", \"FAILED\", \"ERROR\", \"INVALID\"})",
+              "_VERIFIER_PASS_STATUSES = frozenset({",
+              "    \"PASS\", \"PASSED\", \"OK\", \"SUCCESS\", \"SUCCEEDED\", \"AVAILABLE\",",
+              "})",
+              "",
+              "",
+              "def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:",
+              "    \"\"\"Classify verifier semantics independently from transport/runtime health.\"\"\"",
+              "    if not bool(payload.get(\"ok\")):",
+              "        return \"UNAVAILABLE\"",
+              "    result = payload.get(\"result\")",
+              "    if not isinstance(result, Mapping):",
+              "        return \"PASS\"",
+              "    status = str(",
+              "        result.get(\"status\") or result.get(\"state\") or result.get(\"outcome\") or \"\"",
+              "    ).strip().upper()",
+              "    if status in _VERIFIER_UNAVAILABLE_STATUSES:",
+              "        return \"UNAVAILABLE\"",
+              "    if status in _VERIFIER_FAIL_STATUSES:",
+              "        return \"FAIL\"",
+              "    if status in _VERIFIER_PASS_STATUSES and tool_name not in {",
+              "        \"java_diagnostics\", \"jdt_diagnostics\"",
+              "    }:",
+              "        return \"PASS\"",
+              "    if result.get(\"available\") is False:",
+              "        return \"UNAVAILABLE\"",
+              "    for key in (\"success\", \"ok\"):",
+              "        if key in result and isinstance(result.get(key), bool):",
+              "            return \"PASS\" if bool(result.get(key)) else \"FAIL\"",
+              "    if \"exit_code\" in result:",
+              "        try:",
+              "            return \"PASS\" if int(result.get(\"exit_code\")) == 0 else \"FAIL\"",
+              "        except (TypeError, ValueError, OverflowError):",
+              "            return \"UNAVAILABLE\"",
+              "    if tool_name in {\"java_diagnostics\", \"jdt_diagnostics\"}:",
+              "        from .validation_diagnostic_contract import diagnostic_errors",
+              "        errors = diagnostic_errors(result)",
+              "        if any(",
+              "            str(item.get(\"code\") or \"\") == \"JDT_DIAGNOSTICS_UNAVAILABLE\"",
+              "            for item in errors",
+              "        ):",
+              "            return \"UNAVAILABLE\"",
+              "        return \"FAIL\" if errors else \"PASS\"",
+              "    return \"PASS\"",
+              "",
+              "",
+              "def _fixed_point_tool_results(",
+              "    executed: Sequence[tuple[Any, Mapping[str, Any]]],",
+              ") -> list[dict[str, Any]]:",
+              "    \"\"\"Use semantic outcomes, not volatile transport text, as loop identity.\"\"\"",
+              "    stable: list[dict[str, Any]] = []",
+              "    for call, payload in executed:",
+              "        if call.name in _VERIFY_TOOLS:",
+              "            stable.append({",
+              "                \"name\": call.name,",
+              "                \"verification_outcome\": _verification_outcome(call.name, payload),",
+              "            })",
+              "        else:",
+              "            stable.append({",
+              "                \"name\": call.name,",
+              "                \"ok\": bool(payload.get(\"ok\")),",
+              "                \"failure_code\": payload.get(\"failure_code\"),",
+              "            })",
+              "    return stable",
+              "",
+              "",
+          ]
+          helper = "\n".join(helper_lines)
+          marker = "def normalize_retrieval_query(value: Any) -> str:"
+          if text.count(marker) != 1:
+              raise SystemExit("normalize marker is not unique")
+          text = text.replace(marker, helper + marker, 1)
 
-          helper = r'''
-
-          _VERIFIER_UNAVAILABLE_STATUSES = frozenset({
-              "UNAVAILABLE", "NOT_RUN", "TIMEOUT", "TIMED_OUT", "UNHEALTHY",
-          })
-          _VERIFIER_FAIL_STATUSES = frozenset({
-              "FAIL", "FAILED", "ERROR", "INVALID",
-          })
-          _VERIFIER_PASS_STATUSES = frozenset({
-              "PASS", "PASSED", "OK", "SUCCESS", "SUCCEEDED", "AVAILABLE",
-          })
-
-
-          def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
-              """Classify verifier semantics independently from transport/runtime health."""
-              if not bool(payload.get("ok")):
-                  return "UNAVAILABLE"
-
-              result = payload.get("result")
-              if not isinstance(result, Mapping):
-                  return "PASS"
-
-              status = str(
-                  result.get("status")
-                  or result.get("state")
-                  or result.get("outcome")
-                  or ""
-              ).strip().upper()
-              if status in _VERIFIER_UNAVAILABLE_STATUSES:
-                  return "UNAVAILABLE"
-              if status in _VERIFIER_FAIL_STATUSES:
-                  return "FAIL"
-              if status in _VERIFIER_PASS_STATUSES and tool_name not in {
-                  "java_diagnostics", "jdt_diagnostics"
-              }:
-                  return "PASS"
-
-              if result.get("available") is False:
-                  return "UNAVAILABLE"
-              for key in ("success", "ok"):
-                  if key in result and isinstance(result.get(key), bool):
-                      return "PASS" if bool(result.get(key)) else "FAIL"
-              if "exit_code" in result:
-                  try:
-                      return "PASS" if int(result.get("exit_code")) == 0 else "FAIL"
-                  except (TypeError, ValueError, OverflowError):
-                      return "UNAVAILABLE"
-
-              if tool_name in {"java_diagnostics", "jdt_diagnostics"}:
-                  from .validation_diagnostic_contract import diagnostic_errors
-
-                  errors = diagnostic_errors(result)
-                  if any(
-                      str(item.get("code") or "") == "JDT_DIAGNOSTICS_UNAVAILABLE"
-                      for item in errors
-                  ):
-                      return "UNAVAILABLE"
-                  return "FAIL" if errors else "PASS"
-
-              return "PASS"
-
-
-          def _fixed_point_tool_results(
-              executed: Sequence[tuple[Any, Mapping[str, Any]]],
-          ) -> list[dict[str, Any]]:
-              """Remove incidental transport text from no-progress identity."""
-              stable: list[dict[str, Any]] = []
-              for call, payload in executed:
-                  if call.name in _VERIFY_TOOLS:
-                      stable.append({
-                          "name": call.name,
-                          "verification_outcome": _verification_outcome(call.name, payload),
-                      })
-                  else:
-                      stable.append({
-                          "name": call.name,
-                          "ok": bool(payload.get("ok")),
-                          "failure_code": payload.get("failure_code"),
-                      })
-              return stable
-          '''
-
-          text = replace_once(
-              text,
-              "\n\ndef normalize_retrieval_query(value: Any) -> str:\n",
-              helper + "\n\ndef normalize_retrieval_query(value: Any) -> str:\n",
-              "insert verifier classifier",
+          phase_scope = text.index("if call.name not in allowed_phase_tools:")
+          phase_end = text.index("return call, {", phase_scope)
+          phase_chunk = text[phase_scope:phase_end]
+          phase_needle = (
+              "and implementation_requires_mutation\n"
+              "                    and state.mutation_context is not None"
           )
-
-          phase_old = '''                if (
-                      call.name in _MUTATION_ACT_TOOLS
-                      and implementation_requires_mutation
-                      and state.mutation_context is not None
-                      and state.mutation_context.is_mutation_ready
-                  ):
-          '''
-          phase_new = '''                if (
-                      call.name in _MUTATION_ACT_TOOLS
-                      and implementation_requires_mutation
-                      and state.phase == LoopPhase.OBSERVE
-                      and state.mutation_context is not None
-                      and state.mutation_context.is_mutation_ready
-                  ):
-          '''
-          text = replace_once(text, phase_old, phase_new, "VERIFY phase escape guard")
-
-          retry_old = '''                    if authority_retry:
-                          # Retrieval cannot expand write authority. Reissue the same
-                          # single mutation action against the host-pinned target.
-                          state.phase = LoopPhase.ACT
-                      elif all_exposed_names & _READ_OBSERVE_TOOLS:
-                          state.phase = LoopPhase.OBSERVE
-          '''
-          retry_new = '''                    if (
-                          failure_code == "PHASE_PROTOCOL_VIOLATION"
-                          and state.phase == LoopPhase.VERIFY
-                      ):
-                          # VERIFY owns the next transition. An out-of-phase mutation is
-                          # an invalid model action, not a request for another source edit.
-                          pass
-                      elif authority_retry:
-                          # Retrieval cannot expand write authority. Reissue the same
-                          # single mutation action against the host-pinned target.
-                          state.phase = LoopPhase.ACT
-                      elif all_exposed_names & _READ_OBSERVE_TOOLS:
-                          state.phase = LoopPhase.OBSERVE
-          '''
-          text = replace_once(text, retry_old, retry_new, "VERIFY authority retry guard")
-
-          verify_old = '''            if call.name in _VERIFY_TOOLS:
-                  status = "PASS" if bool(payload.get("ok")) else "FAIL"
-                  if status != state.validation_status:
-                      state.validation_status = status
-                      turn_made_progress = True
-                  if status == "FAIL" and implementation_requires_mutation:
-                      state.record_failure(call.name, payload.get("error", "verification FAIL"))
-                      state.phase = LoopPhase.ACT
-                  continue
-          '''
-          verify_new = '''            if call.name in _VERIFY_TOOLS:
-                  status = _verification_outcome(call.name, payload)
-                  if status == "UNAVAILABLE":
-                      # Tool/runtime failure is verifier health, not evidence that the
-                      # source is wrong. Stay in VERIFY and do not credit progress.
-                      state.validation_status = "UNAVAILABLE"
-                      state.record_failure(
-                          call.name,
-                          payload.get("error", "verification unavailable"),
-                      )
-                      continue
-                  if status != state.validation_status:
-                      state.validation_status = status
-                      turn_made_progress = True
-                  if status == "FAIL" and implementation_requires_mutation:
-                      # Only a trustworthy verifier observation may request another edit.
-                      state.record_failure(
-                          call.name,
-                          "verification reported source defects",
-                      )
-                      state.phase = LoopPhase.ACT
-                  continue
-          '''
-          text = replace_once(text, verify_old, verify_new, "verifier semantic outcome")
-
-          fingerprint_old = '''                    "mutation_context_after": ctx_after,
-                      "model_tool_calls": model_calls_info,
-                      "tool_results": results_info,
-          '''
-          fingerprint_new = '''                    "mutation_context_after": ctx_after,
-                      "validation_status": state.validation_status,
-                      "workspace_changed": state.workspace_changed,
-                      "applied_mutations": tuple(state.applied_mutations),
-                      "model_tool_calls": model_calls_info,
-                      "tool_results": _fixed_point_tool_results(executed),
-          '''
-          text = replace_once(
-              text,
-              fingerprint_old,
-              fingerprint_new,
-              "semantic fixed-point fingerprint",
+          if phase_chunk.count(phase_needle) != 1:
+              raise SystemExit("VERIFY phase escape guard target missing")
+          phase_chunk = phase_chunk.replace(
+              phase_needle,
+              "and implementation_requires_mutation\n"
+              "                    and state.phase == LoopPhase.OBSERVE\n"
+              "                    and state.mutation_context is not None",
+              1,
           )
+          text = text[:phase_scope] + phase_chunk + text[phase_end:]
+
+          mutation_scope = text.index("failure_code = str(payload.get(\"failure_code\") or \"\")")
+          mutation_end = text.index("state.record_failure(call.name, payload.get(\"error\", \"mutation failed\"))", mutation_scope)
+          mutation_chunk = text[mutation_scope:mutation_end]
+          if mutation_chunk.count("if authority_retry:") != 1:
+              raise SystemExit("authority retry target missing")
+          mutation_chunk = mutation_chunk.replace(
+              "if authority_retry:",
+              "if authority_retry and state.phase != LoopPhase.VERIFY:",
+              1,
+          )
+          if mutation_chunk.count("elif all_exposed_names & _READ_OBSERVE_TOOLS:") != 1:
+              raise SystemExit("observe fallback target missing")
+          mutation_chunk = mutation_chunk.replace(
+              "elif all_exposed_names & _READ_OBSERVE_TOOLS:",
+              "elif state.phase != LoopPhase.VERIFY and all_exposed_names & _READ_OBSERVE_TOOLS:",
+              1,
+          )
+          text = text[:mutation_scope] + mutation_chunk + text[mutation_end:]
+
+          verify_scope = text.index("if call.name in _VERIFY_TOOLS:", text.index("executed = _execute_tool_waves"))
+          verify_end_marker = "                continue\n"
+          verify_end = text.index(verify_end_marker, verify_scope) + len(verify_end_marker)
+          verify_block = "\n".join([
+              "            if call.name in _VERIFY_TOOLS:",
+              "                status = _verification_outcome(call.name, payload)",
+              "                if status == \"UNAVAILABLE\":",
+              "                    # Runtime/tool failure is verifier health, not a source defect.",
+              "                    state.validation_status = \"UNAVAILABLE\"",
+              "                    state.record_failure(",
+              "                        call.name, payload.get(\"error\", \"verification unavailable\")",
+              "                    )",
+              "                    continue",
+              "                if status != state.validation_status:",
+              "                    state.validation_status = status",
+              "                    turn_made_progress = True",
+              "                if status == \"FAIL\" and implementation_requires_mutation:",
+              "                    # Only trustworthy verifier evidence may request another edit.",
+              "                    state.record_failure(",
+              "                        call.name, \"verification reported source defects\"",
+              "                    )",
+              "                    state.phase = LoopPhase.ACT",
+              "                continue",
+              "",
+          ])
+          text = text[:verify_scope] + verify_block + text[verify_end:]
+
+          no_progress_scope = text.index("state.record_no_progress_result(")
+          no_progress_end = text.index("            )\n", no_progress_scope)
+          fingerprint_chunk = text[no_progress_scope:no_progress_end]
+          target = '                    "tool_results": results_info,'
+          if fingerprint_chunk.count(target) != 1:
+              raise SystemExit("fixed-point tool result target missing")
+          fingerprint_chunk = fingerprint_chunk.replace(
+              target,
+              '                    "validation_status": state.validation_status,\n'
+              '                    "workspace_changed": state.workspace_changed,\n'
+              '                    "applied_mutations": tuple(state.applied_mutations),\n'
+              '                    "tool_results": _fixed_point_tool_results(executed),',
+              1,
+          )
+          text = text[:no_progress_scope] + fingerprint_chunk + text[no_progress_end:]
 
           path.write_text(text, encoding="utf-8")
 
