@@ -76,6 +76,11 @@ if none_anchor not in text:
     raise SystemExit("requirement helper anchor missing")
 text = text.replace(none_anchor, helper, 1)
 
+# Patch only the acceptance validator, never the Markdown parser that has a similar
+# assert_design_field_clean sequence.
+validate_start = text.index("def _validate_section_types(")
+validate_end = text.index("\ndef _validate_requirement_coverage(", validate_start)
+validate_block = text[validate_start:validate_end]
 validation_anchor = '''        try:
             assert_design_field_clean(field, value)
 '''
@@ -83,9 +88,12 @@ validation_replacement = '''        _assert_known_requirement_ids(field, value, 
         try:
             assert_design_field_clean(field, value)
 '''
-if validation_anchor not in text:
-    raise SystemExit("section validation anchor missing")
-text = text.replace(validation_anchor, validation_replacement, 1)
+if validate_block.count(validation_anchor) != 1:
+    raise SystemExit(
+        f"validate-section clean-boundary count={validate_block.count(validation_anchor)}"
+    )
+validate_block = validate_block.replace(validation_anchor, validation_replacement, 1)
+text = text[:validate_start] + validate_block + text[validate_end:]
 
 old_section_rule = '            "Preserve exact approved requirement IDs in modules. "\n'
 new_section_rule = '            "Never invent requirement IDs; when citing one, use only an exact host-approved ID. "\n'
