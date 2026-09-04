@@ -254,25 +254,23 @@ def test_two_full_attachment_pages_complete_one_tool_before_parse(monkeypatch) -
     }
 
 
-def test_live_zero_token_calibration_returns_only_template_owned_bytes(monkeypatch) -> None:
+def test_live_apply_template_calibration_returns_only_template_owned_bytes(monkeypatch) -> None:
     sent = []
     generation_prompt = "<think>\n\n</think>\n\n"
+    sentinel = adapter_module._PREFILL_CALIBRATION_SENTINEL
 
-    def post(_url, payload):
-        sent.append(payload)
-        return _Response(
-            {
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": generation_prompt},
-                    }
-                ],
-                "usage": {"prompt_tokens": 25, "completion_tokens": 0},
-            }
-        )
+    def post(url, *, json, timeout):
+        sent.append((url, json, timeout))
+        return _Response({"prompt": "template-prefix" + sentinel + generation_prompt})
 
-    monkeypatch.setattr(adapter_module, "_post_completion", post)
+    monkeypatch.setattr(adapter_module.httpx, "post", post)
+    monkeypatch.setattr(
+        adapter_module,
+        "_post_completion",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("prefill calibration must not invoke inference")
+        ),
+    )
     original = {
         "model": "local",
         "messages": [{"role": "user", "content": "SECRET USER SOURCE"}],
@@ -293,47 +291,50 @@ def test_live_zero_token_calibration_returns_only_template_owned_bytes(monkeypat
         == generation_prompt
     )
     assert len(sent) == 1
-    assert sent[0]["max_tokens"] == 0
-    assert sent[0]["chat_template_kwargs"] == original["chat_template_kwargs"]
-    assert sent[0]["tools"] == original["tools"]
-    assert sent[0]["tool_choice"] == "required"
-    assert sent[0]["messages"][-1] == {
+    url, payload, _timeout = sent[0]
+    assert url == "http://local/apply-template"
+    assert "max_tokens" not in payload
+    assert "temperature" not in payload
+    assert payload["chat_template_kwargs"] == original["chat_template_kwargs"]
+    assert payload["tools"] == original["tools"]
+    assert payload["tool_choice"] == "required"
+    assert payload["messages"][-1] == {
         "role": "assistant",
-        "content": adapter_module._PREFILL_CALIBRATION_SENTINEL,
+        "content": sentinel,
     }
-    assert "SECRET USER SOURCE" not in str(sent[0])
+    assert "SECRET USER SOURCE" not in str(payload)
 
 
 @pytest.mark.parametrize(
-    "message,completion_tokens",
+    "rendered_prompt",
     [
-        ({"role": "assistant", "content": ""}, 0),
+        "no sentinel here",
+        adapter_module._PREFILL_CALIBRATION_SENTINEL,
         (
-            {
-                "role": "assistant",
-                "content": adapter_module._PREFILL_CALIBRATION_SENTINEL,
-            },
-            0,
+            adapter_module._PREFILL_CALIBRATION_SENTINEL
+            + "suffix"
+            + adapter_module._PREFILL_CALIBRATION_SENTINEL
         ),
-        ({"role": "assistant", "content": "prefix", "reasoning": "private"}, 0),
-        ({"role": "assistant", "content": "prefix"}, 1),
+        None,
     ],
 )
 def test_ambiguous_prefill_calibration_fails_closed(
-    monkeypatch, message, completion_tokens
+    monkeypatch, rendered_prompt
 ) -> None:
+    monkeypatch.setattr(
+        adapter_module.httpx,
+        "post",
+        lambda _url, *, json, timeout: _Response({"prompt": rendered_prompt}),
+    )
     monkeypatch.setattr(
         adapter_module,
         "_post_completion",
-        lambda _url, _payload: _Response(
-            {
-                "choices": [{"message": message}],
-                "usage": {"completion_tokens": completion_tokens},
-            }
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("prefill calibration must not invoke inference")
         ),
     )
 
-    with pytest.raises(RuntimeError, match="assistant-prefill calibration"):
+    with pytest.raises((RuntimeError, TypeError), match="assistant-prefill"):
         adapter_module._calibrate_assistant_prefill_generation_prompt(
             "http://local",
             {
