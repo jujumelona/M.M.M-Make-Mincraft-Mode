@@ -29,6 +29,13 @@ _MAX_QUERY_WORKERS = max(1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKE
 _MAX_SOURCE_WORKERS = max(
     1, min(16, int(os.environ.get("MMM_PREDESIGN_SOURCE_WORKERS", "8") or 8))
 )
+_MAX_GITHUB_FALLBACK_WORKERS = max(
+    1,
+    min(
+        4,
+        int(os.environ.get("MMM_PREDESIGN_GITHUB_FALLBACK_WORKERS", "2") or 2),
+    ),
+)
 # Provider search endpoints are relevance-ranked. Exhaustively paging their catalogs
 # multiplies detail fetches and the later small-model read without improving scope
 # coverage. Keep authored query breadth, but bound expensive fan-out per query.
@@ -582,8 +589,11 @@ def _search_code_index(index: Path | None, query: str) -> dict[str, Any]:
             "hits": [],
         }
     try:
+        # Pre-design requirements issue many code queries. Keep this hot path lexical:
+        # it avoids loading local dense/reranker models and, unlike the old call, does
+        # not request model-backed modes without providing a router.
         result = ProjectRAGIndex(index).search_with_receipt(
-            query, limit=8, semantic=True, rerank=True
+            query, limit=8, semantic=False, rerank=False
         )
         return {
             "schema_version": "mmm/code-rag-query-v3",
@@ -716,7 +726,7 @@ def _forced_rag_bundle(
     code_index = _existing_code_index()
     github_blocked = False
     github_state_lock = threading.Lock()
-    github_fallback_lock = threading.Lock()
+    github_fallback_slots = threading.BoundedSemaphore(_MAX_GITHUB_FALLBACK_WORKERS)
 
     def disabled() -> bool:
         with github_state_lock:
@@ -768,7 +778,7 @@ def _forced_rag_bundle(
         # CurseForge returned metadata without a linked repository; otherwise the
         # downstream immutable donor pipeline is guaranteed to receive zero candidates.
         if not linked:
-            with github_fallback_lock:
+            with github_fallback_slots:
                 try:
                     found, receipt = _search_github(
                         query, disabled=disabled, disable=disable
@@ -876,6 +886,7 @@ def _forced_rag_bundle(
         "query_count": query_count,
         "unique_query_count": len(unique_queries),
         "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
+        "github_fallback_workers": _MAX_GITHUB_FALLBACK_WORKERS,
         "provider_result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,
         "provider_search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,
         "external_source_count": external_count,
