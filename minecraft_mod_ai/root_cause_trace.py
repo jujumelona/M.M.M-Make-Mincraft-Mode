@@ -2,14 +2,16 @@ from __future__ import annotations
 
 """Bounded, secret-safe structured tracing for host-owned execution boundaries.
 
-The trace is deliberately independent of model output.  It records what the host
+The trace is deliberately independent of model output. It records what the host
 actually attempted, what gate/result was observed, and the original exception chain
-before callers wrap or aggregate the failure.
+before callers wrap or aggregate the failure. Traces always go to stderr so an MCP
+stdio transport can reserve stdout exclusively for JSON-RPC protocol frames.
 """
 
 import inspect
 import itertools
 import json
+import sys
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -64,7 +66,13 @@ def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
             child_key = str(raw_key)
             result[child_key] = bounded_safe(child, depth=depth + 1, key=child_key)
         return result
-    if isinstance(value, (list, tuple, set, frozenset)):
+    if isinstance(value, (set, frozenset)):
+        items = sorted(value, key=lambda item: repr(item))
+        result = [bounded_safe(item, depth=depth + 1) for item in items[:_COLLECTION_LIMIT]]
+        if len(items) > _COLLECTION_LIMIT:
+            result.append(f"<truncated:{len(items) - _COLLECTION_LIMIT}>")
+        return result
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         items = list(value)
         result = [bounded_safe(item, depth=depth + 1) for item in items[:_COLLECTION_LIMIT]]
         if len(items) > _COLLECTION_LIMIT:
@@ -74,7 +82,7 @@ def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
 
 
 def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
-    """Preserve the first causal exception instead of only the final wrapper message."""
+    """Preserve the causal exception chain instead of only the final wrapper message."""
     chain: list[dict[str, Any]] = []
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -86,11 +94,7 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
                 "type": type(current).__name__,
                 "message": bounded_safe(str(current)),
                 "frames": [
-                    {
-                        "file": frame.filename,
-                        "line": frame.lineno,
-                        "function": frame.name,
-                    }
+                    {"file": frame.filename, "line": frame.lineno, "function": frame.name}
                     for frame in frames
                 ],
             }
@@ -144,6 +148,7 @@ def emit_root_cause(
         payload["exception_chain"] = exception_chain(exc)
     print(
         _TRACE_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str),
+        file=sys.stderr,
         flush=True,
     )
 
