@@ -31,6 +31,28 @@ def test_bounded_safe_redacts_secret_fields_recursively() -> None:
     assert value["nested"]["safe"] == "visible"
 
 
+class _NoFullIterationList(list[int]):
+    def __iter__(self):
+        raise AssertionError("bounded tracing must not iterate an entire list")
+
+
+def test_bounded_safe_does_not_copy_unreported_sequence_tail() -> None:
+    value = _NoFullIterationList(range(1_000))
+    bounded = bounded_safe(value)
+
+    assert bounded[:3] == [0, 1, 2]
+    assert len(bounded) == 65
+    assert bounded[-1] == "<truncated:936>"
+
+
+def test_bounded_safe_keeps_large_set_output_bounded_and_ordered() -> None:
+    bounded = bounded_safe({f"item-{index:04d}" for index in range(1_000)})
+
+    assert len(bounded) == 65
+    assert bounded[:3] == ["item-0000", "item-0001", "item-0002"]
+    assert bounded[-1] == "<truncated:936>"
+
+
 def test_traced_callable_preserves_original_exception_chain(capsys: pytest.CaptureFixture[str]) -> None:
     def failing(api_key: str) -> None:
         try:
