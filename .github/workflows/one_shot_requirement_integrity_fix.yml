@@ -35,3 +35,5 @@ jobs:
           git add minecraft_mod_ai/agentic_research_game_design.py tests/test_agentic_design_requirement_integrity.py
           git commit -m "fix: enforce planner requirement authority across fields"
           git push origin HEAD:main
+
+# trigger-v2
