@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
 from threading import RLock
@@ -104,15 +104,28 @@ def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
     )
 
 
-def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
-    texts = extract_hit_texts(result)
-    vector = adapt_query_vector(router, query, texts)
-    if not vector or not texts:
+def _centroid_terms(
+    router: Any,
+    query: str,
+    result: Mapping[str, Any],
+    *,
+    texts: Sequence[str] | None = None,
+    vector: Sequence[float] | None = None,
+) -> str:
+    """Choose centroid-nearest terms, reusing an already-computed q1 when available."""
+
+    resolved_texts = texts if texts is not None else extract_hit_texts(result)
+    resolved_vector = (
+        vector
+        if vector is not None
+        else adapt_query_vector(router, query, resolved_texts)
+    )
+    if not resolved_vector or not resolved_texts:
         return ""
 
     tokens: list[str] = []
     seen: set[str] = set()
-    for text in texts:
+    for text in resolved_texts:
         for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.$:/-]{2,96}", text):
             lowered = token.casefold()
             if lowered in seen:
@@ -127,10 +140,10 @@ def _centroid_terms(router: Any, query: str, result: Mapping[str, Any]) -> str:
     rows = _embedding_rows(router, tokens)
     candidates: list[tuple[float, str]] = []
     for token, values in zip(tokens, rows, strict=False):
-        width = min(len(vector), len(values))
+        width = min(len(resolved_vector), len(values))
         if not width:
             continue
-        dot = sum(vector[index] * values[index] for index in range(width))
+        dot = sum(resolved_vector[index] * values[index] for index in range(width))
         candidates.append((dot, token))
     candidates.sort(key=lambda item: (-item[0], item[1].casefold()))
     return " ".join(token for _score, token in candidates[:8])
@@ -297,9 +310,11 @@ def install(production_tools_module: Any) -> None:
                 except Exception as exc:
                     errors.append(f"centroid-router:{type(exc).__name__}:{str(exc)[:240]}")
             if router is not None:
+                centroid_texts: Sequence[str] | None = None
+                q1_vector: Sequence[float] | None = None
                 try:
-                    texts = extract_hit_texts(best)
-                    q1_vector = adapt_query_vector(router, query, texts)
+                    centroid_texts = extract_hit_texts(best)
+                    q1_vector = adapt_query_vector(router, query, centroid_texts)
                     if q1_vector:
                         direct = direct_centroid_vector_search(
                             _resolve_index_target(self, index_path),
@@ -326,10 +341,16 @@ def install(production_tools_module: Any) -> None:
                     errors.append(f"centroid-vector:{type(exc).__name__}:{str(exc)[:240]}")
 
                 # Compatibility fallback for semantic indexes that cannot expose
-                # stored vectors directly. q1 still chooses centroid-nearest terms
-                # and performs one final semantic+rereanker text search.
+                # stored vectors directly. Reuse q1 from the direct attempt instead
+                # of re-embedding the same query and same first-pass hits.
                 try:
-                    terms = _centroid_terms(router, query, best)
+                    terms = _centroid_terms(
+                        router,
+                        query,
+                        best,
+                        texts=centroid_texts,
+                        vector=q1_vector,
+                    )
                     if terms:
                         adapted_query = query + "\nlocal-adaptation: " + terms
                         adapted = dict(
