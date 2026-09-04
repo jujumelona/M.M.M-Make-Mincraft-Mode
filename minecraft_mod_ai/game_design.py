@@ -563,6 +563,7 @@ def _validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, 
     if not isinstance(design, Mapping):
         raise SpecValidationError("game design generation returned a non-object result")
     result = dict(design)
+    _validate_design(result)
     _assert_minimum_design_depth(result)
     authority = _active_authority()
     if authority is None or authority[0] != prompt:
@@ -921,9 +922,11 @@ def _validate_design(design: dict[str, Any]) -> None:
     for field in ("combat", "mod_context"):
         if not isinstance(design.get(field), dict):
             raise SpecValidationError(f"game_design.{field} must be an object")
-    for field in ("title", "pitch", "core_loop"):
+    for field in (*_GAME_DESIGN_FIELDS, *_OPTIONAL_GAME_DESIGN_FIELDS):
+        if field not in design:
+            continue
         try:
-            assert_design_field_clean(field, design.get(field))
+            assert_design_field_clean(field, design[field])
         except ValueError as exc:
             raise SpecValidationError(str(exc)) from exc
 
