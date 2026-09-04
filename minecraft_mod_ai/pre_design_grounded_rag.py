@@ -29,6 +29,23 @@ _MAX_QUERY_WORKERS = max(1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKE
 _MAX_SOURCE_WORKERS = max(
     1, min(16, int(os.environ.get("MMM_PREDESIGN_SOURCE_WORKERS", "8") or 8))
 )
+# Provider search endpoints are relevance-ranked. Exhaustively paging their catalogs
+# multiplies detail fetches and the later small-model read without improving scope
+# coverage. Keep authored query breadth, but bound expensive fan-out per query.
+_MAX_PROVIDER_RESULTS_PER_QUERY = max(
+    1,
+    min(
+        24,
+        int(os.environ.get("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", "6") or 6),
+    ),
+)
+_MAX_PROVIDER_SEARCH_PAGES = max(
+    1,
+    min(
+        4,
+        int(os.environ.get("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", "2") or 2),
+    ),
+)
 _UA = "MMM-PreDesignResearch/2.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 
 
@@ -113,11 +130,15 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     search_requests = 0
     source_requests = 0
     provider_total = 0
-    while True:
+    while (
+        search_requests < _MAX_PROVIDER_SEARCH_PAGES
+        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    ):
+        page_size = min(100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
         params = urllib.parse.urlencode(
             {
                 "query": _query_terms(query),
-                "limit": 100,
+                "limit": page_size,
                 "offset": offset,
                 "index": "relevance",
                 "facets": json.dumps([["project_type:mod"]]),
@@ -203,7 +224,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             break
         if provider_total and next_offset >= provider_total:
             break
-        if len(hits) < 100 and not provider_total:
+        if len(hits) < page_size and not provider_total:
             break
         offset = next_offset
 
@@ -216,6 +237,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "source_requests": source_requests,
         "detail_errors": errors,
     }
+
 
 def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     key = os.environ.get("CURSEFORGE_API_KEY", "").strip()
@@ -249,13 +271,17 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             return mod_id, "", f"{mod_id}:{type(exc).__name__}:{exc}"
         return mod_id, "", ""
 
-    while True:
+    while (
+        search_requests < _MAX_PROVIDER_SEARCH_PAGES
+        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    ):
+        page_size = min(50, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
         params = urllib.parse.urlencode(
             {
                 "gameId": 432,
                 "searchFilter": _query_terms(query),
                 "index": index,
-                "pageSize": 50,
+                "pageSize": page_size,
                 "sortField": 2,
                 "sortOrder": "desc",
             }
@@ -319,7 +345,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
 
         pagination = payload.get("pagination") if isinstance(payload, Mapping) else None
         if not isinstance(pagination, Mapping):
-            if len(rows) < 50:
+            if len(rows) < page_size:
                 break
             next_index = index + len(rows)
         else:
@@ -350,6 +376,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "source_requests": source_requests,
         "detail_errors": errors,
     }
+
 
 def _search_github(
     query: str,
@@ -393,13 +420,17 @@ def _search_github(
             return full_name, body, f"{full_name}:{type(exc).__name__}:{exc}"
         return full_name, body, ""
 
-    while True:
+    while (
+        search_requests < _MAX_PROVIDER_SEARCH_PAGES
+        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    ):
         if disabled is not None and disabled():
             break
+        page_size = min(100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
         params = urllib.parse.urlencode(
             {
                 "q": _query_terms(query) + " minecraft fabric mod",
-                "per_page": 100,
+                "per_page": page_size,
                 "page": page,
             }
         )
@@ -490,6 +521,7 @@ def _search_github(
         "search_requests": search_requests,
         "source_requests": source_requests,
     }
+
 
 def _versions(router: Any) -> tuple[str, ...]:
     requested = str(
@@ -599,6 +631,8 @@ def _linked_github_sources(
         )
         repo = _github_repo_from_url(source_url)
         if repo and repo not in repositories:
+            if len(repositories) >= _MAX_PROVIDER_RESULTS_PER_QUERY:
+                continue
             repositories.append(repo)
     if not repositories:
         return [], {
@@ -719,7 +753,7 @@ def _forced_rag_bundle(
         receipts["github"] = linked_receipt
 
         # Ecosystem descriptions are useful design evidence, but they are not source
-        # repositories.  Source-reuse mode must still search GitHub when Modrinth or
+        # repositories. Source-reuse mode must still search GitHub when Modrinth or
         # CurseForge returned metadata without a linked repository; otherwise the
         # downstream immutable donor pipeline is guaranteed to receive zero candidates.
         if not linked:
@@ -831,11 +865,14 @@ def _forced_rag_bundle(
         "query_count": query_count,
         "unique_query_count": len(unique_queries),
         "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
+        "provider_result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,
+        "provider_search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,
         "external_source_count": external_count,
         "domains": out_domains,
     }
     payload["research_sha256"] = _sha256(payload)
     return payload
+
 
 def _body(record: Mapping[str, Any]) -> str:
     return str(
@@ -850,6 +887,7 @@ def _units(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         else {}
     )
     result: list[dict[str, Any]] = []
+    seen_bodies: set[str] = set()
     for row in (
         grounded.get("queries", []) if isinstance(grounded.get("queries"), list) else []
     ):
@@ -865,6 +903,10 @@ def _units(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
             body = _body(record)
             if not body:
                 continue
+            body_key = str(record.get("content_sha256") or "").strip() or _sha256_text(body)
+            if body_key in seen_bodies:
+                continue
+            seen_bodies.add(body_key)
             result.append(
                 {
                     "query": str(row.get("query") or ""),
@@ -971,6 +1013,7 @@ def _materialize_domain_evidence_document(
         "model_unit_count": len(units),
         "model_projection": "claim_bearing_source_bodies_only",
     }
+
 
 def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     expected = int(document.get("page_count") or 0)
