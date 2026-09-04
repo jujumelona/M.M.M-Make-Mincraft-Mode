@@ -1293,11 +1293,10 @@ def _filter_tools_for_phase(
             selected_names = ["apply_source_edit"]
         else:
             selected_names = [name for name in by_name if name in _MUTATION_ACT_TOOLS]
-    elif phase in (LoopPhase.VERIFY, LoopPhase.RECOVER):
-        selected_names = [
-            name for name in by_name
-            if name in _VERIFY_TOOLS or name in _READ_OBSERVE_TOOLS
-        ]
+    elif phase == LoopPhase.VERIFY:
+        selected_names = [name for name in by_name if name in _VERIFY_TOOLS]
+    elif phase == LoopPhase.RECOVER:
+        selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
     else:
         selected_names = []
 
@@ -1562,6 +1561,7 @@ def generate_with_tools(
     forced_rag_tool: str | None = None
     forced_rag_attempts = 0
     required_rag_choice = False
+    unavailable_verifiers: set[str] = set()
     round_limit = _agent_tool_round_limit()
     host_grounded = host_baseline_evidence_ready(request.messages)
     require_rag = bool(
@@ -1690,6 +1690,38 @@ def generate_with_tools(
                     "Required production evidence is unavailable: no reviewed RAG tool remains "
                     "eligible for semantic selection."
                 )
+
+        forced_verify_tool: str | None = None
+        if state.phase == LoopPhase.VERIFY:
+            phase_tools = tuple(
+                schema for schema in phase_tools
+                if _tool_name(schema) not in unavailable_verifiers
+            )
+            verifier_preference = (
+                "java_diagnostics",
+                "jdt_diagnostics",
+                "run_gradle_build",
+                "gradle_build",
+                "run_gametest",
+            )
+            available_verifier_names = {
+                _tool_name(schema) for schema in phase_tools if _tool_name(schema)
+            }
+            forced_verify_tool = next(
+                (name for name in verifier_preference if name in available_verifier_names),
+                None,
+            )
+            if forced_verify_tool is None:
+                state.termination_reason = "VERIFIER_UNAVAILABLE"
+                raise ModelConfigurationError(
+                    "VERIFIER_UNAVAILABLE: no healthy host verifier remains; refusing to send "
+                    "the coder back into retrieval or mutation without trustworthy diagnostics."
+                )
+            phase_tools = tuple(
+                schema for schema in phase_tools
+                if _tool_name(schema) == forced_verify_tool
+            )
+
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
         if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:
             state.termination_reason = "MUTATION_LOCALIZATION_STALLED"
@@ -1712,6 +1744,9 @@ def generate_with_tools(
             if len(mutation_names) == 1:
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
                 parallel_tool_calls = False
+        elif forced_verify_tool is not None:
+            tool_choice = {"type": "function", "function": {"name": forced_verify_tool}}
+            parallel_tool_calls = False
 
         target_desc = (
             f"path={state.mutation_context.target_path} symbol={state.mutation_context.target_symbol} has_body={bool(state.mutation_context.source_body)}"
@@ -1969,6 +2004,13 @@ def generate_with_tools(
             forced_rag_tool = None
             forced_rag_attempts = 0
 
+        if forced_verify_tool is not None:
+            if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool:
+                called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
+                raise ModelConfigurationError(
+                    f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."
+                )
+
         messages.append({
             "role": "assistant",
             "content": turn.content or None,
@@ -2177,6 +2219,9 @@ def generate_with_tools(
                 status = _verification_outcome(call.name, payload)
                 if status == "UNAVAILABLE":
                     # Runtime/tool failure is verifier health, not a source defect.
+                    # Retire this verifier for the current HostRunState instead of
+                    # spending another model turn selecting it or unrelated research.
+                    unavailable_verifiers.add(call.name)
                     state.validation_status = "UNAVAILABLE"
                     state.record_failure(
                         call.name, payload.get("error", "verification unavailable")

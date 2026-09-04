@@ -48,7 +48,10 @@ def _post_apply_template(
     server_url: str,
     payload: Mapping[str, Any],
 ) -> Any:
-    endpoint = f"{server_url.rstrip('/')}/apply-template"
+    base_url = server_url.rstrip('/')
+    if base_url.endswith('/v1'):
+        base_url = base_url[:-3].rstrip('/')
+    endpoint = f"{base_url}/apply-template"
     positive_timeout = getattr(llama_cpp_module, "_positive_env_float", None)
     default_timeout = float(
         getattr(llama_cpp_module, "_DEFAULT_COMPLETION_TIMEOUT_SECONDS", 120.0)

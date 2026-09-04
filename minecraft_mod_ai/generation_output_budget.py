@@ -29,10 +29,11 @@ _CONTEXT_GUARD_TOKENS = 2048
 _BYTES_PER_TOKEN_ESTIMATE = 3
 _DEFAULT_DYNAMIC_OUTPUT_TOKENS = 16384
 _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS = 4096
+_MIN_GENERAL_TOOL_OUTPUT_TOKENS = 512
 # This is a liveness/safety floor, not a quality target. Deliberate static profiles may
 # choose 512/1024-token scalar edit pages; accidental context collapse to 0/1 (or another
-# tiny fragment) must fail before inference. Dynamic profiles still receive the larger
-# 4096-token structural floor above.
+# tiny fragment) must fail before inference. The rule applies to every model-facing tool
+# action because a one-token verifier/retrieval call cannot encode valid function args.
 _MIN_VIABLE_STRUCTURAL_TOOL_OUTPUT_TOKENS = 128
 _STRUCTURAL_COMPACT_TOOLS = frozenset({"apply_source_edit"})
 # These are not executable agent actions. They are host-selected, schema-constrained
@@ -126,15 +127,14 @@ def _structural_tool_call_is_compact(tools: Sequence[Any]) -> bool:
 
 
 def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
-    if _structural_tool_call_is_compact(tools):
-        return max(
-            1,
-            min(
-                _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS,
-                tool_action_token_budget(config),
-            ),
-        )
-    return 1
+    if not tools:
+        return 1
+    target = (
+        _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS
+        if _structural_tool_call_is_compact(tools)
+        else _MIN_GENERAL_TOOL_OUTPUT_TOKENS
+    )
+    return max(1, min(target, tool_action_token_budget(config)))
 
 
 def _assert_structural_budget_viable(
@@ -152,7 +152,7 @@ def _assert_structural_budget_viable(
     reasonably encode one scalar tool action.
     """
 
-    if not _structural_tool_call_is_compact(tools):
+    if not tools:
         return
     viable = min(
         _MIN_VIABLE_STRUCTURAL_TOOL_OUTPUT_TOKENS,

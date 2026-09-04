@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from minecraft_mod_ai import generation_output_budget as budget
+from minecraft_mod_ai import prefill_calibration_strictness_contract as prefill
+from minecraft_mod_ai.progress_aware_tool_loop import LoopPhase, _filter_tools_for_phase
+
+
+def _tool(name: str):
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+
+
+def test_verify_exposes_only_verifiers():
+    tools = (
+        _tool("java_diagnostics"),
+        _tool("search_project_rag"),
+        _tool("discover_ecosystem_resources"),
+        _tool("inspect_github_repository"),
+        _tool("apply_source_edit"),
+    )
+    selected = _filter_tools_for_phase(tools, LoopPhase.VERIFY, "coder")
+    assert [item["function"]["name"] for item in selected] == ["java_diagnostics"]
+
+
+def test_non_structural_tool_never_gets_one_token_static_budget(monkeypatch):
+    monkeypatch.delenv("MMM_GENERATION_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TEXT_MAX_TOKENS", raising=False)
+    config = SimpleNamespace(adapter="llama_cpp", max_new_tokens=1, extra={})
+    with pytest.raises(budget.GenerationOutputBudgetError, match="OUTPUT_BUDGET_UNVIABLE"):
+        budget.generation_output_token_budget(config, tools=(_tool("java_diagnostics"),))
+
+
+def test_apply_template_strips_openai_v1_prefix(monkeypatch):
+    seen = {}
+
+    class _Response:
+        status_code = 200
+
+    class _Timeout:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _TimeoutException(Exception):
+        pass
+
+    def _post(url, *, json, timeout):
+        seen["url"] = url
+        seen["json"] = json
+        seen["timeout"] = timeout
+        return _Response()
+
+    fake_httpx = SimpleNamespace(
+        post=_post,
+        Timeout=_Timeout,
+        TimeoutException=_TimeoutException,
+    )
+    fake_module = SimpleNamespace(
+        _positive_env_float=lambda _name, default: default,
+        _DEFAULT_COMPLETION_TIMEOUT_SECONDS=120.0,
+        _DEFAULT_HTTPX_POST=object(),
+        httpx=fake_httpx,
+    )
+
+    response = prefill._post_apply_template(
+        fake_module,
+        "http://127.0.0.1:8910/v1",
+        {"messages": []},
+    )
+    assert response.status_code == 200
+    assert seen["url"] == "http://127.0.0.1:8910/apply-template"
+
+
+def test_recover_does_not_expose_verifiers():
+    tools = (_tool("java_diagnostics"), _tool("search_project_rag"))
+    selected = _filter_tools_for_phase(tools, LoopPhase.RECOVER, "coder")
+    assert [item["function"]["name"] for item in selected] == ["search_project_rag"]

@@ -748,87 +748,54 @@ class CustomModuleGenerator:
 
         summary = ""
         continuation_count = 0
-        seen_output_states: set[str] = set()
-        active_messages = initial_messages
-        while True:
+        try:
+            with _active_checkpoint_persistence(
+                checkpoint_root,
+                staged_root,
+                checkpoint_identity,
+            ):
+                summary = self.router.generate_text(
+                    "coder",
+                    initial_messages,
+                    response_format="text",
+                    tool_stage="generation",
+                    enable_tools=True,
+                )
+            _persist_generation_checkpoint(
+                checkpoint_root,
+                staged_root,
+                identity_sha256=checkpoint_identity,
+            )
+        except BaseException as exc:
             try:
-                with _active_checkpoint_persistence(
-                    checkpoint_root,
-                    staged_root,
-                    checkpoint_identity,
-                ):
-                    summary = self.router.generate_text(
-                        "coder",
-                        active_messages,
-                        response_format="text",
-                        tool_stage="generation",
-                        enable_tools=True,
-                    )
                 _persist_generation_checkpoint(
                     checkpoint_root,
                     staged_root,
                     identity_sha256=checkpoint_identity,
                 )
-                break
-            except BaseException as exc:
-                try:
-                    _persist_generation_checkpoint(
-                        checkpoint_root,
-                        staged_root,
-                        identity_sha256=checkpoint_identity,
-                    )
-                except (OSError, ValueError) as checkpoint_exc:
-                    print(
-                        "custom module: checkpoint update failed",
-                        f"module={module.module_id}",
-                        f"error={type(checkpoint_exc).__name__}",
-                        flush=True,
-                    )
-
-                # Context-pressure recovery belongs exclusively to the canonical
-                # progress-aware tool loop. If it bubbles out, preserve the original
-                # boundary error instead of re-entering coder with tools disabled.
-                boundary_kind = completion_boundary_kind(exc)
-                if boundary_kind != OUTPUT_EXHAUSTED:
-                    raise
-
-                progress_operations, progress_paths, discarded_paths = (
-                    _collect_staged_operations(root, staged_root, before)
-                )
-                if progress_operations:
-                    self._validate_operations(progress_operations)
-                    self._validate_total_patch_bytes(progress_operations)
-                state_sha256 = _mutable_stage_state_sha256(staged_root)
-                if continuation_count >= 5:
-                    raise CustomModuleGenerationError(
-                        f"Output continuation reached maximum allowed attempts ({continuation_count})."
-                    ) from exc
-                if state_sha256 in seen_output_states:
-                    raise CustomModuleGenerationError(
-                        "Output continuation reached a no-source-progress fixed point."
-                    ) from exc
-                seen_output_states.add(state_sha256)
-                continuation_count += 1
-                active_messages = _output_exhaustion_continuation_messages(
-                    module=module,
-                    minecraft_version=minecraft_version,
-                    loader=loader,
-                    mappings=mappings,
-                    java_version=java_version,
-                    continuation_index=continuation_count,
-                    state_sha256=state_sha256,
-                    touched_paths=progress_paths,
-                    discarded_paths=discarded_paths,
-                    source_observation_receipt=observation_ledger["receipt"],
-                    host_grounding=host_grounding,
-                )
+            except (OSError, ValueError) as checkpoint_exc:
                 print(
-                    "custom module: bounded output continuation",
+                    "custom module: checkpoint update failed",
                     f"module={module.module_id}",
-                    f"continuation={continuation_count}",
-                    f"preserved_paths={len(progress_paths)}",
+                    f"error={type(checkpoint_exc).__name__}",
                     flush=True,
                 )
+
+            boundary_kind = completion_boundary_kind(exc)
+            if boundary_kind != OUTPUT_EXHAUSTED:
+                raise
+
+            progress_operations, _progress_paths, _discarded_paths = (
+                _collect_staged_operations(root, staged_root, before)
+            )
+            if progress_operations:
+                self._validate_operations(progress_operations)
+                self._validate_total_patch_bytes(progress_operations)
+            raise CustomModuleGenerationError(
+                "ATOMIC_ACTION_OUTPUT_STALLED: the canonical progress-aware coder loop exhausted "
+                "its bounded in-state output recovery; refusing an outer continuation because it "
+                "would reset HostRunState over an already-mutated staged workspace."
+            ) from exc
 
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
