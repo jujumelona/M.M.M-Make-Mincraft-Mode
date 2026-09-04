@@ -1,0 +1,128 @@
+name: One-shot prefill test migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one_shot_migrate_prefill_tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Migrate prefill calibration tests to apply-template
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("tests/test_llama_assistant_prefill_continuation.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("def test_live_zero_token_calibration_returns_only_template_owned_bytes")
+          end = text.index("def test_calibrated_strip_removes_one_template_prefix_and_preserves_the_next", start)
+          replacement = '''def test_live_apply_template_calibration_returns_only_template_owned_bytes(monkeypatch) -> None:
+              sent = []
+              generation_prompt = "<think>\\n\\n</think>\\n\\n"
+              sentinel = adapter_module._PREFILL_CALIBRATION_SENTINEL
+
+              def post(url, *, json, timeout):
+                  sent.append((url, json, timeout))
+                  return _Response({"prompt": "template-prefix" + sentinel + generation_prompt})
+
+              monkeypatch.setattr(adapter_module.httpx, "post", post)
+              monkeypatch.setattr(
+                  adapter_module,
+                  "_post_completion",
+                  lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                      AssertionError("prefill calibration must not invoke inference")
+                  ),
+              )
+              original = {
+                  "model": "local",
+                  "messages": [{"role": "user", "content": "SECRET USER SOURCE"}],
+                  "max_tokens": 8192,
+                  "chat_template_kwargs": {
+                      "enable_thinking": False,
+                      "preserve_thinking": False,
+                  },
+                  "tools": [{"type": "function", "function": {"name": "edit"}}],
+                  "tool_choice": "required",
+                  "parallel_tool_calls": False,
+              }
+
+              assert (
+                  adapter_module._calibrate_assistant_prefill_generation_prompt(
+                      "http://local", original
+                  )
+                  == generation_prompt
+              )
+              assert len(sent) == 1
+              url, payload, _timeout = sent[0]
+              assert url == "http://local/apply-template"
+              assert "max_tokens" not in payload
+              assert "temperature" not in payload
+              assert payload["chat_template_kwargs"] == original["chat_template_kwargs"]
+              assert payload["tools"] == original["tools"]
+              assert payload["tool_choice"] == "required"
+              assert payload["messages"][-1] == {
+                  "role": "assistant",
+                  "content": sentinel,
+              }
+              assert "SECRET USER SOURCE" not in str(payload)
+
+
+          @pytest.mark.parametrize(
+              "rendered_prompt",
+              [
+                  "no sentinel here",
+                  adapter_module._PREFILL_CALIBRATION_SENTINEL,
+                  (
+                      adapter_module._PREFILL_CALIBRATION_SENTINEL
+                      + "suffix"
+                      + adapter_module._PREFILL_CALIBRATION_SENTINEL
+                  ),
+                  None,
+              ],
+          )
+          def test_ambiguous_prefill_calibration_fails_closed(
+              monkeypatch, rendered_prompt
+          ) -> None:
+              monkeypatch.setattr(
+                  adapter_module.httpx,
+                  "post",
+                  lambda _url, *, json, timeout: _Response({"prompt": rendered_prompt}),
+              )
+              monkeypatch.setattr(
+                  adapter_module,
+                  "_post_completion",
+                  lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                      AssertionError("prefill calibration must not invoke inference")
+                  ),
+              )
+
+              with pytest.raises((RuntimeError, TypeError), match="assistant-prefill"):
+                  adapter_module._calibrate_assistant_prefill_generation_prompt(
+                      "http://local",
+                      {
+                          "messages": [{"role": "user", "content": "go"}],
+                          "chat_template_kwargs": {"enable_thinking": False},
+                      },
+                  )
+
+
+          '''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+      - name: Compile migrated test
+        run: python -m py_compile tests/test_llama_assistant_prefill_continuation.py
+      - name: Commit migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_llama_assistant_prefill_continuation.py
+          git commit -m "test: migrate prefill calibration to apply-template"
+          git push origin HEAD:main
