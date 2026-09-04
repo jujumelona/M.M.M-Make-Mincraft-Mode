@@ -8,6 +8,7 @@ before callers wrap or aggregate the failure. Traces always go to stderr so an M
 stdio transport can reserve stdout exclusively for JSON-RPC protocol frames.
 """
 
+import heapq
 import inspect
 import itertools
 import json
@@ -45,6 +46,39 @@ def _secret_key(value: Any) -> bool:
     return any(part in key for part in _SECRET_KEY_PARTS)
 
 
+def _bounded_collection(items: Sequence[Any], total: int, *, depth: int) -> list[Any]:
+    result = [bounded_safe(item, depth=depth + 1) for item in items]
+    if total > _COLLECTION_LIMIT:
+        result.append(f"<truncated:{total - _COLLECTION_LIMIT}>")
+    return result
+
+
+def _bounded_sequence(value: Sequence[Any], *, depth: int) -> list[Any]:
+    """Bound a sequence without copying or traversing its unreported tail."""
+    total = len(value)
+    if isinstance(value, (list, tuple)):
+        items = value[:_COLLECTION_LIMIT]
+    else:
+        items = tuple(itertools.islice(value, _COLLECTION_LIMIT))
+    return _bounded_collection(items, total, depth=depth)
+
+
+def _bounded_set(value: set[Any] | frozenset[Any], *, depth: int) -> list[Any]:
+    """Keep deterministic set traces with O(limit) auxiliary memory.
+
+    Sorting the full set made every trace O(N log N) and allocated O(N) temporary
+    storage even though only 64 values are emitted. nsmallest keeps the same repr-key
+    ordering contract for the reported prefix while bounding auxiliary memory and the
+    sort factor to the trace limit.
+    """
+    total = len(value)
+    if total <= _COLLECTION_LIMIT:
+        items = sorted(value, key=repr)
+    else:
+        items = heapq.nsmallest(_COLLECTION_LIMIT, value, key=repr)
+    return _bounded_collection(items, total, depth=depth)
+
+
 def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
     """Return deterministic bounded trace data while redacting credential-like fields."""
     if key and _secret_key(key):
@@ -67,17 +101,9 @@ def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
             result[child_key] = bounded_safe(child, depth=depth + 1, key=child_key)
         return result
     if isinstance(value, (set, frozenset)):
-        items = sorted(value, key=lambda item: repr(item))
-        result = [bounded_safe(item, depth=depth + 1) for item in items[:_COLLECTION_LIMIT]]
-        if len(items) > _COLLECTION_LIMIT:
-            result.append(f"<truncated:{len(items) - _COLLECTION_LIMIT}>")
-        return result
+        return _bounded_set(value, depth=depth)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        items = list(value)
-        result = [bounded_safe(item, depth=depth + 1) for item in items[:_COLLECTION_LIMIT]]
-        if len(items) > _COLLECTION_LIMIT:
-            result.append(f"<truncated:{len(items) - _COLLECTION_LIMIT}>")
-        return result
+        return _bounded_sequence(value, depth=depth)
     return bounded_safe(str(value), depth=depth + 1)
 
 
