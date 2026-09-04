@@ -10,8 +10,10 @@ use the live context that remains after the current request.
 
 Transport token estimation is intentionally conservative, but it is only an estimate.
 A forced structural tool action is never starved down to a few hundred tokens merely
-because that estimate is pessimistic: real context pressure is classified by the llama
-backend and recovered by the canonical context-compaction owner.
+because that estimate is pessimistic.  More importantly, the host never sends a
+structural action to inference when an authoritative configured ceiling cannot fit one
+complete action page: that is a deterministic budget failure, not a useful 1-token
+model request.
 """
 
 import json
@@ -47,6 +49,11 @@ _EXPANSIVE_TOOL_EFFECTS = frozenset(
         "packaged",
     }
 )
+
+
+class GenerationOutputBudgetError(RuntimeError):
+    """Raised before inference when one complete host-required action cannot fit."""
+
 
 
 def _positive_override(name: str) -> int | None:
@@ -126,6 +133,28 @@ def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
     return 1
 
 
+def _assert_structural_budget_viable(
+    config: Any,
+    tools: Sequence[Any],
+    budget: int,
+    *,
+    source: str,
+) -> None:
+    """Fail before decode instead of asking a model for an impossible partial action."""
+
+    if not _structural_tool_call_is_compact(tools):
+        return
+    floor = _structural_tool_floor(config, tools)
+    if int(budget) >= floor:
+        return
+    names = sorted({_tool_name(tool) for tool in tools if _tool_name(tool)})
+    raise GenerationOutputBudgetError(
+        "STRUCTURAL_OUTPUT_BUDGET_UNVIABLE: host-required tool action "
+        f"{names or ['<unknown>']} needs at least {floor} output tokens, but {source} "
+        f"permits only {max(0, int(budget))}; refusing a partial inference request."
+    )
+
+
 def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
     """Classify tool effects, not how many tokens its function arguments need.
 
@@ -172,8 +201,15 @@ def generation_output_token_budget(
     floor = _structural_tool_floor(config, tools)
 
     if ceiling is not None:
-        # Explicit operator/model ceilings remain authoritative; the floor never raises
-        # a deliberately configured bound.
+        # An explicit ceiling is authoritative, but an authoritative impossible value is
+        # a host configuration failure. Silently converting it into max_tokens=1 only
+        # spends inference time on a response that cannot encode the required action.
+        _assert_structural_budget_viable(
+            config,
+            tools,
+            ceiling,
+            source="configured output ceiling",
+        )
         budget = ceiling
     elif context > 0:
         estimated_remaining = (
@@ -188,6 +224,13 @@ def generation_output_token_budget(
     # by the structural minimum above rather than by a small hard maximum.
     if tools and not tools_require_expansive_output(tools):
         budget = min(budget, tool_action_token_budget(config))
+
+    _assert_structural_budget_viable(
+        config,
+        tools,
+        int(budget),
+        source="computed output budget",
+    )
     return max(1, int(budget))
 
 
@@ -251,13 +294,26 @@ def apply_payload_generation_budget(
     except (TypeError, ValueError):
         requested = 0
     if requested > 0 and not dynamic_output_budget_enabled(config):
+        _assert_structural_budget_viable(
+            config,
+            tools,
+            requested,
+            source="request max_tokens",
+        )
         budget = min(budget, requested)
 
+    _assert_structural_budget_viable(
+        config,
+        tools,
+        int(budget),
+        source="final payload budget",
+    )
     bounded["max_tokens"] = max(1, int(budget))
     return bounded
 
 
 __all__ = [
+    "GenerationOutputBudgetError",
     "apply_payload_generation_budget",
     "dynamic_output_budget_enabled",
     "generation_output_token_budget",
