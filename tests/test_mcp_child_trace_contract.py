@@ -17,14 +17,13 @@ def test_runtime_uses_visible_child_stderr_session_factory() -> None:
     assert getattr(mcp_transport_pool, "_mmm_child_trace_contract_installed", False) is True
 
 
-def test_transport_trace_remains_outermost_over_nonblocking_hot_path() -> None:
+def test_nonblocking_transport_hot_path_is_not_rebound_by_trace_contract() -> None:
     execute = mcp_transport_pool.MCPTransportPool._execute
 
-    # functools.wraps copies the hot-path marker onto the traced outer wrapper. The
-    # actual wrapped function must still be present, proving both contracts survive.
+    # Child visibility is installed through the session-factory default only. Keep the
+    # reviewed non-blocking _execute mutation as the sole transport method rebind.
     assert getattr(execute, "_mmm_nonblocking_transport_execute_v1", False) is True
-    assert execute.__module__ == "minecraft_mod_ai.mcp_child_trace_contract"
-    assert getattr(execute, "__wrapped__", None) is not None
+    assert execute.__module__ == "minecraft_mod_ai.runtime_hot_path_contract"
 
 
 def test_stdio_child_stderr_is_forwarded_to_parent_stderr(monkeypatch, capsys) -> None:
