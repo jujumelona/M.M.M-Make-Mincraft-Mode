@@ -18,6 +18,7 @@ import anyio
 
 from .external_agent_bridge import TOOL_NAMES as EXTERNAL_TOOL_NAMES
 from .external_agent_bridge import ExternalAgentBridge
+from .root_cause_trace import emit_root_cause
 from .source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_SCHEMA,
     materialize_model_source_edit,
@@ -164,6 +165,7 @@ class AgentToolRuntime:
         with self._lock:
             cached = self._schema_cache.get(selected)
         if cached is not None:
+            emit_root_cause("tool_schema_cache_hit", stage=selected, operation="tool_schemas", gate="tool_surface", result="PASS", details={"schemas": cached})
             return cached
 
         # Never hold the runtime lock across MCP I/O. In notebook hosts an asyncio
@@ -172,6 +174,7 @@ class AgentToolRuntime:
         # joining that bridge creates a cross-thread deadlock and only surfaces as a
         # misleading MCP synchronous bridge timeout.
         listed = self._run_async(self._list_tools_async, selected)
+        emit_root_cause("tool_schema_listed", stage=selected, operation="tool_schemas", gate="mcp_list_tools", result="PASS", details={"raw_tools": listed})
         schemas: list[dict[str, Any]] = []
         names: set[str] = set()
         for item in listed:
@@ -230,6 +233,7 @@ class AgentToolRuntime:
                 return cached
             self._schema_cache[selected] = result
             self._allowed_tool_cache[selected] = allowed
+        emit_root_cause("tool_schema_surface_result", stage=selected, operation="tool_schemas", gate="tool_surface", result="PASS", details={"schemas": result, "allowed_tools": sorted(allowed)})
         return result
 
     def call(
@@ -298,6 +302,56 @@ class AgentToolRuntime:
                 )
 
         payload = dict(arguments or {})
+        raw_payload = dict(payload)
+        if selected == "generation" and tool_name == "java_diagnostics":
+            project_root, _project_argument = _discover_model_project_root(self.workspace_root)
+            raw_files = payload.get("relative_files")
+            if raw_files is not None:
+                if not isinstance(raw_files, list) or not raw_files:
+                    raise AgentToolRuntimeError(
+                        "Verifier relative_files must be a non-empty list when supplied"
+                    )
+                normalized_files: list[str] = []
+                for raw_file in raw_files:
+                    relative = str(raw_file or "").replace("\\", "/").strip()
+                    while relative.startswith("./"):
+                        relative = relative[2:]
+                    candidate = Path(relative)
+                    if (
+                        not relative
+                        or candidate.is_absolute()
+                        or ".." in candidate.parts
+                        or not relative.endswith((".java", ".kt"))
+                    ):
+                        raise AgentToolRuntimeError(
+                            f"Invalid task diagnostic path: {relative!r}"
+                        )
+                    normalized_files.append(relative)
+                payload["relative_files"] = list(dict.fromkeys(normalized_files))
+            payload["project_root"] = str(project_root)
+            for legacy in (
+                "diagnostics_path",
+                "file_path",
+                "diagnostics_command",
+                "diagnostics_config",
+                "arguments",
+                "args",
+                "parameters",
+            ):
+                payload.pop(legacy, None)
+        emit_root_cause(
+            "agent_tool_call_normalized",
+            stage=selected,
+            operation=tool_name,
+            gate="runtime_argument_authority",
+            result="PASS",
+            details={
+                "model_scoped": model_scoped,
+                "workspace_root": self.workspace_root,
+                "raw_arguments": raw_payload,
+                "normalized_arguments": payload,
+            },
+        )
         try:
             if selected == "generation" and tool_name == _SOURCE_EDIT_TOOL:
                 try:
@@ -331,11 +385,15 @@ class AgentToolRuntime:
                     tool_name,
                     payload,
                 )
-        except AgentToolRuntimeError:
+        except AgentToolRuntimeError as exc:
+            emit_root_cause("agent_tool_call_failure", stage=selected, operation=tool_name, gate="runtime_dispatch", result="FAIL", reason=f"AgentToolRuntimeError: {exc}", details={"arguments": payload}, exc=exc)
             raise
         except Exception as exc:
+            emit_root_cause("agent_tool_call_failure", stage=selected, operation=tool_name, gate="runtime_dispatch", result="FAIL", reason=f"{type(exc).__name__}: {exc}", details={"arguments": payload}, exc=exc)
             raise AgentToolRuntimeError(_redact_text(str(exc))) from exc
-        return _bounded_result(result)
+        bounded = _bounded_result(result)
+        emit_root_cause("agent_tool_call_result", stage=selected, operation=tool_name, gate="runtime_dispatch", result="PASS", details={"arguments": payload, "result": bounded})
+        return bounded
 
     @staticmethod
     def _stage(stage: str) -> str:

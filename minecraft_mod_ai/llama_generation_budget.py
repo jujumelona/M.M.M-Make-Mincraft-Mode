@@ -34,6 +34,13 @@ _SEMANTIC_DECISION_FIELDS = frozenset(
         "then",
     }
 )
+_SEMANTIC_DECISION_OPTIONAL_FIELDS = frozenset(
+    {
+        "semantic_type",
+        "required_prerequisite_capabilities",
+        "optional_prerequisite_capabilities",
+    }
+)
 _RETRIEVAL_DECISION_FIELDS = frozenset(
     {"requirement_id", "depends_on", "search_queries"}
 )
@@ -144,7 +151,9 @@ def _planning_decision_schema_kind(schema: Any) -> str:
     if not isinstance(item_properties, Mapping):
         return ""
     fields = frozenset(str(key) for key in item_properties)
-    if fields == _SEMANTIC_DECISION_FIELDS:
+    if (
+        _SEMANTIC_DECISION_FIELDS <= fields <= _SEMANTIC_DECISION_FIELDS | _SEMANTIC_DECISION_OPTIONAL_FIELDS
+    ):
         return "semantic"
     if fields == _RETRIEVAL_DECISION_FIELDS:
         return "retrieval"

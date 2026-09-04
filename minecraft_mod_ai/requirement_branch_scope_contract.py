@@ -64,7 +64,11 @@ _TERMS: dict[str, tuple[str, ...]] = {
     "needs_mixin": (
         "mixin",
         "optimization",
-        "performance",
+        "software.performance",
+        "performance.optimization",
+        "runtime.performance",
+        "code.optimization",
+        "performance optimization",
         "renderer_patch",
         "injection",
     ),
@@ -138,6 +142,12 @@ def _scoped_branch_predicates(
                 continue
             text = _requirement_text(requirement)
             active = any(_contains_term(text, term) for term in _TERMS[branch])
+            if (
+                branch == "needs_mixin"
+                and requirement.get("semantic_type")
+                and requirement.get("semantic_type") != "software_quality"
+            ):
+                active = False
             component_refs: list[str] = []
             if branch == "needs_datagen" and not active:
                 component_refs = [

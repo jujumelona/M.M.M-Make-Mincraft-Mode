@@ -42,10 +42,6 @@ from .final_artifact import (
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
 from .java_lsp import JavaLanguageService
-from .validation_diagnostic_contract import (
-    diagnostic_errors as jdt_diagnostic_errors,
-    run_diagnostics as run_jdt_diagnostics,
-)
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
 )
@@ -76,6 +72,7 @@ from .publisher import (
 from .quality_evidence import compile_quality_evidence
 from .repair_engine import RepairEngine
 from .research_ledger import is_research_shard, write_research_shard
+from .root_cause_trace import emit_root_cause
 from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
 from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
@@ -86,6 +83,12 @@ from .system_pack_generator import generate_system_pack
 from .validation_checkpoint_policy import (
     cached_validation_is_reusable,
     validation_checkpoint_input,
+)
+from .validation_diagnostic_contract import (
+    diagnostic_errors as jdt_diagnostic_errors,
+)
+from .validation_diagnostic_contract import (
+    run_diagnostics as run_jdt_diagnostics,
 )
 from .validator import validate_jar
 from .work_graph import (
@@ -821,31 +824,53 @@ class CompleteProductionOrchestrator:
     @staticmethod
     def _run_work_node(ledger: DurableWorkLedger, node: WorkNode, *, action: Callable[[], dict[str, Any]], validate_cached: Callable[[dict[str, Any]], bool], shared_index: ProjectIndex | None=None) -> dict[str, Any]:
         cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
+        emit_root_cause(
+            'orchestrator_node_decision',
+            stage=node.stage,
+            operation=node.node_id,
+            gate='cache_and_ledger_state',
+            result='START',
+            details={'node': node.to_dict() if hasattr(node, 'to_dict') else str(node), 'cached_receipt': cached},
+        )
         if cached is not None and validate_cached(cached):
+            emit_root_cause('orchestrator_node_cache_hit', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='PASS', details={'receipt': cached})
             return cached
         if cached is not None:
+            emit_root_cause('orchestrator_node_cache_invalidated', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='FAIL', reason='cached outputs failed existence/integrity validation', details={'receipt': cached})
             ledger.invalidate(node.node_id)
         current = ledger.task(node.node_id)
         if current['state'] in {'failed', 'input_required', 'cancelled'}:
+            emit_root_cause('orchestrator_node_retry', stage=node.stage, operation=node.node_id, gate='retry_policy', result='START', reason=str(current.get('error') or current['state']), details={'before': current})
             ledger.retry(node.node_id)
             current = ledger.task(node.node_id)
         ledger.raise_if_cancelled()
         if current['state'] != 'running':
             ledger.begin(node.node_id, worker_id='complete-orchestrator')
         try:
+            emit_root_cause('orchestrator_node_action_start', stage=node.stage, operation=node.node_id, gate='work_node_action', result='START', details={'ledger_state': current, 'payload': node.payload})
             receipt = action()
             if not isinstance(receipt, dict):
                 raise CompleteProductionError(f'Work node {node.node_id} returned a non-object receipt.')
             ledger.raise_if_cancelled()
             ledger.succeed(node.node_id, receipt)
+            emit_root_cause('orchestrator_node_action_result', stage=node.stage, operation=node.node_id, gate='work_node_action', result='PASS', details={'receipt': receipt})
             if shared_index is not None:
                 touched = receipt.get('touched_paths') or receipt.get('written_files') or []
                 if touched:
                     try:
                         shared_index.update_files(touched)
                         shared_index.write_manifest()
-                    except Exception:
-                        pass
+                    except Exception as index_exc:  # noqa: BLE001 - index refresh is non-fatal
+                        emit_root_cause(
+                            'orchestrator_index_refresh_failure',
+                            stage=node.stage,
+                            operation=node.node_id,
+                            gate='shared_project_index',
+                            result='FAIL',
+                            reason=f'{type(index_exc).__name__}: {index_exc}',
+                            details={'touched_paths': touched},
+                            exc=index_exc,
+                        )
             return receipt
         except BaseException as exc:
             try:
@@ -853,6 +878,7 @@ class CompleteProductionOrchestrator:
                     ledger.fail(node.node_id, f'{type(exc).__name__}: {exc}')
             except WorkGraphError:
                 pass
+            emit_root_cause('orchestrator_node_action_failure', stage=node.stage, operation=node.node_id, gate='work_node_action', result='FAIL', reason=f'{type(exc).__name__}: {exc}', details={'ledger_state': current, 'payload': node.payload}, exc=exc)
             raise
 
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
@@ -1229,4 +1255,3 @@ class CompleteProductionOrchestrator:
 
 def _normalize_required_gate(value: str) -> str:
     return ' '.join(''.join(character.casefold() if character.isalnum() else ' ' for character in value).split())
-

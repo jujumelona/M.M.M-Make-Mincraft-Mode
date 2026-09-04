@@ -18,6 +18,7 @@ from typing import Any
 
 from . import evidence_first_planning as _planning
 from . import target_grounding_contract as _target_contract
+from .root_cause_trace import emit_root_cause
 
 _INSTALLED = False
 _REQUIREMENT_DEPS: ContextVar[dict[str, tuple[str, ...]]] = ContextVar(
@@ -127,11 +128,37 @@ def _derive_requirement_causality(catalog: Mapping[str, Any]) -> dict[str, Any]:
         existing = tuple(_planning._strings(requirement.get("depends_on")))
         if existing:
             requirement["depends_on"] = list(existing)
+            emit_root_cause(
+                "requirement_dependency_decision",
+                stage="planning",
+                operation="derive_requirement_causality",
+                gate="explicit_prerequisite_contract",
+                result="PASS",
+                reason="preserved host-approved semantic prerequisites",
+                details={
+                    "requirement_id": requirement.get("requirement_id"),
+                    "selected_dependencies": requirement["depends_on"],
+                    "dependency_reasons": requirement.get("dependency_reasons", {}),
+                },
+            )
             continue
         needed, _produced = flows[child_index]
         if not needed or child_index == 0:
             requirement["depends_on"] = []
             requirement["dependency_reasons"] = {}
+            emit_root_cause(
+                "requirement_dependency_decision",
+                stage="planning",
+                operation="derive_requirement_causality",
+                gate="precondition_effect_matching",
+                result="SKIP",
+                reason="no informative earlier prerequisite state",
+                details={
+                    "requirement_id": requirement.get("requirement_id"),
+                    "needed_state_terms": sorted(needed),
+                    "selected_dependencies": [],
+                },
+            )
             continue
 
         candidates: list[tuple[int, int, str, tuple[str, ...]]] = []
@@ -173,6 +200,32 @@ def _derive_requirement_causality(catalog: Mapping[str, Any]) -> dict[str, Any]:
             }
             for parent_id, matched in selected
         }
+        unlock_policy = dict(requirement.get("unlock_policy") or {})
+        unlock_policy["required_requirement_refs"] = list(requirement["depends_on"])
+        unlock_policy["required_capabilities"] = [
+            str(parent.get("capability") or "")
+            for parent in requirements
+            if str(parent.get("requirement_id") or "") in requirement["depends_on"]
+        ]
+        unlock_policy.setdefault("optional_requirement_refs", [])
+        unlock_policy.setdefault("optional_capabilities", [])
+        unlock_policy["policy"] = "all_required_optional_do_not_block"
+        requirement["unlock_policy"] = unlock_policy
+        emit_root_cause(
+            "requirement_dependency_decision",
+            stage="planning",
+            operation="derive_requirement_causality",
+            gate="precondition_effect_matching",
+            result="PASS",
+            reason="dependencies preserved or derived from observable state flow",
+            details={
+                "requirement_id": requirement.get("requirement_id"),
+                "needed_state_terms": sorted(needed),
+                "candidate_producers": candidates,
+                "selected_dependencies": requirement["depends_on"],
+                "dependency_reasons": requirement["dependency_reasons"],
+            },
+        )
 
     result = dict(catalog)
     result["requirements"] = requirements
@@ -427,6 +480,21 @@ def _project_requirement_dataflow(
         task["dependency_reasons"] = reasons
         task["task_sha256"] = ""
         task["task_sha256"] = _planning._hash_without(task, "task_sha256")
+        emit_root_cause(
+            "task_dependency_bound",
+            stage="planning",
+            operation="project_requirement_dataflow",
+            gate="codeplan_dag",
+            result="PASS",
+            details={
+                "task_id": task.get("task_id"),
+                "requirement_refs": req_refs,
+                "consumes": task.get("consumes"),
+                "provides": task.get("provides"),
+                "depends_on": task.get("depends_on"),
+                "dependency_reasons": reasons,
+            },
+        )
     _planning._topological(bound)
     return tuple(bound)
 
@@ -460,6 +528,7 @@ def _postprocess_tasks(
         task["acceptance"] = internal
         gap = gap_by_req.get(req, {})
         gap_acceptance = list(_planning._strings(gap.get("acceptance")))
+        runtime_acceptance = list(_planning._strings(gap.get("runtime_acceptance")))
         if (
             str(task.get("semantic_outcome") or "").startswith(
                 "Implement one independently verifiable outcome for "
@@ -470,6 +539,66 @@ def _postprocess_tasks(
                 f"Satisfy requirement {req} for {gap.get('capability')}: {gap_acceptance[0]}"
             )
         task["artifact_obligations"] = _artifact_obligations(task)
+        existing_artifact_kinds = {
+            str(item.get("kind") or "")
+            for item in task["artifact_obligations"]
+            if isinstance(item, Mapping)
+        }
+        for obligation in (
+            gap.get("artifact_obligations", [])
+            if isinstance(gap.get("artifact_obligations"), list)
+            else []
+        ):
+            if not isinstance(obligation, Mapping):
+                continue
+            kind = str(obligation.get("kind") or "").strip()
+            if not kind or kind in existing_artifact_kinds:
+                continue
+            task["artifact_obligations"].append(
+                {
+                    "artifact_id": _planning._stable_id(
+                        "artifact", kind, {"task": task_id, "requirement": req}
+                    ),
+                    "kind": kind,
+                    "locator": f"unresolved:{kind}",
+                    "requirement_refs": req_refs,
+                    "task_ref": task_id,
+                    "status": "REQUIRED_UNRESOLVED",
+                    "provenance_role": "implementation_obligation",
+                }
+            )
+            existing_artifact_kinds.add(kind)
+        task["implementation_capabilities"] = list(
+            _planning._strings(gap.get("implementation_capabilities"))
+        )
+        task["design_resolution_obligations"] = list(
+            _planning._strings(gap.get("design_resolution_obligations"))
+        )
+        task["semantic_type"] = str(
+            gap.get("semantic_type") or "gameplay_mechanic"
+        )
+        task["unlock_policy"] = dict(gap.get("unlock_policy") or {})
+        task["runtime_acceptance"] = runtime_acceptance
+        if public:
+            gates = list(_planning._strings(task.get("required_gates")))
+            if "runtime_gameplay_validation" not in gates:
+                gates.append("runtime_gameplay_validation")
+            task["required_gates"] = gates
+            checks = list(
+                _planning._strings(
+                    (task.get("done_predicate") or {}).get("checks")
+                    if isinstance(task.get("done_predicate"), Mapping)
+                    else ()
+                )
+            )
+            for check in (
+                "public_acceptance_observed",
+                "runtime_scenario_receipt_recorded",
+                "persistence_network_ui_state_observed_where_applicable",
+            ):
+                if check not in checks:
+                    checks.append(check)
+            task["done_predicate"] = {"operator": "all", "checks": checks}
         task["impact_domains"] = list(
             dict.fromkeys(
                 [
@@ -536,6 +665,15 @@ def _artifact_plan(
             "generated_data_resource",
             "client_visual_or_ui_resource",
             "worldgen_data",
+            "item_model",
+            "block_model",
+            "blockstate",
+            "entity_model",
+            "recipe",
+            "loot_table",
+            "tag",
+            "lang",
+            "dimension_data",
         }
     ]
     return {
@@ -603,6 +741,20 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                         "reason": "required by the selected task architecture",
                     }
                 )
+        for obligation in _planning._strings(
+            task.get("design_resolution_obligations")
+        ):
+            obligations.append(
+                {
+                    "obligation_id": _planning._stable_id(
+                        "design_obligation", obligation, {"task": task.get("task_id")}
+                    ),
+                    "provenance_role": "implementation_obligation",
+                    "requirement_refs": refs,
+                    "kind": "design_resolution",
+                    "reason": obligation,
+                }
+            )
     return {
         "schema_version": "mmm/design-resolution-v1",
         "selected_design_alternatives": alternatives,

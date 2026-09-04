@@ -25,6 +25,7 @@ from . import authored_scope_research_contract as _retrieval
 from . import evidence_first_planning as _evidence
 from . import evidence_request_guard as _guard
 from . import semantic_requirement_authority as _semantic
+from .root_cause_trace import emit_root_cause, trace_scope
 
 
 def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]:
@@ -74,6 +75,14 @@ def _enrich_retrieval_plan(
         return dict(catalog)
 
     payload = _retrieval._call_retrieval_planner(router, prompt, requirements)
+    emit_root_cause(
+        "dependency_and_retrieval_plan_candidate",
+        stage="planning",
+        operation="enrich_retrieval_plan",
+        gate="causal_dependency_graph",
+        result="START",
+        details={"requirements": requirements, "candidate": payload},
+    )
     plan = _retrieval._normalize_retrieval_plan(prompt, requirements, payload)
 
     enriched = deepcopy(dict(catalog))
@@ -111,6 +120,14 @@ def _enrich_retrieval_plan(
     enriched["catalog_sha256"] = ""
     enriched["catalog_sha256"] = _evidence._hash_without(enriched, "catalog_sha256")
     _semantic.validate_approved_requirement_catalog(enriched, prompt=prompt)
+    emit_root_cause(
+        "dependency_and_retrieval_plan_approved",
+        stage="planning",
+        operation="enrich_retrieval_plan",
+        gate="causal_dependency_graph",
+        result="PASS",
+        details={"plan": plan, "edges": edges, "catalog": enriched},
+    )
     return enriched
 
 
@@ -124,11 +141,41 @@ def build_authoritative_request_catalog(
     regardless of requirement count. Retrieval planning is deterministic host work.
     """
 
-    return _enrich_retrieval_plan(
-        prompt,
-        _compile_semantic_catalog(prompt, router),
-        router,
-    )
+    with trace_scope("planner"):
+        emit_root_cause(
+            "pipeline_boundary_start",
+            stage="planning",
+            operation="build_authoritative_request_catalog",
+            gate="planner",
+            result="START",
+            details={"prompt": prompt, "router": type(router).__name__ if router else None},
+        )
+        try:
+            catalog = _enrich_retrieval_plan(
+                prompt,
+                _compile_semantic_catalog(prompt, router),
+                router,
+            )
+        except BaseException as exc:
+            emit_root_cause(
+                "pipeline_boundary_failure",
+                stage="planning",
+                operation="build_authoritative_request_catalog",
+                gate="planner",
+                result="FAIL",
+                reason=f"{type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+            raise
+        emit_root_cause(
+            "pipeline_boundary_result",
+            stage="planning",
+            operation="build_authoritative_request_catalog",
+            gate="planner",
+            result="PASS",
+            details={"catalog": catalog},
+        )
+        return catalog
 
 
 @contextmanager

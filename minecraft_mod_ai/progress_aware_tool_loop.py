@@ -28,6 +28,7 @@ from .model_context_budget import (
     fit_messages_to_context,
     request_message_budget,
 )
+from .root_cause_trace import emit_root_cause, trace_scope
 from .source_mutation_contract import (
     mutation_history_applied,
     mutation_payload_applied,
@@ -120,6 +121,9 @@ _VERIFIER_PASS_STATUSES = frozenset({
 def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
     """Classify verifier semantics independently from transport/runtime health."""
     if not bool(payload.get("ok")):
+        failure_code = str(payload.get("failure_code") or "").strip().upper()
+        if failure_code in {"VERIFIER_ARGUMENT_INVALID", "VERIFIER_TARGET_INVALID"}:
+            return failure_code
         return "UNAVAILABLE"
     result = payload.get("result")
     if not isinstance(result, Mapping):
@@ -1358,10 +1362,22 @@ def _retry_atomic_after_output_exhaustion(
         f"tools={sorted(_tool_name(schema) for schema in request.tools if _tool_name(schema))}",
         flush=True,
     )
+    emit_root_cause(
+        "model_retry_start",
+        stage="generation",
+        operation="atomic_output_recovery",
+        gate="output_budget",
+        result="START",
+        reason="previous model output exhausted its bounded allowance",
+        details={"retry_request": retry_request},
+    )
     try:
         with router._generation_scope(config):
-            return adapter.generate_turn(retry_request)
+            result = adapter.generate_turn(retry_request)
+        emit_root_cause("model_retry_result", stage="generation", operation="atomic_output_recovery", gate="output_budget", result="PASS", details={"response": result})
+        return result
     except BaseException as retry_exc:
+        emit_root_cause("model_retry_failure", stage="generation", operation="atomic_output_recovery", gate="output_budget", result="FAIL", reason=f"{type(retry_exc).__name__}: {retry_exc}", exc=retry_exc)
         if completion_boundary_kind(retry_exc) == OUTPUT_EXHAUSTED:
             raise ModelConfigurationError(
                 "ATOMIC_ACTION_OUTPUT_STALLED: the model exceeded the output allowance twice "
@@ -1460,6 +1476,16 @@ def _generate_turn_with_context_recovery(
             return adapter.generate_turn(turn_request)
     except BaseException as exc:
         boundary_kind = completion_boundary_kind(exc)
+        emit_root_cause(
+            "model_turn_failure_classified",
+            stage="generation",
+            operation="context_recovery",
+            gate="completion_boundary",
+            result="FAIL",
+            reason=boundary_kind or "unclassified",
+            details={"request": turn_request},
+            exc=exc,
+        )
         if boundary_kind == OUTPUT_EXHAUSTED:
             return _retry_atomic_after_output_exhaustion(
                 router,
@@ -1507,10 +1533,22 @@ def _generate_turn_with_context_recovery(
             *(f"{key}={value}" for key, value in recovery_receipt.items()),
             flush=True,
         )
+        emit_root_cause(
+            "model_retry_start",
+            stage="generation",
+            operation="context_recovery",
+            gate="context_budget",
+            result="START",
+            reason="deterministic message fitting selected",
+            details={"receipt": recovery_receipt, "retry_request": retry_request},
+        )
         try:
             with router._generation_scope(config):
-                return adapter.generate_turn(retry_request)
+                result = adapter.generate_turn(retry_request)
+            emit_root_cause("model_retry_result", stage="generation", operation="context_recovery", gate="context_budget", result="PASS", details={"response": result})
+            return result
         except BaseException as retry_exc:
+            emit_root_cause("model_retry_failure", stage="generation", operation="context_recovery", gate="context_budget", result="FAIL", reason=f"{type(retry_exc).__name__}: {retry_exc}", details={"receipt": recovery_receipt}, exc=retry_exc)
             retry_kind = completion_boundary_kind(retry_exc)
             if retry_kind == OUTPUT_EXHAUSTED:
                 return _retry_atomic_after_output_exhaustion(
@@ -1527,7 +1565,7 @@ def _generate_turn_with_context_recovery(
             raise
 
 
-def generate_with_tools(
+def _generate_with_tools_impl(
     router: Any,
     *,
     config: Any,
@@ -1586,8 +1624,44 @@ def generate_with_tools(
     else:
         state.phase = LoopPhase.OBSERVE
 
+    emit_root_cause(
+        "tool_loop_initialized",
+        stage=stage,
+        operation="generate_with_tools",
+        gate="phase_selection",
+        result="PASS",
+        reason="host selected initial execution phase",
+        details={
+            "role": role,
+            "message_count": len(messages),
+            "exposed_tools": sorted(all_exposed_names),
+            "round_limit": round_limit,
+            "host_grounded": host_grounded,
+            "require_rag": require_rag,
+            "implementation_requires_mutation": implementation_requires_mutation,
+            "mutation_ready": mutation_ready,
+            "initial_phase": state.phase.value,
+            "reviewed_external_servers": sorted(reviewed_external_servers),
+        },
+    )
+
     while True:
         state.step_index += 1
+        emit_root_cause(
+            "tool_loop_step_start",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="step_budget",
+            result="START",
+            details={
+                "step_index": state.step_index,
+                "phase": state.phase.value,
+                "validation_status": state.validation_status,
+                "workspace_changed": state.workspace_changed,
+                "no_progress_streak": state.no_progress_streak,
+                "last_failure_reason": state.last_failure_reason,
+            },
+        )
 
         if state.step_index > round_limit:
             if require_rag and not state.has_fresh_evidence:
@@ -1713,6 +1787,18 @@ def generate_with_tools(
             )
             if forced_verify_tool is None:
                 state.termination_reason = "VERIFIER_UNAVAILABLE"
+                emit_root_cause(
+                    "tool_loop_abort",
+                    stage=stage,
+                    operation="generate_with_tools",
+                    gate="verifier_selection",
+                    result="FAIL",
+                    reason=state.termination_reason,
+                    details={
+                        "unavailable_verifiers": sorted(unavailable_verifiers),
+                        "exposed_verifiers": sorted(available_verifier_names),
+                    },
+                )
                 raise ModelConfigurationError(
                     "VERIFIER_UNAVAILABLE: no healthy host verifier remains; refusing to send "
                     "the coder back into retrieval or mutation without trustworthy diagnostics."
@@ -1723,6 +1809,23 @@ def generate_with_tools(
             )
 
         phase_tool_names = frozenset(_tool_name(s) for s in phase_tools if _tool_name(s))
+        emit_root_cause(
+            "phase_tools_selected",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="phase_tool_allowlist",
+            result="PASS" if phase_tools else "SKIP",
+            reason="host filtered tools for the current phase",
+            details={
+                "step_index": state.step_index,
+                "phase": state.phase.value,
+                "localization_stage": current_localization_stage.value,
+                "attempted_sources": sorted(phase_attempted_sources),
+                "selected_tools": sorted(phase_tool_names),
+                "forced_verifier": forced_verify_tool,
+                "retired_verifiers": sorted(unavailable_verifiers),
+            },
+        )
         if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:
             state.termination_reason = "MUTATION_LOCALIZATION_STALLED"
             raise ModelConfigurationError(
@@ -1766,6 +1869,24 @@ def generate_with_tools(
             parallel_tool_calls=parallel_tool_calls,
         )
 
+        emit_root_cause(
+            "model_turn_requested",
+            stage=stage,
+            operation="coder_turn",
+            gate="model_boundary",
+            result="START",
+            details={
+                "step_index": state.step_index,
+                "phase": state.phase.value,
+                "role": role,
+                "message_count": len(messages),
+                "messages": messages,
+                "tool_schemas": phase_tools,
+                "tool_choice": tool_choice,
+                "parallel_tool_calls": parallel_tool_calls,
+            },
+        )
+
         turn = _generate_turn_with_context_recovery(
             router,
             config=config,
@@ -1775,6 +1896,28 @@ def generate_with_tools(
             media_paths=request.media_paths if state.step_index == 1 else (),
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,
+        )
+        emit_root_cause(
+            "model_turn_received",
+            stage=stage,
+            operation="coder_turn",
+            gate="model_boundary",
+            result="PASS",
+            reason="model response decoded",
+            details={
+                "step_index": state.step_index,
+                "phase": state.phase.value,
+                "content": turn.content,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "raw_arguments": call.raw_arguments,
+                        "parsed_arguments": dict(call.arguments),
+                    }
+                    for call in turn.tool_calls
+                ],
+            },
         )
 
         if not turn.tool_calls:
@@ -2044,6 +2187,22 @@ def generate_with_tools(
             route_metadata: dict[str, Any] = {
                 "skills": list(skills_for_tool(stage, call.name, model_role=role))
             }
+            emit_root_cause(
+                "tool_call_received",
+                stage=stage,
+                operation=call.name,
+                gate="tool_protocol",
+                result="START",
+                details={
+                    "step_index": state.step_index,
+                    "phase": state.phase.value,
+                    "call_id": call.id,
+                    "raw_arguments": call.raw_arguments,
+                    "normalized_arguments": dict(call.arguments),
+                    "allowed_tools": sorted(allowed_phase_tools),
+                    "localization_stage": localization_stage.value,
+                },
+            )
             if call.name == "external_mcp_call":
                 capability = str(call.arguments.get("capability", "")).strip()
                 if capability:
@@ -2066,6 +2225,15 @@ def generate_with_tools(
                     # OBSERVE needs a phase correction, not another retrieval round.
                     state.phase = LoopPhase.ACT
                 print(f"  [!] PHASE VIOLATION: {call.name} -> {err_msg}", flush=True)
+                emit_root_cause(
+                    "tool_call_rejected",
+                    stage=stage,
+                    operation=call.name,
+                    gate="phase_tool_allowlist",
+                    result="FAIL",
+                    reason=err_msg,
+                    details={"arguments": dict(call.arguments)},
+                )
                 return call, {
                     "ok": False,
                     "tool": call.name,
@@ -2119,6 +2287,19 @@ def generate_with_tools(
                 }
 
             try:
+                emit_root_cause(
+                    "tool_execution_start",
+                    stage=stage,
+                    operation=call.name,
+                    gate="runtime_dispatch",
+                    result="START",
+                    details={
+                        "step_index": state.step_index,
+                        "phase": state.phase.value,
+                        "arguments": dict(call.arguments),
+                        "route_metadata": route_metadata,
+                    },
+                )
                 if call.name.startswith("external_mcp_"):
                     scoped_call = getattr(runtime, "call_scoped", None)
                     if callable(scoped_call):
@@ -2144,16 +2325,56 @@ def generate_with_tools(
                     **route_metadata,
                     "result": result,
                 }
+                emit_root_cause(
+                    "tool_execution_result",
+                    stage=stage,
+                    operation=call.name,
+                    gate="runtime_dispatch",
+                    result="PASS",
+                    reason="tool returned successfully",
+                    details={"arguments": dict(call.arguments), "result_payload": result},
+                )
             except Exception as exc:  # noqa: BLE001 - tool failures become observations
                 err_msg = f"{type(exc).__name__}: {exc}"
+                lowered = err_msg.casefold()
+                failure_code = (
+                    "VERIFIER_TARGET_INVALID"
+                    if call.name in _VERIFY_TOOLS
+                    and any(
+                        marker in lowered
+                        for marker in (
+                            "no such file",
+                            "not found",
+                            "does not exist",
+                            "no java files",
+                            "outside",
+                            "unsafe path",
+                        )
+                    )
+                    else "VERIFIER_ARGUMENT_INVALID"
+                    if call.name in _VERIFY_TOOLS
+                    and any(marker in lowered for marker in ("argument", "schema", "invalid"))
+                    else "TOOL_RUNTIME_UNAVAILABLE"
+                )
                 payload = {
                     "ok": False,
                     "tool": call.name,
                     **route_metadata,
+                    "failure_code": failure_code,
                     "error": err_msg,
                 }
                 state.record_failure(call.name, err_msg)
                 print(f"  [!] TOOL EXCEPTION: {call.name} -> {err_msg}", flush=True)
+                emit_root_cause(
+                    "tool_execution_failure",
+                    stage=stage,
+                    operation=call.name,
+                    gate="runtime_dispatch",
+                    result="FAIL",
+                    reason=failure_code,
+                    details={"arguments": dict(call.arguments), "error": err_msg},
+                    exc=exc,
+                )
             return call, payload
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
@@ -2181,7 +2402,27 @@ def generate_with_tools(
             )
 
             if call.name in _MUTATION_ACT_TOOLS:
-                if state.record_mutation(call.name, payload):
+                mutation_applied = state.record_mutation(call.name, payload)
+                emit_root_cause(
+                    "mutation_adjudicated",
+                    stage=stage,
+                    operation=call.name,
+                    gate="workspace_diff_receipt",
+                    result="PASS" if mutation_applied else "FAIL",
+                    reason=(
+                        "workspace bytes changed"
+                        if mutation_applied
+                        else str(payload.get("failure_code") or payload.get("error") or "no source-byte change")
+                    ),
+                    details={
+                        "step_index": state.step_index,
+                        "arguments": dict(call.arguments),
+                        "payload": payload,
+                        "workspace_changed": state.workspace_changed,
+                        "applied_mutations": tuple(state.applied_mutations),
+                    },
+                )
+                if mutation_applied:
                     turn_made_progress = True
                     if all_exposed_names & _VERIFY_TOOLS:
                         state.phase = LoopPhase.VERIFY
@@ -2217,6 +2458,27 @@ def generate_with_tools(
 
             if call.name in _VERIFY_TOOLS:
                 status = _verification_outcome(call.name, payload)
+                emit_root_cause(
+                    "verification_adjudicated",
+                    stage=stage,
+                    operation=call.name,
+                    gate="verification_outcome",
+                    result="FAIL" if status != "PASS" else "PASS",
+                    reason=status,
+                    details={
+                        "step_index": state.step_index,
+                        "arguments": dict(call.arguments),
+                        "payload": payload,
+                        "previous_validation_status": state.validation_status,
+                    },
+                )
+                if status in {"VERIFIER_ARGUMENT_INVALID", "VERIFIER_TARGET_INVALID"}:
+                    state.termination_reason = status
+                    raise ModelConfigurationError(
+                        f"{status}: host-bound verifier request is invalid; verifier health was not "
+                        f"retired. tool={call.name} arguments={json.dumps(dict(call.arguments), ensure_ascii=False)} "
+                        f"cause={payload.get('error', '')}"
+                    )
                 if status == "UNAVAILABLE":
                     # Runtime/tool failure is verifier health, not a source defect.
                     # Retire this verifier for the current HostRunState instead of
@@ -2336,6 +2598,27 @@ def generate_with_tools(
             action_decision="tool_wave_executed",
         )
         state.trajectory.append(trace_entry)
+        emit_root_cause(
+            "tool_loop_step_result",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="progress_adjudication",
+            result="PASS" if turn_made_progress else "SKIP",
+            reason="progress" if turn_made_progress else "no_progress",
+            details={
+                "step_index": state.step_index,
+                "phase_before": phase_before,
+                "phase_after": phase_after,
+                "localization_stage_before": loc_stage_before,
+                "localization_stage_after": loc_stage_after,
+                "model_calls": model_calls_info,
+                "tool_results": results_info,
+                "validation_status": state.validation_status,
+                "workspace_changed": state.workspace_changed,
+                "no_progress_streak": state.no_progress_streak,
+                "action_decision": trace_entry.action_decision,
+            },
+        )
         print(
             f"  step {state.step_index} finished: stage={loc_stage_before}->{loc_stage_after} "
             f"phase={phase_before}->{phase_after} progress={turn_made_progress} streak={state.no_progress_streak}\n",
@@ -2379,6 +2662,65 @@ def _finalize_without_tools(
     if not content:
         raise ModelConfigurationError(empty_error)
     return content
+
+
+def generate_with_tools(
+    router: Any,
+    *,
+    config: Any,
+    adapter: Any,
+    request: GenerationRequest,
+    runtime: Any,
+    stage: str,
+    role: str,
+) -> str:
+    """Trace the complete coder/tool lifecycle with one correlation scope."""
+
+    with trace_scope("tool_loop"):
+        emit_root_cause(
+            "pipeline_boundary_start",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="coder_tool_loop",
+            result="START",
+            details={
+                "role": role,
+                "request_messages": request.messages,
+                "request_tools": request.tools,
+                "tool_choice": request.tool_choice,
+            },
+        )
+        try:
+            value = _generate_with_tools_impl(
+                router,
+                config=config,
+                adapter=adapter,
+                request=request,
+                runtime=runtime,
+                stage=stage,
+                role=role,
+            )
+        except BaseException as exc:
+            emit_root_cause(
+                "pipeline_boundary_failure",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="coder_tool_loop",
+                result="FAIL",
+                reason=f"{type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+            raise
+        emit_root_cause(
+            "pipeline_boundary_result",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="coder_tool_loop",
+            result="PASS",
+            reason="coder/tool loop completed",
+            details={"output": value},
+        )
+        return value
 
 
 __all__ = [

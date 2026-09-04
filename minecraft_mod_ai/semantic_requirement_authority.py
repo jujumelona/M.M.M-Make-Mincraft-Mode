@@ -18,6 +18,7 @@ from typing import Any
 
 from . import evidence_first_planning as _evidence
 from . import evidence_request_guard as _guard
+from .root_cause_trace import emit_root_cause
 
 _INSTALLED = False
 _SCHEMA = "mmm/approved-requirement-graph-v1"
@@ -33,6 +34,211 @@ _ALL_PROVENANCE_ROLES = frozenset(
 _CAPABILITY_ID = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _OPAQUE_CAPABILITY = re.compile(r"^(?:semantic_[0-9a-f]{6,}|unresolved:)", re.IGNORECASE)
 _WORD = re.compile(r"\w+", re.UNICODE)
+_SOFTWARE_PERFORMANCE_MARKERS = (
+    "software.performance",
+    "performance.optimization",
+    "runtime.performance",
+    "code.optimization",
+    "performance optimization",
+    "tick budget",
+    "latency budget",
+    "throughput budget",
+    "memory budget",
+    "profiling",
+    "benchmark",
+    "mixin",
+    "코드 성능",
+    "성능 최적화",
+    "프로파일링",
+    "벤치마크",
+)
+
+
+def _semantic_type(capability: str, statement: str, supplied: Any = "") -> str:
+    supplied_value = str(supplied or "").strip().casefold()
+    evidence = f"{capability} {statement}".casefold()
+    if any(marker in evidence for marker in _SOFTWARE_PERFORMANCE_MARKERS):
+        return "software_quality"
+    object_state_markers = (
+        "spacecraft",
+        "spaceship",
+        "ship",
+        "vehicle",
+        "weapon",
+        "player",
+        "entity",
+        "fuel",
+        "durability",
+        "stat",
+        "upgrade",
+        "우주선",
+        "연료",
+        "내구",
+        "속도",
+        "추진",
+        "업그레이드",
+    )
+    if any(marker in evidence for marker in object_state_markers):
+        return "gameplay_mechanic"
+    if supplied_value in {"gameplay_mechanic", "software_quality"}:
+        return supplied_value
+    return "gameplay_mechanic"
+
+
+def _implementation_profile(capability: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Map semantic gameplay families to Minecraft implementation obligations.
+
+    These are architecture categories, not invented game-design values.  Exact resource
+    names, prices, tiers and balance values remain explicit design-resolution obligations.
+    """
+
+    value = capability.casefold()
+    capabilities = {"registry.lifecycle", "gametest.runtime_scenario"}
+    artifacts = {"lang", "gametest"}
+
+    def matches(*terms: str) -> bool:
+        return any(term in value for term in terms)
+
+    if matches("resource", "mining", "mineral", "ore"):
+        capabilities.update({"item.registry", "loot.acquisition", "inventory.transaction"})
+        artifacts.update({"item_model", "loot_table", "tag", "recipe"})
+    if matches("economy", "currency", "money", "trade", "shop", "purchase"):
+        capabilities.update(
+            {
+                "economy.transaction_service",
+                "economy.price_stock_policy",
+                "persistence.economy_state",
+                "network.server_authority",
+                "ui.transaction_surface",
+            }
+        )
+        artifacts.update({"item_model", "recipe", "tag", "lang"})
+    if matches("spacecraft", "spaceship", "ship", "vehicle"):
+        capabilities.update(
+            {
+                "spacecraft.component_registry",
+                "spacecraft.assembly_validation",
+                "spacecraft.stat_state",
+                "persistence.spacecraft_state",
+                "network.server_authority",
+                "ui.spacecraft_surface",
+            }
+        )
+        artifacts.update({"item_model", "recipe", "tag", "lang"})
+    if matches("performance", "stat", "upgrade") and matches(
+        "spacecraft", "spaceship", "ship", "vehicle"
+    ):
+        capabilities.update(
+            {
+                "spacecraft.gameplay_stat_schema",
+                "spacecraft.upgrade_tier_service",
+                "economy.transaction_service",
+            }
+        )
+    if matches("weapon", "combat"):
+        capabilities.update(
+            {"combat.damage_service", "combat.server_validation", "loot.drop_table"}
+        )
+        artifacts.update({"item_model", "recipe", "loot_table", "tag", "lang"})
+    if matches("crew", "recruit", "hire"):
+        capabilities.update(
+            {
+                "entity.crew_lifecycle",
+                "crew.role_skill_schema",
+                "crew.recruit_replace_service",
+                "persistence.crew_state",
+                "network.server_authority",
+                "ui.crew_surface",
+            }
+        )
+        artifacts.update({"entity_model", "loot_table", "lang"})
+    if matches("launch", "space.travel", "space_access", "planet_access"):
+        capabilities.update(
+            {
+                "space.launch_unlock_policy",
+                "space.fuel_transaction",
+                "space.destination_registry",
+                "space.travel_transition",
+                "persistence.travel_state",
+                "network.server_authority",
+                "ui.destination_surface",
+            }
+        )
+        artifacts.update({"dimension_data", "tag", "lang"})
+    if matches("planet", "dimension", "worldgen"):
+        capabilities.update(
+            {"worldgen.dimension", "worldgen.configured_feature", "worldgen.placed_feature"}
+        )
+        artifacts.update({"dimension_data", "worldgen_data", "tag", "loot_table", "lang"})
+    if matches("alien", "mob", "entity"):
+        capabilities.update(
+            {"entity.ai_goals", "entity.attributes", "entity.spawn_rules", "loot.drop_table"}
+        )
+        artifacts.update({"entity_model", "loot_table", "tag", "lang"})
+    if matches("colony", "coloniz", "settlement"):
+        capabilities.update(
+            {
+                "colony.placement_validation",
+                "colony.ownership_state",
+                "colony.progression_service",
+                "colony.storage_service",
+                "persistence.colony_state",
+                "network.server_authority",
+                "ui.colony_surface",
+            }
+        )
+        artifacts.update({"blockstate", "block_model", "item_model", "recipe", "loot_table", "tag", "lang"})
+    return tuple(sorted(capabilities)), tuple(sorted(artifacts))
+
+
+def _design_resolution_obligations(capability: str) -> tuple[str, ...]:
+    """Require concrete design values before code generation, without inventing them."""
+
+    value = capability.casefold()
+    obligations = [
+        "Name every registry identifier and authoritative state owner used by this behavior.",
+        "Define success, rejection, consumption and persistence-visible state transitions.",
+        "Define a disposable GameTest scenario with concrete setup, action and assertions.",
+    ]
+
+    def add_if(terms: tuple[str, ...], *items: str) -> None:
+        if any(term in value for term in terms):
+            obligations.extend(items)
+
+    add_if(
+        ("resource", "mining", "mineral", "ore"),
+        "Name resource and currency types, acquisition amounts/rules, sinks and crafting or upgrade uses.",
+    )
+    add_if(
+        ("economy", "currency", "trade", "shop", "purchase"),
+        "Define trader/NPC access, buy/sell prices, stock/restock rules and atomic insufficient-funds/full-inventory rejection.",
+    )
+    add_if(
+        ("spacecraft", "spaceship"),
+        "Name ship part types, slots, compatibility and assembly completion conditions.",
+        "Define engine thrust/speed, hull durability, fuel, cargo and weapon-slot stat schemas, tiers and costs where applicable.",
+    )
+    add_if(
+        ("crew", "recruit", "hire"),
+        "Define crew professions, skills, hiring costs, assignments, death/dismissal and replacement rules.",
+    )
+    add_if(
+        ("space.launch", "space.travel", "space_access", "planet_access"),
+        "Declare every required versus optional launch unlock, fuel cost, destination selection and arrival/return rule.",
+    )
+    add_if(
+        ("planet", "dimension", "worldgen"),
+        "Define dimension/planet generation, biome/feature placement and destination access rules.",
+    )
+    add_if(
+        ("alien", "combat"),
+        "Define alien attributes, spawn conditions, AI goals, attacks, damage, death and drop tables.",
+    )
+    add_if(
+        ("colony", "coloniz", "settlement"),
+        "Define colony placement, ownership, development stages/costs, storage and save/reload behavior.",
+    )
+    return tuple(dict.fromkeys(obligations))
 
 
 def _canonical(value: Any) -> str:
@@ -113,6 +319,20 @@ def _semantic_schema(max_clause_index: int) -> dict[str, Any]:
                         "given": {"type": "string", "minLength": 1},
                         "when": {"type": "string", "minLength": 1},
                         "then": {"type": "string", "minLength": 1},
+                        "semantic_type": {
+                            "type": "string",
+                            "enum": ["gameplay_mechanic", "software_quality"],
+                        },
+                        "required_prerequisite_capabilities": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 3, "maxLength": 128},
+                            "uniqueItems": True,
+                        },
+                        "optional_prerequisite_capabilities": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 3, "maxLength": 128},
+                            "uniqueItems": True,
+                        },
                     },
                     "required": [
                         "source_clause_index",
@@ -177,7 +397,13 @@ def _model_messages(
         "one concrete Given/When/Then observable behavior for each leaf. Every condition and outcome "
         "in Given/When/Then must be supported by the authored request; do not fill missing details from "
         "Minecraft conventions or general game-design knowledge. Do not emit provenance roles, local "
-        "IDs, dependencies, source offsets, or hashes."
+        "IDs, requirement IDs, source offsets, or hashes. Classify semantic_type as gameplay_mechanic "
+        "for player/world/entity/item stats and upgrades, including vehicle or spaceship performance; "
+        "use software_quality only for explicit code/runtime optimization, profiling, latency, memory, "
+        "throughput, tick or frame-rate requirements. Emit required_prerequisite_capabilities when the "
+        "authored Given-state or explicit causal language requires another leaf's completed state. Emit "
+        "optional_prerequisite_capabilities for available-but-not-required upgrades. Use capability IDs, "
+        "never requirement IDs, and never infer a dependency from mention order alone."
     )
     payload = {
         "host_owned_clauses": [
@@ -201,9 +427,17 @@ def _call_semantic_model(
     max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
     parameters = _semantic_schema(max_clause_index)
     messages = _model_messages(clauses)
+    emit_root_cause(
+        "planner_model_request",
+        stage="planning",
+        operation="compile_semantic_requirements",
+        gate="semantic_typing",
+        result="START",
+        details={"clauses": clauses, "messages": messages, "schema": parameters},
+    )
     native = getattr(router, "generate_tool_decision", None)
     if callable(native):
-        return native(
+        result = native(
             "planner",
             messages,
             tool_name="compile_semantic_requirements",
@@ -213,6 +447,15 @@ def _call_semantic_model(
                 "leaf requirements. The host owns exact source grounding."
             ),
         )
+        emit_root_cause(
+            "planner_model_response",
+            stage="planning",
+            operation="compile_semantic_requirements",
+            gate="semantic_typing",
+            result="PASS",
+            details={"raw_response": result},
+        )
+        return result
     raw = router.generate_text(
         "planner",
         messages,
@@ -220,7 +463,16 @@ def _call_semantic_model(
         response_schema=None,
         enable_tools=False,
     )
-    return _parse_json(raw)
+    result = _parse_json(raw)
+    emit_root_cause(
+        "planner_model_response",
+        stage="planning",
+        operation="compile_semantic_requirements",
+        gate="semantic_typing",
+        result="PASS",
+        details={"raw_response": raw, "parsed_response": result},
+    )
+    return result
 
 
 def _similarity_projection(value: str) -> tuple[str, list[int]]:
@@ -430,8 +682,51 @@ def _normalize_requirement(
             clause_index,
         )
 
+    prerequisite_fields: dict[str, list[str]] = {}
+    for field in (
+        "required_prerequisite_capabilities",
+        "optional_prerequisite_capabilities",
+    ):
+        supplied = raw.get(field, [])
+        if not isinstance(supplied, list):
+            return (
+                None,
+                _diagnostic(
+                    "REQ_PREREQUISITE_SCHEMA",
+                    path + "." + field,
+                    supplied,
+                    "a list of meaningful dotted capability IDs",
+                    f"clause:{clause_index}",
+                ),
+                clause_index,
+            )
+        normalized = tuple(
+            dict.fromkeys(str(value or "").strip().casefold() for value in supplied)
+        )
+        if any(
+            not _CAPABILITY_ID.fullmatch(value) or _OPAQUE_CAPABILITY.match(value)
+            for value in normalized
+        ):
+            return (
+                None,
+                _diagnostic(
+                    "REQ_PREREQUISITE_CAPABILITY",
+                    path + "." + field,
+                    supplied,
+                    "meaningful lower-case dotted capability IDs",
+                    f"clause:{clause_index}",
+                ),
+                clause_index,
+            )
+        prerequisite_fields[field] = list(normalized)
+
     node = {
         "capability_id": capability,
+        "semantic_type": _semantic_type(
+            capability,
+            semantic_statement,
+            raw.get("semantic_type"),
+        ),
         "provenance_role": "explicit",
         "source_clause_index": clause_index,
         **grounding,
@@ -444,6 +739,7 @@ def _normalize_requirement(
             "when": when,
             "then": then,
         },
+        **prerequisite_fields,
     }
     return node, None, clause_index
 
@@ -494,6 +790,14 @@ def _evaluate_batch(
             continue
         assert node is not None
         nodes.append(node)
+        emit_root_cause(
+            "semantic_requirement_normalized",
+            stage="planning",
+            operation="normalize_requirement",
+            gate="semantic_schema_and_grounding",
+            result="PASS",
+            details={"item_index": item_index, "model_item": raw, "normalized_node": node},
+        )
 
     if global_failure:
         invalid_clauses = set(all_indices)
@@ -612,6 +916,12 @@ def _build_catalog(
             },
         )
 
+    ids_by_capability: dict[str, list[str]] = {}
+    for item in nodes:
+        ids_by_capability.setdefault(str(item["capability_id"]), []).append(
+            requirement_ids[str(item["local_id"])]
+        )
+
     requirements: list[dict[str, Any]] = []
     for item in nodes:
         requirement_id = requirement_ids[str(item["local_id"])]
@@ -620,7 +930,55 @@ def _build_catalog(
         source_start = int(item["source_start"])
         source_end = int(item["source_end"])
         behavior = dict(item["observable_behavior"])
-        requirements.append(
+        implementation_capabilities, artifact_kinds = _implementation_profile(
+            str(item["capability_id"])
+        )
+        required_capabilities = tuple(
+            str(value)
+            for value in item.get("required_prerequisite_capabilities", ())
+        )
+        optional_capabilities = tuple(
+            str(value)
+            for value in item.get("optional_prerequisite_capabilities", ())
+        )
+        missing_required = [
+            capability
+            for capability in required_capabilities
+            if capability not in ids_by_capability
+        ]
+        if missing_required:
+            raise _evidence.EvidencePlanError(
+                "REQ_PREREQUISITE_UNRESOLVED: required capability has no approved leaf: "
+                + _canonical(missing_required)
+            )
+        required_ids = tuple(
+            dict.fromkeys(
+                candidate
+                for capability in required_capabilities
+                for candidate in ids_by_capability.get(capability, ())
+                if candidate != requirement_id
+            )
+        )
+        optional_ids = tuple(
+            dict.fromkeys(
+                candidate
+                for capability in optional_capabilities
+                for candidate in ids_by_capability.get(capability, ())
+                if candidate != requirement_id
+            )
+        )
+        artifact_task_ids = [
+            _evidence._stable_id(
+                "task",
+                implementation_capability,
+                {"requirement_id": requirement_id, "layer": "implementation"},
+            )
+            for implementation_capability in implementation_capabilities
+        ]
+        design_obligations = _design_resolution_obligations(
+            str(item["capability_id"])
+        )
+        requirement = (
             {
                 "requirement_id": requirement_id,
                 "capability": item["capability_id"],
@@ -641,11 +999,35 @@ def _build_catalog(
                     "model_anchor": item["model_anchor"],
                 },
                 "derived_from": [],
-                "depends_on": [],
+                "depends_on": list(required_ids),
                 "provides": [_evidence._canonical_capability(item["capability_id"])],
                 "gameplay_capabilities": [item["capability_id"]],
-                "implementation_capabilities": [],
-                "artifact_task_ids": [],
+                "implementation_capabilities": list(implementation_capabilities),
+                "artifact_task_ids": artifact_task_ids,
+                "semantic_type": item["semantic_type"],
+                "unlock_policy": {
+                    "required_capabilities": list(required_capabilities),
+                    "required_requirement_refs": list(required_ids),
+                    "optional_capabilities": list(optional_capabilities),
+                    "optional_requirement_refs": list(optional_ids),
+                    "policy": "all_required_optional_do_not_block",
+                },
+                "artifact_obligations": [
+                    {
+                        "kind": kind,
+                        "status": "REQUIRED_DESIGN_AND_GENERATION",
+                    }
+                    for kind in artifact_kinds
+                ],
+                "design_resolution_obligations": list(design_obligations),
+                "runtime_acceptance": [
+                    (
+                        f"Given {behavior['given']}; when {behavior['when']} is exercised in "
+                        f"a disposable server-authoritative GameTest scenario; then {behavior['then']} "
+                        "and every changed persistent, inventory, world, entity, UI and network-visible "
+                        "state is independently observed."
+                    )
+                ],
                 "semantic_status": "RESOLVED",
                 "unresolved_spans": [],
                 "acceptance": [
@@ -656,6 +1038,20 @@ def _build_catalog(
                 ],
                 "observable_behavior": behavior,
             }
+        )
+        requirements.append(requirement)
+        emit_root_cause(
+            "requirement_contract_compiled",
+            stage="planning",
+            operation="build_requirement_catalog",
+            gate="semantic_to_implementation",
+            result="PASS",
+            details={
+                "requirement": requirement,
+                "missing_required_capabilities": missing_required,
+                "required_dependency_refs": required_ids,
+                "optional_dependency_refs": optional_ids,
+            },
         )
 
     payload: dict[str, Any] = {
@@ -669,7 +1065,11 @@ def _build_catalog(
         "deployment_expectations": [],
         "requirement_graph": {
             "node_ids": [item["requirement_id"] for item in requirements],
-            "edges": [],
+            "edges": [
+                [dependency, item["requirement_id"]]
+                for item in requirements
+                for dependency in item["depends_on"]
+            ],
         },
         "semantic_audit": {
             "status": "APPROVED",
@@ -774,6 +1174,46 @@ def validate_approved_requirement_catalog(
                 f"REQ_AUTHORITY_ACCEPTANCE: concrete observable contract missing for {requirement_id}."
             )
 
+        if raw.get("semantic_type") not in {"gameplay_mechanic", "software_quality"}:
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_SEMANTIC_TYPE: invalid semantic type for {requirement_id}."
+            )
+        if not isinstance(raw.get("implementation_capabilities"), list) or not raw.get(
+            "implementation_capabilities"
+        ):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_IMPLEMENTATION: implementation obligations missing for {requirement_id}."
+            )
+        if not isinstance(raw.get("artifact_task_ids"), list) or not raw.get(
+            "artifact_task_ids"
+        ):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_ARTIFACT_TASKS: artifact tasks missing for {requirement_id}."
+            )
+        if not isinstance(raw.get("artifact_obligations"), list) or not raw.get(
+            "artifact_obligations"
+        ):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_ARTIFACTS: resource/data obligations missing for {requirement_id}."
+            )
+        if not isinstance(raw.get("runtime_acceptance"), list) or not raw.get(
+            "runtime_acceptance"
+        ):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_RUNTIME_ACCEPTANCE: runtime scenario missing for {requirement_id}."
+            )
+        if not isinstance(raw.get("design_resolution_obligations"), list) or not raw.get(
+            "design_resolution_obligations"
+        ):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_DESIGN_RESOLUTION: concrete design obligations missing for {requirement_id}."
+            )
+        unlock = raw.get("unlock_policy")
+        if not isinstance(unlock, Mapping):
+            raise _evidence.EvidencePlanError(
+                f"REQ_AUTHORITY_UNLOCK_POLICY: unlock policy missing for {requirement_id}."
+            )
+
         for field in ("derived_from", "depends_on"):
             refs = raw.get(field, [])
             if not isinstance(refs, list):
@@ -787,6 +1227,27 @@ def validate_approved_requirement_catalog(
                 raise _evidence.EvidencePlanError(
                     f"REQ_AUTHORITY_GRAPH: {field} contains unknown requirement IDs."
                 )
+
+    dependency_map = {
+        str(raw["requirement_id"]): tuple(str(value) for value in raw.get("depends_on", ()))
+        for raw in requirements
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(requirement_id: str) -> None:
+        if requirement_id in visited:
+            return
+        if requirement_id in visiting:
+            raise _evidence.EvidencePlanError("REQ_AUTHORITY_GRAPH: dependency cycle detected.")
+        visiting.add(requirement_id)
+        for dependency in dependency_map.get(requirement_id, ()):
+            visit(dependency)
+        visiting.remove(requirement_id)
+        visited.add(requirement_id)
+
+    for requirement_id in dependency_map:
+        visit(requirement_id)
 
     audit = catalog.get("semantic_audit")
     if (

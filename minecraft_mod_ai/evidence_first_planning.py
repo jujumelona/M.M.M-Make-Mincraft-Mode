@@ -17,6 +17,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .root_cause_trace import emit_root_cause
+
 SCHEMA = "mmm/evidence-first-implementation-plan-v1"
 _SHA_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -1339,6 +1341,25 @@ def _branch_predicates(
     )
     topology = _mapping(target.get("project_topology"))
     loaders = _strings(topology.get("loaders"))
+    software_performance_evidence = any(
+        term in joined
+        for term in (
+            "software.performance",
+            "performance.optimization",
+            "code.optimization",
+            "runtime.optimization",
+            "tick optimization",
+            "latency budget",
+            "throughput budget",
+            "memory budget",
+            "frame rate budget",
+            "profiling",
+            "benchmark",
+            "mixin",
+            "renderer_patch",
+            "injection",
+        )
+    )
     conditions = {
         "needs_registry": any(
             term in joined
@@ -1350,7 +1371,10 @@ def _branch_predicates(
         "needs_network": any(term in joined for term in ("network", "payload", "packet", "sync")),
         "needs_client_render": any(term in joined for term in ("gui", "screen", "render", "texture", "model", "client", "hud")),
         "needs_worldgen": any(term in joined for term in ("worldgen", "biome", "configured_feature", "placed_feature", "structure", "dimension")),
-        "needs_mixin": any(term in joined for term in ("mixin", "optimization", "performance", "renderer_patch", "injection")),
+        # "performance" is frequently a player-visible stat (vehicle speed, fuel,
+        # durability, weapon output, and so on).  A code optimization branch is only
+        # legal when the requirement carries explicit software/runtime evidence.
+        "needs_mixin": software_performance_evidence,
         "needs_loader_leaf": len(loaders) > 1 or any(term in joined for term in ("loader_leaf", "multiloader", "multi_loader")),
     }
     result: dict[str, dict[str, Any]] = {}
@@ -1379,7 +1403,10 @@ def _required_gates(capability: str, branches: Mapping[str, Mapping[str, Any]]) 
         gates.append("network_protocol_validation")
     if "needs_worldgen" in active and any(term in capability.casefold() for term in ("worldgen", "biome", "feature", "structure", "dimension")):
         gates.append("worldgen_runtime_validation")
-    if "needs_mixin" in active and any(term in capability.casefold() for term in ("mixin", "optimization", "performance")):
+    if "needs_mixin" in active and any(
+        term in capability.casefold()
+        for term in ("mixin", "optimization", "software.performance", "runtime.performance")
+    ):
         gates.extend(("behavior_equivalence", "performance_regression"))
     return tuple(dict.fromkeys(gates))
 
@@ -1424,13 +1451,95 @@ def _semantic_steps(
             _Step("state_codec", f"Define the versioned state/codec contract for {capability}", (root,), (codec,), ("symbol", "test")),
             _Step("state_store", f"Persist, reload, and validate {capability}", (codec,), (capability,), ("symbol", "test")),
         )
-    if any(term in folded for term in ("mixin", "optimization", "performance")):
+    if any(
+        term in folded
+        for term in ("mixin", "optimization", "software.performance", "runtime.performance")
+    ):
         baseline = f"baseline:{capability}"
         patch = f"patch:{capability}"
         return (
             _Step("baseline_contract", f"Capture correctness and performance baselines for {capability}", (root,), (baseline,), ("test",)),
             _Step("optimization_patch", f"Apply one compatibility-gated optimization for {capability}", (baseline,), (patch,), ("symbol", "build_config")),
             _Step("regression_proof", f"Prove behavior equivalence and performance for {capability}", (patch,), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("economy", "currency", "trade", "shop", "purchase")):
+        model = f"economy_model:{capability}"
+        service = f"transaction_service:{capability}"
+        state = f"persistent_state:{capability}"
+        surface = f"interaction_surface:{capability}"
+        return (
+            _Step("economy_model", f"Define resource/currency, trader, price, stock and debit-credit rules for {capability}", (root,), (model,), ("symbol", "resource", "test")),
+            _Step("transaction_service", f"Implement one shared atomic server-authoritative transaction service for {capability}", (model,), (service,), ("symbol", "test")),
+            _Step("persistent_state", f"Persist and synchronize balances, stock and transaction outcomes for {capability}", (service,), (state,), ("symbol", "test")),
+            _Step("interaction_surface", f"Bind the approved NPC/menu interaction to the shared transaction service for {capability}", (service, state), (surface,), ("symbol", "resource", "test")),
+            _Step("runtime_scenario", f"Exercise acquisition, purchase/sale, rejection and reload behavior for {capability}", (surface,), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("spacecraft", "spaceship")):
+        schema = f"spacecraft_schema:{capability}"
+        service = f"spacecraft_service:{capability}"
+        persisted = f"spacecraft_persisted:{capability}"
+        resources = f"spacecraft_resources:{capability}"
+        detail = (
+            "part slots, compatibility and assembly conditions"
+            if any(term in folded for term in ("assembly", "construction", "component", "part"))
+            else "engine thrust/speed, hull durability, fuel, cargo and weapon-slot tier effects"
+            if any(term in folded for term in ("performance", "stat", "upgrade", "expansion"))
+            else "authoritative spacecraft state transitions"
+        )
+        return (
+            _Step("gameplay_schema", f"Define {detail} for {capability}", (root,), (schema,), ("symbol", "registry_id", "resource", "test")),
+            _Step("domain_service", f"Implement validation, costs and state transitions for {capability} through shared economy/inventory services", (schema,), (service,), ("symbol", "test")),
+            _Step("state_sync", f"Persist and synchronize assembled parts, tiers, fuel, damage and cargo for {capability}", (service,), (persisted,), ("symbol", "test")),
+            _Step("resource_binding", f"Bind recipes, models, tags, language and loot references for {capability}", (schema,), (resources,), ("resource", "test")),
+            _Step("runtime_scenario", f"Verify success, insufficient-cost, incompatible-part and reload scenarios for {capability}", (persisted, resources), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("crew", "recruit", "hire")):
+        schema = f"crew_schema:{capability}"
+        lifecycle = f"crew_lifecycle:{capability}"
+        state = f"crew_state:{capability}"
+        return (
+            _Step("role_skill_schema", f"Define crew roles, skills and assignment effects for {capability}", (root,), (schema,), ("symbol", "registry_id", "resource", "test")),
+            _Step("recruitment_lifecycle", f"Implement hiring cost, assignment, death/dismissal and replacement for {capability}", (schema,), (lifecycle,), ("symbol", "test")),
+            _Step("state_sync", f"Persist and synchronize crew identity, role, skill and assignment state for {capability}", (lifecycle,), (state,), ("symbol", "test")),
+            _Step("runtime_scenario", f"Verify hire, assign, remove, replace and reload outcomes for {capability}", (state,), (capability,), ("resource", "test")),
+        )
+    if any(term in folded for term in ("space.launch", "space.travel", "space_access", "planet_access")):
+        policy = f"unlock_policy:{capability}"
+        travel = f"travel_service:{capability}"
+        world = f"destination_access:{capability}"
+        return (
+            _Step("unlock_policy", f"Define explicit required and optional launch prerequisites for {capability}", (root,), (policy,), ("symbol", "test")),
+            _Step("fuel_destination_service", f"Validate fuel, consume it atomically and select an approved destination for {capability}", (policy,), (travel,), ("symbol", "registry_id", "test")),
+            _Step("world_transition", f"Bind destination world/dimension access and return state for {capability}", (travel,), (world,), ("symbol", "resource", "test")),
+            _Step("runtime_scenario", f"Verify locked, launch, insufficient-fuel, arrival and reload scenarios for {capability}", (world,), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("colony", "coloniz", "settlement")):
+        placement = f"colony_placement:{capability}"
+        state = f"colony_state:{capability}"
+        progression = f"colony_progression:{capability}"
+        return (
+            _Step("placement_ownership", f"Validate colony placement and establish server-owned identity/ownership for {capability}", (root,), (placement,), ("symbol", "registry_id", "resource", "test")),
+            _Step("persistent_storage", f"Persist colony ownership, storage and world linkage for {capability}", (placement,), (state,), ("symbol", "test")),
+            _Step("progression_surface", f"Implement resource costs, development stages and synchronized UI for {capability}", (state,), (progression,), ("symbol", "resource", "test")),
+            _Step("runtime_scenario", f"Verify place, reject, own, develop, store and reload scenarios for {capability}", (progression,), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("alien", "combat")):
+        entity = f"combat_entity:{capability}"
+        behavior = f"combat_behavior:{capability}"
+        drops = f"combat_drops:{capability}"
+        return (
+            _Step("entity_attributes_spawn", f"Register entity attributes and planet-aware spawn rules for {capability}", (root,), (entity,), ("symbol", "registry_id", "resource", "test")),
+            _Step("ai_damage_combat", f"Implement server-authoritative AI, attacks, damage and death behavior for {capability}", (entity,), (behavior,), ("symbol", "test")),
+            _Step("drops_resources", f"Bind drops, loot tables, models and language for {capability}", (behavior,), (drops,), ("resource", "test")),
+            _Step("runtime_scenario", f"Verify spawn, aggro, combat, death and drop scenarios for {capability}", (drops,), (capability,), ("test",)),
+        )
+    if any(term in folded for term in ("resource", "mineral", "mining", "ore")):
+        registry = f"resource_registry:{capability}"
+        acquisition = f"resource_acquisition:{capability}"
+        return (
+            _Step("resource_registry", f"Define resource identities, item/block registrations and acquisition rules for {capability}", (root,), (registry,), ("symbol", "registry_id", "resource", "test")),
+            _Step("acquisition_consumption", f"Implement inventory acquisition, drops, recipes and consumption accounting for {capability}", (registry,), (acquisition,), ("symbol", "resource", "test")),
+            _Step("runtime_scenario", f"Verify obtain, reject, consume and persistence-visible outcomes for {capability}", (acquisition,), (capability,), ("test",)),
         )
     if any(term in folded for term in ("gui", "screen", "hud", "client_render")):
         contract = f"client_contract:{capability}"
@@ -1654,7 +1763,13 @@ def _anchors(
             "ownership": "exclusive",
             "status": "host_reserved",
             "module_id": ownership["module_id"],
-            "source_set": ownership["source_set"],
+            "source_set": (
+                "test"
+                if kind == "test"
+                else "resources"
+                if kind == "resource"
+                else ownership["source_set"]
+            ),
         }
         for kind in step.anchor_kinds
     ]
@@ -1669,6 +1784,20 @@ def _compile_tasks(
 ) -> tuple[dict[str, Any], ...]:
     reuse_by_req = {str(item["requirement_ref"]): item for item in reuse}
     tasks: list[dict[str, Any]] = []
+    emit_root_cause(
+        "implementation_decomposition_start",
+        stage="planning",
+        operation="compile_tasks",
+        gate="requirement_to_codeplan",
+        result="START",
+        details={
+            "gaps": gaps,
+            "reuse_decisions": reuse,
+            "target": target,
+            "branches": branches,
+            "ownership": ownership,
+        },
+    )
     for gap in gaps:
         requirement_ref = str(gap["requirement_ref"])
         capability = str(gap.get("capability") or gap["missing_provides"][0])
@@ -1779,7 +1908,24 @@ def _compile_tasks(
             }
             task["task_sha256"] = _hash_without(task, "task_sha256")
             tasks.append(task)
-    return _bind_consumes_dependencies(tasks, root_provides={"target:frozen"})
+            emit_root_cause(
+                "implementation_task_compiled",
+                stage="planning",
+                operation="compile_tasks",
+                gate="task_contract",
+                result="PASS",
+                details={"task": task, "step_index": index, "step_count": len(steps)},
+            )
+    bound = _bind_consumes_dependencies(tasks, root_provides={"target:frozen"})
+    emit_root_cause(
+        "implementation_decomposition_result",
+        stage="planning",
+        operation="compile_tasks",
+        gate="requirement_to_codeplan",
+        result="PASS",
+        details={"tasks": bound},
+    )
+    return bound
 
 
 def _bind_consumes_dependencies(
@@ -1940,6 +2086,16 @@ def compile_evidence_first_plan(
             "reason": "not supplied by a verified project-bound component receipt",
             "required_gates": ["source_static_validation", "target_compile"],
             "acceptance": list(requirement["acceptance"]),
+            "runtime_acceptance": list(requirement.get("runtime_acceptance") or ()),
+            "implementation_capabilities": list(
+                requirement.get("implementation_capabilities") or ()
+            ),
+            "artifact_obligations": list(requirement.get("artifact_obligations") or ()),
+            "design_resolution_obligations": list(
+                requirement.get("design_resolution_obligations") or ()
+            ),
+            "semantic_type": str(requirement.get("semantic_type") or "gameplay_mechanic"),
+            "unlock_policy": dict(requirement.get("unlock_policy") or {}),
             "gap_sha256": "",
         }
         gap["gap_sha256"] = _hash_without(gap, "gap_sha256")
@@ -2255,6 +2411,16 @@ def validate_evidence_first_plan(plan: Mapping[str, Any], *, prompt: str | None 
             "reason": "not supplied by a verified project-bound component receipt",
             "required_gates": ["source_static_validation", "target_compile"],
             "acceptance": list(requirement["acceptance"]),
+            "runtime_acceptance": list(requirement.get("runtime_acceptance") or ()),
+            "implementation_capabilities": list(
+                requirement.get("implementation_capabilities") or ()
+            ),
+            "artifact_obligations": list(requirement.get("artifact_obligations") or ()),
+            "design_resolution_obligations": list(
+                requirement.get("design_resolution_obligations") or ()
+            ),
+            "semantic_type": str(requirement.get("semantic_type") or "gameplay_mechanic"),
+            "unlock_policy": dict(requirement.get("unlock_policy") or {}),
             "gap_sha256": "",
         }
         expected_gap["gap_sha256"] = _hash_without(expected_gap, "gap_sha256")

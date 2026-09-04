@@ -15,12 +15,17 @@ import json
 import sys
 import time
 import traceback
+import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any, TypeVar, cast
 
 _TRACE_PREFIX = "ROOT CAUSE TRACE: "
 _TRACE_SEQUENCE = itertools.count(1)
+_TRACE_ID: ContextVar[str] = ContextVar("mmm_root_trace_id", default="")
+_SPAN_ID: ContextVar[str] = ContextVar("mmm_root_span_id", default="")
 _STRING_LIMIT = 512
 _COLLECTION_LIMIT = 64
 _DEPTH_LIMIT = 5
@@ -39,6 +44,36 @@ _SECRET_KEY_PARTS = (
 _FAILURE_STATUSES = frozenset({"FAIL", "FAILED", "ERROR", "INVALID", "UNAVAILABLE", "TIMEOUT", "TIMED_OUT", "UNHEALTHY"})
 _SKIP_STATUSES = frozenset({"SKIP", "SKIPPED", "NOT_RUN"})
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def current_trace_id() -> str:
+    """Return the active correlation ID, creating it at the first boundary."""
+
+    value = _TRACE_ID.get()
+    if value:
+        return value
+    value = uuid.uuid4().hex
+    _TRACE_ID.set(value)
+    return value
+
+
+@contextmanager
+def trace_scope(operation: str, *, trace_id: str = ""):
+    """Correlate nested planner and execution events without changing public APIs."""
+
+    parent_span = _SPAN_ID.get()
+    trace_token = _TRACE_ID.set(trace_id or _TRACE_ID.get() or uuid.uuid4().hex)
+    span = f"{operation}:{next(_TRACE_SEQUENCE)}"
+    span_token = _SPAN_ID.set(span)
+    try:
+        yield {
+            "trace_id": _TRACE_ID.get(),
+            "span_id": span,
+            "parent_span_id": parent_span,
+        }
+    finally:
+        _SPAN_ID.reset(span_token)
+        _TRACE_ID.reset(trace_token)
 
 
 def _secret_key(value: Any) -> bool:
@@ -154,10 +189,14 @@ def emit_root_cause(
     exc: BaseException | None = None,
 ) -> None:
     payload: dict[str, Any] = {
-        "schema_version": "mmm/root-cause-trace-v1",
+        "schema_version": "mmm/root-cause-trace-v2",
         "trace_seq": next(_TRACE_SEQUENCE),
+        "trace_id": current_trace_id(),
         "event": str(event),
     }
+    span_id = _SPAN_ID.get()
+    if span_id:
+        payload["span_id"] = span_id
     if stage:
         payload["stage"] = stage
     if operation:
@@ -235,4 +274,11 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
     return cast(F, wrapped)
 
 
-__all__ = ["bounded_safe", "emit_root_cause", "exception_chain", "traced_callable"]
+__all__ = [
+    "bounded_safe",
+    "current_trace_id",
+    "emit_root_cause",
+    "exception_chain",
+    "trace_scope",
+    "traced_callable",
+]

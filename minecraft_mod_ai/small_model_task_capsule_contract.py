@@ -18,9 +18,12 @@ from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
 
+from .root_cause_trace import emit_root_cause, trace_scope
+
 _MARKER = "_mmm_small_model_task_capsule_v1"
 _SCHEMA = "mmm/small-model-task-capsule-v1"
 _SOURCE_EDIT_TOOL = "apply_source_edit"
+_JAVA_VERIFY_TOOLS = frozenset({"java_diagnostics", "jdt_diagnostics"})
 _PATH_ALIASES = ("file", "target_path", "target_file")
 _ALLOWED_TARGET_PREFIXES = (
     "src/main/java/",
@@ -414,6 +417,44 @@ def narrow_source_edit_schema(schema: Any, capsule: TaskCapsule) -> Any:
     return narrowed
 
 
+def narrow_task_tool_schema(schema: Any, capsule: TaskCapsule) -> Any:
+    """Expose exact task-owned paths to mutation and diagnostic tools."""
+
+    narrowed = narrow_source_edit_schema(schema, capsule)
+    name = _tool_name(narrowed)
+    if name not in _JAVA_VERIFY_TOOLS or not isinstance(narrowed, Mapping):
+        return narrowed
+    result = copy.deepcopy(dict(narrowed))
+    function = result.get("function")
+    parameters = function.get("parameters") if isinstance(function, dict) else None
+    if not isinstance(parameters, dict):
+        return result
+    properties = parameters.setdefault("properties", {})
+    java_paths = [capsule.primary_path]
+    properties["relative_files"] = {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": True,
+        "items": {"type": "string", "enum": java_paths},
+        "description": "Exact host-owned task Java paths.",
+    }
+    properties["project_root"] = {
+        "type": "string",
+        "enum": ["."],
+        "description": "Host-bound project root relative to the runtime workspace.",
+    }
+    for alias in (
+        "diagnostics_path",
+        "file_path",
+        "diagnostics_command",
+        "diagnostics_config",
+    ):
+        properties.pop(alias, None)
+    parameters["additionalProperties"] = False
+    parameters["required"] = ["project_root", "relative_files"]
+    return result
+
+
 def _resolve_model_path(arguments: Mapping[str, Any], capsule: TaskCapsule) -> str:
     raw = ""
     for key in ("path", *_PATH_ALIASES):
@@ -479,8 +520,33 @@ def bind_source_edit_arguments(
     return bound
 
 
+def bind_verifier_arguments(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    capsule: TaskCapsule,
+) -> dict[str, Any]:
+    """Replace model diagnostic paths with exact PlanIR-owned Java targets."""
+
+    if tool_name not in _JAVA_VERIFY_TOOLS:
+        return dict(arguments)
+    java_paths = [capsule.primary_path] if capsule.primary_path.endswith(".java") else []
+    if not java_paths:
+        raise TaskCapsuleContractError(
+            "TASK_CAPSULE_VERIFIER_TARGET_MISSING: no task-owned Java path is available."
+        )
+    timeout = arguments.get("timeout_seconds", 60)
+    if type(timeout) is not int or not 1 <= timeout <= 600:
+        timeout = 60
+    return {
+        "project_root": ".",
+        "relative_files": java_paths,
+        "timeout_seconds": timeout,
+    }
+
+
 def _bind_tool_call(call: Any, capsule: TaskCapsule) -> Any:
-    if str(getattr(call, "name", "") or "") != _SOURCE_EDIT_TOOL:
+    tool_name = str(getattr(call, "name", "") or "")
+    if tool_name != _SOURCE_EDIT_TOOL and tool_name not in _JAVA_VERIFY_TOOLS:
         return call
     arguments = getattr(call, "arguments", None)
     if not isinstance(arguments, Mapping):
@@ -493,8 +559,15 @@ def _bind_tool_call(call: Any, capsule: TaskCapsule) -> Any:
         ),
         "",
     )
-    bound = bind_source_edit_arguments(arguments, capsule)
-    if original_path.replace("\\", "/").strip() != bound["path"]:
+    bound = (
+        bind_source_edit_arguments(arguments, capsule)
+        if tool_name == _SOURCE_EDIT_TOOL
+        else bind_verifier_arguments(tool_name, arguments, capsule)
+    )
+    if (
+        tool_name == _SOURCE_EDIT_TOOL
+        and original_path.replace("\\", "/").strip() != bound["path"]
+    ):
         print(
             "task capsule: rebound model path",
             f"task={capsule.task_id}",
@@ -502,6 +575,21 @@ def _bind_tool_call(call: Any, capsule: TaskCapsule) -> Any:
             f"target={bound['path']!r}",
             flush=True,
         )
+    emit_root_cause(
+        "task_tool_arguments_bound",
+        stage="generation",
+        operation=tool_name,
+        gate="task_capsule_authority",
+        result="PASS",
+        reason="model arguments normalized to exact task-owned targets",
+        details={
+            "task_id": capsule.task_id,
+            "primary_path": capsule.primary_path,
+            "raw_arguments": getattr(call, "raw_arguments", ""),
+            "parsed_arguments": dict(arguments),
+            "normalized_arguments": bound,
+        },
+    )
     try:
         return replace(
             call,
@@ -534,13 +622,65 @@ class _TaskBoundAdapter:
         return self._adapter.generate(request)
 
     def generate_turn(self, request: Any) -> Any:
+        emit_root_cause(
+            "task_coder_request",
+            stage="generation",
+            operation="task_bound_adapter",
+            gate="coder_boundary",
+            result="START",
+            details={
+                "task_id": self._capsule.task_id,
+                "primary_path": self._capsule.primary_path,
+                "request": request,
+            },
+        )
         response = self._adapter.generate_turn(request)
+        emit_root_cause(
+            "task_coder_response_raw",
+            stage="generation",
+            operation="task_bound_adapter",
+            gate="coder_boundary",
+            result="PASS",
+            details={
+                "task_id": self._capsule.task_id,
+                "content": getattr(response, "content", ""),
+                "tool_calls": [
+                    {
+                        "id": getattr(call, "id", ""),
+                        "name": getattr(call, "name", ""),
+                        "raw_arguments": getattr(call, "raw_arguments", ""),
+                        "parsed_arguments": getattr(call, "arguments", {}),
+                    }
+                    for call in tuple(getattr(response, "tool_calls", ()) or ())
+                ],
+            },
+        )
         calls = tuple(
             _bind_tool_call(call, self._capsule)
             for call in tuple(getattr(response, "tool_calls", ()) or ())
         )
         try:
-            return replace(response, tool_calls=calls)
+            normalized = replace(response, tool_calls=calls)
+            emit_root_cause(
+                "task_coder_response_normalized",
+                stage="generation",
+                operation="task_bound_adapter",
+                gate="task_capsule_authority",
+                result="PASS",
+                details={
+                    "task_id": self._capsule.task_id,
+                    "tool_calls": [
+                        {
+                            "id": getattr(call, "id", ""),
+                            "name": getattr(call, "name", ""),
+                            "raw_arguments": getattr(call, "raw_arguments", ""),
+                            "arguments": getattr(call, "arguments", {}),
+                        }
+                        for call in calls
+                    ],
+                },
+            )
+            return normalized
         except TypeError as exc:
             raise TaskCapsuleContractError(
                 "TASK_CAPSULE_RESPONSE_UNSUPPORTED: generation response is not replaceable."
@@ -589,8 +729,34 @@ def install() -> None:
     def generate(self: Any, *args: Any, **kwargs: Any):
         capsule = compile_task_capsule(kwargs.get("module"))
         token = _CURRENT_CAPSULE.set(capsule)
+        emit_root_cause(
+            "task_capsule_compiled",
+            stage="generation",
+            operation="compile_task_capsule",
+            gate="planir_task_authority",
+            result="PASS" if capsule is not None else "SKIP",
+            details={
+                "task_id": capsule.task_id if capsule else "",
+                "primary_path": capsule.primary_path if capsule else "",
+                "writable_paths": capsule.writable_paths if capsule else (),
+                "test_paths": capsule.test_paths if capsule else (),
+                "required_gates": capsule.required_gates if capsule else (),
+            },
+        )
         try:
             return original_generate(self, *args, **kwargs)
+        except BaseException as exc:
+            emit_root_cause(
+                "task_capsule_generation_failure",
+                stage="generation",
+                operation="custom_module_generate",
+                gate="task_capsule",
+                result="FAIL",
+                reason=f"{type(exc).__name__}: {exc}",
+                details={"task_id": capsule.task_id if capsule else ""},
+                exc=exc,
+            )
+            raise
         finally:
             _CURRENT_CAPSULE.reset(token)
 
@@ -620,7 +786,7 @@ def install() -> None:
             request,
             messages=_insert_authority_message(request.messages, capsule),
             tools=tuple(
-                narrow_source_edit_schema(schema, capsule) for schema in tuple(request.tools)
+                narrow_task_tool_schema(schema, capsule) for schema in tuple(request.tools)
             ),
         )
         print(
@@ -631,15 +797,32 @@ def install() -> None:
             f"reuse={capsule.reuse_action}",
             flush=True,
         )
-        return original_loop(
-            router,
-            config=config,
-            adapter=_TaskBoundAdapter(adapter, capsule),
-            request=request,
-            runtime=runtime,
-            stage=stage,
-            role=role,
-        )
+        with trace_scope(f"task:{capsule.task_id}"):
+            emit_root_cause(
+                "task_capsule_activated",
+                stage=stage,
+                operation="task_capsule",
+                gate="coder_input",
+                result="PASS",
+                details={
+                    "task_id": capsule.task_id,
+                    "primary_path": capsule.primary_path,
+                    "writable_paths": capsule.writable_paths,
+                    "test_paths": capsule.test_paths,
+                    "reuse_action": capsule.reuse_action,
+                    "messages": request.messages,
+                    "narrowed_tools": request.tools,
+                },
+            )
+            return original_loop(
+                router,
+                config=config,
+                adapter=_TaskBoundAdapter(adapter, capsule),
+                request=request,
+                runtime=runtime,
+                stage=stage,
+                role=role,
+            )
 
     @wraps(original_contract)
     def task_local_module_contract(module: Any) -> dict[str, Any]:
@@ -688,8 +871,10 @@ __all__ = [
     "TaskCapsuleContractError",
     "assert_installed",
     "bind_source_edit_arguments",
+    "bind_verifier_arguments",
     "compact_task_local_module_contract",
     "compile_task_capsule",
     "install",
     "narrow_source_edit_schema",
+    "narrow_task_tool_schema",
 ]

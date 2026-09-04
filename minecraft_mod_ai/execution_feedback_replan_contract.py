@@ -28,6 +28,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .root_cause_trace import emit_root_cause, trace_scope
+
 _SCHEMA = "mmm/execution-feedback-replan-v1"
 _PATH_TOKEN = re.compile(
     r"(?P<path>(?:[A-Za-z]:)?[^\s:'\"<>|]*?(?:src[/\\][^\s:'\"<>|]+|[A-Za-z0-9_.-]+\.(?:java|json|kt|kts|gradle|mcmeta|png|ogg)))"
@@ -618,8 +620,7 @@ def _install_run_context(orchestrator_module: Any) -> None:
     if getattr(current_execute, "_mmm_impacted_feedback_loop", False):
         return
 
-    @wraps(current_execute)
-    def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
+    def execute_feedback_loop(self: Any, *args: Any, **kwargs: Any):
         # Termination is bounded by both semantic progress and an absolute host cap:
         # duplicate validation/ownership fingerprints never replay, and even distinct
         # new evidence gets at most two repair re-entries for one execute() call.
@@ -629,8 +630,19 @@ def _install_run_context(orchestrator_module: Any) -> None:
         while True:
             try:
                 return current_execute(self, *args, **call_kwargs)
-            except orchestrator_module.CompleteProductionError:
+            except orchestrator_module.CompleteProductionError as exc:
+                emit_root_cause(
+                    "execution_feedback_failure_observed",
+                    stage="generation",
+                    operation="execute_with_feedback",
+                    gate="adjudication",
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    details={"repair_attempts": repair_attempts, "seen_fingerprints": sorted(seen)},
+                    exc=exc,
+                )
                 if repair_attempts >= 2:
+                    emit_root_cause("execution_feedback_abort", stage="generation", operation="execute_with_feedback", gate="retry_budget", result="FAIL", reason="repair_attempt_limit_reached", details={"repair_attempts": repair_attempts})
                     raise
                 ledger = getattr(self, "_mmm_feedback_ledger", None)
                 if ledger is None or not hasattr(ledger, "invalidate_execution_feedback"):
@@ -640,12 +652,21 @@ def _install_run_context(orchestrator_module: Any) -> None:
                     raise
                 receipt = ledger.invalidate_execution_feedback(feedback)
                 fingerprint = str(receipt.get("feedback_fingerprint") or "")
+                emit_root_cause(
+                    "execution_feedback_adjudicated",
+                    stage="generation",
+                    operation="execute_with_feedback",
+                    gate="impact_analysis",
+                    result="PASS",
+                    details={"feedback": feedback, "invalidation_receipt": receipt, "fingerprint": fingerprint},
+                )
                 if (
                     receipt.get("global_replan_required") is True
                     or not receipt.get("impacted_generation_node_ids")
                     or not fingerprint
                     or fingerprint in seen
                 ):
+                    emit_root_cause("execution_feedback_abort", stage="generation", operation="execute_with_feedback", gate="retry_eligibility", result="FAIL", reason="feedback cannot produce a bounded novel retry", details={"receipt": receipt, "seen_fingerprints": sorted(seen)})
                     raise
                 seen.add(fingerprint)
                 repair_attempts += 1
@@ -658,10 +679,45 @@ def _install_run_context(orchestrator_module: Any) -> None:
                     except TypeError:
                         raise
                 call_kwargs["options"] = options
+                emit_root_cause("execution_feedback_retry", stage="generation", operation="execute_with_feedback", gate="retry_eligibility", result="START", reason="novel impacted nodes invalidated", details={"repair_attempt": repair_attempts, "fingerprint": fingerprint, "options": options})
                 # Re-enter the approved execution on the same durable run.  The work
                 # ledger preserves unaffected succeeded nodes and exposes only the
                 # invalidated generation shard plus its dependents as pending.
                 continue
+
+    @wraps(current_execute)
+    def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
+        with trace_scope("complete_production"):
+            emit_root_cause(
+                "pipeline_boundary_start",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="START",
+                details={"args": args, "kwargs": kwargs},
+            )
+            try:
+                result = execute_feedback_loop(self, *args, **kwargs)
+            except BaseException as exc:
+                emit_root_cause(
+                    "pipeline_boundary_failure",
+                    stage="runtime",
+                    operation="complete_production",
+                    gate="end_to_end_execution",
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    exc=exc,
+                )
+                raise
+            emit_root_cause(
+                "pipeline_boundary_result",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="PASS",
+                details={"result": result},
+            )
+            return result
 
     execute_with_feedback._mmm_impacted_feedback_loop = True
     execute_with_feedback.__wrapped__ = current_execute

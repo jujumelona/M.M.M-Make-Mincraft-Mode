@@ -13,13 +13,12 @@ import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # 1. Atomic Canonical Capabilities
 # ---------------------------------------------------------------------------
-
 from enum import Enum
+from typing import Any
 
 
 class CapabilityOrigin(str, Enum):
@@ -332,6 +331,13 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         search_queries=("minecraft resource mining mechanic", "custom mining drops mod"),
         default_dependencies=("inventory.transfer",),
     ),
+    "resource.farming": CapabilityDefinition(
+        id="resource.farming",
+        category="resource",
+        description="Repeatable acquisition of named resources with explicit drops, amounts, inventory transfer, and consumption sinks",
+        search_queries=("minecraft resource farming inventory drops", "fabric resource acquisition gametest"),
+        default_dependencies=("inventory.transfer", "loot.drop_table"),
+    ),
     "economy.reward": CapabilityDefinition(
         id="economy.reward",
         category="economy",
@@ -379,6 +385,34 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         search_queries=("minecraft spaceship component crafting mod",),
         default_dependencies=("crafting.recipe",),
     ),
+    "spacecraft.component_construction": CapabilityDefinition(
+        id="spacecraft.component_construction",
+        category="transport",
+        description="Acquire compatible spacecraft parts through shared economy/inventory services and assemble them into persistent slot state",
+        search_queries=("minecraft fabric modular spaceship parts assembly", "vehicle component slot assembly gametest"),
+        default_dependencies=("crafting.recipe", "economy.trade", "persistence.state_store"),
+    ),
+    "spacecraft.weapon_upgrade": CapabilityDefinition(
+        id="spacecraft.weapon_upgrade",
+        category="combat",
+        description="Purchase and install tiered spacecraft weapon modules with server-authoritative combat stats",
+        search_queries=("minecraft vehicle weapon upgrade slots", "fabric tiered weapon module server validation"),
+        default_dependencies=("combat.weapon", "economy.trade", "persistence.state_store"),
+    ),
+    "spacecraft.performance_upgrade": CapabilityDefinition(
+        id="spacecraft.performance_upgrade",
+        category="transport",
+        description="Upgrade gameplay spacecraft stats such as thrust, speed, fuel capacity, hull durability and cargo capacity",
+        search_queries=("minecraft vehicle gameplay stat upgrade tiers", "fabric spaceship fuel durability speed upgrade"),
+        default_dependencies=("economy.trade", "persistence.state_store", "network.action_sync"),
+    ),
+    "spacecraft.expansion": CapabilityDefinition(
+        id="spacecraft.expansion",
+        category="transport",
+        description="Install spacecraft expansion modules that add explicit cargo, crew or module capacity",
+        search_queries=("minecraft modular vehicle expansion slots", "fabric persistent cargo module capacity"),
+        default_dependencies=("economy.trade", "persistence.state_store"),
+    ),
     "spaceship.vehicle": CapabilityDefinition(
         id="spaceship.vehicle",
         category="transport",
@@ -414,6 +448,13 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         search_queries=("minecraft space travel spaceship mod",),
         default_dependencies=("entity.vehicle", "network.action_sync"),
     ),
+    "space.launch": CapabilityDefinition(
+        id="space.launch",
+        category="transport",
+        description="Evaluate explicit required versus optional launch unlocks, consume fuel and transition to a selected destination",
+        search_queries=("minecraft spaceship launch fuel destination dimension", "fabric server authoritative dimension travel gametest"),
+        default_dependencies=("space.travel", "persistence.state_store", "network.action_sync"),
+    ),
     "worldgen.planet": CapabilityDefinition(
         id="worldgen.planet",
         category="worldgen",
@@ -428,12 +469,26 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         search_queries=("minecraft custom special ore worldgen",),
         default_dependencies=("resource.mining", "worldgen.planet"),
     ),
+    "planet.special_mineral": CapabilityDefinition(
+        id="planet.special_mineral",
+        category="worldgen",
+        description="Generate, mine, tag, loot and consume named special minerals on an accessible planet",
+        search_queries=("minecraft custom planet ore configured placed feature", "fabric ore loot tag recipe datagen"),
+        default_dependencies=("worldgen.planet", "resource.special_ore", "space.launch"),
+    ),
     "alien.entity": CapabilityDefinition(
         id="alien.entity",
         category="entity",
         description="Alien entities that participate in hostile encounters",
         search_queries=("minecraft alien mob entity mod",),
         default_dependencies=("entity.lifecycle", "combat.damage"),
+    ),
+    "alien.combat": CapabilityDefinition(
+        id="alien.combat",
+        category="combat",
+        description="Planet-aware alien spawn, AI, attributes, attacks, damage, death and loot behavior",
+        search_queries=("minecraft fabric hostile alien entity AI loot", "fabric entity combat gametest spawn drops"),
+        default_dependencies=("alien.entity", "combat.weapon", "space.launch"),
     ),
     "combat.weapon": CapabilityDefinition(
         id="combat.weapon",
@@ -448,6 +503,13 @@ _ATOMIC_CAPABILITIES: dict[str, CapabilityDefinition] = {
         description="Create and maintain a player colony settlement",
         search_queries=("minecraft colony settlement building mod",),
         default_dependencies=("colony.progression", "persistence.state_store"),
+    ),
+    "colony.colonization": CapabilityDefinition(
+        id="colony.colonization",
+        category="progression",
+        description="Validate planet colony placement and persist ownership, storage and staged development",
+        search_queries=("minecraft colony placement ownership persistence", "fabric settlement progression storage gametest"),
+        default_dependencies=("colony.settlement", "space.launch", "network.action_sync"),
     ),
     "colony.progression": CapabilityDefinition(
         id="colony.progression",
