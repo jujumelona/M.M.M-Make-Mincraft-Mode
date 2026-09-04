@@ -9,11 +9,10 @@ planning decisions stay finitely bounded, while source mutation/generation actio
 use the live context that remains after the current request.
 
 Transport token estimation is intentionally conservative, but it is only an estimate.
-A forced structural tool action is never starved down to a few hundred tokens merely
-because that estimate is pessimistic.  More importantly, the host never sends a
-structural action to inference when an authoritative configured ceiling cannot fit one
-complete action page: that is a deterministic budget failure, not a useful 1-token
-model request.
+Dynamic forced structural actions retain a generous 4096-token page so an estimated
+context squeeze cannot silently starve them. Explicit static ceilings remain
+host-authoritative, but the host refuses genuinely non-viable structural decodes before
+inference instead of sending the 0/1-token requests that caused the continuation loop.
 """
 
 import json
@@ -30,6 +29,11 @@ _CONTEXT_GUARD_TOKENS = 2048
 _BYTES_PER_TOKEN_ESTIMATE = 3
 _DEFAULT_DYNAMIC_OUTPUT_TOKENS = 16384
 _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS = 4096
+# This is a liveness/safety floor, not a quality target. Deliberate static profiles may
+# choose 512/1024-token scalar edit pages; accidental context collapse to 0/1 (or another
+# tiny fragment) must fail before inference. Dynamic profiles still receive the larger
+# 4096-token structural floor above.
+_MIN_VIABLE_STRUCTURAL_TOOL_OUTPUT_TOKENS = 128
 _STRUCTURAL_COMPACT_TOOLS = frozenset({"apply_source_edit"})
 # These are not executable agent actions. They are host-selected, schema-constrained
 # semantic decisions whose arguments are consumed and validated by the host. Treating an
@@ -140,17 +144,26 @@ def _assert_structural_budget_viable(
     *,
     source: str,
 ) -> None:
-    """Fail before decode instead of asking a model for an impossible partial action."""
+    """Fail before a structurally useless fragment reaches model inference.
+
+    The 4096-token structural floor is a *dynamic packing target*. It must not override a
+    deliberate static profile ceiling such as 512/1024. The separate viability floor is
+    intentionally much smaller and exists only to reject collapsed fragments that cannot
+    reasonably encode one scalar tool action.
+    """
 
     if not _structural_tool_call_is_compact(tools):
         return
-    floor = _structural_tool_floor(config, tools)
-    if int(budget) >= floor:
+    viable = min(
+        _MIN_VIABLE_STRUCTURAL_TOOL_OUTPUT_TOKENS,
+        max(1, tool_action_token_budget(config)),
+    )
+    if int(budget) >= viable:
         return
     names = sorted({_tool_name(tool) for tool in tools if _tool_name(tool)})
     raise GenerationOutputBudgetError(
         "STRUCTURAL_OUTPUT_BUDGET_UNVIABLE: host-required tool action "
-        f"{names or ['<unknown>']} needs at least {floor} output tokens, but {source} "
+        f"{names or ['<unknown>']} needs at least {viable} output tokens, but {source} "
         f"permits only {max(0, int(budget))}; refusing a partial inference request."
     )
 
@@ -201,9 +214,8 @@ def generation_output_token_budget(
     floor = _structural_tool_floor(config, tools)
 
     if ceiling is not None:
-        # An explicit ceiling is authoritative, but an authoritative impossible value is
-        # a host configuration failure. Silently converting it into max_tokens=1 only
-        # spends inference time on a response that cannot encode the required action.
+        # Explicit static ceilings are host-authoritative. We reject only a truly
+        # non-viable fragment; we do not silently promote 512/1024 to the dynamic floor.
         _assert_structural_budget_viable(
             config,
             tools,
