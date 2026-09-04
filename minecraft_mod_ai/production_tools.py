@@ -11,7 +11,7 @@ from typing import Any
 
 from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operations
 from .geckolib_generator import generate_geckolib_entity_assets
-from .java_lsp import JavaLanguageService
+from .java_lsp_trace import TracedJavaLanguageService
 from .model_router import ModelRouter
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
@@ -41,9 +41,9 @@ class ProductionToolService:
         return MineflayerBridge()
 
     @cached_property
-    def java(self) -> JavaLanguageService:
-        """Keep one initialized JDT LS owner per persistent production service."""
-        return JavaLanguageService()
+    def java(self) -> TracedJavaLanguageService:
+        """Keep one initialized, root-cause-visible JDT LS owner per service."""
+        return TracedJavaLanguageService()
 
     @cached_property
     def model_router(self) -> ModelRouter:
