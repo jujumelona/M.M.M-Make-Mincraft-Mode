@@ -25,21 +25,13 @@ jobs:
           path = Path("minecraft_mod_ai/progress_aware_tool_loop.py")
           text = path.read_text(encoding="utf-8")
 
-          anchor = '''_VERIFY_TOOLS = frozenset({
-              "java_diagnostics",
-              "jdt_diagnostics",
-              "run_gradle_build",
-              "gradle_build",
-              "run_gametest",
-          })
-          '''
-          replacement = '''_VERIFY_TOOLS = frozenset({
-              "java_diagnostics",
-              "jdt_diagnostics",
-              "run_gradle_build",
-              "gradle_build",
-              "run_gametest",
-          })
+          def replace_once(source: str, old: str, new: str, label: str) -> str:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return source.replace(old, new, 1)
+
+          helper = r'''
 
           _VERIFIER_UNAVAILABLE_STATUSES = frozenset({
               "UNAVAILABLE", "NOT_RUN", "TIMEOUT", "TIMED_OUT", "UNHEALTHY",
@@ -53,11 +45,7 @@ jobs:
 
 
           def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
-              """Classify verifier semantics independently from tool transport success."""
-
-              # execute() sets ok=False only when the tool/runtime call itself raised or
-              # was rejected by the host. That is verifier availability, not evidence
-              # that the source under test failed validation.
+              """Classify verifier semantics independently from transport/runtime health."""
               if not bool(payload.get("ok")):
                   return "UNAVAILABLE"
 
@@ -75,11 +63,10 @@ jobs:
                   return "UNAVAILABLE"
               if status in _VERIFIER_FAIL_STATUSES:
                   return "FAIL"
-              if status in _VERIFIER_PASS_STATUSES:
-                  # For JDT receipts, PASS/AVAILABLE is not enough by itself: severity-1
-                  # diagnostics still mean a trustworthy source failure.
-                  if tool_name not in {"java_diagnostics", "jdt_diagnostics"}:
-                      return "PASS"
+              if status in _VERIFIER_PASS_STATUSES and tool_name not in {
+                  "java_diagnostics", "jdt_diagnostics"
+              }:
+                  return "PASS"
 
               if result.get("available") is False:
                   return "UNAVAILABLE"
@@ -104,51 +91,65 @@ jobs:
                   return "FAIL" if errors else "PASS"
 
               return "PASS"
-          '''
-          if text.count(anchor) != 1:
-              raise SystemExit("verification helper anchor mismatch")
-          text = text.replace(anchor, replacement, 1)
 
-          old = '''                if (
+
+          def _fixed_point_tool_results(
+              executed: Sequence[tuple[Any, Mapping[str, Any]]],
+          ) -> list[dict[str, Any]]:
+              """Remove incidental transport text from no-progress identity."""
+              stable: list[dict[str, Any]] = []
+              for call, payload in executed:
+                  if call.name in _VERIFY_TOOLS:
+                      stable.append({
+                          "name": call.name,
+                          "verification_outcome": _verification_outcome(call.name, payload),
+                      })
+                  else:
+                      stable.append({
+                          "name": call.name,
+                          "ok": bool(payload.get("ok")),
+                          "failure_code": payload.get("failure_code"),
+                      })
+              return stable
+          '''
+
+          text = replace_once(
+              text,
+              "\n\ndef normalize_retrieval_query(value: Any) -> str:\n",
+              helper + "\n\ndef normalize_retrieval_query(value: Any) -> str:\n",
+              "insert verifier classifier",
+          )
+
+          phase_old = '''                if (
                       call.name in _MUTATION_ACT_TOOLS
                       and implementation_requires_mutation
                       and state.mutation_context is not None
                       and state.mutation_context.is_mutation_ready
                   ):
-                      # The target is already localized. A stale mutation emitted during
-                      # OBSERVE needs a phase correction, not another retrieval round.
-                      state.phase = LoopPhase.ACT
           '''
-          new = '''                if (
+          phase_new = '''                if (
                       call.name in _MUTATION_ACT_TOOLS
                       and implementation_requires_mutation
                       and state.phase == LoopPhase.OBSERVE
                       and state.mutation_context is not None
                       and state.mutation_context.is_mutation_ready
                   ):
-                      # The target is already localized. Only OBSERVE may correct a stale
-                      # mutation into ACT. A mutation hallucinated during VERIFY must not
-                      # escape the verifier phase or reset liveness accounting.
-                      state.phase = LoopPhase.ACT
           '''
-          if text.count(old) != 1:
-              raise SystemExit("phase-violation anchor mismatch")
-          text = text.replace(old, new, 1)
+          text = replace_once(text, phase_old, phase_new, "VERIFY phase escape guard")
 
-          old = '''                    if authority_retry:
+          retry_old = '''                    if authority_retry:
                           # Retrieval cannot expand write authority. Reissue the same
                           # single mutation action against the host-pinned target.
                           state.phase = LoopPhase.ACT
                       elif all_exposed_names & _READ_OBSERVE_TOOLS:
                           state.phase = LoopPhase.OBSERVE
-                      state.record_failure(call.name, payload.get("error", "mutation failed"))
           '''
-          new = '''                    if (
+          retry_new = '''                    if (
                           failure_code == "PHASE_PROTOCOL_VIOLATION"
                           and state.phase == LoopPhase.VERIFY
                       ):
                           # VERIFY owns the next transition. An out-of-phase mutation is
-                          # an invalid model action, not a reason to re-enter ACT/OBSERVE.
+                          # an invalid model action, not a request for another source edit.
                           pass
                       elif authority_retry:
                           # Retrieval cannot expand write authority. Reissue the same
@@ -156,13 +157,10 @@ jobs:
                           state.phase = LoopPhase.ACT
                       elif all_exposed_names & _READ_OBSERVE_TOOLS:
                           state.phase = LoopPhase.OBSERVE
-                      state.record_failure(call.name, payload.get("error", "mutation failed"))
           '''
-          if text.count(old) != 1:
-              raise SystemExit("authority-retry anchor mismatch")
-          text = text.replace(old, new, 1)
+          text = replace_once(text, retry_old, retry_new, "VERIFY authority retry guard")
 
-          old = '''            if call.name in _VERIFY_TOOLS:
+          verify_old = '''            if call.name in _VERIFY_TOOLS:
                   status = "PASS" if bool(payload.get("ok")) else "FAIL"
                   if status != state.validation_status:
                       state.validation_status = status
@@ -172,11 +170,11 @@ jobs:
                       state.phase = LoopPhase.ACT
                   continue
           '''
-          new = '''            if call.name in _VERIFY_TOOLS:
+          verify_new = '''            if call.name in _VERIFY_TOOLS:
                   status = _verification_outcome(call.name, payload)
                   if status == "UNAVAILABLE":
-                      # Tool/runtime failure does not prove a source defect and therefore
-                      # cannot credit semantic progress or pivot VERIFY back into ACT.
+                      # Tool/runtime failure is verifier health, not evidence that the
+                      # source is wrong. Stay in VERIFY and do not credit progress.
                       state.validation_status = "UNAVAILABLE"
                       state.record_failure(
                           call.name,
@@ -188,61 +186,37 @@ jobs:
                       turn_made_progress = True
                   if status == "FAIL" and implementation_requires_mutation:
                       # Only a trustworthy verifier observation may request another edit.
-                      state.record_failure(call.name, "verification reported source defects")
+                      state.record_failure(
+                          call.name,
+                          "verification reported source defects",
+                      )
                       state.phase = LoopPhase.ACT
                   continue
           '''
-          if text.count(old) != 1:
-              raise SystemExit("verify outcome anchor mismatch")
-          text = text.replace(old, new, 1)
+          text = replace_once(text, verify_old, verify_new, "verifier semantic outcome")
 
-          old = '''                {
-                      "phase_before": phase_before,
-                      "phase_after": phase_after,
-                      "localization_stage_before": loc_stage_before,
-                      "localization_stage_after": loc_stage_after,
-                      "mutation_context_after": ctx_after,
+          fingerprint_old = '''                    "mutation_context_after": ctx_after,
                       "model_tool_calls": model_calls_info,
                       "tool_results": results_info,
-                  }
           '''
-          new = '''                {
-                      "phase_before": phase_before,
-                      "phase_after": phase_after,
-                      "localization_stage_before": loc_stage_before,
-                      "localization_stage_after": loc_stage_after,
-                      "mutation_context_after": ctx_after,
+          fingerprint_new = '''                    "mutation_context_after": ctx_after,
                       "validation_status": state.validation_status,
                       "workspace_changed": state.workspace_changed,
                       "applied_mutations": tuple(state.applied_mutations),
                       "model_tool_calls": model_calls_info,
-                      # Verifier exception strings can contain incidental transport text.
-                      # Fixed-point identity uses the semantic verifier outcome instead.
-                      "tool_results": [
-                          (
-                              {
-                                  "name": item.get("name"),
-                                  "verification_outcome": _verification_outcome(
-                                      str(item.get("name") or ""),
-                                      next(
-                                          payload
-                                          for call, payload in executed
-                                          if call.name == item.get("name")
-                                      ),
-                                  ),
-                              }
-                              if item.get("name") in _VERIFY_TOOLS
-                              else item
-                          )
-                          for item in results_info
-                      ],
-                  }
+                      "tool_results": _fixed_point_tool_results(executed),
           '''
-          if text.count(old) != 1:
-              raise SystemExit("fixed-point anchor mismatch")
-          text = text.replace(old, new, 1)
+          text = replace_once(
+              text,
+              fingerprint_old,
+              fingerprint_new,
+              "semantic fixed-point fingerprint",
+          )
 
           path.write_text(text, encoding="utf-8")
+
+      - name: Syntax check
+        run: python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py
 
       - name: Commit patch
         run: |
