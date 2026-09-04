@@ -200,7 +200,7 @@ def _capacity_batches(
     domain: Mapping[str, Any],
     pages: Sequence[Mapping[str, Any]],
 ) -> tuple[list[list[dict[str, Any]]], list[str]]:
-    """Pack all evidence by live context capacity with no fixed page cap."""
+    """Pack all evidence by exact live capacity without quadratic prefix retokenization."""
     ordered = [
         dict(page)
         for page in pages
@@ -229,37 +229,63 @@ def _capacity_batches(
         diagnostics.extend(notes)
 
     batches: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    for index, page in enumerate(expanded):
-        trial = [*current, page]
+    start = 0
+    while start < len(expanded):
+        remaining = expanded[start:]
         try:
-            accounting = _live_accounting(router, _batch_messages(domain, trial))
+            accounting = _live_accounting(router, _batch_messages(domain, remaining))
         except Exception as exc:
             diagnostics.append(f"exact_input_accounting_failure:{type(exc).__name__}:{exc}")
             accounting = None
         if accounting is None:
-            if current:
-                batches.append(current)
-            remaining = expanded[index:]
-            if remaining:
-                batches.append(remaining)
+            batches.append(remaining)
             diagnostics.append("exact_input_accounting_lost;remaining_pages_kept_together")
             return batches, diagnostics
         if _accounting_fits(accounting, reserve):
-            current = trial
-            continue
-        if not current:
+            batches.append(remaining)
+            break
+
+        # Exact accounting is monotonic for this append-only source envelope. Find the
+        # largest fitting prefix with logarithmic probes instead of rebuilding/tokenizing
+        # every growing prefix (1, 2, 3 ... N pages).
+        low = start + 1
+        high = len(expanded)
+        best = start
+        while low <= high:
+            mid = (low + high) // 2
+            trial = expanded[start:mid]
+            try:
+                probe = _live_accounting(router, _batch_messages(domain, trial))
+            except Exception as exc:
+                diagnostics.append(
+                    f"exact_input_accounting_failure:{type(exc).__name__}:{exc}"
+                )
+                probe = None
+            if probe is None:
+                batches.append(expanded[start:])
+                diagnostics.append(
+                    "exact_input_accounting_lost;remaining_pages_kept_together"
+                )
+                return batches, diagnostics
+            if _accounting_fits(probe, reserve):
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        if best <= start:
+            page = expanded[start]
             diagnostics.append(
                 "source_segment_unexpectedly_exceeds_live_context:"
                 + str(page.get("page_ref") or "")
             )
             batches.append([page])
+            start += 1
             continue
-        batches.append(current)
-        current = [page]
-    if current:
-        batches.append(current)
+        batches.append(expanded[start:best])
+        start = best
     return batches, diagnostics
+
 
 def _extract_batch(
     router: Any,
