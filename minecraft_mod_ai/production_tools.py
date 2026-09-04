@@ -184,7 +184,7 @@ class ProductionToolService:
 
     def generate_system_plugin(self, *, project_root: str, pack_id: str, mod_id: str, package_name: str, config: dict[str, Any], proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]:
         self._approved(proposal, approval_hash)
-        return generate_system_pack(project_root=self._existing_dir(project_root), pack_id=pack_id, mod_id=mod_id, package_name=package_name, config=config, proposal=proposal, approval_hash=approval_hash)
+        return generate_system_pack(project_root=self._existing_dir(project_root), pack_id=pack_id, mod_id=mod_id, package_name=package_name, config=config)
 
     def runtime_prepare_instance(self, *, instance_name: str, mod_jar: str, server_launcher: str, eula_accepted: bool, proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]:
         self._approved(proposal, approval_hash)
