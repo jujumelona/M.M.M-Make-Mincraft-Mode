@@ -114,6 +114,35 @@ _SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
 _LIST_FIELDS = frozenset({"core_loop", "progression", "acceptance_tests"})
 _MAP_FIELDS = frozenset({"combat", "mod_context", "art_direction"})
 _NONE_VALUES = frozenset({"none", "n/a", "없음"})
+_REQUIREMENT_ID_RE = re.compile(r"\breq_[A-Za-z0-9_]+\b")
+
+
+def _referenced_requirement_ids(value: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, str):
+        refs.update(_REQUIREMENT_ID_RE.findall(value))
+    elif isinstance(value, Mapping):
+        for key, child in value.items():
+            refs.update(_referenced_requirement_ids(str(key)))
+            refs.update(_referenced_requirement_ids(child))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            refs.update(_referenced_requirement_ids(child))
+    return refs
+
+
+def _assert_known_requirement_ids(
+    field: str,
+    value: Any,
+    approved_requirement_ids: set[str],
+) -> None:
+    if not approved_requirement_ids:
+        return
+    unknown = sorted(_referenced_requirement_ids(value) - approved_requirement_ids)
+    if unknown:
+        raise SpecValidationError(
+            f"{field} cites unknown requirement ids: " + ", ".join(unknown)
+        )
 
 _PRODUCTION_DEPTH = (
     "PRODUCTION DEPTH: finish the game/mod design before implementation search. "
@@ -122,13 +151,19 @@ _PRODUCTION_DEPTH = (
     "verbs, resources, state transitions, purchase/assembly steps, upgrade gates, travel "
     "phases, encounters, combat outcomes, world interactions, persistence-visible state, "
     "networking/client surfaces, and integration rules when they can fail independently. "
-    "The modules section is the implementation-leaf index: every implementation-bearing "
-    "core-loop/progression/combat/mod-context behavior must have a concrete modules row. "
     "Do not collapse an epic such as planet interaction, ship construction, trading, or "
-    "progression into one generic module. Use as many leaf modules as the authored design "
-    "genuinely needs; never add unrelated features. Use supplied research evidence for "
-    "Minecraft/Fabric facts and unresolved assumptions, but donor/reuse selection happens "
-    "only after this design is frozen."
+    "progression into one generic subsystem. Use as many concrete subsystems as the authored "
+    "design genuinely needs; never add unrelated features. Use supplied research evidence "
+    "for Minecraft/Fabric facts and unresolved assumptions, but donor/reuse selection happens "
+    "only after this design is frozen. Do not invent target-specific APIs, storage locations, "
+    "client/server authority, or implementation facts that are not supported by the supplied "
+    "research; describe behavior and authority requirements instead."
+)
+
+_MODULE_PRODUCTION_DEPTH = (
+    "MODULE LEAF INDEX: every implementation-bearing core-loop/progression/combat/mod-context "
+    "behavior must have a concrete modules row. Preserve only exact host-approved requirement "
+    "IDs in requirement_refs; never infer, synthesize, rename, or extend requirement IDs."
 )
 
 _MODULE_FORMAT = (
@@ -1027,6 +1062,7 @@ def _validate_section_types(
                     if not str(key).strip():
                         raise SpecValidationError(f"{field} contains an empty key")
                     _nonempty_text_list(items, field=f"{field}.{key}")
+        _assert_known_requirement_ids(field, value, required_ids)
         try:
             assert_design_field_clean(field, value)
         except ValueError as exc:
@@ -1143,10 +1179,11 @@ def _section_messages(
             "Use each required ## heading exactly once, in the supplied order, and do not add other ## headings. "
             "Never omit a heading; for an optional empty map/list use literal 'none'. "
             "Do not emit JSON, code fences, <think>, analysis, system commentary, or unrelated sections. "
-            "Preserve exact approved requirement IDs in modules. "
+            "Never invent requirement IDs; when citing one, use only an exact host-approved ID. "
             + " ".join(format_rules)
             + " "
             + _PRODUCTION_DEPTH
+            + (" " + _MODULE_PRODUCTION_DEPTH if "modules" in fields else "")
         )
         ledger = _active_requirement_ledger(prompt)
         user = (
@@ -1193,10 +1230,11 @@ def _field_messages(
     system = (
         "You are a bounded Minecraft mod design worker. The host already owns the field name and final structure. "
         "Generate semantic content for exactly one field. Do not write the field name, a Markdown ## heading, JSON, "
-        "code fences, <think>, analysis, or unrelated fields. Preserve exact approved requirement IDs when requested. "
+        "code fences, <think>, analysis, or unrelated fields. Never invent requirement IDs; cite only exact host-approved IDs. "
         + format_instruction
         + " No JSON. "
         + _PRODUCTION_DEPTH
+        + (" " + _MODULE_PRODUCTION_DEPTH if field == "modules" else "")
     )
     ledger = _active_requirement_ledger(prompt)
     user = (
