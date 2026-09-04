@@ -652,21 +652,32 @@ def _linked_github_sources(
         }
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    found: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for full_name in repositories:
+
+    def fetch_readme(full_name: str) -> tuple[str, str, str]:
         try:
             body = _text(
                 f"https://api.github.com/repos/{full_name}/readme", headers
             ).strip()
+            return full_name, body, ""
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403, 429}:
                 disable()
-            errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
-            continue
+            return full_name, "", f"{full_name}:{type(exc).__name__}:{exc}"
         except Exception as exc:
-            errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
-            continue
+            return full_name, "", f"{full_name}:{type(exc).__name__}:{exc}"
+
+    workers = min(_MAX_SOURCE_WORKERS, len(repositories))
+    if workers <= 1:
+        fetched = [fetch_readme(full_name) for full_name in repositories]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            fetched = list(pool.map(fetch_readme, repositories))
+
+    found: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for full_name, body, error in fetched:
+        if error:
+            errors.append(error)
         if not body:
             continue
         found.append(
@@ -939,6 +950,13 @@ def _root() -> Path:
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = text.encode("utf-8")
+    try:
+        if path.is_file() and path.read_bytes() == encoded:
+            return
+    except OSError:
+        # Preserve the existing atomic rewrite as the repair path for unreadable files.
+        pass
     name = ""
     try:
         with tempfile.NamedTemporaryFile(
