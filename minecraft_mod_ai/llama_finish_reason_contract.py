@@ -5,13 +5,12 @@ from __future__ import annotations
 llama.cpp uses the same finish reason when a bounded decode exhausts ``max_tokens``
 and when the server cannot complete within its context window. Those are different
 agent failures: shrinking observations can recover context pressure, while a bounded
-output stop must be continued by the owner that can preserve tool/workspace state.
+output stop must be handled without restarting the agent over already-mutated source.
 
-The canonical inner agent loop gets the first chance to shrink an oversized action.
-If that atomic retry still exhausts output, the typed boundary remains recoverable by
-the outer custom-module checkpoint owner instead of being hidden behind a terminal
-configuration error. This gives the pipeline one state-preserving continuation layer
-rather than aborting the entire generation node.
+The canonical progress-aware loop owns context compaction and its one bounded atomic
+output retry. If that recovery is exhausted, the typed boundary propagates to the
+custom-module owner so it can persist/report the checkpoint and terminate the attempt
+without creating a second HostRunState.
 """
 
 import copy
@@ -109,14 +108,12 @@ def context_recovery_exhausted(exc: BaseException) -> bool:
 
 
 def completion_boundary_kind(exc: BaseException) -> str:
-    """Return a recoverable completion-boundary kind through wrapper chains.
+    """Return the surviving completion-boundary kind through wrapper chains.
 
-    Context recovery has a single canonical owner and therefore becomes terminal once
-    that owner marks it exhausted. Output exhaustion is different: after the inner
-    atomic retry, the outer custom-module generator still owns a stronger recovery
-    mechanism because it can persist staged edits and restart from a compact checkpoint.
-    Therefore an ``ATOMIC_ACTION_OUTPUT_STALLED`` wrapper does not erase the underlying
-    typed OUTPUT_EXHAUSTED boundary.
+    Context pressure is no longer recoverable after the canonical loop marks its
+    deterministic compaction path exhausted. Output exhaustion remains classifiable so
+    the custom-module owner can persist and report the failed checkpoint, but that owner
+    must not start another generation loop or reset HostRunState.
     """
 
     boundary = completion_boundary_error(exc)
