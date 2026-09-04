@@ -105,7 +105,6 @@ def finalize_runtime() -> None:
         from .tool_validation_surface_contract import install as install_tool_validation_surface
         from .work_graph_receipt_integrity_contract import install as install_work_graph_receipt_integrity
 
-        install_mcp_child_trace(mcp_transport_pool)
         install_agent_mcp_transport_pool()
         install_mcp_schema_integrity(
             agent_tool_runtime,
@@ -119,6 +118,9 @@ def finalize_runtime() -> None:
             external_mcp_router_module=external_mcp_router,
             research_rag_performance_module=research_rag_performance,
         )
+        # Keep one-run root-cause tracing outside the performance wrapper so transport
+        # START/PASS/FAIL evidence cannot be bypassed by the non-blocking hot path.
+        install_mcp_child_trace(mcp_transport_pool)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         install_procedural_skill_identity(external_procedural_skill_contract)
