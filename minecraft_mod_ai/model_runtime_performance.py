@@ -34,7 +34,13 @@ def _length_prefixed_digest(values: Sequence[str]) -> str:
 
 
 def _text_digest(text: str) -> str:
-    return _length_prefixed_digest((text,))
+    """Fast path for the single-string digest contract used by retrieval caches."""
+
+    encoded = text.encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _available_memory_bytes() -> int | None:
