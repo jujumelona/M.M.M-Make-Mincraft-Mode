@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 from contextlib import asynccontextmanager
+from typing import Any
 
 import anyio
 
@@ -26,6 +27,61 @@ class _NotebookStderr:
 
     def fileno(self) -> int:
         raise io.UnsupportedOperation("fileno")
+
+
+def _install_fake_mcp(monkeypatch, *, write_child_marker: bool = False) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
+    class FakeParams:
+        def __init__(self, *, command, args, env):
+            captured["command"] = command
+            captured["args"] = args
+            captured["env"] = env
+
+    class FakeSession:
+        def __init__(self, read_stream, write_stream):
+            captured["streams"] = (read_stream, write_stream)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def initialize(self):
+            return {"server": "fake"}
+
+    @asynccontextmanager
+    async def fake_stdio_client(params, *, errlog):
+        captured["errlog"] = errlog
+        captured["errlog_fileno"] = errlog.fileno()
+        if write_child_marker:
+            errlog.write("child-stderr-visible\n")
+            errlog.flush()
+        yield "read", "write"
+
+    fake_mcp = types.ModuleType("mcp")
+    fake_mcp.ClientSession = FakeSession
+    fake_mcp.StdioServerParameters = FakeParams
+    fake_client = types.ModuleType("mcp.client")
+    fake_stdio = types.ModuleType("mcp.client.stdio")
+    fake_stdio.stdio_client = fake_stdio_client
+    monkeypatch.setitem(sys.modules, "mcp", fake_mcp)
+    monkeypatch.setitem(sys.modules, "mcp.client", fake_client)
+    monkeypatch.setitem(sys.modules, "mcp.client.stdio", fake_stdio)
+    return captured
+
+
+def _run_traced_session() -> None:
+    async def run() -> None:
+        async with traced_stdio_session(
+            "generation",
+            {"MMM_MCP_STAGE": "generation"},
+            2.0,
+        ):
+            pass
+
+    anyio.run(run)
 
 
 def test_runtime_uses_visible_child_stderr_session_factory() -> None:
@@ -89,58 +145,32 @@ def test_subprocess_stderr_duplicates_fd2_when_python_streams_have_no_fd(
         }
 
 
+def test_traced_session_never_passes_notebook_stderr_to_mcp_subprocess(monkeypatch) -> None:
+    captured = _install_fake_mcp(monkeypatch)
+    notebook_stderr = _NotebookStderr()
+
+    with tempfile.TemporaryFile(mode="w+b") as original_stderr:
+        monkeypatch.setattr(mcp_child_trace_contract.sys, "stderr", notebook_stderr)
+        monkeypatch.setattr(mcp_child_trace_contract.sys, "__stderr__", original_stderr)
+
+        _run_traced_session()
+
+        assert captured["errlog"] is original_stderr
+        assert captured["errlog_fileno"] == original_stderr.fileno()
+        trace = notebook_stderr.buffer.getvalue()
+        assert '"event":"mcp_transport_session_start"' in trace
+        assert '"stderr_route":"parent_dunder_stderr"' in trace
+        assert '"parent_stderr":"UnsupportedOperation: fileno"' in trace
+
+
 def test_stdio_child_stderr_is_forwarded_to_parent_stderr(monkeypatch, capfd) -> None:
-    captured: dict[str, object] = {}
+    captured = _install_fake_mcp(monkeypatch, write_child_marker=True)
 
-    class FakeParams:
-        def __init__(self, *, command, args, env):
-            captured["command"] = command
-            captured["args"] = args
-            captured["env"] = env
-
-    class FakeSession:
-        def __init__(self, read_stream, write_stream):
-            captured["streams"] = (read_stream, write_stream)
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def initialize(self):
-            return {"server": "fake"}
-
-    @asynccontextmanager
-    async def fake_stdio_client(params, *, errlog):
-        captured["errlog"] = errlog
-        assert errlog.fileno() >= 0
-        errlog.write("child-stderr-visible\n")
-        errlog.flush()
-        yield "read", "write"
-
-    fake_mcp = types.ModuleType("mcp")
-    fake_mcp.ClientSession = FakeSession
-    fake_mcp.StdioServerParameters = FakeParams
-    fake_client = types.ModuleType("mcp.client")
-    fake_stdio = types.ModuleType("mcp.client.stdio")
-    fake_stdio.stdio_client = fake_stdio_client
-    monkeypatch.setitem(sys.modules, "mcp", fake_mcp)
-    monkeypatch.setitem(sys.modules, "mcp.client", fake_client)
-    monkeypatch.setitem(sys.modules, "mcp.client.stdio", fake_stdio)
-
-    async def run() -> None:
-        async with traced_stdio_session(
-            "generation",
-            {"MMM_MCP_STAGE": "generation"},
-            2.0,
-        ):
-            pass
-
-    anyio.run(run)
+    _run_traced_session()
     stderr = capfd.readouterr().err
 
     assert captured["errlog"] is not None
+    assert captured["errlog_fileno"] >= 0
     assert "child-stderr-visible" in stderr
     assert '"event":"mcp_transport_session_start"' in stderr
     assert '"event":"mcp_transport_initialized"' in stderr
