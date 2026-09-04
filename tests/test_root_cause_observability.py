@@ -10,11 +10,11 @@ from minecraft_mod_ai.java_lsp_trace import _collect_diagnostics_traced
 from minecraft_mod_ai.root_cause_trace import bounded_safe, traced_callable
 
 
-def _trace_payloads(stdout: str) -> list[dict[str, object]]:
+def _trace_payloads(stderr: str) -> list[dict[str, object]]:
     prefix = "ROOT CAUSE TRACE: "
     return [
         json.loads(line[len(prefix):])
-        for line in stdout.splitlines()
+        for line in stderr.splitlines()
         if line.startswith(prefix)
     ]
 
@@ -42,7 +42,9 @@ def test_traced_callable_preserves_original_exception_chain(capsys: pytest.Captu
     with pytest.raises(RuntimeError, match="wrapper"):
         wrapped("secret-value")
 
-    payloads = _trace_payloads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    assert "ROOT CAUSE TRACE:" not in captured.out
+    payloads = _trace_payloads(captured.err)
     failure = next(item for item in payloads if item["event"] == "operation_failure")
     assert [item["type"] for item in failure["exception_chain"]] == ["RuntimeError", "KeyError"]
     start = next(item for item in payloads if item["event"] == "operation_start")
@@ -102,7 +104,9 @@ def test_jdt_timeout_reports_missing_and_mismatched_uris(capsys: pytest.CaptureF
     assert expected in message
     assert unexpected in message
     assert "reader_alive=True" in message
-    payloads = _trace_payloads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    assert "ROOT CAUSE TRACE:" not in captured.out
+    payloads = _trace_payloads(captured.err)
     timeout = next(item for item in payloads if item["event"] == "jdt_publish_timeout")
     assert timeout["details"]["missing_uris"] == [expected]
     assert timeout["details"]["unexpected_uris"] == [unexpected]
