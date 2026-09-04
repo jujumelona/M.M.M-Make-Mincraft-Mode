@@ -77,3 +77,16 @@ def test_recover_does_not_expose_verifiers():
     tools = (_tool("java_diagnostics"), _tool("search_project_rag"))
     selected = _filter_tools_for_phase(tools, LoopPhase.RECOVER, "coder")
     assert [item["function"]["name"] for item in selected] == ["search_project_rag"]
+
+
+def test_observe_keeps_retrieval_tools_after_verify_isolation():
+    tools = (
+        _tool("java_diagnostics"),
+        _tool("search_project_rag"),
+        _tool("inspect_github_repository"),
+    )
+    selected = _filter_tools_for_phase(tools, LoopPhase.OBSERVE, "coder")
+    names = [item["function"]["name"] for item in selected]
+    assert "search_project_rag" in names
+    assert "inspect_github_repository" in names
+    assert "java_diagnostics" not in names
