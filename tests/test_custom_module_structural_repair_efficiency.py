@@ -286,7 +286,7 @@ def _output_exhausted_error(
     return ModelBackendError(role="coder", model_id="test", cause=boundary)
 
 
-def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
+def test_output_exhaustion_preserves_checkpoint_without_outer_state_restart(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "project"
@@ -310,46 +310,37 @@ def test_output_exhaustion_continues_from_same_staged_workspace_until_success(
             project = self.workspace / request["workspace_project_root"]
             target = project / "src/main/java/example/Chunked.java"
             target.parent.mkdir(parents=True, exist_ok=True)
-            call_index = len(self.calls)
-            previous = target.read_text(encoding="utf-8") if target.exists() else ""
-            target.write_text(previous + f"// chunk {call_index}\n", encoding="utf-8")
-            if call_index <= 3:
-                raise _output_exhausted_error()
-            return "Implemented through bounded continuation."
+            target.write_text("// chunk 1\n", encoding="utf-8")
+            raise _output_exhausted_error()
 
     router = _ChunkedRouter()
     target = adapter_for_target("1.20.1", "fabric")
-    result = CustomModuleGenerator(
-        router,
-        policy=ScalePolicy(model_context_bytes=4096),
-    ).generate(
-        root,
-        module=ProductionModule(
-            "chunked_output",
-            "custom_java",
-            {"feature": "large bounded source"},
-        ),
-        minecraft_version=target.minecraft_version,
-        loader=target.loader,
-        mappings=target.yarn_mappings,
-    )
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="refusing an outer continuation",
+    ):
+        CustomModuleGenerator(
+            router,
+            policy=ScalePolicy(model_context_bytes=4096),
+        ).generate(
+            root,
+            module=ProductionModule(
+                "chunked_output",
+                "custom_java",
+                {"feature": "large bounded source"},
+            ),
+            minecraft_version=target.minecraft_version,
+            loader=target.loader,
+            mappings=target.yarn_mappings,
+        )
 
-    assert result["output_exhaustion_continuations"] == 3
-    assert len(router.calls) == 4
+    assert len(router.calls) == 1
     assert len(set(router.bound_workspaces)) == 1
-    assert (root / "src/main/java/example/Chunked.java").read_text(
+    assert not (root / "src/main/java/example/Chunked.java").exists()
+    assert router.workspace is not None
+    assert (router.workspace / "src/main/java/example/Chunked.java").read_text(
         encoding="utf-8"
-    ) == "// chunk 1\n// chunk 2\n// chunk 3\n// chunk 4\n"
-    continuation = _implement_request(router.messages[1])
-    assert continuation["continuation"]["continuation_index"] == 1
-    assert continuation["continuation"]["preserved_path_count"] == 1
-    assert continuation["initial_exact_source_context"]["global_anchors"] == []
-    assert continuation["initial_exact_source_context"]["page_observations"] == []
-    assert (
-        continuation["initial_exact_source_context"]["ledger_receipt"]
-        == continuation["source_observation_receipt"]
-    )
-    assert any("bounded tool actions" in rule for rule in continuation["rules"])
+    ) == "// chunk 1\n"
 
 
 def test_context_pressure_raises_directly_without_masking(tmp_path: Path) -> None:

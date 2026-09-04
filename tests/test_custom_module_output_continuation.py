@@ -139,7 +139,7 @@ def test_checkpoint_persists_staged_mutation_across_resume(tmp_path: Path) -> No
         _remove_generation_checkpoint(checkpoint_root_2)
 
 
-def test_output_boundary_loop_is_tool_enabled_checkpointed_and_fixed_point_bounded() -> None:
+def test_output_boundary_is_tool_enabled_checkpointed_and_single_owner() -> None:
     source = inspect.getsource(CustomModuleGenerator.generate)
     exception_block = source[source.index("except BaseException as exc:") :]
 
@@ -148,7 +148,6 @@ def test_output_boundary_loop_is_tool_enabled_checkpointed_and_fixed_point_bound
     assert exception_block.index("_persist_generation_checkpoint(") < exception_block.index(
         "boundary_kind = completion_boundary_kind(exc)"
     )
-    assert "seen_output_states: set[str] = set()" in source
-    assert "if state_sha256 in seen_output_states:" in source
-    assert "Output continuation reached a no-source-progress fixed point." in source
-    assert "seen_output_states.add(state_sha256)" in source
+    assert "seen_output_states: set[str] = set()" not in source
+    assert "_output_exhaustion_continuation_messages(" not in source
+    assert "refusing an outer continuation" in source

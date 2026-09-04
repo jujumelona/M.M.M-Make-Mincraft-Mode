@@ -169,7 +169,7 @@ def test_filter_tools_for_phase_is_strictly_fail_closed() -> None:
     mixed = (read_tool, mutate_tool, verify_tool)
     assert _filter_tools_for_phase(mixed, LoopPhase.OBSERVE, role="coder") == (read_tool,)
     assert _filter_tools_for_phase(mixed, LoopPhase.ACT, role="coder") == (mutate_tool,)
-    assert _filter_tools_for_phase(mixed, LoopPhase.VERIFY, role="coder") == (read_tool, verify_tool)
+    assert _filter_tools_for_phase(mixed, LoopPhase.VERIFY, role="coder") == (verify_tool,)
 
 
 def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
