@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import generation_output_budget as budget
+from minecraft_mod_ai import llama_exact_context
 from minecraft_mod_ai import prefill_calibration_strictness_contract as prefill
+from minecraft_mod_ai.llama_finish_reason_contract import (
+    CONTEXT_PRESSURE,
+    LlamaCompletionBoundaryError,
+)
 from minecraft_mod_ai.progress_aware_tool_loop import LoopPhase, _filter_tools_for_phase
 
 
@@ -31,6 +36,33 @@ def test_non_structural_tool_never_gets_one_token_static_budget(monkeypatch):
     config = SimpleNamespace(adapter="llama_cpp", max_new_tokens=1, extra={})
     with pytest.raises(budget.GenerationOutputBudgetError, match="OUTPUT_BUDGET_UNVIABLE"):
         budget.generation_output_token_budget(config, tools=(_tool("java_diagnostics"),))
+
+
+def test_exact_context_never_clamps_tool_action_to_one_token(monkeypatch):
+    monkeypatch.setattr(
+        llama_exact_context,
+        "live_context_accounting",
+        lambda _server_url, _payload: llama_exact_context.LiveContextAccounting(
+            input_tokens=15360,
+            context_tokens=15361,
+        ),
+    )
+    payload = {
+        "max_tokens": 512,
+        "tools": [_tool("java_diagnostics")],
+    }
+
+    with pytest.raises(LlamaCompletionBoundaryError) as caught:
+        llama_exact_context.capacity_safe_payload(
+            "http://127.0.0.1:8910/v1",
+            payload,
+        )
+
+    assert caught.value.kind == CONTEXT_PRESSURE
+    assert caught.value.prompt_tokens == 15360
+    assert caught.value.max_tokens == 1
+    assert "remaining_tokens=1" in str(caught.value)
+    assert "required_output_tokens=128" in str(caught.value)
 
 
 def test_apply_template_strips_openai_v1_prefix(monkeypatch):
