@@ -14,6 +14,11 @@ from typing import Any
 
 _CONTEXT_CACHE_LOCK = threading.RLock()
 _MANAGED_CONTEXT_CACHE: dict[str, int] = {}
+# A model-facing tool call needs enough decode room to serialize one complete function
+# action. The generic generation budget already enforces this floor, but exact live
+# context accounting is a later authority and must never squeeze that valid request back
+# down to the 0/1-token fragment that caused the coder continuation loop.
+_MIN_TOOL_OUTPUT_RESERVE = 128
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,29 @@ def capacity_safe_payload(
             "exact llama.cpp chat input exceeds the active runtime slot; "
             f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens}"
         )
+
+    raw_tools = result.get("tools")
+    has_tools = bool(isinstance(raw_tools, (list, tuple)) and raw_tools)
+    if has_tools and remaining < _MIN_TOOL_OUTPUT_RESERVE:
+        # This is context pressure, not output exhaustion. Raising the canonical typed
+        # boundary here lets the progress-aware owner compact observations *before*
+        # inference instead of sending max_tokens=1, receiving finish_reason=length,
+        # and entering assistant-prefill/outer-continuation recovery.
+        from .llama_finish_reason_contract import (
+            CONTEXT_PRESSURE,
+            LlamaCompletionBoundaryError,
+        )
+
+        raise LlamaCompletionBoundaryError(
+            "exact llama.cpp live context cannot fit one complete tool action; compact "
+            "observations before inference; "
+            f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens} "
+            f"remaining_tokens={remaining} required_output_tokens={_MIN_TOOL_OUTPUT_RESERVE}",
+            kind=CONTEXT_PRESSURE,
+            prompt_tokens=accounting.input_tokens,
+            max_tokens=remaining,
+        )
+
     requested = int(result.get("max_tokens", 0) or 0)
     if requested <= 0 or requested > remaining:
         result["max_tokens"] = remaining
