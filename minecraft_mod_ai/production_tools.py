@@ -11,7 +11,7 @@ from typing import Any
 
 from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operations
 from .geckolib_generator import generate_geckolib_entity_assets
-from .java_lsp_trace import TracedJavaLanguageService
+from .java_lsp_trace import TracedJavaLanguageService as JavaLanguageService
 from .model_router import ModelRouter
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
@@ -41,9 +41,9 @@ class ProductionToolService:
         return MineflayerBridge()
 
     @cached_property
-    def java(self) -> TracedJavaLanguageService:
+    def java(self) -> JavaLanguageService:
         """Keep one initialized, root-cause-visible JDT LS owner per service."""
-        return TracedJavaLanguageService()
+        return JavaLanguageService()
 
     @cached_property
     def model_router(self) -> ModelRouter:
@@ -184,7 +184,7 @@ class ProductionToolService:
 
     def generate_system_plugin(self, *, project_root: str, pack_id: str, mod_id: str, package_name: str, config: dict[str, Any], proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]:
         self._approved(proposal, approval_hash)
-        return generate_system_pack(project_root=self._existing_dir(project_root), pack_id=pack_id, mod_id=mod_id, package_name=package_name, config=config)
+        return generate_system_pack(project_root=self._existing_dir(project_root), pack_id=pack_id, mod_id=mod_id, package_name=package_name, config=config, proposal=proposal, approval_hash=approval_hash)
 
     def runtime_prepare_instance(self, *, instance_name: str, mod_jar: str, server_launcher: str, eula_accepted: bool, proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]:
         self._approved(proposal, approval_hash)
