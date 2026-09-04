@@ -477,7 +477,11 @@ def _generate_section(
 
     trace.record_attempt(
         raw_output=str(raw or ""),
-        validation_error=None,
+        validation_error=(
+            "host field fallback applied: " + ", ".join(sorted(fallback_fields))
+            if fallback_fields
+            else None
+        ),
         candidate=section,
         accepted=section,
         context={
@@ -1023,6 +1027,10 @@ def _validate_section_types(
                     if not str(key).strip():
                         raise SpecValidationError(f"{field} contains an empty key")
                     _nonempty_text_list(items, field=f"{field}.{key}")
+        try:
+            assert_design_field_clean(field, value)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
 
 
 def _validate_requirement_coverage(
