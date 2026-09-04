@@ -90,13 +90,6 @@ class ReentrantReadWriteLock:
             if not self._readers:
                 self._condition.notify_all()
 
-    def _other_reader_count(self, owner: int) -> int:
-        return sum(
-            count
-            for thread_id, count in self._readers.items()
-            if thread_id != owner
-        )
-
     def __enter__(self) -> ReentrantReadWriteLock:
         self.acquire()
         return self
