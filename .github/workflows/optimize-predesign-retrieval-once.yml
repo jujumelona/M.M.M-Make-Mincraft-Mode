@@ -1,0 +1,327 @@
+name: Optimize predesign retrieval once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/optimize-predesign-retrieval-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Bound retrieval fanout and deduplicate model evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/pre_design_grounded_rag.py')
+          text = path.read_text(encoding='utf-8')
+
+          anchor = '''_MAX_SOURCE_WORKERS = max(
+              1, min(16, int(os.environ.get("MMM_PREDESIGN_SOURCE_WORKERS", "8") or 8))
+          )
+          _UA ='''
+          replacement = '''_MAX_SOURCE_WORKERS = max(
+              1, min(16, int(os.environ.get("MMM_PREDESIGN_SOURCE_WORKERS", "8") or 8))
+          )
+          # Preserve query breadth, but bound expensive provider/detail fan-out per query.
+          # Relevance-sorted providers make the first few bodies the useful evidence surface;
+          # paging entire catalogs only duplicates evidence and serializes later model reads.
+          _MAX_PROVIDER_RESULTS_PER_QUERY = max(
+              1,
+              min(
+                  24,
+                  int(os.environ.get("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", "6") or 6),
+              ),
+          )
+          _MAX_PROVIDER_SEARCH_PAGES = max(
+              1,
+              min(
+                  4,
+                  int(os.environ.get("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", "2") or 2),
+              ),
+          )
+          _UA ='''
+          if text.count(anchor) != 1:
+              raise SystemExit('constant anchor mismatch')
+          text = text.replace(anchor, replacement)
+
+          def edit_function(source: str, name: str, edits: list[tuple[str, str]]) -> str:
+              start = source.index(f'def {name}(')
+              next_def = source.find('\ndef ', start + 1)
+              end = len(source) if next_def < 0 else next_def
+              block = source[start:end]
+              for old, new in edits:
+                  if block.count(old) != 1:
+                      raise SystemExit(f'{name}: expected one match for {old!r}, got {block.count(old)}')
+                  block = block.replace(old, new)
+              return source[:start] + block + source[end:]
+
+          text = edit_function(text, '_search_modrinth', [
+              ('    provider_total = 0\n    while True:\n',
+               '    provider_total = 0\n    consumed = 0\n    while (\n        search_requests < _MAX_PROVIDER_SEARCH_PAGES\n        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY\n    ):\n        page_size = min(\n            100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records)\n        )\n'),
+              ('                "limit": 100,\n', '                "limit": page_size,\n'),
+              ('        try:\n            provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))\n',
+               '        consumed = max(consumed, offset + len(hits))\n        try:\n            provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))\n'),
+              ('        if len(hits) < 100 and not provider_total:\n', '        if len(hits) < page_size and not provider_total:\n'),
+              ('        "source_requests": source_requests,\n        "detail_errors": errors,\n',
+               '        "source_requests": source_requests,\n        "result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,\n        "search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,\n        "saturation_reason": (\n            "result_budget"\n            if len(records) >= _MAX_PROVIDER_RESULTS_PER_QUERY\n            else (\n                "search_page_budget"\n                if search_requests >= _MAX_PROVIDER_SEARCH_PAGES\n                and (not provider_total or consumed < provider_total)\n                else ""\n            )\n        ),\n        "detail_errors": errors,\n'),
+          ])
+
+          text = edit_function(text, '_search_curseforge', [
+              ('    provider_total = 0\n\n    def description',
+               '    provider_total = 0\n    consumed = 0\n\n    def description'),
+              ('    while True:\n        params = urllib.parse.urlencode(\n',
+               '    while (\n        search_requests < _MAX_PROVIDER_SEARCH_PAGES\n        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY\n    ):\n        page_size = min(\n            50, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records)\n        )\n        params = urllib.parse.urlencode(\n'),
+              ('                "pageSize": 50,\n', '                "pageSize": page_size,\n'),
+              ('            if len(rows) < 50:\n', '            if len(rows) < page_size:\n'),
+              ('            next_index = server_index + result_count\n',
+               '            next_index = server_index + result_count\n            consumed = max(consumed, next_index)\n'),
+              ('        "source_requests": source_requests,\n        "detail_errors": errors,\n',
+               '        "source_requests": source_requests,\n        "result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,\n        "search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,\n        "saturation_reason": (\n            "result_budget"\n            if len(records) >= _MAX_PROVIDER_RESULTS_PER_QUERY\n            else (\n                "search_page_budget"\n                if search_requests >= _MAX_PROVIDER_SEARCH_PAGES\n                and (not provider_total or consumed < provider_total)\n                else ""\n            )\n        ),\n        "detail_errors": errors,\n'),
+          ])
+
+          text = edit_function(text, '_search_github', [
+              ('    while True:\n        if disabled is not None and disabled():\n',
+               '    while (\n        search_requests < _MAX_PROVIDER_SEARCH_PAGES\n        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY\n    ):\n        if disabled is not None and disabled():\n'),
+              ('        params = urllib.parse.urlencode(\n            {\n                "q": _query_terms(query) + " minecraft fabric mod",\n                "per_page": 100,\n',
+               '        page_size = min(\n            100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records)\n        )\n        params = urllib.parse.urlencode(\n            {\n                "q": _query_terms(query) + " minecraft fabric mod",\n                "per_page": page_size,\n'),
+              ('        "source_requests": source_requests,\n    }\n',
+               '        "source_requests": source_requests,\n        "result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,\n        "search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,\n        "saturation_reason": (\n            "result_budget"\n            if len(records) >= _MAX_PROVIDER_RESULTS_PER_QUERY\n            else (\n                "search_page_budget"\n                if search_requests >= _MAX_PROVIDER_SEARCH_PAGES\n                and (not provider_total or consumed < provider_total)\n                else ""\n            )\n        ),\n    }\n'),
+          ])
+
+          text = edit_function(text, '_linked_github_sources', [
+              ('    repositories: list[str] = []\n', '    repositories: list[str] = []\n    linked_candidate_count = 0\n'),
+              ('        if repo and repo not in repositories:\n            repositories.append(repo)\n',
+               '        if repo and repo not in repositories:\n            linked_candidate_count += 1\n            if len(repositories) < _MAX_PROVIDER_RESULTS_PER_QUERY:\n                repositories.append(repo)\n'),
+              ('        "source_requests": len(repositories),\n        "readme_errors": errors[:3],\n',
+               '        "source_requests": len(repositories),\n        "result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,\n        "saturation_reason": (\n            "linked_source_budget"\n            if linked_candidate_count > len(repositories)\n            else ""\n        ),\n        "readme_errors": errors[:3],\n'),
+          ])
+
+          old = '''                    "saturation_reason": (
+                        "rate_or_auth_failure"
+                        if str(gh.get("status"))
+                        in {"error", "disabled_after_rate_or_auth_failure"}
+                        else ""
+                    ),'''
+          new = '''                    "saturation_reason": (
+                        str(gh.get("saturation_reason") or "")
+                        or (
+                            "rate_or_auth_failure"
+                            if str(gh.get("status"))
+                            in {"error", "disabled_after_rate_or_auth_failure"}
+                            else ""
+                        )
+                    ),'''
+          if text.count(old) != 1:
+              raise SystemExit('github saturation receipt anchor mismatch')
+          text = text.replace(old, new)
+
+          old = '''        "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
+        "external_source_count": external_count,
+        "domains": out_domains,'''
+          new = '''        "query_workers": min(_MAX_QUERY_WORKERS, len(unique_queries)) if unique_queries else 0,
+        "provider_result_budget": _MAX_PROVIDER_RESULTS_PER_QUERY,
+        "provider_search_page_budget": _MAX_PROVIDER_SEARCH_PAGES,
+        "external_source_count": external_count,
+        "domains": out_domains,'''
+          if text.count(old) != 1:
+              raise SystemExit('bundle budget receipt anchor mismatch')
+          text = text.replace(old, new)
+
+          old = '''    result: list[dict[str, Any]] = []
+    for row in (
+        grounded.get("queries", []) if isinstance(grounded.get("queries"), list) else []
+    ):'''
+          new = '''    result: list[dict[str, Any]] = []
+    seen_bodies: set[str] = set()
+    for row in (
+        grounded.get("queries", []) if isinstance(grounded.get("queries"), list) else []
+    ):'''
+          if text.count(old) != 1:
+              raise SystemExit('unit dedupe setup anchor mismatch')
+          text = text.replace(old, new)
+
+          old = '''            body = _body(record)
+            if not body:
+                continue
+            result.append(
+'''
+          new = '''            body = _body(record)
+            if not body:
+                continue
+            body_key = str(record.get("content_sha256") or "").strip() or _sha256_text(body)
+            if body_key in seen_bodies:
+                continue
+            seen_bodies.add(body_key)
+            result.append(
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unit dedupe body anchor mismatch')
+          text = text.replace(old, new)
+
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_predesign_retrieval_budget.py')
+          test.write_text(r'''from __future__ import annotations
+
+import json
+import urllib.parse
+
+from minecraft_mod_ai import pre_design_grounded_rag as rag
+
+
+def test_modrinth_fetches_only_top_result_budget(monkeypatch) -> None:
+    monkeypatch.setattr(rag, "_MAX_PROVIDER_RESULTS_PER_QUERY", 3)
+    monkeypatch.setattr(rag, "_MAX_PROVIDER_SEARCH_PAGES", 2)
+    calls: list[str] = []
+
+    def fake_json(url: str, headers=None):
+        del headers
+        calls.append(url)
+        if "/v2/search?" in url:
+            params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            assert params["limit"] == ["3"]
+            offset = int(params.get("offset", ["0"])[0])
+            return {
+                "offset": offset,
+                "total_hits": 100,
+                "hits": [
+                    {
+                        "project_id": f"p{offset + i}",
+                        "slug": f"s{offset + i}",
+                        "title": f"T{offset + i}",
+                        "description": "summary",
+                    }
+                    for i in range(3)
+                ],
+            }
+        ids = json.loads(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["ids"][0])
+        return [{"id": project_id, "body": f"body {project_id}"} for project_id in ids]
+
+    monkeypatch.setattr(rag, "_json", fake_json)
+    records, receipt = rag._search_modrinth("minecraft inventory implementation")
+
+    assert len(records) == 3
+    assert receipt["search_requests"] == 1
+    assert receipt["source_requests"] == 1
+    assert receipt["saturation_reason"] == "result_budget"
+    assert sum("/v2/search?" in url for url in calls) == 1
+
+
+def test_github_readmes_are_bounded_before_detail_fetch(monkeypatch) -> None:
+    monkeypatch.setattr(rag, "_MAX_PROVIDER_RESULTS_PER_QUERY", 3)
+    monkeypatch.setattr(rag, "_MAX_PROVIDER_SEARCH_PAGES", 2)
+    reads: list[str] = []
+
+    def fake_json(url: str, headers=None):
+        del headers
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        assert params["per_page"] == ["3"]
+        return {
+            "total_count": 1000,
+            "items": [
+                {
+                    "full_name": f"owner/repo{i}",
+                    "name": f"repo{i}",
+                    "description": "minecraft implementation",
+                    "html_url": f"https://github.com/owner/repo{i}",
+                    "default_branch": "main",
+                }
+                for i in range(3)
+            ],
+        }
+
+    def fake_text(url: str, headers=None) -> str:
+        del headers
+        reads.append(url)
+        return "README implementation body"
+
+    monkeypatch.setattr(rag, "_json", fake_json)
+    monkeypatch.setattr(rag, "_text", fake_text)
+    records, receipt = rag._search_github("minecraft inventory implementation")
+
+    assert len(records) == 3
+    assert len(reads) == 3
+    assert receipt["search_requests"] == 1
+    assert receipt["source_requests"] == 3
+    assert receipt["saturation_reason"] == "result_budget"
+
+
+def test_linked_github_sources_share_the_same_result_budget(monkeypatch) -> None:
+    monkeypatch.setattr(rag, "_MAX_PROVIDER_RESULTS_PER_QUERY", 2)
+    monkeypatch.setattr(rag, "_text", lambda *args, **kwargs: "README")
+    records = [
+        {"metadata": {"source_url": f"https://github.com/owner/repo{i}"}}
+        for i in range(5)
+    ]
+
+    found, receipt = rag._linked_github_sources(
+        records,
+        disabled=lambda: False,
+        disable=lambda: None,
+    )
+
+    assert len(found) == 2
+    assert receipt["source_requests"] == 2
+    assert receipt["saturation_reason"] == "linked_source_budget"
+
+
+def test_model_evidence_units_deduplicate_same_body_across_queries() -> None:
+    record = {
+        "source_id": "github:owner/repo",
+        "source_type": "github_repository_body",
+        "url": "https://github.com/owner/repo",
+        "title": "repo",
+        "content": "same source body",
+        "content_sha256": "sha256:same",
+    }
+    evidence = {
+        "grounded_rag": {
+            "queries": [
+                {"query": "query one", "evidence_records": [record]},
+                {"query": "query two", "evidence_records": [dict(record)]},
+            ]
+        }
+    }
+
+    units = rag._units(evidence)
+
+    assert len(units) == 1
+    assert units[0]["source_id"] == "github:owner/repo"
+''', encoding='utf-8')
+          PY
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run focused retrieval regressions
+        run: |
+          python -m compileall -q minecraft_mod_ai
+          python -m pytest -q tests/test_predesign_retrieval_budget.py
+      - name: Commit bounded retrieval refactor and remove one-shot workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/optimize-predesign-retrieval-once.yml
+          git add minecraft_mod_ai/pre_design_grounded_rag.py tests/test_predesign_retrieval_budget.py
+          git commit -m "perf: bound predesign evidence fanout"
+          git push origin main
+      - name: Remove one-shot workflow after failure
+        if: failure()
+        run: |
+          git reset --hard HEAD
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/optimize-predesign-retrieval-once.yml
+          git commit -m "chore: remove failed retrieval optimization workflow"
+          git push origin main
