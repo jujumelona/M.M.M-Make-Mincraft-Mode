@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+from .target_profile_semantics import mappings_applicable
+
 
 class PlatformDiscoveryError(RuntimeError):
     pass
@@ -698,8 +700,12 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
     prefetched_java = dict(_stable_java_versions()).get(version, "")
     java = prefetched_java or _mojang_java_version(version)
 
-    mappings_kind = "mojang"
-    mappings_version = "mojang"
+    if mappings_applicable(version):
+        mappings_kind = "mojang"
+        mappings_version = "mojang"
+    else:
+        mappings_kind = ""
+        mappings_version = ""
     payload = {
         "source": "official-live-discovery-v5",
         "minecraft_version": version,
