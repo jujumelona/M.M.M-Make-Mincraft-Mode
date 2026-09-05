@@ -169,16 +169,13 @@ def validate_semantic_source_partition(
     return tuple(diagnostics)
 
 
-_FIDELITY_SYSTEM_RULE = (
+_SOURCE_PARTITION_RULE = (
     "SOURCE-FIDELITY CONTRACT: source_anchor is not a keyword label. Across all semantic "
     "leaves for each supplied clause, choose exact contiguous source anchors whose spans "
     "partition every authored non-whitespace/non-punctuation character exactly once. "
     "Include connective/context text in one adjacent span; do not leave source words "
-    "unowned and do not overlap anchors. Split independently observable behaviors before "
-    "classification. capability_id must represent every authored behavior inside its own "
-    "span; never substitute a prerequisite/base entity/state capability for a directly "
-    "authored interaction merely because the prerequisite is also needed. The host will "
-    "add prerequisites after semantic approval."
+    "unowned and do not overlap anchors. Split independently observable behaviors into "
+    "separate leaves before any capability classification."
 )
 
 
@@ -187,12 +184,11 @@ def _augment_messages(
     diagnostics: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     result = [dict(message) for message in messages]
-    instruction = _FIDELITY_SYSTEM_RULE
+    instruction = _SOURCE_PARTITION_RULE
     if diagnostics:
         instruction += (
             " Previous output violated the host source-fidelity gate. Repair only the "
-            "semantic decomposition/classification and source anchors using these host "
-            "diagnostics: "
+            "semantic decomposition and source anchors using these host diagnostics: "
             + _canonical(list(diagnostics))
         )
     if result and str(result[0].get("role") or "") == "system":
