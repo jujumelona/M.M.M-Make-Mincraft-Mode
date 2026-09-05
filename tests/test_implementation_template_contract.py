@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
+from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner, _ProductionBatch
 from minecraft_mod_ai.implementation_template_contract import (
     MODEL_FILL_FIELDS,
     SCHEMA,
     build_implementation_template,
     sanitize_hole_fills,
 )
+from minecraft_mod_ai.planner_hole_filling import fill_evidence_page
 from minecraft_mod_ai.planner_template_schema import (
     build_batch_skeleton,
     merge_model_output_into_skeleton,
@@ -103,6 +106,50 @@ def _task() -> dict:
             }
         ],
     }
+
+
+class _HoleRouter:
+    def __init__(self, *, omit_once: bool = False) -> None:
+        self.calls = 0
+        self.omit_once = omit_once
+        self.enable_tools: list[object] = []
+
+    def generate_text(self, role, messages, **kwargs):
+        assert role == "planner"
+        assert kwargs.get("response_format") == "json"
+        self.enable_tools.append(kwargs.get("enable_tools"))
+        self.calls += 1
+        packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
+        modules = []
+        for module in packet["modules"]:
+            holes = list(module["implementation_template"]["holes"])
+            if self.omit_once and self.calls == 1 and holes:
+                holes = holes[:-1]
+            modules.append(
+                {
+                    "module_id": module["module_id"],
+                    "config": {
+                        "implementation_notes": "Implement the host sketch without changing authority.",
+                        "hole_fills": [
+                            {
+                                "hole_id": hole["hole_id"],
+                                "implementation_decision": f"Implement {hole['subject']}",
+                                "local_steps": [
+                                    "Read the host-owned anchors and constraints.",
+                                    "Implement the bounded obligation.",
+                                    "Run the declared verification gate.",
+                                ],
+                                "code_bindings": [],
+                                "reference_uses": [],
+                                "verification_intent": "Produce host-verifiable evidence.",
+                                "uncertainties": [],
+                            }
+                            for hole in holes
+                        ],
+                    },
+                }
+            )
+        return json.dumps({"modules": modules})
 
 
 def test_template_is_dynamic_detailed_and_stable() -> None:
@@ -266,3 +313,63 @@ def test_planner_skeleton_uses_real_contract_and_sanitizes_hole_fills() -> None:
             "implementation_decision": "Use the shared transaction service.",
         }
     ]
+
+
+def test_hole_filler_repairs_only_missing_holes() -> None:
+    task = _task()
+    skeleton = build_batch_skeleton(
+        task["task_id"],
+        task["semantic_outcome"],
+        task["provides"],
+        [task["task_id"]],
+        host_module_contracts={task["task_id"]: task},
+    )
+    router = _HoleRouter(omit_once=True)
+
+    page = fill_evidence_page(
+        router,
+        skeleton,
+        valid_module_catalog={task["task_id"]},
+    )
+    template = page["modules"][0]["config"]["implementation_template"]
+    fills = page["modules"][0]["config"]["model_fill"]["hole_fills"]
+
+    assert router.calls == 2
+    assert router.enable_tools == [False, False]
+    assert {item["hole_id"] for item in fills} == set(
+        template["completion_policy"]["required_hole_ids"]
+    )
+
+
+def test_canonical_evidence_batch_invokes_bounded_hole_filler() -> None:
+    task = _task()
+    batch = _ProductionBatch(
+        batch_id=task["task_id"],
+        scope=task["semantic_outcome"],
+        depends_on_batches=(),
+        deliverables=tuple(task["provides"]),
+        exports=(task["task_id"],),
+        task_contract=task,
+        evidence_plan_sha256="sha256:evidence",
+    )
+    router = _HoleRouter()
+
+    modules, assets, tests = CompleteGameDesignPlanner(router)._expand_batches(
+        (batch,),
+        prompt="Create a server-authoritative trade system.",
+        game_design={},
+        evidence_mode=True,
+    )
+
+    assert router.calls == 1
+    assert not assets
+    assert tests
+    assert len(modules) == 1
+    config = modules[0].config
+    required = set(
+        config["implementation_template"]["completion_policy"]["required_hole_ids"]
+    )
+    filled = {
+        item["hole_id"] for item in config["model_fill"]["hole_fills"]
+    }
+    assert filled == required
