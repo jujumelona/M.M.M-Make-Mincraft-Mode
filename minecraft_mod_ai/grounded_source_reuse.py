@@ -2,12 +2,14 @@ from __future__ import annotations
 
 """Host-owned bridge from grounded repository evidence to executable code reuse.
 
-The small coder never searches for or selects a donor.  Only GitHub repositories that
-already have host-materialized evidence in pre-design RAG may enter this pipeline.  A
-candidate is then pinned, license/closure checked, materialized, and compiled against
-the selected target before its source is attached to a generation task.
+The small coder never searches for or selects a donor. Only GitHub repositories that
+already have host-materialized evidence in pre-design RAG or were explicitly supplied
+by the host/user may enter this pipeline. A candidate is then pinned, license/closure
+checked, materialized, and compiled against the selected target before its source is
+attached to a generation task.
 """
 
+import os
 import re
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -27,6 +29,10 @@ from .source_transplant import (
 
 _SCHEMA = "mmm/grounded-repository-reuse-plan-v2"
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[가-힣]{2,}", re.IGNORECASE)
+_REFERENCE_SPLIT_RE = re.compile(r"[\s,;]+")
+_REPOSITORY_ID_RE = re.compile(
+    r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$"
+)
 _STOP = frozenset(
     {
         "minecraft",
@@ -62,28 +68,72 @@ def _github_repository(source_id: str, source_url: str) -> str:
     identity = str(source_id or "").strip()
     if identity.casefold().startswith("github:"):
         value = identity.split(":", 1)[1].strip().removesuffix(".git")
-        if value.count("/") == 1:
+        if _REPOSITORY_ID_RE.fullmatch(value):
             return value
     try:
         parsed = urlparse(str(source_url or "").strip())
     except ValueError:
         return ""
-    if parsed.hostname not in {"github.com", "www.github.com"}:
+    if parsed.scheme != "https" or parsed.hostname not in {"github.com", "www.github.com"}:
         return ""
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) < 2:
         return ""
-    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    value = f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    return value if _REPOSITORY_ID_RE.fullmatch(value) else ""
+
+
+def _normalize_reference_repository(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    direct = raw.removesuffix(".git")
+    if _REPOSITORY_ID_RE.fullmatch(direct):
+        return direct
+    repository = _github_repository("", raw)
+    if repository:
+        return repository
+    raise ValueError(
+        "MMM_REFERENCE_MOD_URLS only accepts GitHub repository URLs or owner/repo "
+        f"identifiers; unsupported reference: {raw!r}"
+    )
+
+
+def _host_reference_cards() -> tuple[dict[str, Any], ...]:
+    raw = os.environ.get("MMM_REFERENCE_MOD_URLS", "")
+    if not raw.strip():
+        return ()
+    repositories: list[str] = []
+    seen: set[str] = set()
+    for value in _REFERENCE_SPLIT_RE.split(raw.strip()):
+        if not value:
+            continue
+        repository = _normalize_reference_repository(value)
+        key = repository.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        repositories.append(repository)
+    return tuple(
+        {
+            "repository": repository,
+            "page_refs": ["host:reference_mod"],
+            "source_ids": [f"github:{repository}"],
+            "source_urls": [f"https://github.com/{repository}"],
+            "evidence_text": "",
+            "evidence_tokens": [],
+            "explicit_reference": True,
+        }
+        for repository in repositories
+    )
 
 
 def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     research = design.get("_pre_design_research")
     notes = research.get("domain_notes") if isinstance(research, Mapping) else None
-    if not isinstance(notes, list):
-        return ()
     cards: list[dict[str, Any]] = []
     by_repository: dict[str, int] = {}
-    for note in notes:
+    for note in notes if isinstance(notes, list) else ():
         raw_cards = note.get("grounded_evidence_cards") if isinstance(note, Mapping) else None
         for raw in raw_cards if isinstance(raw_cards, list) else ():
             if not isinstance(raw, Mapping):
@@ -108,20 +158,36 @@ def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any
                         "source_ids": [str(raw.get("source_id") or "")],
                         "source_urls": [str(raw.get("source_url") or "")],
                         "evidence_text": evidence_text,
+                        "explicit_reference": False,
                     }
                 )
                 continue
             existing = cards[by_repository[key]]
-            for field, value in (
+            for field, field_value in (
                 ("page_refs", str(raw.get("page_ref") or "")),
                 ("source_ids", str(raw.get("source_id") or "")),
                 ("source_urls", str(raw.get("source_url") or "")),
             ):
-                if value and value not in existing[field]:
-                    existing[field].append(value)
+                if field_value and field_value not in existing[field]:
+                    existing[field].append(field_value)
             existing["evidence_text"] = (
                 f"{existing['evidence_text']} {evidence_text}"
             ).strip()
+
+    for host_card in _host_reference_cards():
+        repository = str(host_card["repository"])
+        key = repository.casefold()
+        if key not in by_repository:
+            by_repository[key] = len(cards)
+            cards.append(dict(host_card))
+            continue
+        existing = cards[by_repository[key]]
+        existing["explicit_reference"] = True
+        for field in ("page_refs", "source_ids", "source_urls"):
+            for field_value in host_card[field]:
+                if field_value and field_value not in existing[field]:
+                    existing[field].append(field_value)
+
     for card in cards:
         card["evidence_tokens"] = sorted(_tokens(card["evidence_text"]))
     return tuple(cards)
@@ -261,7 +327,8 @@ def build_repository_reuse_plan(
             candidates: list[DonorSlice] = []
             for card in cards:
                 overlap = _candidate_overlap(capability, terms, card)
-                if overlap <= 0:
+                explicit_reference = bool(card.get("explicit_reference"))
+                if overlap <= 0 and not explicit_reference:
                     continue
                 repository = str(card["repository"])
                 try:
@@ -277,6 +344,7 @@ def build_repository_reuse_plan(
                             "capability": capability,
                             "repository": repository,
                             "page_refs": list(card.get("page_refs", ())),
+                            "explicit_reference": explicit_reference,
                             "status": "inspection_error",
                             "error": f"{type(exc).__name__}: {exc}",
                         }
@@ -292,6 +360,7 @@ def build_repository_reuse_plan(
                         "capability": capability,
                         "repository": repository,
                         "page_refs": list(card.get("page_refs", ())),
+                        "explicit_reference": explicit_reference,
                         "status": "proof_pending" if admitted else "inspection_rejected",
                         "overlap": overlap,
                     }
@@ -336,8 +405,9 @@ def build_repository_reuse_plan(
                         "source_id": "",
                         "component_refs": [],
                         "rationale": (
-                            "No grounded GitHub donor passed immutable source, permissive "
-                            "license, dependency closure, authoritative compile, and artifact coverage gates."
+                            "No grounded or explicitly referenced GitHub donor passed immutable "
+                            "source, permissive license, dependency closure, authoritative compile, "
+                            "and artifact coverage gates."
                         ),
                     }
                 )
@@ -352,8 +422,8 @@ def build_repository_reuse_plan(
                     "donor": donor.to_dict(),
                     "proof_receipt": receipt.to_dict(),
                     "rationale": (
-                        "Host-grounded donor source was pinned, hash-verified, adapted, "
-                        "and authoritatively compiled before coder generation."
+                        "Host-grounded or explicitly referenced donor source was pinned, "
+                        "hash-verified, adapted, and authoritatively compiled before coder generation."
                     ),
                 }
             )
@@ -367,11 +437,15 @@ def build_repository_reuse_plan(
         "capability_graph": graph,
         "capabilities": decisions,
         "grounded_repository_count": len(cards),
+        "explicit_reference_repository_count": sum(
+            bool(card.get("explicit_reference")) for card in cards
+        ),
         "inspection_receipts": inspections,
         "proof_receipts": proofs,
         "selection_policy": (
-            "grounded GitHub evidence -> frozen-intent overlap -> immutable source inspection -> "
-            "authoritative target compile -> complete verified artifact coverage -> task-owned code context"
+            "grounded/explicit GitHub evidence -> frozen-intent capability inspection -> "
+            "immutable source inspection -> authoritative target compile -> complete verified "
+            "artifact coverage -> task-owned code context"
         ),
     }
 
