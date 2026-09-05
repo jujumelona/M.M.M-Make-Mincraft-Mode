@@ -4,6 +4,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .implementation_template_contract import (
+    build_implementation_template,
+    sanitize_hole_fills,
+)
+
 MODULE_KEYS = frozenset(
     {"module_id", "kind", "config", "depends_on", "required_gates"}
 )
@@ -29,6 +34,7 @@ MODEL_TASK_DETAIL_KEYS = frozenset(
         "api_usage",
         "validation_notes",
         "asset_notes",
+        "hole_fills",
     }
 )
 
@@ -119,6 +125,27 @@ def _positive_int(value: Any, default: int) -> int:
     return value if type(value) is int and value > 0 else default
 
 
+def _contract_task(contract: Mapping[str, Any]) -> dict[str, Any]:
+    nested = contract.get("evidence_task")
+    return dict(nested) if isinstance(nested, Mapping) else dict(contract)
+
+
+def _contract_values(
+    contracts: Mapping[str, Mapping[str, Any]],
+    *keys: str,
+) -> list[str]:
+    values: list[str] = []
+    for contract in contracts.values():
+        if not isinstance(contract, Mapping):
+            continue
+        task = _contract_task(contract)
+        for key in keys:
+            for item in _unique_strings(task.get(key)):
+                if item not in values:
+                    values.append(item)
+    return values
+
+
 def build_batch_skeleton(
     batch_id: str,
     scope: str,
@@ -129,7 +156,11 @@ def build_batch_skeleton(
     host_module_contracts: Mapping[str, Mapping[str, Any]] | None = None,
     acceptance_tests: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Create the complete page shape and module identities on the host."""
+    """Create the complete page shape and module identities on the host.
+
+    Evidence-owned pages derive acceptance and deliverables from the actual task contract.
+    They never manufacture registration tests or feature names merely to make a page non-empty.
+    """
     batch = _normalize_id(batch_id, "batch")
     module_ids = list(
         dict.fromkeys(_normalize_id(item, "module") for item in exports)
@@ -148,12 +179,18 @@ def build_batch_skeleton(
         }
         contract = contracts.get(module_id)
         if isinstance(contract, Mapping):
+            evidence_task = _contract_task(contract)
+            implementation_template = (
+                build_implementation_template(evidence_task)
+                if str(evidence_task.get("task_id") or "").strip()
+                else None
+            )
             config.update(
                 {
                     "evidence_plan_sha256": str(
                         contract.get("evidence_plan_sha256") or ""
                     ),
-                    "evidence_task": dict(contract.get("evidence_task") or contract),
+                    "evidence_task": evidence_task,
                     "requirement_refs": _unique_strings(
                         contract.get("requirement_refs")
                     ),
@@ -167,6 +204,8 @@ def build_batch_skeleton(
                     "model_fill": {},
                 }
             )
+            if implementation_template is not None:
+                config["implementation_template"] = implementation_template
         modules.append(
             {
                 "module_id": module_id,
@@ -180,13 +219,31 @@ def build_batch_skeleton(
                 ),
             }
         )
+
+    explicit_acceptance = _unique_strings(acceptance_tests)
+    explicit_deliverables = _unique_strings(deliverables)
+    if contracts:
+        derived_acceptance = _contract_values(
+            contracts,
+            "public_acceptance",
+            "runtime_acceptance",
+            "acceptance",
+            "internal_invariants",
+        )
+        derived_deliverables = _contract_values(contracts, "provides")
+        page_acceptance = explicit_acceptance or derived_acceptance
+        page_deliverables = explicit_deliverables or derived_deliverables
+    else:
+        page_acceptance = explicit_acceptance or [
+            f"test_{module_id}_registers" for module_id in module_ids
+        ]
+        page_deliverables = explicit_deliverables or [f"{batch}_feature"]
+
     return {
         "modules": modules,
         "assets": [],
-        "acceptance_tests": _unique_strings(acceptance_tests)
-        or [f"test_{module_id}_registers" for module_id in module_ids],
-        "completed_deliverables": _unique_strings(deliverables)
-        or [f"{batch}_feature"],
+        "acceptance_tests": page_acceptance,
+        "completed_deliverables": page_deliverables,
         "complete": True,
         "next_cursor": "",
     }
@@ -235,8 +292,16 @@ def _merge_modules(
                 for key in MODEL_TASK_DETAIL_KEYS
                 if isinstance(raw_config, Mapping) and key in raw_config
             }
+            implementation_template = host_config.get("implementation_template")
+            if isinstance(implementation_template, Mapping):
+                details["hole_fills"] = sanitize_hole_fills(
+                    implementation_template,
+                    details.get("hole_fills"),
+                )
+            else:
+                details.pop("hole_fills", None)
             config = {**host_config, "model_fill": details}
-            # Task kind, dependency edges, and gates are also host-owned.
+            # Task kind, dependency edges, target, artifacts, holes, and gates are host-owned.
             kind = str(host_item.get("kind") or "custom_java")
         elif isinstance(raw_config, dict):
             config = dict(raw_config)
