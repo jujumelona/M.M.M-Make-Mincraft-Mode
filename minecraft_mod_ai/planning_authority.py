@@ -232,25 +232,41 @@ def _host_causal_dependencies(
 
 
 def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]:
-    """Compile the whole authored request in one semantic model turn."""
+    """Compile authored clauses through the bounded canonical semantic helper."""
 
-    catalog = dict(_semantic.build_approved_requirement_catalog(prompt, router=router))
+    from .semantic_batching_contract import build_bounded_requirement_catalog
+
+    catalog = dict(build_bounded_requirement_catalog(prompt, router=router))
     if router is None:
         return catalog
 
     audit = dict(catalog.get("semantic_audit") or {})
+    batch_size = audit.get("semantic_batch_size")
+    batch_count = audit.get("semantic_batch_count")
+    if type(batch_size) is not int or batch_size <= 0:
+        raise _evidence.EvidencePlanError(
+            "REQ_SCALE_BATCH_AUDIT: semantic batch size was lost before planning finalization."
+        )
+    if type(batch_count) is not int or batch_count <= 0:
+        raise _evidence.EvidencePlanError(
+            "REQ_SCALE_BATCH_AUDIT: semantic batch count was lost before planning finalization."
+        )
+
     audit.update(
         {
-            "normal_model_turns": 1,
-            "semantic_model_turns": 1,
-            "semantic_discovery_model_turns": 1,
+            "normal_model_turns": batch_count,
+            "semantic_model_turns": batch_count,
+            "semantic_discovery_model_turns": batch_count,
             "semantic_detail_model_turns": 0,
             "max_repair_turns": 0,
-            "generation_policy": "single_pass_constrained_batch",
-            "semantic_generation_protocol": "all_clauses_one_structured_batch",
-            "max_clauses_per_model_turn": len(_semantic._clause_records(prompt)),
+            "generation_policy": "bounded_host_owned_semantic_batches",
+            "semantic_generation_protocol": "bounded_host_owned_semantic_batches",
+            "max_clauses_per_model_turn": batch_size,
             "max_semantic_leaves_per_detail_turn": 0,
             "model_generated_planning_json": False,
+            "global_dependency_reconciliation": (
+                "global_catalog_capability_resolution_then_host_causal_dag"
+            ),
             "source_clause_index_owner": "host",
             "source_anchor_owner": "host",
             "source_grounding_owner": "host",
@@ -373,8 +389,8 @@ def build_authoritative_request_catalog(
 ) -> dict[str, Any]:
     """Compile request meaning and retrieval intent before any design/RAG execution.
 
-    With a model router, normal planning performs exactly one bounded semantic model turn
-    regardless of requirement count. Retrieval planning is deterministic host work.
+    Semantic extraction is bounded by a measured receipt when present and otherwise by
+    the conservative one-clause fallback. Retrieval planning is deterministic host work.
     """
 
     with trace_scope("planner"):
