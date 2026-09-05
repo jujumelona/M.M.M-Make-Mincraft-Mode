@@ -1,44 +1,45 @@
 """Bound semantic extraction without weakening host-owned requirement authority.
 
 The requirements ledger forbids treating an arbitrarily large authored request as one
-structured model call. This module does not invent an "optimal" batch size. It uses a
-strict measured receipt when one is attached to the router; otherwise it falls back to
-one host-owned clause per model turn and records that the value is unmeasured.
+structured model call. This module does not invent an optimal batch size. A measured
+model/runtime receipt may provide a bounded size; otherwise the conservative fallback
+is one host-owned clause per model turn and is explicitly recorded as unmeasured.
 
 Only semantic leaf extraction is batched. Stable source records are created by the host
 before any model call, all approved leaves are merged before requirement IDs are built,
 and the existing global catalog/dependency passes remain authoritative.
 
 This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
-directly; installation never rewires another module at runtime.
+directly; installation validates that static call graph and installs only the catalog
+validator, never a second request builder or runtime routing implementation.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import semantic_requirement_authority as _semantic
 
 _INSTALLED = False
-_ORIGINAL_SEMANTIC_BUILD = _semantic.build_approved_requirement_catalog
-
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
 _MEASURED_STATUS = "MEASURED"
 _FALLBACK_BATCH_SIZE = 1
+_SHA256_RECEIPT = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _sha_receipt(value: Any, *, field: str) -> str:
-    result = str(value or "").strip()
-    if not result.startswith("sha256:") or len(result) != len("sha256:") + 64:
+    result = str(value or "").strip().casefold()
+    if not _SHA256_RECEIPT.fullmatch(result):
         raise _semantic._evidence.EvidencePlanError(
-            f"REQ_SCALE_BATCH_RECEIPT: {field} must be a sha256 receipt."
+            f"REQ_SCALE_BATCH_RECEIPT: {field} must be an exact sha256 receipt."
         )
     return result
 
 
 def _resolve_batch_contract(router: Any) -> dict[str, Any]:
-    """Return an explicit measured batch contract or a conservative unmeasured fallback."""
+    """Return a measured batch contract or an explicit conservative fallback."""
 
     raw = getattr(router, _RECEIPT_ATTRIBUTE, None)
     if raw is None:
@@ -47,6 +48,7 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
             "source": "unmeasured_conservative_single_clause",
             "measured": False,
             "model_identity_sha256": "",
+            "runtime_profile_sha256": "",
             "benchmark_receipt_sha256": "",
         }
     if not isinstance(raw, Mapping):
@@ -67,10 +69,13 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
 
     return {
         "max_clauses_per_turn": int(size),
-        "source": "measured_model_profile_receipt",
+        "source": "measured_model_runtime_receipt",
         "measured": True,
         "model_identity_sha256": _sha_receipt(
             raw.get("model_identity_sha256"), field="model_identity_sha256"
+        ),
+        "runtime_profile_sha256": _sha_receipt(
+            raw.get("runtime_profile_sha256"), field="runtime_profile_sha256"
         ),
         "benchmark_receipt_sha256": _sha_receipt(
             raw.get("benchmark_receipt_sha256"), field="benchmark_receipt_sha256"
@@ -88,16 +93,36 @@ def _chunks(
     )
 
 
+def _source_batch_receipt(
+    batch_index: int,
+    clauses: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "batch_index": batch_index,
+        "source_clauses": [
+            {
+                "source_clause_index": int(clause["clause_index"]),
+                "char_start": int(clause["char_start"]),
+                "char_end": int(clause["char_end"]),
+                "text_sha256": str(clause["text_sha256"]),
+            }
+            for clause in clauses
+        ],
+    }
+
+
 def _generate_bounded_nodes(
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
     *,
     batch_size: int,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], ...]]:
     nodes: list[dict[str, Any]] = []
     batches = _chunks(clauses, batch_size)
+    receipts: list[dict[str, Any]] = []
 
     for batch_index, batch in enumerate(batches):
+        receipts.append(_source_batch_receipt(batch_index, batch))
         try:
             payload = _semantic._call_semantic_model(router, batch)
         except Exception as exc:
@@ -120,17 +145,22 @@ def _generate_bounded_nodes(
             )
         nodes.extend(batch_nodes)
 
-    return _semantic._assign_local_ids(nodes), len(batches)
+    assigned = _semantic._assign_local_ids(nodes)
+    if not assigned:
+        raise _semantic._evidence.EvidencePlanError(
+            "REQ_SCALE_BATCH_EMPTY: bounded semantic extraction produced no approved leaves."
+        )
+    return assigned, tuple(receipts)
 
 
 def build_bounded_requirement_catalog(
     prompt: str,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Compile semantic leaves in bounded batches, then reconcile the full catalog globally."""
+    """Compile bounded semantic leaves, then reconcile the full catalog globally."""
 
     if router is None:
-        return _ORIGINAL_SEMANTIC_BUILD(prompt, router=None)
+        return _semantic.build_approved_requirement_catalog(prompt, router=None)
     if not isinstance(prompt, str) or not prompt.strip():
         raise _semantic._evidence.EvidencePlanError(
             "REQ_SOURCE_EMPTY: semantic authority requires a non-empty prompt."
@@ -139,7 +169,7 @@ def build_bounded_requirement_catalog(
     clauses = _semantic._clause_records(prompt)
     contract = _resolve_batch_contract(router)
     batch_size = int(contract["max_clauses_per_turn"])
-    nodes, batch_count = _generate_bounded_nodes(
+    nodes, batch_receipts = _generate_bounded_nodes(
         router,
         clauses,
         batch_size=batch_size,
@@ -149,6 +179,7 @@ def build_bounded_requirement_catalog(
     # been merged. Cross-batch prerequisites therefore cannot be lost at a batch edge.
     catalog = _semantic._build_catalog(prompt, nodes, clauses)
     audit = dict(catalog.get("semantic_audit") or {})
+    batch_count = len(batch_receipts)
     audit.update(
         {
             "normal_model_turns": batch_count,
@@ -163,9 +194,11 @@ def build_bounded_requirement_catalog(
             "semantic_batch_size_source": contract["source"],
             "semantic_batch_size_measured": bool(contract["measured"]),
             "semantic_batch_model_identity_sha256": contract["model_identity_sha256"],
+            "semantic_batch_runtime_profile_sha256": contract["runtime_profile_sha256"],
             "semantic_batch_benchmark_receipt_sha256": contract[
                 "benchmark_receipt_sha256"
             ],
+            "semantic_batches": list(batch_receipts),
             "max_clauses_per_model_turn": batch_size,
             "cross_batch_prerequisite_reconciliation": (
                 "global_catalog_capability_resolution"
@@ -187,10 +220,50 @@ def build_bounded_requirement_catalog(
 build_bounded_requirement_catalog.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
 
 
+def _install_approved_catalog_validator() -> None:
+    original_validate = _semantic._evidence._validate_request_catalog
+    if getattr(original_validate, "__mmm_approved_requirement_authority__", False):
+        return
+
+    def validate(catalog: Mapping[str, Any], *, prompt: str) -> None:
+        original_validate(catalog, prompt=prompt)
+        if catalog.get("schema_version") == _semantic._SCHEMA:
+            _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
+
+    validate.__mmm_approved_requirement_authority__ = True  # type: ignore[attr-defined]
+    validate.__wrapped__ = original_validate  # type: ignore[attr-defined]
+    _semantic._evidence._validate_request_catalog = validate
+
+
+def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
+    code = getattr(target, "__code__", None)
+    names = set(getattr(code, "co_names", ()))
+    if "build_bounded_requirement_catalog" not in names:
+        raise RuntimeError(
+            f"{owner} is not statically wired to build_bounded_requirement_catalog"
+        )
+    target.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
+
+
 def install_semantic_batching_contract() -> None:
-    """Mark the pure batching helper available without runtime rebinding."""
+    """Validate static owners and install semantic catalog validation exactly once."""
 
     global _INSTALLED
+    if _INSTALLED:
+        return
+
+    from . import evidence_request_guard as guard
+    from . import planning_authority as planning
+
+    _assert_static_bounded_owner(
+        guard.build_authoritative_request_catalog,
+        owner="evidence_request_guard.build_authoritative_request_catalog",
+    )
+    _assert_static_bounded_owner(
+        planning._compile_semantic_catalog,
+        owner="planning_authority._compile_semantic_catalog",
+    )
+    _install_approved_catalog_validator()
     _INSTALLED = True
 
 
