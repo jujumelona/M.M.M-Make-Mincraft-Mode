@@ -56,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="전체 모드·월드·GUI·시스템·자산 계획을 생성합니다.",
     )
     plan.add_argument("prompt")
-    plan.add_argument("--profile", default="t4_local")
+    plan.add_argument("--profile", default="Qwen3.5-9B_6GB")
     plan.add_argument("--media", type=Path, action="append", default=[])
     plan.add_argument("--existing-zip", type=Path)
     plan.add_argument("--save", type=Path)
@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--approve", help=argparse.SUPPRESS)
     execute.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     execute.add_argument("--output", type=Path, default=Path("mmm-output"))
-    execute.add_argument("--profile", default="t4_local")
+    execute.add_argument("--profile", default="Qwen3.5-9B_6GB")
     execute.add_argument("--run-name", default="complete-run")
     execute.add_argument("--existing-zip", type=Path)
     execute.add_argument("--source-only", action="store_true")
@@ -107,7 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("local", "heuristic-dev"),
         default="local",
     )
-    slice_plan.add_argument("--profile", default="t4_local")
+    slice_plan.add_argument("--profile", default="Qwen3.5-9B_6GB")
     slice_plan.add_argument("--existing-zip", type=Path)
     slice_plan.add_argument("--save", type=Path)
 
@@ -132,7 +132,7 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("proposal", type=Path)
     ui = subparsers.add_parser("ui")
     ui.add_argument("--output", type=Path, default=Path("mmm-output"))
-    ui.add_argument("--profile", default="t4_local")
+    ui.add_argument("--profile", default="Qwen3.5-9B_6GB")
     ui.add_argument("--share", action="store_true")
     ui.add_argument("--server-name", default="127.0.0.1")
     return parser
