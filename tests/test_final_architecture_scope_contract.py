@@ -67,3 +67,24 @@ def test_evidence_metadata_does_not_invalidate_build_fingerprint(tmp_path: Path)
         "_mmm_build_input_scope",
         False,
     )
+
+
+def test_custom_model_training_surface_is_absent() -> None:
+    """REQ-LORA-001..003 / NO-029 / REQ-CLEAN-001: no user tuning pipeline."""
+
+    root = Path(__file__).resolve().parents[1]
+    forbidden_paths = (
+        "minecraft_mod_ai/training.py",
+        "minecraft_mod_ai/training_cli.py",
+        "minecraft_mod_ai/preference_training.py",
+        "minecraft_mod_ai/config/training_policy.yaml",
+        "minecraft_mod_ai/training_configs",
+        "config/training_policy.yaml",
+        "training",
+    )
+    assert [path for path in forbidden_paths if (root / path).exists()] == []
+
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert "mmm-training" not in pyproject
+    assert "training_configs" not in pyproject
+    assert "\ntraining = []" not in pyproject
