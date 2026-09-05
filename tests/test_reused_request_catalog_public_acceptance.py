@@ -19,10 +19,7 @@ def _target() -> dict[str, object]:
         "target": {
             "minecraft_version": "26.1.2",
             "loader": "fabric",
-            "java_version": "21",
-            "yarn_mappings": "mojang",
-            "mappings_kind": "mojang",
-            "mappings_version": "mojang",
+            "java_version": "25",
             "fabric_loader": "0.18.4",
             "fabric_api": "0.140.2+26.1",
             "fabric_loom": "1.14.10",
