@@ -5,8 +5,8 @@ from __future__ import annotations
 A repository hit is never a reusable implementation by itself. Reuse is admitted
 only after an immutable commit, SPDX license, exact target metadata (or an explicit
 adaptation classification), a resource-budgeted dependency-complete source slice,
-and hashes for every source blob have been recorded. Execution refetches the pinned blobs and verifies the same
-hashes before exposing them to the coder.
+and hashes for every source blob have been recorded. Execution refetches the pinned
+blobs and verifies the same hashes before exposing them to the coder.
 """
 
 import base64
@@ -37,13 +37,27 @@ from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
 from .reuse_license import is_reusable_source_license
 
-_TYPE_DECL = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
+_TYPE_DECL = re.compile(
+    r"\b(?:(?:data|sealed|value|annotation|enum)\s+class|class|interface|object|record|enum)"
+    r"\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
 _METHOD_DECL = re.compile(
     r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
     r"[A-Za-z_$][A-Za-z0-9_$<>?,.\[\]\s]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
-_MINECRAFT_PROP = re.compile(r"(?m)^\s*minecraft_version\s*=\s*([^\s#]+)")
-_GRADLE_DEP = re.compile(r"(?m)^\s*(?:modImplementation|implementation|api|compileOnly|runtimeOnly)\s*[\( ]\s*['\"]([^'\"]+)")
+_KOTLIN_FUN_DECL = re.compile(
+    r"\bfun\s+(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_?.<>]*\.)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+_MINECRAFT_PROP = re.compile(
+    r"(?mi)^\s*(?:minecraft_version|minecraftVersion|minecraft\.version)\s*=\s*([^\s#]+)"
+)
+_GRADLE_DEP = re.compile(
+    r"(?m)^\s*(?:modImplementation|implementation|api|compileOnly|runtimeOnly)"
+    r"\s*[\( ]\s*['\"]([^'\"]+)"
+)
+
+
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     raw = os.environ.get(name, str(default)).strip()
     try:
@@ -81,7 +95,7 @@ def _response_byte_budget() -> int:
 
 
 def _tree_request_budget() -> int:
-    # Work budget only.  It never truncates a successfully enumerated tree.
+    # Work budget only. It never truncates a successfully enumerated tree.
     return _env_int(
         "MMM_SOURCE_TRANSPLANT_TREE_REQUEST_BUDGET",
         2048,
@@ -116,6 +130,7 @@ _BLOB_LOCK = Lock()
 _BLOB_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 _BLOB_CACHE_BYTES = 0
 _BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
+
 
 @dataclass(frozen=True)
 class CompatibilityEvidence:
@@ -345,7 +360,7 @@ def _donor_test_paths(blobs: Mapping[str, str]) -> tuple[str, ...]:
         sorted(
             path
             for path in blobs
-            if path.endswith((".java", ".kt"))
+            if path.casefold().endswith((".java", ".kt"))
             and any(
                 marker in f"/{path.casefold()}/"
                 for marker in ("/test/", "/gametest/")
@@ -381,9 +396,9 @@ def _repository_tree_entries(
 ) -> tuple[Mapping[str, Any], ...]:
     """Resolve the complete immutable Git tree, recovering GitHub truncation.
 
-    The recursive Git Trees endpoint is used as the fast path.  If GitHub marks it
+    The recursive Git Trees endpoint is used as the fast path. If GitHub marks it
     truncated (or the response exceeds the configured transport byte budget), the
-    repository is walked subtree-by-subtree.  A repository is never discarded just
+    repository is walked subtree-by-subtree. A repository is never discarded just
     because it crosses a local file-count threshold.
     """
 
@@ -473,7 +488,7 @@ def inspect_repository_slice(
     adapter: PlatformAdapter,
     discovery_client: Any,
 ) -> DonorSlice | None:
-    """Inspect one repo and return a pinned minimal Java closure when evidence suffices."""
+    """Inspect one repo and return a pinned minimal Java/Kotlin closure when evidence suffices."""
 
     snapshot = _repository_snapshot(repository, discovery_client)
     if not isinstance(snapshot, Mapping):
@@ -499,13 +514,17 @@ def inspect_repository_slice(
             return None
         required_dependencies = _declared_dependencies(metadata_text)
         donor_tests = _donor_test_paths(blobs)
-        java_paths = tuple(
-            path for path in blobs
-            if path.endswith(".java") and "/src/" in f"/{path}"
+        source_paths = tuple(
+            path
+            for path in blobs
+            if path.casefold().endswith((".java", ".kt"))
+            and "/src/" in f"/{path.casefold()}"
         )
-        if not java_paths:
-            java_paths = tuple(path for path in blobs if path.endswith(".java"))
-        if not java_paths:
+        if not source_paths:
+            source_paths = tuple(
+                path for path in blobs if path.casefold().endswith((".java", ".kt"))
+            )
+        if not source_paths:
             return None
 
         tree_items = tuple(
@@ -614,13 +633,18 @@ def inspect_repository_slice(
         if not selected:
             return None
 
-        # Build DonorFile list
         files: list[DonorFile] = []
         symbols: set[str] = set()
         for path in selected:
             raw = contents[path]
             text = raw.decode("utf-8", errors="replace")
-            local_symbols = tuple(sorted(set(_TYPE_DECL.findall(text)) | set(_METHOD_DECL.findall(text))))
+            local_symbols = tuple(
+                sorted(
+                    set(_TYPE_DECL.findall(text))
+                    | set(_METHOD_DECL.findall(text))
+                    | (set(_KOTLIN_FUN_DECL.findall(text)) if path.casefold().endswith(".kt") else set())
+                )
+            )
             symbols.update(local_symbols)
             files.append(
                 DonorFile(
@@ -700,7 +724,6 @@ def materialize_source_slices(
     if not validated:
         return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
 
-    # Validate every donor/proof receipt before creating any local evidence path.
     target_root = root / ".minecraft_ai" / "reuse" / "donors"
     target_root.mkdir(parents=True, exist_ok=True)
 
@@ -802,7 +825,7 @@ def _donor_materialization_key(
 
 
 def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str, Any] | None:
-    """Cache immutable repository metadata/tree across target-version evaluation."""
+    """Cache immutable repository metadata/tree across capability evaluation."""
 
     owner = False
     with _SNAPSHOT_LOCK:
@@ -1073,11 +1096,7 @@ def materialize_pinned_donor(
     donor_slice: DonorSlice,
     discovery_client: Any = None,
 ) -> dict[str, bytes]:
-    """Fetch and verify all files in a donor slice using immutable blob SHAs.
-
-    Validates SHA-256 integrity against donor file manifests. If any blob fails to
-    fetch or hash does not match, raises SourceTransplantError (no placeholders allowed).
-    """
+    """Fetch and verify all files in a donor slice using immutable blob SHAs."""
     validate_donor_slice_manifest(donor_slice)
     token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
     client = getattr(discovery_client, "_client", None)
@@ -1088,20 +1107,20 @@ def materialize_pinned_donor(
 
     try:
         materialized: dict[str, bytes] = {}
-        for df in donor_slice.files:
-            raw = _fetch_blob_bytes(client, donor_slice.repository, df.blob_sha)
+        for donor_file in donor_slice.files:
+            raw = _fetch_blob_bytes(client, donor_slice.repository, donor_file.blob_sha)
             if not raw:
-                raise SourceTransplantError(f"Failed to fetch blob for {df.path}")
+                raise SourceTransplantError(f"Failed to fetch blob for {donor_file.path}")
             actual_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
-            if actual_sha.casefold() != df.sha256.casefold():
+            if actual_sha.casefold() != donor_file.sha256.casefold():
                 raise SourceTransplantError(
-                    f"SHA-256 hash mismatch for {df.path}: expected {df.sha256}, got {actual_sha}"
+                    f"SHA-256 hash mismatch for {donor_file.path}: expected {donor_file.sha256}, got {actual_sha}"
                 )
-            if len(raw) != df.size_bytes:
+            if len(raw) != donor_file.size_bytes:
                 raise SourceTransplantError(
-                    f"Pinned donor size mismatch for {df.path}: expected {df.size_bytes}, got {len(raw)}"
+                    f"Pinned donor size mismatch for {donor_file.path}: expected {donor_file.size_bytes}, got {len(raw)}"
                 )
-            materialized[df.path] = raw
+            materialized[donor_file.path] = raw
         return materialized
     finally:
         if own_client:
@@ -1118,10 +1137,13 @@ def _build_metadata_text(
         "gradle.properties",
         "fabric.mod.json",
         "src/main/resources/fabric.mod.json",
+        "src/main/resources/META-INF/mods.toml",
+        "src/main/resources/META-INF/neoforge.mods.toml",
         "build.gradle",
         "build.gradle.kts",
         "settings.gradle",
         "settings.gradle.kts",
+        "gradle/libs.versions.toml",
     )
     chunks: list[str] = []
     for path in metadata_paths:
@@ -1129,9 +1151,14 @@ def _build_metadata_text(
         if not blob:
             continue
         try:
-            chunks.append(_fetch_blob_bytes(client, repository, blob).decode("utf-8", errors="replace"))
+            content = _fetch_blob_bytes(client, repository, blob).decode(
+                "utf-8", errors="replace"
+            )
         except SourceTransplantError:
             continue
+        # Keep the path in the evidence text so loader-specific metadata filenames
+        # (notably NeoForge) remain observable even when their body uses generic keys.
+        chunks.append(f"\n# MMM_METADATA_PATH {path}\n{content}")
     return "\n".join(chunks)
 
 
@@ -1140,36 +1167,50 @@ def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> Co
         return CompatibilityEvidence(minecraft_version="", loader="", status="unverified")
     folded = text.casefold()
     loader = adapter.loader.casefold()
-    loader_evidenced = loader in folded or (loader == "fabric" and "fabricloader" in folded)
+    loader_aliases = {
+        "fabric": ("fabric", "fabricloader", "fabric.mod.json"),
+        "forge": ("forge", "net.minecraftforge", "mods.toml", "javafml"),
+        "neoforge": ("neoforge", "net.neoforged", "neoforge.mods.toml"),
+    }
+    loader_evidenced = any(
+        alias in folded for alias in loader_aliases.get(loader, (loader,))
+    )
     prop = _MINECRAFT_PROP.search(text)
-    mc_ver = prop.group(1).strip() if prop else ""
-    if not mc_ver:
-        for v in (adapter.minecraft_version, "1.21", "1.20", "1.19"):
-            if v in text:
-                mc_ver = v
+    minecraft_version = prop.group(1).strip() if prop else ""
+    if not minecraft_version:
+        for version in (adapter.minecraft_version, "1.21", "1.20", "1.19"):
+            if version in text:
+                minecraft_version = version
                 break
     mixin_count = len(re.findall(r"\bmixins?\b", folded))
-    has_aw = ".accesswidener" in text or "accessWidener" in text
+    has_access_widener = ".accesswidener" in folded or "accesswidener" in folded
 
-    if (mc_ver == adapter.minecraft_version or adapter.minecraft_version in text) and loader_evidenced:
+    if (
+        minecraft_version == adapter.minecraft_version
+        or adapter.minecraft_version in text
+    ) and loader_evidenced:
         status = "metadata_exact"
-    elif loader_evidenced or mc_ver or (adapter.minecraft_version in text):
+    elif loader_evidenced or minecraft_version or adapter.minecraft_version in text:
         status = "metadata_adapt"
     else:
         status = "unverified"
 
     return CompatibilityEvidence(
-        minecraft_version=mc_ver,
+        minecraft_version=minecraft_version,
         loader=adapter.loader if loader_evidenced else "",
         mixin_count=mixin_count,
-        has_access_widener=has_aw,
+        has_access_widener=has_access_widener,
         status=status,
     )
 
 
 def _target_compatibility(text: str, *, adapter: PlatformAdapter) -> str:
-    ev = _target_compatibility_evidence(text, adapter=adapter)
-    return "exact" if ev.status == "metadata_exact" else ("adapt" if ev.status == "metadata_adapt" else "unverified")
+    evidence = _target_compatibility_evidence(text, adapter=adapter)
+    return (
+        "exact"
+        if evidence.status == "metadata_exact"
+        else ("adapt" if evidence.status == "metadata_adapt" else "unverified")
+    )
 
 
 def _declared_dependencies(text: str) -> tuple[str, ...]:
