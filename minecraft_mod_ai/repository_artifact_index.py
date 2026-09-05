@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Repository-Wide Artifact Index & Lazy Blob Resolver.
+"""Repository-wide artifact index and lazy immutable blob resolver.
 
-Constructs an authoritative full-repository index of FQCNs, declared symbols,
-registry identifiers, data/asset resources, and mod metadata before any capability
-seed localization or dependency closure is performed.
+The external-donor path indexes source, build metadata, registries, data/assets and
+cross-file relations before capability seed localization. Java and Kotlin source are
+both first-class inputs; source language never decides whether a repository is visible.
 """
 
 import re
@@ -14,14 +14,21 @@ from typing import Any
 
 from .artifact_dependency_graph import ArtifactDependencyGraph, ArtifactKind
 
-_PKG_RE = re.compile(r"(?m)^\s*package\s+([A-Za-z0-9_.]+)\s*;")
-_CLASS_RE = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
-_REGISTRY_CALL_RE = re.compile(r'Registry\.[A-Za-z0-9_]+\s*\([^,]+,\s*["\']([^"\']+)["\']')
-_NAMESPACED_ID_RE = re.compile(r'["\']([a-z0-9_.-]+:[a-z0-9_/.-]+)["\']')
-_METHOD_RE = re.compile(
+_PACKAGE_RE = re.compile(r"(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*;?")
+_TYPE_RE = re.compile(
+    r"\b(?:(?:data|sealed|value|annotation|enum)\s+class|class|interface|object|record|enum)"
+    r"\s+([A-Za-z_][A-Za-z0-9_]*)"
+)
+_JAVA_METHOD_RE = re.compile(
     r"\b(?:public|protected|private|static|final|synchronized|abstract|default|native|\s)+"
     r"[A-Za-z_$][A-Za-z0-9_$<>?,.\[\]\s]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
+_KOTLIN_FUN_RE = re.compile(
+    r"\bfun\s+(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_?.<>]*\.)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+_REGISTRY_CALL_RE = re.compile(r'Registry\.[A-Za-z0-9_]+\s*\([^,]+,\s*["\']([^"\']+)["\']')
+_NAMESPACED_ID_RE = re.compile(r'["\']([a-z0-9_.-]+:[a-z0-9_/.-]+)["\']')
 _CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _RESOURCE_PATH_RE = re.compile(r"^src/main/resources/(assets|data)/([^/]+)/(.+)$")
 
@@ -33,7 +40,16 @@ def _is_repository_artifact(path: str) -> bool:
     if kind is not ArtifactKind.OTHER:
         return True
     normalized = path.replace("\\", "/").casefold()
-    return normalized.startswith(("src/main/", "src/client/", "src/server/"))
+    return normalized.startswith(
+        ("src/main/", "src/client/", "src/server/", "src/common/", "src/api/")
+    )
+
+
+def _declared_methods(path: str, content: str) -> tuple[str, ...]:
+    methods = list(_JAVA_METHOD_RE.findall(content))
+    if path.casefold().endswith(".kt"):
+        methods.extend(_KOTLIN_FUN_RE.findall(content))
+    return tuple(dict.fromkeys(methods))
 
 
 @dataclass
@@ -76,23 +92,21 @@ class RepositoryArtifactIndex:
                 continue
             index.files_by_path[path] = item
 
-            # Index resource paths
-            m_res = _RESOURCE_PATH_RE.match(path)
-            if m_res:
-                _domain, ns, rest = m_res.group(1), m_res.group(2), m_res.group(3)
-                logical_id = f"{ns}:{rest}"
+            resource_match = _RESOURCE_PATH_RE.match(path)
+            if resource_match:
+                _domain, namespace, rest = resource_match.group(1), resource_match.group(2), resource_match.group(3)
+                logical_id = f"{namespace}:{rest}"
                 index.resource_to_path[logical_id] = path
                 index.resource_to_path[path] = path
 
-            # Index Java source FQCN and simple class name
-            if path.endswith(".java") or path.endswith(".kt"):
-                fname = path.split("/")[-1].rsplit(".", 1)[0]
-                index.symbol_to_paths.setdefault(fname, []).append(path)
+            if path.casefold().endswith((".java", ".kt")):
+                filename_symbol = path.split("/")[-1].rsplit(".", 1)[0]
+                index.symbol_to_paths.setdefault(filename_symbol, []).append(path)
 
         return index
 
     def get_blob(self, path: str) -> bytes | None:
-        """Fetch blob for a path using lazy resolver and cache."""
+        """Fetch one immutable blob lazily and cache it by repository path."""
         if path in self._blob_cache:
             return self._blob_cache[path]
         item = self.files_by_path.get(path)
@@ -102,30 +116,30 @@ class RepositoryArtifactIndex:
         if not sha:
             return None
         try:
-            bdata = self._blob_fetcher(self.repository, sha)
-            self._blob_cache[path] = bdata
-            return bdata
+            data = self._blob_fetcher(self.repository, sha)
+            self._blob_cache[path] = data
+            return data
         except Exception:
             return None
 
-    def populate_java_symbols(self, path: str, content: str) -> None:
-        """Parse package and class declarations from a Java/Kotlin file."""
+    def populate_source_symbols(self, path: str, content: str) -> None:
+        """Index Java/Kotlin packages, declared types, methods, calls and registry IDs."""
         self.text_by_path[path] = content
-        pkg_match = _PKG_RE.search(content)
-        pkg = pkg_match.group(1) if pkg_match else ""
+        package_match = _PACKAGE_RE.search(content)
+        package_name = package_match.group(1) if package_match else ""
         declared: list[str] = []
-        for m in _CLASS_RE.finditer(content):
-            cls_name = m.group(1)
-            fqcn = f"{pkg}.{cls_name}" if pkg else cls_name
+        for match in _TYPE_RE.finditer(content):
+            type_name = match.group(1)
+            fqcn = f"{package_name}.{type_name}" if package_name else type_name
             self.fqcn_to_path[fqcn] = path
-            declared.extend((fqcn, cls_name))
-            paths = self.symbol_to_paths.setdefault(cls_name, [])
+            declared.extend((fqcn, type_name))
+            paths = self.symbol_to_paths.setdefault(type_name, [])
             if path not in paths:
                 paths.append(path)
 
         self.declared_symbols_by_path[path] = tuple(dict.fromkeys(declared))
 
-        for method in _METHOD_RE.findall(content):
+        for method in _declared_methods(path, content):
             paths = self.method_to_paths.setdefault(method, [])
             if path not in paths:
                 paths.append(path)
@@ -135,11 +149,14 @@ class RepositoryArtifactIndex:
             if path not in paths:
                 paths.append(path)
 
-        for m_reg in _REGISTRY_CALL_RE.finditer(content):
-            reg_id = m_reg.group(1)
-            self.registry_to_path[reg_id] = path
-        for reg_id in _NAMESPACED_ID_RE.findall(content):
-            self.registry_to_path.setdefault(reg_id, path)
+        for registry_match in _REGISTRY_CALL_RE.finditer(content):
+            self.registry_to_path[registry_match.group(1)] = path
+        for registry_id in _NAMESPACED_ID_RE.findall(content):
+            self.registry_to_path.setdefault(registry_id, path)
+
+    # Compatibility alias for callers/tests written before Kotlin became first-class.
+    def populate_java_symbols(self, path: str, content: str) -> None:
+        self.populate_source_symbols(path, content)
 
     def build_dependency_graph(
         self,
@@ -167,7 +184,7 @@ class RepositoryArtifactIndex:
             files[path] = raw
             kind = ArtifactDependencyGraph.kind_for_path(path)
             if kind in {ArtifactKind.JAVA_SOURCE, ArtifactKind.KOTLIN_SOURCE}:
-                self.populate_java_symbols(
+                self.populate_source_symbols(
                     path,
                     raw.decode("utf-8", errors="replace"),
                 )
