@@ -6,8 +6,14 @@ from minecraft_mod_ai.implementation_template_contract import (
     MODEL_FILL_FIELDS,
     SCHEMA,
     build_implementation_template,
-    install,
     sanitize_hole_fills,
+)
+from minecraft_mod_ai.planner_template_schema import (
+    build_batch_skeleton,
+    merge_model_output_into_skeleton,
+)
+from minecraft_mod_ai.small_model_task_capsule_contract import (
+    compact_task_local_module_contract,
 )
 
 
@@ -62,12 +68,40 @@ def _task() -> dict:
         "public_acceptance": [
             "Given sufficient funds, when buying, then debit exactly once and grant the item."
         ],
+        "internal_invariants": [
+            "Trade mutation is server-authoritative and atomic."
+        ],
+        "acceptance": [
+            "Trade mutation is server-authoritative and atomic."
+        ],
         "runtime_acceptance": [
             "Reject insufficient funds without mutating balance, stock, or inventory."
         ],
         "reuse_refs": ["donor:verified:trade"],
         "conditional_predicates": ["needs_network", "needs_persistence"],
-        "owned_anchors": [],
+        "owned_anchors": [
+            {
+                "kind": "symbol",
+                "locator": "src/main/java/example/TradeService.java#TradeService",
+                "status": "host_reserved",
+                "ownership": "exclusive",
+                "module_id": ":",
+                "source_set": "main",
+            }
+        ],
+        "production_bindings": [
+            {
+                "task_ref": "task_trade_service",
+                "reuse_action": "adapt",
+                "owned_anchors": [
+                    {
+                        "kind": "symbol",
+                        "locator": "src/main/java/example/TradeService.java#TradeService",
+                        "status": "host_reserved",
+                    }
+                ],
+            }
+        ],
     }
 
 
@@ -136,46 +170,99 @@ def test_model_cannot_add_holes_or_write_host_owned_fields() -> None:
     assert set(fills[0]) <= {"hole_id", *MODEL_FILL_FIELDS}
 
 
-def test_install_preserves_detailed_plan_in_small_model_capsule_surface() -> None:
-    base_task = _task()
+def test_small_model_capsule_gets_detailed_template_from_full_task() -> None:
+    task = _task()
+    module = SimpleNamespace(
+        module_id=task["task_id"],
+        kind="custom_java",
+        config={"evidence_task": task},
+        depends_on=[],
+        required_gates=task["required_gates"],
+    )
 
-    def compile_tasks(_gaps, _reuse, _target, _branches, _ownership):
-        return (dict(base_task),)
+    payload = compact_task_local_module_contract(module)
+    compact = payload["evidence_task"]
+    template = compact["implementation_template"]
 
-    def hash_without(value, field):
-        payload = dict(value)
-        payload[field] = ""
-        return "sha256:" + str(len(repr(sorted(payload))))
+    assert template["schema_version"] == SCHEMA
+    assert template["task_ref"] == task["task_id"]
+    assert len(template["holes"]) == 16
+    assert {
+        hole["subject"]
+        for hole in template["holes"]
+        if hole["kind"] == "implementation_capability"
+    } == set(task["implementation_capabilities"])
+    assert template["host_owned"]["artifact_obligations"] == task["artifact_obligations"]
+    assert template["host_owned"]["required_gates"] == task["required_gates"]
 
-    planning = SimpleNamespace(_compile_tasks=compile_tasks, _hash_without=hash_without)
 
-    def build_batch_skeleton(*_args, **_kwargs):
-        return {
-            "modules": [],
-            "acceptance_tests": ["fake_default"],
-            "completed_deliverables": ["fake_default"],
+def test_planner_skeleton_uses_real_contract_and_sanitizes_hole_fills() -> None:
+    task = _task()
+    contracts = {task["task_id"]: task}
+    skeleton = build_batch_skeleton(
+        task["task_id"],
+        task["semantic_outcome"],
+        [],
+        [task["task_id"]],
+        host_module_contracts=contracts,
+    )
+
+    assert skeleton["acceptance_tests"] == [
+        *task["public_acceptance"],
+        *task["runtime_acceptance"],
+        *task["acceptance"],
+    ]
+    assert skeleton["completed_deliverables"] == task["provides"]
+    assert not any(
+        item.startswith("test_task_trade_service_registers")
+        for item in skeleton["acceptance_tests"]
+    )
+
+    config = skeleton["modules"][0]["config"]
+    template = config["implementation_template"]
+    first_id = template["holes"][0]["hole_id"]
+    model_output = {
+        "modules": [
+            {
+                "module_id": task["task_id"],
+                "kind": "boss",
+                "depends_on": ["invented_dependency"],
+                "required_gates": ["invented_gate"],
+                "config": {
+                    "implementation_notes": "Adapt the exact host task.",
+                    "hole_fills": [
+                        {
+                            "hole_id": first_id,
+                            "implementation_decision": "Use the shared transaction service.",
+                            "target_coordinates": {"minecraft_version": "1.20.1"},
+                        },
+                        {
+                            "hole_id": "hole_model_invented",
+                            "implementation_decision": "must disappear",
+                        },
+                    ],
+                },
+            }
+        ],
+        "acceptance_tests": ["model_replaced_acceptance"],
+        "completed_deliverables": ["model_replaced_deliverable"],
+    }
+    merged = merge_model_output_into_skeleton(
+        skeleton,
+        model_output,
+        {task["task_id"]},
+    )
+    module = merged["modules"][0]
+
+    assert module["kind"] == "custom_java"
+    assert module["depends_on"] == []
+    assert module["required_gates"] == task["required_gates"]
+    assert merged["acceptance_tests"] == skeleton["acceptance_tests"]
+    assert merged["completed_deliverables"] == skeleton["completed_deliverables"]
+    assert module["config"]["implementation_template"] == template
+    assert module["config"]["model_fill"]["hole_fills"] == [
+        {
+            "hole_id": first_id,
+            "implementation_decision": "Use the shared transaction service.",
         }
-
-    def merge_model_output_into_skeleton(skeleton, _model_output, _catalog):
-        return skeleton
-
-    planner_template = SimpleNamespace(
-        MODEL_TASK_DETAIL_KEYS=frozenset({"implementation_notes"}),
-        build_batch_skeleton=build_batch_skeleton,
-        merge_model_output_into_skeleton=merge_model_output_into_skeleton,
-    )
-    capsule = SimpleNamespace(_COMPACT_TASK_FIELDS=("task_id", "required_gates"))
-
-    install(
-        planning_module=planning,
-        planner_template_module=planner_template,
-        task_capsule_module=capsule,
-    )
-
-    compiled = planning._compile_tasks([], [], {}, {}, {})[0]
-    assert compiled["implementation_template"]["schema_version"] == SCHEMA
-    assert "implementation_capabilities" in capsule._COMPACT_TASK_FIELDS
-    assert "design_resolution_obligations" in capsule._COMPACT_TASK_FIELDS
-    assert "runtime_acceptance" in capsule._COMPACT_TASK_FIELDS
-    assert "implementation_template" in capsule._COMPACT_TASK_FIELDS
-    assert "hole_fills" in planner_template.MODEL_TASK_DETAIL_KEYS
+    ]
