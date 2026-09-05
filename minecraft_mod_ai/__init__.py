@@ -1,10 +1,14 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+from .evidence_request_guard import install_evidence_request_guard
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
+from .semantic_requirement_authority import install_semantic_requirement_authority
 
 initialize_runtime()
 finalize_runtime()
+install_evidence_request_guard()
+install_semantic_requirement_authority()
 
 from .api import (
     ChatReply,
