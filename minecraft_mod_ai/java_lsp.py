@@ -12,6 +12,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .source_set_boundary_contract import (
+    SourceSetBoundaryError,
+    assert_server_safe_source_sets,
+)
+
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _DEFAULT_DIAGNOSTIC_QUIET_SECONDS = 2.0
@@ -281,6 +286,12 @@ class JavaLanguageService:
             raise FileNotFoundError(root)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
+        try:
+            assert_server_safe_source_sets(root)
+        except (SourceSetBoundaryError, FileNotFoundError, OSError, UnicodeError) as exc:
+            raise JDTLanguageServerError(
+                f"Java source-set preflight failed: {exc}"
+            ) from exc
         files = _java_files(root, relative_files)
         pages = _diagnostic_pages(
             files,
@@ -391,6 +402,9 @@ class JavaLanguageService:
                 "query": query,
                 "symbols": result or [],
             }
+
+
+JavaLanguageService.diagnostics.__mmm_source_set_boundary__ = True
 
 
 def _validated_java_file(root: Path, candidate: Path) -> Path:
@@ -528,7 +542,7 @@ def _collect_diagnostics(
         if callable(poll):
             returncode = poll()
             if returncode is not None:
-                stderr = "\n".join(list(getattr(rpc, "stderr", ())) [-8:])
+                stderr = "\n".join(list(getattr(rpc, "stderr", ()))[-8:])
                 detail = f"; stderr={stderr}" if stderr else ""
                 raise JDTLanguageServerError(
                     "JDT LS exited before publishing complete diagnostics: "

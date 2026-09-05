@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai.java_lsp import JDTLanguageServerError, JavaLanguageService
 from minecraft_mod_ai.source_set_boundary_contract import (
     SourceSetBoundaryError,
     assert_server_safe_source_sets,
@@ -105,7 +106,7 @@ def test_same_package_client_type_is_rejected_without_import(tmp_path):
     assert any("same-package client source ClientHooks" in item for item in errors)
 
 
-def test_installed_guard_fails_before_underlying_jdt_is_called(tmp_path):
+def test_canonical_java_diagnostics_fails_before_jdt_start(tmp_path, monkeypatch):
     _write(
         tmp_path,
         "src/main/java/example/CommonInit.java",
@@ -113,34 +114,30 @@ def test_installed_guard_fails_before_underlying_jdt_is_called(tmp_path):
     )
     calls: list[str] = []
 
-    class FakeJDTError(RuntimeError):
-        pass
+    def unexpected_rpc(*args, **kwargs):
+        calls.append("rpc")
+        raise AssertionError("JDT must not start before source-set validation")
 
-    class FakeService:
-        def diagnostics(
-            self,
-            project_root,
-            *,
-            relative_files=None,
-            timeout_seconds=60,
-        ):
-            calls.append(str(project_root))
-            return {"diagnostics": []}
+    monkeypatch.setattr(JavaLanguageService, "_ensure_rpc_locked", unexpected_rpc)
 
-    module = SimpleNamespace(
-        JavaLanguageService=FakeService,
-        JDTLanguageServerError=FakeJDTError,
-    )
-    install(module)
-
-    with pytest.raises(FakeJDTError, match="Java source-set preflight failed"):
-        FakeService().diagnostics(tmp_path)
+    with pytest.raises(JDTLanguageServerError, match="Java source-set preflight failed"):
+        JavaLanguageService(command="jdtls").diagnostics(tmp_path)
     assert calls == []
+
+
+def test_installation_only_accepts_static_source_set_owner():
+    class MissingGuard:
+        def diagnostics(self):
+            return None
+
+    with pytest.raises(RuntimeError, match="missing the canonical source-set boundary"):
+        install(SimpleNamespace(JavaLanguageService=MissingGuard))
 
 
 def test_package_runtime_exposes_source_set_guard_on_java_diagnostics():
     from minecraft_mod_ai import java_lsp
 
+    install(java_lsp)
     assert getattr(
         java_lsp.JavaLanguageService.diagnostics,
         "__mmm_source_set_boundary__",
