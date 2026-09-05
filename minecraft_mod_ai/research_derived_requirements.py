@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-"""Evidence-backed derivation of implementation requirements.
+"""Evidence-backed augmentation of host-owned implementation requirements.
 
-Authored requirements remain immutable. The host first closes each fixed engineering
-facet from the requirement-bound PlanIR task slice, then lets the small planner add only
-external-evidence-backed obligations. One model turn handles one complete requirement
-template; generic absence of research can never manufacture dozens of unresolved facets.
+Authored requirements, target receipts, facet identity, task identity, and baseline
+acceptance remain host-owned.  The small planner receives one evidence-bearing facet at
+a time and may only decide whether external evidence adds a missing implementation
+obligation.  Invalid or empty model output is contained to that optional augmentation;
+it can never destroy the host template or abort planning by itself.
 """
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -24,17 +26,20 @@ from .research_requirement_plan_slice import (
     render_task_slice,
     requirement_task_slice,
 )
-from .research_requirement_schema import (
-    DISPOSITIONS,
-    FACETS,
-    REQUIREMENT_RESPONSE_SCHEMA,
+from .research_requirement_schema import FACETS
+from .research_requirement_template import (
+    DECISIONS,
+    FACET_AUGMENTATION_RESPONSE_SCHEMA,
+    build_facet_slot,
+    build_host_planning_context,
 )
 
-SCHEMA = "mmm/research-derived-requirements-v2"
+SCHEMA = "mmm/research-derived-requirements-v3"
+_LOGGER = logging.getLogger(__name__)
 
 
 class ResearchRequirementError(ValueError):
-    """Raised when evidence exposes an implementation facet that cannot be closed safely."""
+    """Raised when host structure or valid evidence exposes an unsafe unresolved facet."""
 
 
 def _canonical(value: Any) -> str:
@@ -71,144 +76,179 @@ def _require_text(value: Any, *, field: str) -> str:
     return text
 
 
-def _model_requirement_facets(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    tasks: Sequence[Mapping[str, Any]],
-    baseline: Mapping[str, Mapping[str, Any]],
+def _facet_evidence(
     evidence_window: Sequence[Mapping[str, Any]],
-    relevant_refs: Mapping[str, Sequence[str]],
-) -> Mapping[str, Mapping[str, Any]]:
-    parent = _require_text(
-        requirement.get("requirement_id"),
-        field="parent_requirement_ref",
+    allowed_refs: Sequence[str],
+) -> tuple[Mapping[str, Any], ...]:
+    allowed = set(allowed_refs)
+    return tuple(
+        item
+        for item in evidence_window
+        if str(item.get("evidence_ref") or "") in allowed
     )
-    payload = {
-        "requirement": {
-            "requirement_id": parent,
-            "capability": requirement.get("capability"),
-            "statement": str(requirement.get("statement") or "")[:1200],
-            "implementation_capabilities": list(
-                _strings(requirement.get("implementation_capabilities"))
-            ),
-            "artifact_obligations": list(
-                _strings(requirement.get("artifact_obligations"))
-            ),
-            "acceptance": list(_strings(requirement.get("acceptance"))),
-        },
-        "host_task_slice": render_task_slice(tasks),
-        "host_baseline": [dict(baseline[facet]) for facet in FACETS],
-        "facet_relevant_evidence_refs": {
-            facet: list(relevant_refs.get(facet, ())) for facet in FACETS
-        },
-        "evidence_catalog": list(evidence_window),
-    }
-    system = (
-        "You are filling one host-owned research-to-requirements template for a "
-        "Minecraft mod. The requirement identity, seven facet names, target/task "
-        "ownership, and host baseline are immutable. Return all seven facets exactly "
-        "once. Do not invent paths, APIs, versions, repositories, or evidence refs. "
-        "The host baseline is authoritative. You may change a baseline disposition to "
-        "derived ONLY when supplied external evidence directly requires an additional "
-        "implementation obligation. A derived facet must cite only refs listed for that "
-        "facet and include concrete implementation obligations plus observable acceptance. "
-        "Use unresolved only when a facet has listed relevant external evidence indicating "
-        "a real requirement but that evidence is insufficient to specify it safely. Never "
-        "use unresolved merely because generic research is absent."
-    )
-    try:
-        raw = router.generate_text(
-            "planner",
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": _canonical(payload)},
-            ],
-            response_format="json",
-            response_schema=REQUIREMENT_RESPONSE_SCHEMA,
-            enable_tools=False,
-        )
-        decoded = json.loads(raw)
-    except Exception as exc:
-        raise ResearchRequirementError(
-            f"research-derived requirement decision failed for {parent!r}"
-        ) from exc
-
-    facets = decoded.get("facets") if isinstance(decoded, Mapping) else None
-    if not isinstance(facets, list):
-        raise ResearchRequirementError(
-            f"research-derived requirement decision for {parent!r} has no facets"
-        )
-    by_facet: dict[str, Mapping[str, Any]] = {}
-    for item in facets:
-        if not isinstance(item, Mapping):
-            raise ResearchRequirementError(
-                f"research-derived requirement decision for {parent!r} contains a non-object facet"
-            )
-        facet = str(item.get("facet") or "").strip()
-        if facet not in FACETS or facet in by_facet:
-            raise ResearchRequirementError(
-                f"requirement {parent!r} has an invalid or duplicate facet {facet!r}"
-            )
-        by_facet[facet] = item
-    missing = [facet for facet in FACETS if facet not in by_facet]
-    if missing:
-        raise ResearchRequirementError(
-            f"requirement {parent!r} omitted derivation facets: {missing}"
-        )
-    return by_facet
 
 
-def _derived_decision(
+def _validated_augmentation(
+    *,
     parent: str,
     facet: str,
     candidate: Mapping[str, Any],
-    *,
-    facet_allowed_refs: set[str],
-    allowed_refs: set[str],
+    allowed_refs: Sequence[str],
 ) -> dict[str, Any]:
+    decision = str(candidate.get("decision") or "").strip().casefold()
+    if decision not in DECISIONS:
+        raise ResearchRequirementError(
+            f"requirement {parent!r} facet {facet!r} has invalid decision {decision!r}"
+        )
     rationale = _require_text(
         candidate.get("rationale"),
         field=f"{parent}.{facet}.rationale",
     )
     evidence_refs = _strings(candidate.get("evidence_refs"))
-    if not set(evidence_refs) <= allowed_refs:
-        unknown = sorted(set(evidence_refs) - allowed_refs)
-        raise ResearchRequirementError(
-            f"requirement {parent!r} facet {facet!r} cites unknown evidence: {unknown}"
-        )
-    statement = str(candidate.get("statement") or "").strip()
-    acceptance = _strings(candidate.get("acceptance"))
     obligations = _strings(candidate.get("implementation_obligations"))
-    if (
-        not statement
-        or not evidence_refs
-        or not acceptance
-        or not obligations
-        or not set(evidence_refs) <= facet_allowed_refs
-    ):
+    acceptance = _strings(candidate.get("acceptance"))
+    allowed = set(allowed_refs)
+    unknown = sorted(set(evidence_refs) - allowed)
+    if unknown:
         raise ResearchRequirementError(
-            f"derived facet {parent}.{facet} lacks facet-bound "
-            "evidence/statement/acceptance/obligations"
+            f"requirement {parent!r} facet {facet!r} cites disallowed evidence: {unknown}"
         )
+
+    if decision == "add_obligation":
+        if not evidence_refs or not obligations or not acceptance:
+            raise ResearchRequirementError(
+                f"requirement {parent!r} facet {facet!r} add_obligation requires "
+                "evidence_refs, implementation_obligations, and acceptance"
+            )
+    elif decision == "insufficient_evidence":
+        if not evidence_refs or obligations or acceptance:
+            raise ResearchRequirementError(
+                f"requirement {parent!r} facet {facet!r} insufficient_evidence must "
+                "cite evidence and leave obligations/acceptance empty"
+            )
+    elif obligations or acceptance:
+        raise ResearchRequirementError(
+            f"requirement {parent!r} facet {facet!r} no_addition must leave "
+            "obligations/acceptance empty"
+        )
+
     return {
-        "facet": facet,
-        "disposition": "derived",
-        "statement": statement,
+        "decision": decision,
         "rationale": rationale,
         "evidence_refs": list(evidence_refs),
-        "acceptance": list(acceptance),
         "implementation_obligations": list(obligations),
+        "acceptance": list(acceptance),
     }
+
+
+def _model_facet_augmentation(
+    router: Any,
+    *,
+    parent: str,
+    facet: str,
+    slot: Mapping[str, Any],
+    allowed_refs: Sequence[str],
+) -> tuple[Mapping[str, Any] | None, int, list[dict[str, Any]]]:
+    """Fill one semantic slot; malformed model output degrades to the host baseline."""
+
+    system = (
+        "Fill exactly ONE semantic decision slot in an immutable host-owned Minecraft "
+        "mod planning template. Everything under host_owned is read-only and must never "
+        "be repeated, rewritten, renamed, or inferred. In particular, do not output the "
+        "facet name, requirement/task IDs, Minecraft version, loader, Java version, "
+        "mappings, Gradle/Fabric coordinates, paths, or baseline fields. Return only the "
+        "five fields allowed by model_slot. Choose add_obligation only when supplied "
+        "allowed evidence directly requires concrete work absent from host_baseline. "
+        "Choose insufficient_evidence only when supplied evidence exposes a real missing "
+        "requirement but cannot safely specify it. Otherwise choose no_addition. Never "
+        "invent evidence refs, APIs, repositories, versions, or implementation details."
+    )
+    events: list[dict[str, Any]] = []
+    calls = 0
+    for attempt in (1, 2):
+        raw: Any = ""
+        calls += 1
+        try:
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": _canonical(slot)},
+            ]
+            if attempt == 2:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The previous response was rejected. Return only one object "
+                            "matching the response schema exactly; do not add prose."
+                        ),
+                    }
+                )
+            raw = router.generate_text(
+                "planner",
+                messages,
+                response_format="json",
+                response_schema=FACET_AUGMENTATION_RESPONSE_SCHEMA,
+                enable_tools=False,
+            )
+            if isinstance(raw, Mapping):
+                decoded: Any = dict(raw)
+            else:
+                decoded = json.loads(str(raw))
+            if not isinstance(decoded, Mapping):
+                raise ResearchRequirementError("facet augmentation response is not an object")
+            validated = _validated_augmentation(
+                parent=parent,
+                facet=facet,
+                candidate=decoded,
+                allowed_refs=allowed_refs,
+            )
+            events.append(
+                {
+                    "stage": "research_facet_augmentation",
+                    "requirement_id": parent,
+                    "facet": facet,
+                    "attempt": attempt,
+                    "status": "accepted",
+                    "fallback_used": False,
+                    "decision": validated["decision"],
+                }
+            )
+            return validated, calls, events
+        except Exception as exc:  # model/structured-output failures are optional here
+            snippet = str(raw or "").strip().replace("\n", " ")[:1000]
+            terminal = attempt == 2
+            event = {
+                "stage": "research_facet_augmentation",
+                "requirement_id": parent,
+                "facet": facet,
+                "attempt": attempt,
+                "status": "fallback_host_baseline" if terminal else "retry",
+                "fallback_used": terminal,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:1000],
+                "raw_response_snippet": snippet,
+            }
+            events.append(event)
+            _LOGGER.warning(
+                "research_facet_augmentation_failed requirement=%s facet=%s "
+                "attempt=%s fallback=%s error_type=%s error=%s raw=%r",
+                parent,
+                facet,
+                attempt,
+                terminal,
+                type(exc).__name__,
+                str(exc)[:500],
+                snippet[:500],
+            )
+
+    return None, calls, events
 
 
 def _merge_model_with_baseline(
     *,
     requirement: Mapping[str, Any],
     baseline: Mapping[str, Mapping[str, Any]],
-    model: Mapping[str, Mapping[str, Any]] | None,
-    relevant_refs: Mapping[str, Sequence[str]],
-    allowed_refs: set[str],
+    augmentations: Mapping[str, Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     parent = _require_text(
         requirement.get("requirement_id"),
@@ -219,52 +259,47 @@ def _merge_model_with_baseline(
 
     for facet in FACETS:
         selected = dict(baseline[facet])
-        candidate = model.get(facet) if model is not None else None
-
+        candidate = augmentations.get(facet)
         if candidate is not None:
-            disposition = str(candidate.get("disposition") or "").strip().casefold()
-            if disposition not in DISPOSITIONS:
-                raise ResearchRequirementError(
-                    f"requirement {parent!r} facet {facet!r} "
-                    f"has invalid disposition {disposition!r}"
-                )
-            rationale = _require_text(
-                candidate.get("rationale"),
-                field=f"{parent}.{facet}.rationale",
-            )
-            facet_allowed = set(relevant_refs.get(facet, ()))
-            if disposition == "derived":
-                selected = _derived_decision(
-                    parent,
-                    facet,
-                    candidate,
-                    facet_allowed_refs=facet_allowed,
-                    allowed_refs=allowed_refs,
-                )
-            elif disposition == "unresolved":
-                if facet_allowed:
-                    unresolved.append(f"{parent}:{facet}")
-                    selected = {
-                        "facet": facet,
-                        "disposition": "unresolved",
-                        "statement": str(candidate.get("statement") or "").strip(),
-                        "rationale": rationale,
-                        "evidence_refs": list(
-                            _strings(candidate.get("evidence_refs"))
-                        ),
-                        "acceptance": list(_strings(candidate.get("acceptance"))),
-                        "implementation_obligations": list(
-                            _strings(candidate.get("implementation_obligations"))
-                        ),
-                    }
+            decision = str(candidate["decision"])
+            if decision == "add_obligation":
+                obligations = _strings(candidate.get("implementation_obligations"))
+                selected = {
+                    "facet": facet,
+                    "disposition": "derived",
+                    "statement": (
+                        f"External evidence adds {len(obligations)} implementation "
+                        f"obligation(s) to host facet {facet}."
+                    ),
+                    "rationale": str(candidate["rationale"]),
+                    "evidence_refs": list(_strings(candidate.get("evidence_refs"))),
+                    "acceptance": list(_strings(candidate.get("acceptance"))),
+                    "implementation_obligations": list(obligations),
+                }
+            elif decision == "insufficient_evidence":
+                unresolved.append(f"{parent}:{facet}")
+                selected = {
+                    "facet": facet,
+                    "disposition": "unresolved",
+                    "statement": (
+                        f"External evidence exposes an unresolved obligation for {facet}."
+                    ),
+                    "rationale": str(candidate["rationale"]),
+                    "evidence_refs": list(_strings(candidate.get("evidence_refs"))),
+                    "acceptance": [],
+                    "implementation_obligations": [],
+                }
             else:
                 selected["rationale"] = (
                     str(selected.get("rationale") or "")
-                    + " Model review: "
-                    + rationale
+                    + " Evidence-slot review: "
+                    + str(candidate["rationale"])
+                )
+                selected["evidence_refs"] = list(
+                    _strings(candidate.get("evidence_refs"))
                 )
 
-        decision = {
+        decision_record = {
             "derived_requirement_id": "derived_"
             + _sha(
                 {
@@ -289,7 +324,7 @@ def _merge_model_with_baseline(
                 _strings(selected.get("implementation_obligations"))
             ),
         }
-        decisions.append(decision)
+        decisions.append(decision_record)
 
     return decisions, unresolved
 
@@ -303,7 +338,7 @@ def derive_research_requirements(
     technical_evidence: Any,
     game_design: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Produce a complete derivation matrix with at most one model turn per requirement."""
+    """Build host templates and fill only evidence-bearing semantic slots."""
 
     validate_evidence_first_plan(evidence_plan, prompt=prompt)
     request_catalog = evidence_plan.get("request_catalog")
@@ -313,11 +348,19 @@ def derive_research_requirements(
     if not isinstance(requirements, list) or not requirements:
         raise ResearchRequirementError("evidence plan has no authored requirements")
 
+    try:
+        planning_context = build_host_planning_context(router, game_design)
+    except Exception as exc:
+        raise ResearchRequirementError(
+            "host planning template has no resolved platform context"
+        ) from exc
+
     evidence = evidence_catalog(research_brief, technical_evidence, game_design)
-    allowed_refs = {str(item["evidence_ref"]) for item in evidence}
     decisions: list[dict[str, Any]] = []
     unresolved: list[str] = []
+    augmentation_events: list[dict[str, Any]] = []
     model_calls = 0
+    evidence_bearing_slots = 0
 
     for requirement in requirements:
         if not isinstance(requirement, Mapping):
@@ -330,45 +373,85 @@ def derive_research_requirements(
         baseline = host_facet_baseline(requirement, tasks)
         relevant_refs = facet_relevant_refs(evidence, requirement, baseline)
         window = requirement_evidence_window(evidence, relevant_refs)
+        rendered_tasks = render_task_slice(tasks)
+        augmentations: dict[str, Mapping[str, Any]] = {}
 
-        model: Mapping[str, Mapping[str, Any]] | None = None
-        if window:
-            model = _model_requirement_facets(
-                router,
+        for facet in FACETS:
+            refs = tuple(dict.fromkeys(str(ref) for ref in relevant_refs.get(facet, ()) if str(ref)))
+            if not refs:
+                continue
+            facet_catalog = _facet_evidence(window, refs)
+            if not facet_catalog:
+                continue
+            evidence_bearing_slots += 1
+            slot = build_facet_slot(
+                planning_context=planning_context,
                 requirement=requirement,
-                tasks=tasks,
-                baseline=baseline,
-                evidence_window=window,
-                relevant_refs=relevant_refs,
+                facet=facet,
+                baseline=baseline[facet],
+                task_slice=rendered_tasks,
+                evidence_catalog=facet_catalog,
+                allowed_evidence_refs=refs,
             )
-            model_calls += 1
+            candidate, calls, events = _model_facet_augmentation(
+                router,
+                parent=parent,
+                facet=facet,
+                slot=slot,
+                allowed_refs=refs,
+            )
+            model_calls += calls
+            augmentation_events.extend(events)
+            if candidate is not None:
+                augmentations[facet] = candidate
 
         merged, requirement_unresolved = _merge_model_with_baseline(
             requirement=requirement,
             baseline=baseline,
-            model=model,
-            relevant_refs=relevant_refs,
-            allowed_refs=allowed_refs,
+            augmentations=augmentations,
         )
         decisions.extend(merged)
         unresolved.extend(requirement_unresolved)
 
     if unresolved:
         raise ResearchRequirementError(
-            "research could not close required implementation facets: "
-            + ", ".join(unresolved)
+            "research evidence exposed implementation facets that remain semantically "
+            "underspecified: " + ", ".join(unresolved)
         )
 
+    fallback_facets = [
+        f"{event['requirement_id']}:{event['facet']}"
+        for event in augmentation_events
+        if event.get("status") == "fallback_host_baseline"
+    ]
     ledger: dict[str, Any] = {
         "schema_version": SCHEMA,
         "prompt_sha256": request_catalog.get("prompt_sha256"),
+        "host_template": {
+            "authority": "host_only_except_bounded_evidence_slots",
+            "facet_order": list(FACETS),
+            "planning_context": planning_context,
+            "host_owned_fields": [
+                "platform target receipt and versions",
+                "requirement identity and authored acceptance",
+                "facet identity/order/purpose",
+                "task identity/ownership/dependencies",
+                "baseline disposition/acceptance/obligations",
+                "derived requirement IDs and ledger hashes",
+            ],
+        },
         "evidence_catalog": list(evidence),
         "facet_decisions": decisions,
+        "augmentation_events": augmentation_events,
+        "degraded_augmentation_facets": list(dict.fromkeys(fallback_facets)),
         "model_call_policy": {
-            "unit": "one_requirement_template",
-            "actual_calls": model_calls,
-            "max_calls_per_requirement": 1,
+            "unit": "one_evidence_bearing_facet_slot",
+            "evidence_bearing_slots": evidence_bearing_slots,
+            "actual_calls_including_retries": model_calls,
+            "max_attempts_per_evidence_bearing_facet": 2,
             "skip_without_relevant_external_evidence": True,
+            "malformed_output_fallback": "immutable_host_baseline",
+            "model_may_mutate_host_fields": False,
         },
         "ledger_sha256": "",
     }
