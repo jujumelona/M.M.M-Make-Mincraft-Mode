@@ -40,8 +40,8 @@ _LOCAL_PROFILE_ENV_NAMES = (
     "MMM_LLAMA_SERVER_DISTRIBUTION",
     "MMM_LLAMA_SERVER_SOURCE_DIR",
 )
-REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio,training]"
-LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio,training]"
+REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio]"
+LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio]"
 
 # Pinned official ggml-org/llama.cpp release commit. Local GGUF execution uses the
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
