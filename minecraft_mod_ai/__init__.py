@@ -4,11 +4,9 @@ from .evidence_request_guard import install_evidence_request_guard
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .semantic_batching_contract import install_semantic_batching_contract
-from .semantic_requirement_authority import install_semantic_requirement_authority
 
 initialize_runtime()
 install_evidence_request_guard()
-install_semantic_requirement_authority()
 install_semantic_batching_contract()
 finalize_runtime()
 
