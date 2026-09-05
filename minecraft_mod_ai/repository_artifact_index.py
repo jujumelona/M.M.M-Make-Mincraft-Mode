@@ -8,7 +8,8 @@ both first-class inputs; source language never decides whether a repository is v
 
 Immutable repo snapshots are cached by repository/commit/tree/fetcher provenance so a
 large donor is parsed into one dependency graph and then reused across capability
-slicing. The cache is bounded and graph construction is synchronized.
+slicing. Index objects and their local blob retention are both bounded; the graph keeps
+structural evidence while decoded full-source text is released after graph construction.
 """
 
 import hashlib
@@ -47,13 +48,37 @@ _INDEX_CACHE: OrderedDict[
 ] = OrderedDict()
 
 
-def _cache_entry_limit() -> int:
-    raw = os.environ.get("MMM_REPOSITORY_ARTIFACT_INDEX_CACHE_ENTRIES", "4").strip()
+def _bounded_env_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = os.environ.get(name, str(default)).strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 4
-    return max(1, min(32, value))
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _cache_entry_limit() -> int:
+    return _bounded_env_int(
+        "MMM_REPOSITORY_ARTIFACT_INDEX_CACHE_ENTRIES",
+        4,
+        minimum=1,
+        maximum=32,
+    )
+
+
+def _blob_cache_byte_budget() -> int:
+    return _bounded_env_int(
+        "MMM_REPOSITORY_ARTIFACT_BLOB_CACHE_BYTE_BUDGET",
+        32 * 1024 * 1024,
+        minimum=64 * 1024,
+        maximum=256 * 1024 * 1024,
+    )
 
 
 def _fetcher_namespace(
@@ -142,7 +167,8 @@ class RepositoryArtifactIndex:
     text_by_path: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     _blob_fetcher: Callable[[str, str], bytes] | None = None
-    _blob_cache: dict[str, bytes] = field(default_factory=dict)
+    _blob_cache: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
+    _blob_cache_bytes: int = 0
     _dependency_graph: ArtifactDependencyGraph | None = None
     _dependency_graph_context_key: str = ""
     _graph_lock: RLock = field(default_factory=RLock, repr=False)
@@ -206,6 +232,8 @@ class RepositoryArtifactIndex:
                 index.symbol_to_paths.setdefault(filename_symbol, []).append(path)
 
         index.metadata["index_cache_hits"] = 0
+        index.metadata["blob_cache_evictions"] = 0
+        index.metadata["blob_cache_bytes"] = 0
         with _INDEX_CACHE_LOCK:
             raced = _INDEX_CACHE.get(cache_key)
             if raced is not None:
@@ -221,10 +249,31 @@ class RepositoryArtifactIndex:
                 _INDEX_CACHE.popitem(last=False)
         return index
 
+    def _remember_blob(self, path: str, data: bytes) -> None:
+        budget = _blob_cache_byte_budget()
+        if len(data) > budget:
+            self.metadata["blob_cache_bytes"] = self._blob_cache_bytes
+            return
+        existing = self._blob_cache.pop(path, None)
+        if existing is not None:
+            self._blob_cache_bytes -= len(existing)
+        while self._blob_cache and self._blob_cache_bytes + len(data) > budget:
+            _old_path, old_data = self._blob_cache.popitem(last=False)
+            self._blob_cache_bytes -= len(old_data)
+            self.metadata["blob_cache_evictions"] = (
+                int(self.metadata.get("blob_cache_evictions", 0)) + 1
+            )
+        self._blob_cache[path] = data
+        self._blob_cache_bytes += len(data)
+        self.metadata["blob_cache_bytes"] = self._blob_cache_bytes
+
     def get_blob(self, path: str) -> bytes | None:
-        """Fetch one immutable blob lazily and cache it by repository path."""
-        if path in self._blob_cache:
-            return self._blob_cache[path]
+        """Fetch one immutable blob lazily with bounded local LRU retention."""
+
+        cached = self._blob_cache.get(path)
+        if cached is not None:
+            self._blob_cache.move_to_end(path)
+            return cached
         item = self.files_by_path.get(path)
         if not item or not self._blob_fetcher:
             return None
@@ -233,13 +282,14 @@ class RepositoryArtifactIndex:
             return None
         try:
             data = self._blob_fetcher(self.repository, sha)
-            self._blob_cache[path] = data
+            self._remember_blob(path, data)
             return data
         except Exception:
             return None
 
     def populate_source_symbols(self, path: str, content: str) -> None:
         """Index Java/Kotlin packages, declared types, methods, calls and registry IDs."""
+
         self.text_by_path[path] = content
         package_match = _PACKAGE_RE.search(content)
         package_name = package_match.group(1) if package_match else ""
@@ -345,10 +395,15 @@ class RepositoryArtifactIndex:
             self._dependency_graph = graph
             self._dependency_graph_context_key = context_key
             self.metadata.setdefault("graph_cache_hits", 0)
+            # Capability localization uses structural maps and the graph, not copies
+            # of every decoded source body. Drop those bodies after indexing so a
+            # cached large donor does not pin the whole repository twice in memory.
+            self.text_by_path.clear()
+            self.metadata["decoded_source_text_retained"] = 0
             return graph
 
     def artifact_bytes(self, path: str) -> bytes | None:
-        """Return bytes already admitted to the repository-wide artifact index."""
+        """Return bytes admitted to the repository-wide artifact index."""
 
         if path not in self.files_by_path or not _is_repository_artifact(path):
             return None
