@@ -7,7 +7,7 @@ from pathlib import Path
 
 _PACKAGE_RE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;")
 _IMPORT_RE = re.compile(
-    r"(?m)^\s*import\s+(?:static\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$*][\w$*]*)*)\s*;"
+    r"(?<![\w$])import\s+(?:static\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$*][\w$*]*)*)\s*;"
 )
 
 # Loader/runtime packages which are intrinsically client-only even when the
