@@ -230,16 +230,19 @@ def build_authoritative_request_catalog(
     prompt: str,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Build an immutable prompt-span catalog with semantic-model interpretation.
+    """Build one immutable host-owned request catalog.
 
-    Passing an empty design is intentional: model-produced design modules, features,
-    acceptance prose, and reuse hints cannot participate in requirement identity.
-    When a router is available it owns only semantic interpretation of the already
-    frozen authored spans. A configured router is authoritative: its failure may not
-    be silently replaced by deterministic host semantics.
+    Host-only callers keep the deterministic fallback. Production semantic callers use
+    the bounded approved-requirement helper directly, so bounded extraction is part of
+    the normal call graph rather than a runtime monkey-patch.
     """
 
-    catalog = _original_catalog_strict(prompt, {}, router=router)
+    if router is None:
+        catalog = _original_catalog_strict(prompt, {}, router=None)
+    else:
+        from .semantic_batching_contract import build_bounded_requirement_catalog
+
+        catalog = build_bounded_requirement_catalog(prompt, router=router)
     return _split_multi_root_requirements(catalog)
 
 
@@ -263,11 +266,16 @@ def install_evidence_request_guard() -> None:
         _INSTALLED = True
         return
 
+    # Capture the statically composed catalog builder before later compatibility
+    # installers can replace the public module attribute. The live guard therefore
+    # keeps one bounded production path without adding another runtime rebinding.
+    request_catalog_builder = build_authoritative_request_catalog
+
     @wraps(original_plan)
     def guarded_plan(self: GameDesignPlanner, prompt: str, *args: Any, **kwargs: Any):
         if not prompt.strip():
             return original_plan(self, prompt, *args, **kwargs)
-        request_catalog = build_authoritative_request_catalog(
+        request_catalog = request_catalog_builder(
             prompt,
             router=self.router,
         )
