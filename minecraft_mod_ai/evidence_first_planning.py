@@ -19,12 +19,9 @@ from typing import Any
 
 from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
 from .minecraft_template_catalog import (
-    FEATURE_CLIENT,
     FEATURE_DATAGEN,
     FEATURE_MIXIN,
     FEATURE_NETWORK,
-    FEATURE_PERSISTENCE,
-    FEATURE_REGISTRY,
     FEATURE_WORLDGEN,
     RESEARCH_BASIS,
     TEMPLATE_CATALOG_SCHEMA,
