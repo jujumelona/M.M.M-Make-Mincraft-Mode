@@ -65,3 +65,22 @@ def test_skillbank_lock_releases_cleanly(tmp_path: Path) -> None:
 
     with _PATH_LOCKS_GUARD:
         assert key not in _PATH_LOCKS
+
+
+def test_pyproject_has_no_orphaned_training_surface() -> None:
+    """Ensure pyproject.toml contains no retired training extras."""
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "\ntraining = []" not in text
+    assert "mmm-training" not in text
+
+
+def test_retired_training_mcp_tools_reject_cleanly() -> None:
+    """Ensure calling retired training MCP tools raises RuntimeError instead of AttributeError."""
+    from minecraft_mod_ai import mcp_server
+
+    with pytest.raises(RuntimeError, match="Custom model training surface has been retired."):
+        mcp_server.record_training_trace({})
+
+    with pytest.raises(RuntimeError, match="Custom model training surface has been retired."):
+        mcp_server.export_training_dataset()
+

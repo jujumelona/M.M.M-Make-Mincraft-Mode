@@ -365,17 +365,17 @@ def mineflayer_disconnect() -> dict[str, Any]:
 @_stage_tool()
 def run_model_smoke(role: str, output_dir: str='model-smoke', media_path: str | None=None) -> dict[str, Any]:
     """Actually load and exercise one configured role and record VRAM/timing."""
-    return _production().run_model_smoke(role, output_dir, media_path, None)
+    return _production().run_model_smoke(role, output_dir, media_path)
 
 @_stage_tool()
 def record_training_trace(trace: dict[str, Any], store_path: str='training/traces') -> dict[str, Any]:
     """Record only a licensed, build/GameTest/JAR-verified training trace."""
-    return _production().record_training_trace(trace, store_path)
+    raise RuntimeError("Custom model training surface has been retired.")
 
 @_stage_tool()
 def export_training_dataset(store_path: str='training/traces', output_path: str='training/mmm-fabric-coder-1201.jsonl') -> dict[str, Any]:
     """Export verified traces to chat-format SFT JSONL."""
-    return _production().export_training_dataset(store_path, output_path)
+    raise RuntimeError("Custom model training surface has been retired.")
 
 @_stage_tool()
 def package_release(project_root: str, proposal: dict[str, Any], approval_hash: str, output_zip: str='releases/mmm-release.zip', jar_path: str | None=None) -> dict[str, Any]:

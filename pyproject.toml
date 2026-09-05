@@ -63,7 +63,6 @@ image = [
 # inventing dependencies that are not part of the runtime contract.
 speech = []
 production-audio = []
-training = []
 dev = [
   "nbformat>=5.10,<6",
   "numpy>=1.26,<3",
