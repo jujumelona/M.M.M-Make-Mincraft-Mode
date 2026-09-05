@@ -67,6 +67,17 @@ def _platform_lock_from_adapter(adapter):
     return lock_from_adapter(adapter)
 
 
+def _uses_native_naming(version: str) -> bool:
+    base = str(version).strip().split("+", 1)[0].split("-", 1)[0]
+    parts = base.split(".")
+    try:
+        major = int(parts[0]) if parts else 0
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        return False
+    return major > 26 or (major == 26 and minor >= 1)
+
+
 def _complete_partial_test_target(target):
     """Model the host provider receipt for legacy unit tests of unrelated contracts.
 
@@ -75,7 +86,8 @@ def _complete_partial_test_target(target):
     planning layer directly and therefore bypass the normal provider-resolution owner.
     For those modules only, fill missing receipt metadata with deterministic synthetic
     evidence while preserving every explicitly supplied coordinate, including invalid
-    values that a test may be exercising.
+    values that a test may be exercising. Minecraft 26.1+ uses native names, so missing
+    legacy mapping coordinates stay empty and the Java baseline is 25 rather than 21.
     """
 
     if not isinstance(target, dict):
@@ -85,15 +97,22 @@ def _complete_partial_test_target(target):
     if not version or not loader:
         return target
     completed = dict(target)
-    mappings_version = str(
-        completed.get("mappings_version")
-        or completed.get("yarn_mappings")
-        or f"{version}+test-mappings"
-    )
-    completed.setdefault("java_version", 21)
-    completed.setdefault("mappings_kind", "yarn")
-    completed.setdefault("mappings_version", mappings_version)
-    completed.setdefault("yarn_mappings", mappings_version)
+    native_naming = _uses_native_naming(version)
+    if native_naming:
+        completed.setdefault("java_version", 25)
+        completed.setdefault("mappings_kind", "")
+        completed.setdefault("mappings_version", "")
+        completed.setdefault("yarn_mappings", "")
+    else:
+        mappings_version = str(
+            completed.get("mappings_version")
+            or completed.get("yarn_mappings")
+            or f"{version}+test-mappings"
+        )
+        completed.setdefault("java_version", 21)
+        completed.setdefault("mappings_kind", "yarn")
+        completed.setdefault("mappings_version", mappings_version)
+        completed.setdefault("yarn_mappings", mappings_version)
     completed.setdefault("fabric_loader", "test-loader")
     completed.setdefault("fabric_api", "test-api")
     completed.setdefault("fabric_loom", "test-loom")
@@ -269,119 +288,8 @@ def _isolate_test_runtime_state(
                     if isinstance(target, dict):
                         selection_copy["target"] = _complete_partial_test_target(target)
                         design["_platform_selection"] = selection_copy
-            return original_target_decision(design, decision)
+            return original_target_decision(design, target_decision=decision)
 
-        monkeypatch.setattr(
-            planning,
-            "_target_decision",
-            target_decision_with_synthetic_receipt,
-        )
+        monkeypatch.setattr(planning, "_target_decision", target_decision_with_synthetic_receipt)
 
-    # These unit tests exercise technology semantics directly. Supply an explicit
-    # executable fixture target instead of depending on a production-wide default.
-    if request.module.__name__ == "test_technology_radar":
-        adapter = _synthetic_test_adapter()
-        target = {
-            "edition": adapter.edition,
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-            "java_version": adapter.java_version,
-            "fabric_loader": adapter.fabric_loader,
-            "fabric_api": adapter.fabric_api,
-        }
-        original = request.module.build_technology_radar
-
-        def build_with_explicit_test_target(*args, **kwargs):
-            kwargs.setdefault("target", target)
-            return original(*args, **kwargs)
-
-        monkeypatch.setattr(
-            request.module,
-            "build_technology_radar",
-            build_with_explicit_test_target,
-        )
-
-    # This test module intentionally replaces GameDesignPlanner.plan, which bypasses
-    # the production platform-selection owner. Bind an explicit target only at that
-    # mocked boundary.
-    if request.module.__name__ == "test_complete_planner_technology_sidecar":
-        import minecraft_mod_ai.complete_planner as planner_module
-
-        adapter = _synthetic_test_adapter()
-        target = {
-            "edition": adapter.edition,
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-            "java_version": adapter.java_version,
-            "fabric_loader": adapter.fabric_loader,
-            "fabric_api": adapter.fabric_api,
-        }
-        original_collect = planner_module.collect_technology_radar
-
-        def collect_with_explicit_test_target(*args, **kwargs):
-            kwargs.setdefault("target", target)
-            return original_collect(*args, **kwargs)
-
-        monkeypatch.setattr(
-            planner_module,
-            "collect_technology_radar",
-            collect_with_explicit_test_target,
-        )
-
-    # Legacy central-research tests assert old provider receipts. Keep that fixture
-    # local to the legacy test module; production retrieval continues to use live
-    # provider receipts and has no historical mapping fallback.
-    if request.module.__name__ == "test_central_research":
-        from minecraft_mod_ai import central_research
-
-        original_adapter_for_target = central_research.adapter_for_target
-
-        def legacy_research_adapter(version: str, loader: str):
-            normalized = str(version).strip()
-            if str(loader).strip().casefold() != "fabric":
-                return original_adapter_for_target(version, loader)
-            adapter = _synthetic_test_adapter(normalized)
-            mapping = {
-                "1.20.1": "1.20.1+build.1",
-                "1.21.1": "1.21.1+build.3",
-            }.get(normalized, adapter.yarn_mappings)
-            return replace(adapter, yarn_mappings=mapping, mappings_version=mapping)
-
-        monkeypatch.setattr(
-            central_research,
-            "adapter_for_target",
-            legacy_research_adapter,
-        )
-
-    # Legacy ecosystem unit tests are exact-target tests. Keep their intent explicit
-    # while product defaults become platform-neutral. Dedicated dynamic-target tests
-    # exercise the new targetless path without this fixture.
-    if request.module.__name__ == "test_ecosystem_discovery":
-        from minecraft_mod_ai import ecosystem_discovery as ecosystem
-
-        original_search = ecosystem.EcosystemDiscoveryClient.search
-        original_inspect = ecosystem.EcosystemDiscoveryClient.inspect_modrinth_project
-
-        def search_with_explicit_test_target(self, *args, **kwargs):
-            if str(kwargs.get("target_profile", "minecraft_mod")) == "minecraft_mod":
-                kwargs.setdefault("minecraft_version", "1.20.1")
-                kwargs.setdefault("loader", "fabric")
-            return original_search(self, *args, **kwargs)
-
-        def inspect_with_explicit_test_target(self, *args, **kwargs):
-            kwargs.setdefault("minecraft_version", "1.20.1")
-            kwargs.setdefault("loader", "fabric")
-            return original_inspect(self, *args, **kwargs)
-
-        monkeypatch.setattr(
-            ecosystem.EcosystemDiscoveryClient,
-            "search",
-            search_with_explicit_test_target,
-        )
-        monkeypatch.setattr(
-            ecosystem.EcosystemDiscoveryClient,
-            "inspect_modrinth_project",
-            inspect_with_explicit_test_target,
-        )
+    yield
