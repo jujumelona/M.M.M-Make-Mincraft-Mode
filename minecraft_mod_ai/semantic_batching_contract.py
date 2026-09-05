@@ -10,8 +10,8 @@ before any model call, all approved leaves are merged before requirement IDs are
 and the existing global catalog/dependency passes remain authoritative.
 
 This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
-directly; installation validates that static call graph and installs only the catalog
-validator, never a second request builder or runtime routing implementation.
+directly; installation validates that static call graph and never rewires another
+module's validator, request builder, or runtime routing implementation.
 """
 
 from __future__ import annotations
@@ -213,26 +213,13 @@ def build_bounded_requirement_catalog(
     catalog["catalog_sha256"] = _semantic._evidence._hash_without(
         catalog, "catalog_sha256"
     )
+    # Strong approved-graph validation stays on the direct construction path. Callers
+    # that reuse this catalog also validate the exact catalog/prompt pair before handoff.
     _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
     return catalog
 
 
 build_bounded_requirement_catalog.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
-
-
-def _install_approved_catalog_validator() -> None:
-    original_validate = _semantic._evidence._validate_request_catalog
-    if getattr(original_validate, "__mmm_approved_requirement_authority__", False):
-        return
-
-    def validate(catalog: Mapping[str, Any], *, prompt: str) -> None:
-        original_validate(catalog, prompt=prompt)
-        if catalog.get("schema_version") == _semantic._SCHEMA:
-            _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
-
-    validate.__mmm_approved_requirement_authority__ = True  # type: ignore[attr-defined]
-    validate.__wrapped__ = original_validate  # type: ignore[attr-defined]
-    _semantic._evidence._validate_request_catalog = validate
 
 
 def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
@@ -246,7 +233,7 @@ def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
 
 
 def install_semantic_batching_contract() -> None:
-    """Validate static owners and install semantic catalog validation exactly once."""
+    """Validate static bounded owners exactly once without mutating their validators."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -263,7 +250,6 @@ def install_semantic_batching_contract() -> None:
         planning._compile_semantic_catalog,
         owner="planning_authority._compile_semantic_catalog",
     )
-    _install_approved_catalog_validator()
     _INSTALLED = True
 
 
