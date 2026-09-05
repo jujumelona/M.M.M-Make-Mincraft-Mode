@@ -233,11 +233,15 @@ def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
 
 
 def install_semantic_batching_contract() -> None:
-    """Validate static bounded owners exactly once without mutating their validators."""
+    """Revalidate static bounded owners on every reconciliation pass.
+
+    The function is intentionally safe to call repeatedly. Runtime finalization may
+    compose compatibility wrappers after the initial package bootstrap, so returning
+    early after the first validation would make the documented post-finalization check
+    a no-op and allow a late owner replacement to escape detection.
+    """
 
     global _INSTALLED
-    if _INSTALLED:
-        return
 
     from . import evidence_request_guard as guard
     from . import planning_authority as planning
