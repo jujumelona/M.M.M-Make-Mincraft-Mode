@@ -37,50 +37,6 @@ _fast_test_text: &fast_test_text
   max_new_tokens: 2048
   min_free_vram_mb: 0
 
-_qwen36_35b: &qwen36_35b
-  model_id: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
-  adapter: llama_cpp
-  gguf_filename: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
-  mmproj_filename: mmproj-F16.gguf
-  runtime_contract: qwen
-  qwen_family: qwen3.6
-  qwen_tool_markup: qwen3_coder_xml
-  qwen_action_thinking_control: enable_thinking_false
-  qwen_preserve_thinking: true
-  qwen_reasoning_effort: false
-  qwen_assistant_prefill: true
-  agent_thinking: true
-  dynamic_output_budget: true
-  mtp_widths: "1,2"
-  sampling_profiles:
-    general_thinking: &qwen36_general_thinking
-      temperature: 1.0
-      top_p: 0.95
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 1.5
-      repeat_penalty: 1.0
-    precise_coding: &qwen36_precise_coding
-      temperature: 0.6
-      top_p: 0.95
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 0.0
-      repeat_penalty: 1.0
-    non_thinking: &qwen36_non_thinking
-      temperature: 0.7
-      top_p: 0.8
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 1.5
-      repeat_penalty: 1.0
-  torch_dtype: float16
-  max_context: 262144
-  max_input_tokens: 0
-  max_new_tokens: 8192
-  min_free_vram_mb: 2000
-  exclusive_gpu: true
-
 _qwen38_27b_q4: &qwen38_27b_q4
   model_id: unsloth/Qwen3.8-27B-GGUF
   adapter: llama_cpp
@@ -180,18 +136,6 @@ profiles:
       reranker: *reranker
       image_generator: *image_gen
 
-  Qwen3.6-35B_23GB:
-    description: unsloth/Qwen3.6-35B-A3B-MTP-GGUF UD-Q4_K_XL (22.9GB)
-    roles:
-      planner: *qwen36_35b
-      researcher: *qwen36_35b
-      coder: *qwen36_35b
-      coder_safe: *qwen36_35b
-      visual_critic: *qwen36_35b
-      embedding: *embedding
-      reranker: *reranker
-      image_generator: *image_gen
-
   Qwen3.8-27B_18GB:
     description: unsloth/Qwen3.8-27B-GGUF UD-Q4_K_XL (17.9GB); native MTP.
     roles:
@@ -236,57 +180,6 @@ profiles:
       coder: *qwen35_9b
       coder_safe: *qwen35_9b
       visual_critic: *qwen35_9b
-      embedding: *embedding
-      reranker: *reranker
-      image_generator: *image_gen
-
-  remote_quality:
-    description: Per-role OpenAI-compatible endpoints for large coding and vision models. Retrieval stays local.
-    roles:
-      planner:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_PLANNER_MODEL
-        base_url_env: MMM_PLANNER_BASE_URL
-        api_key_env: MMM_PLANNER_API_KEY
-        max_context: 65536
-        max_new_tokens: 4000
-      researcher:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_RESEARCH_MODEL
-        base_url_env: MMM_RESEARCH_BASE_URL
-        api_key_env: MMM_RESEARCH_API_KEY
-        max_context: 65536
-        max_new_tokens: 3500
-      coder:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_CODER_MODEL
-        base_url_env: MMM_CODER_BASE_URL
-        api_key_env: MMM_CODER_API_KEY
-        recommended_models:
-          - Qwen/Qwen3-Coder-30B-A3B-Instruct
-          - Qwen/Qwen3-Coder-Next
-        dynamic_output_budget: true
-        max_context: 131072
-        max_new_tokens: 16384
-      coder_safe:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_CODER_SAFE_MODEL
-        base_url_env: MMM_CODER_SAFE_BASE_URL
-        api_key_env: MMM_CODER_SAFE_API_KEY
-        max_context: 65536
-        max_new_tokens: 4096
-      visual_critic:
-        provider: openai_compatible
-        adapter: openai_compatible
-        model_env: MMM_VISION_MODEL
-        base_url_env: MMM_VISION_BASE_URL
-        api_key_env: MMM_VISION_API_KEY
-        max_context: 65536
-        max_new_tokens: 3000
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen
