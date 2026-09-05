@@ -141,13 +141,19 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
 class _FacetRouter:
     def __init__(self, unresolved: bool = False) -> None:
         self.unresolved = unresolved
+        self.calls = 0
 
     def generate_text(self, _role, messages, **_kwargs):
+        self.calls += 1
         payload = json.loads(messages[-1]["content"])
         evidence_ref = payload["evidence_catalog"][0]["evidence_ref"]
         facets = []
         for facet in derivation.FACETS:
-            disposition = "unresolved" if self.unresolved and facet == "persistence_reload" else "not_applicable"
+            disposition = (
+                "unresolved"
+                if self.unresolved and facet == "persistence_reload"
+                else "not_applicable"
+            )
             entry = {
                 "facet": facet,
                 "disposition": disposition,
@@ -172,6 +178,11 @@ class _FacetRouter:
         return json.dumps({"facets": facets})
 
 
+class _NoCallRouter:
+    def generate_text(self, *_args, **_kwargs):
+        raise AssertionError("generic unrelated evidence must not trigger a model turn")
+
+
 def _derivation_plan() -> dict[str, object]:
     return {
         "request_catalog": {
@@ -187,17 +198,24 @@ def _derivation_plan() -> dict[str, object]:
     }
 
 
-def test_research_derivation_requires_traceable_evidence_and_acceptance(monkeypatch):
+def test_research_derivation_requires_traceable_evidence_and_one_requirement_turn(monkeypatch):
     monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
+    router = _FacetRouter()
     ledger = derivation.derive_research_requirements(
-        _FacetRouter(),
+        router,
         prompt="travel to another world",
         evidence_plan=_derivation_plan(),
-        research_brief={"source_id": "research:runtime", "claim": "runtime transition is externally observable"},
+        research_brief={
+            "source_id": "research:runtime",
+            "requirement_ref": "req_demo",
+            "claim": "verification evidence: runtime transition is externally observable",
+        },
         technical_evidence={},
         game_design={},
     )
     decisions = ledger["facet_decisions"]
+    assert router.calls == 1
+    assert ledger["model_call_policy"]["actual_calls"] == 1
     assert len(decisions) == len(derivation.FACETS)
     derived = [item for item in decisions if item["disposition"] == "derived"]
     assert len(derived) == 1
@@ -208,14 +226,38 @@ def test_research_derivation_requires_traceable_evidence_and_acceptance(monkeypa
     assert derived[0]["implementation_obligations"]
 
 
-def test_research_derivation_fails_closed_on_unresolved_facet(monkeypatch):
+def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(monkeypatch):
+    monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
+    ledger = derivation.derive_research_requirements(
+        _NoCallRouter(),
+        prompt="travel to another world",
+        evidence_plan=_derivation_plan(),
+        research_brief={
+            "source_id": "research:generic",
+            "claim": "general platform metadata is available",
+        },
+        technical_evidence={},
+        game_design={},
+    )
+    assert ledger["model_call_policy"]["actual_calls"] == 0
+    assert all(
+        item["disposition"] != "unresolved"
+        for item in ledger["facet_decisions"]
+    )
+
+
+def test_research_derivation_fails_closed_on_relevant_unresolved_facet(monkeypatch):
     monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
     with pytest.raises(derivation.ResearchRequirementError, match="could not close"):
         derivation.derive_research_requirements(
             _FacetRouter(unresolved=True),
             prompt="travel to another world",
             evidence_plan=_derivation_plan(),
-            research_brief={"source_id": "research:runtime", "claim": "runtime evidence"},
+            research_brief={
+                "source_id": "research:persistence",
+                "requirement_ref": "req_demo",
+                "claim": "persistence reload evidence for travel state is incomplete",
+            },
             technical_evidence={},
             game_design={},
         )
