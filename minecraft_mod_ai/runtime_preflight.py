@@ -10,7 +10,6 @@ and the normal model tool/observation loop; preflight must not require a second 
 or forced-routing stack.
 """
 
-import inspect
 import json
 import sys
 import threading
@@ -62,39 +61,34 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
-def _resolves_to_canonical_callable(actual: Any, canonical: Any) -> bool:
-    """Return whether a callable's transparent wrapper chain terminates at canonical.
-
-    Runtime contracts legitimately compose functions with ``functools.wraps``. Exact
-    object identity therefore rejects valid composition. ``inspect.unwrap`` preserves
-    a fail-closed authority check while accepting only transparent wrapper chains whose
-    root is the canonical host-owned callable.
-    """
-
-    if not callable(actual) or not callable(canonical):
-        return False
-    try:
-        return inspect.unwrap(actual) is canonical
-    except (ValueError, TypeError):
-        # Wrapper cycles or malformed ``__wrapped__`` chains are never authority.
-        return False
-
-
 def _assert_authoritative_requirement_path() -> None:
-    """Require the sole host-owned semantic request path before production decode."""
+    """Require the sole host-owned bounded semantic request path before decode."""
 
-    from . import evidence_first_planning, evidence_request_guard
+    from . import evidence_first_planning, evidence_request_guard, planning_authority
     from .game_design import GameDesignPlanner
-    from .semantic_requirement_authority import build_approved_requirement_catalog
+    from .semantic_batching_contract import build_bounded_requirement_catalog
 
     failures: list[str] = []
     if getattr(GameDesignPlanner.plan, "__mmm_request_contract_guard__", False) is not True:
         failures.append("GameDesignPlanner request freeze/guard")
-    if not _resolves_to_canonical_callable(
+    if getattr(
+        build_bounded_requirement_catalog,
+        "__mmm_bounded_semantic_batching__",
+        False,
+    ) is not True:
+        failures.append("bounded semantic catalog builder")
+    if getattr(
         evidence_request_guard.build_authoritative_request_catalog,
-        build_approved_requirement_catalog,
-    ):
-        failures.append("approved requirement catalog authority")
+        "__mmm_bounded_semantic_batching__",
+        False,
+    ) is not True:
+        failures.append("bounded request catalog owner")
+    if getattr(
+        planning_authority._compile_semantic_catalog,
+        "__mmm_bounded_semantic_batching__",
+        False,
+    ) is not True:
+        failures.append("bounded planning semantic compiler")
     if getattr(
         evidence_first_planning._validate_request_catalog,
         "__mmm_approved_requirement_authority__",
