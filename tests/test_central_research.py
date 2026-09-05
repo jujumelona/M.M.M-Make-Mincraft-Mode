@@ -8,6 +8,7 @@ from minecraft_mod_ai.central_research import (
     normalize_research_brief,
     retrieve_domain_evidence,
 )
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.retrieval import RetrievalHit, RetrievalReceipt
 from minecraft_mod_ai.spec import SpecValidationError
 
@@ -89,8 +90,9 @@ def test_retrieve_domain_evidence_covers_authored_and_declared_criteria_without_
     assert any('dependency official_one' in query for query in called_queries)
     assert any('compatibility official_one' in query for query in called_queries)
     assert any('license official_one' in query for query in called_queries)
-    assert all((kwargs['minecraft_version'] == '1.20.1' and kwargs['loader'] == 'fabric' and kwargs['mappings'] == '1.20.1+build.1' and kwargs['limit'] == 8 for _, kwargs in calls))
-    assert evidence['target'] == {'minecraft_version': '1.20.1', 'loader': 'fabric', 'mappings': '1.20.1+build.1'}
+    adapter = adapter_for_target('1.20.1', 'fabric')
+    assert all((kwargs['minecraft_version'] == adapter.minecraft_version and kwargs['loader'] == adapter.loader and kwargs['mappings'] == adapter.yarn_mappings and kwargs['limit'] == 8 for _, kwargs in calls))
+    assert evidence['target'] == {'minecraft_version': adapter.minecraft_version, 'loader': adapter.loader, 'mappings': adapter.yarn_mappings}
     assert evidence['deferred_official_domains'] == []
     assert evidence['unresolved_official_domains'] == []
     assert evidence['retrieval_is_authority'] is False
@@ -103,7 +105,8 @@ def test_selected_target_drives_every_rag_route_without_model_choice() -> None:
         calls.append(kwargs)
         return _receipt(query)
     evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
-    expected = {'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3', 'limit': 8}
+    adapter = adapter_for_target('1.21.1', 'fabric')
+    expected = {'minecraft_version': adapter.minecraft_version, 'loader': adapter.loader, 'mappings': adapter.yarn_mappings, 'limit': 8}
     assert calls
     assert all(call == expected for call in calls)
-    assert evidence['target'] == {'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3'}
+    assert evidence['target'] == {'minecraft_version': adapter.minecraft_version, 'loader': adapter.loader, 'mappings': adapter.yarn_mappings}
