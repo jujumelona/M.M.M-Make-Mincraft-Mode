@@ -309,7 +309,6 @@ def _stub_semantic_model(
             and not node.capability_id.startswith("unresolved:")
         )
     )
-    candidates = candidates[:1]
     return SemanticRequirementIR(
         source_start=source_start,
         source_end=source_end,
