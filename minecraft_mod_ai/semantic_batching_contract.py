@@ -9,6 +9,11 @@ Only semantic leaf extraction is batched. Stable source records are created by t
 before any model call, all approved leaves are merged before requirement IDs are built,
 and host feature-model dependency resolution runs only after that global merge.
 
+Semantic leaves must also pass the language-neutral source-fidelity contract: their
+source spans must partition each authored clause without gaps or overlap. A malformed or
+lossy semantic batch gets at most one diagnostic-guided repair turn; the host never fills
+missing semantics by guessing.
+
 This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
 directly; installation validates that static call graph and never rewires another
 module's validator, request builder, or runtime routing implementation.
@@ -22,11 +27,13 @@ from typing import Any
 
 from . import semantic_requirement_authority as _semantic
 from .minecraft_requirement_dependencies import bind_selected_feature_dependencies
+from .semantic_source_fidelity import fidelity_router, validate_semantic_source_partition
 
 _INSTALLED = False
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
 _MEASURED_STATUS = "MEASURED"
 _FALLBACK_BATCH_SIZE = 1
+_MAX_SEMANTIC_ATTEMPTS = 2
 _SHA256_RECEIPT = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -97,9 +104,14 @@ def _chunks(
 def _source_batch_receipt(
     batch_index: int,
     clauses: Sequence[Mapping[str, Any]],
+    *,
+    semantic_attempts: int,
+    repaired: bool,
 ) -> dict[str, Any]:
     return {
         "batch_index": batch_index,
+        "semantic_attempts": semantic_attempts,
+        "semantic_repaired": repaired,
         "source_clauses": [
             {
                 "source_clause_index": int(clause["clause_index"]),
@@ -110,6 +122,21 @@ def _source_batch_receipt(
             for clause in clauses
         ],
     }
+
+
+def _invalid_clause_indices(
+    diagnostics: Sequence[Mapping[str, Any]],
+    clauses: Sequence[Mapping[str, Any]],
+) -> set[int]:
+    all_indices = {int(clause["clause_index"]) for clause in clauses}
+    result: set[int] = set()
+    for diagnostic in diagnostics:
+        clause_index = diagnostic.get("clause_index")
+        if type(clause_index) is int and clause_index in all_indices:
+            result.add(clause_index)
+        else:
+            result.update(all_indices)
+    return result
 
 
 def _generate_bounded_nodes(
@@ -123,28 +150,73 @@ def _generate_bounded_nodes(
     receipts: list[dict[str, Any]] = []
 
     for batch_index, batch in enumerate(batches):
-        receipts.append(_source_batch_receipt(batch_index, batch))
-        try:
-            payload = _semantic._call_semantic_model(router, batch)
-        except Exception as exc:
-            raise _semantic._evidence.EvidencePlanError(
-                "semantic requirement authority model call failed for bounded batch "
-                f"{batch_index}: {type(exc).__name__}: {exc}"
-            ) from exc
+        repair_diagnostics: tuple[dict[str, Any], ...] = ()
+        accepted_nodes: list[dict[str, Any]] | None = None
+        attempts_used = 0
 
-        batch_nodes, invalid_clauses, diagnostics = _semantic._evaluate_batch(payload, batch)
-        if invalid_clauses:
+        for attempt_index in range(_MAX_SEMANTIC_ATTEMPTS):
+            attempts_used = attempt_index + 1
+            try:
+                payload = _semantic._call_semantic_model(
+                    fidelity_router(router, diagnostics=repair_diagnostics),
+                    batch,
+                )
+            except Exception as exc:
+                repair_diagnostics = (
+                    {
+                        "error_code": "REQ_MODEL_RESPONSE",
+                        "clause_index": int(batch[0]["clause_index"]) if len(batch) == 1 else None,
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                if attempts_used < _MAX_SEMANTIC_ATTEMPTS:
+                    continue
+                raise _semantic._evidence.EvidencePlanError(
+                    "semantic requirement authority model call failed after bounded repair "
+                    f"for batch {batch_index}: {type(exc).__name__}: {exc}"
+                ) from exc
+
+            batch_nodes, invalid_clauses, schema_diagnostics = _semantic._evaluate_batch(
+                payload,
+                batch,
+            )
+            fidelity_diagnostics = validate_semantic_source_partition(batch_nodes, batch)
+            combined_diagnostics = tuple(schema_diagnostics) + tuple(fidelity_diagnostics)
+            invalid_clauses.update(_invalid_clause_indices(fidelity_diagnostics, batch))
+
+            if not invalid_clauses and not combined_diagnostics:
+                accepted_nodes = batch_nodes
+                break
+
+            repair_diagnostics = tuple(dict(item) for item in combined_diagnostics)
+            if attempts_used < _MAX_SEMANTIC_ATTEMPTS:
+                continue
             raise _semantic._evidence.EvidencePlanError(
-                "semantic requirement authority rejected bounded-batch model output: "
+                "semantic requirement authority rejected bounded-batch model output after "
+                "one diagnostic-guided repair: "
                 + _semantic._canonical(
                     {
                         "batch_index": batch_index,
                         "invalid_clause_indices": sorted(invalid_clauses),
-                        "diagnostics": diagnostics,
+                        "diagnostics": list(repair_diagnostics),
                     }
                 )
             )
-        nodes.extend(batch_nodes)
+
+        if accepted_nodes is None:
+            raise _semantic._evidence.EvidencePlanError(
+                f"REQ_SCALE_BATCH_EMPTY: semantic batch {batch_index} produced no approved leaves."
+            )
+
+        nodes.extend(accepted_nodes)
+        receipts.append(
+            _source_batch_receipt(
+                batch_index,
+                batch,
+                semantic_attempts=attempts_used,
+                repaired=attempts_used > 1,
+            )
+        )
 
     assigned = _semantic._assign_local_ids(nodes)
     if not assigned:
@@ -186,15 +258,20 @@ def build_bounded_requirement_catalog(
 
     audit = dict(catalog.get("semantic_audit") or {})
     batch_count = len(batch_receipts)
+    model_turns = sum(int(receipt["semantic_attempts"]) for receipt in batch_receipts)
+    repair_turns = sum(max(0, int(receipt["semantic_attempts"]) - 1) for receipt in batch_receipts)
     audit.update(
         {
-            "normal_model_turns": batch_count,
-            "semantic_model_turns": batch_count,
-            "semantic_discovery_model_turns": batch_count,
+            "normal_model_turns": model_turns,
+            "semantic_model_turns": model_turns,
+            "semantic_discovery_model_turns": model_turns,
             "semantic_detail_model_turns": 0,
-            "max_repair_turns": 0,
-            "generation_policy": "bounded_host_owned_semantic_batches",
-            "semantic_generation_protocol": "bounded_host_owned_semantic_batches",
+            "max_repair_turns": 1,
+            "semantic_repair_turns_used": repair_turns,
+            "generation_policy": "bounded_host_owned_semantic_batches_with_source_fidelity",
+            "semantic_generation_protocol": "bounded_host_owned_semantic_batches_with_source_fidelity",
+            "semantic_source_fidelity_policy": "language_neutral_exact_authored_character_partition",
+            "semantic_source_fidelity_owner": "host",
             "semantic_batch_size": batch_size,
             "semantic_batch_count": batch_count,
             "semantic_batch_size_source": contract["source"],
