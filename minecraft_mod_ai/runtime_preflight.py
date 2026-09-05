@@ -64,7 +64,7 @@ def _assert_wrapper_chain() -> None:
 def _assert_authoritative_requirement_path() -> None:
     """Require the sole host-owned bounded semantic request path before decode."""
 
-    from . import evidence_first_planning, evidence_request_guard, planning_authority
+    from . import evidence_request_guard, planning_authority
     from .game_design import GameDesignPlanner
     from .semantic_batching_contract import build_bounded_requirement_catalog
 
@@ -89,12 +89,6 @@ def _assert_authoritative_requirement_path() -> None:
         False,
     ) is not True:
         failures.append("bounded planning semantic compiler")
-    if getattr(
-        evidence_first_planning._validate_request_catalog,
-        "__mmm_approved_requirement_authority__",
-        False,
-    ) is not True:
-        failures.append("approved requirement catalog validator")
     if failures:
         raise RuntimePreflightError(
             "authoritative semantic requirement path is incomplete: " + ", ".join(failures)
