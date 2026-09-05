@@ -6,7 +6,7 @@ from __future__ import annotations
 integrity proof for ``receipt_json``. This contract adds a separate receipt hash,
 migrates only legacy rows whose old output hash actually proves the receipt body,
 invalidates unverifiable successful state at resume/read boundaries, and applies
-stage-specific verifier truth before a success receipt can be persisted.
+stage-specific verifier truth before a success receipt can be persisted or reused.
 """
 
 import hashlib
@@ -18,7 +18,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .verifier_receipt_truth_contract import _decorate_receipt
+from .verifier_receipt_truth_contract import (
+    VerifierReceiptTruthError,
+    _assert_receipt_reusable,
+    _decorate_receipt,
+)
 
 _INSTALLED = False
 _INTEGRITY_ERROR = "receipt integrity verification failed"
@@ -77,11 +81,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def _audit_legacy_receipts(
-    ledger: Any,
-    module: Any,
-    connection: sqlite3.Connection,
-) -> None:
+def _audit_legacy_receipts(ledger: Any, module: Any, connection: sqlite3.Connection) -> None:
     succeeded = module.WorkState.SUCCEEDED.value
     task_invalid: list[str] = []
     for node_id, output_hash, receipt_json, receipt_hash in connection.execute(
@@ -164,10 +164,53 @@ def install(work_graph_module: Any) -> None:
     original_task = ledger_cls.task
     original_tasks = ledger_cls.tasks
 
+    def _invalidate_stale_task(self: Any, node_id: str) -> None:
+        try:
+            self.invalidate(node_id)
+        except (KeyError, error_type):
+            return
+
+    def _reusable_receipt(
+        self: Any,
+        node_id: str,
+        verified: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        current = original_task(self, node_id)
+        if str(current.get("state") or "") != work_graph_module.WorkState.SUCCEEDED.value:
+            return None
+        try:
+            return _assert_receipt_reusable(current, verified)
+        except VerifierReceiptTruthError:
+            _invalidate_stale_task(self, node_id)
+            return None
+
+    def _audit_reusable_receipts(self: Any) -> None:
+        with self._connect() as connection:
+            node_ids = tuple(
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT node_id FROM tasks WHERE state = ? ORDER BY node_id",
+                    (work_graph_module.WorkState.SUCCEEDED.value,),
+                ).fetchall()
+            )
+        for node_id in node_ids:
+            current = original_task(self, node_id)
+            if str(current.get("state") or "") != work_graph_module.WorkState.SUCCEEDED.value:
+                continue
+            receipt = current.get("receipt")
+            if not isinstance(receipt, dict):
+                _invalidate_stale_task(self, node_id)
+                continue
+            try:
+                _assert_receipt_reusable(current, receipt)
+            except VerifierReceiptTruthError:
+                _invalidate_stale_task(self, node_id)
+
     @wraps(original_initialize)
     def initialize(self: Any) -> None:
         original_initialize(self)
         _audit_integrity(self, work_graph_module)
+        _audit_reusable_receipts(self)
 
     @wraps(ledger_cls.succeed)
     def succeed(
@@ -202,14 +245,10 @@ def install(work_graph_module: Any) -> None:
                 ):
                     connection.commit()
                     return self.task(node_id)
-                raise error_type(
-                    f"Work node {node_id} already succeeded with a different receipt."
-                )
+                raise error_type(f"Work node {node_id} already succeeded with a different receipt.")
 
             if state != work_graph_module.WorkState.RUNNING.value:
-                raise error_type(
-                    f"Work node {node_id} cannot succeed from state {state}."
-                )
+                raise error_type(f"Work node {node_id} cannot succeed from state {state}.")
 
             cursor = connection.execute(
                 """
@@ -288,15 +327,16 @@ def install(work_graph_module: Any) -> None:
         if input_hash is not None and row[1] != input_hash:
             return None
         try:
-            return _verified_receipt(
+            verified = _verified_receipt(
                 row[2],
                 row[3],
                 label=f"Work node {node_id}",
                 error_type=error_type,
             )
         except error_type:
-            self.invalidate(node_id)
+            _invalidate_stale_task(self, node_id)
             return None
+        return _reusable_receipt(self, node_id, verified)
 
     @wraps(ledger_cls.cached_checkpoint)
     def cached_checkpoint(
@@ -313,11 +353,7 @@ def install(work_graph_module: Any) -> None:
                 """,
                 (checkpoint_id,),
             ).fetchone()
-        if (
-            row is None
-            or row[0] != work_graph_module.WorkState.SUCCEEDED.value
-            or row[1] != input_hash
-        ):
+        if row is None or row[0] != work_graph_module.WorkState.SUCCEEDED.value or row[1] != input_hash:
             return None
         try:
             return _verified_receipt(
@@ -388,23 +424,24 @@ def install(work_graph_module: Any) -> None:
 
     @wraps(original_resume_run)
     def resume_run(self: Any) -> dict[str, Any]:
+        _audit_integrity(self, work_graph_module)
+        _audit_reusable_receipts(self)
         result = original_resume_run(self)
         _audit_integrity(self, work_graph_module)
+        _audit_reusable_receipts(self)
         return self.summary() if result is not None else result
 
     @wraps(original_export_receipts)
     def export_receipts(self: Any, path: str | Path) -> Path:
-        """Export portable receipts with the independent receipt integrity hash."""
+        """Export portable receipts with cryptographic and semantic reuse checks."""
 
         _audit_integrity(self, work_graph_module)
+        _audit_reusable_receipts(self)
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f".{target.name}.tmp")
         with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(
-                canonical_json({"record_type": "summary", "value": self.summary()})
-                + "\n"
-            )
+            stream.write(canonical_json({"record_type": "summary", "value": self.summary()}) + "\n")
             with self._connect() as connection:
                 for row in connection.execute(
                     """
