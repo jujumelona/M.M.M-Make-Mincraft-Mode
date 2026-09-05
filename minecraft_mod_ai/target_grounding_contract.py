@@ -3,8 +3,11 @@ from __future__ import annotations
 """Fail-closed target grounding and unambiguous project-module identity.
 
 Planning may not pass the target barrier with only a Minecraft version and loader. The
-selected executable provider receipt must be complete, including mappings and pack metadata.
-Gradle project paths (including the root ':') are represented separately from logical module IDs.
+selected executable provider receipt must be semantically complete for the selected target.
+Legacy obfuscation mappings are required only for targets where mappings are applicable;
+Minecraft 26.1+ native-name targets must not fabricate legacy mapping coordinates merely to
+satisfy a schema. Gradle project paths (including the root ':') are represented separately
+from logical module IDs.
 """
 
 import re
@@ -15,12 +18,10 @@ from typing import Any
 from . import evidence_first_planning as _planning
 
 _INSTALLED = False
-_REQUIRED_TARGET_FIELDS = (
+_BASE_REQUIRED_TARGET_FIELDS = (
     "minecraft_version",
     "loader",
     "java_version",
-    "mappings_kind",
-    "mappings_version",
     "fabric_loader",
     "fabric_api",
     "fabric_loom",
@@ -31,6 +32,11 @@ _REQUIRED_TARGET_FIELDS = (
     "resource_pack_format",
     "release_metadata_url",
 )
+_LEGACY_MAPPING_FIELDS = (
+    "mappings_kind",
+    "mappings_version",
+)
+_NATIVE_NAME_MIN_VERSION = (26, 1)
 
 
 def _text(value: Any) -> str:
@@ -43,25 +49,85 @@ def _is_unresolved(value: Any) -> bool:
     return not _text(value) or _text(value).casefold() == "unresolved"
 
 
+def _minecraft_version_key(value: Any) -> tuple[int, int]:
+    text = _text(value)
+    match = re.match(r"^(\d+)\.(\d+)(?:\D|$)", text)
+    if not match:
+        raise _planning.EvidencePlanError(
+            f"TARGET_MINECRAFT_VERSION: unsupported or unparseable Minecraft version {text!r}."
+        )
+    return int(match.group(1)), int(match.group(2))
+
+
+def _uses_native_names(version: Any) -> bool:
+    return _minecraft_version_key(version) >= _NATIVE_NAME_MIN_VERSION
+
+
+def _required_target_fields(coordinates: Mapping[str, Any]) -> tuple[str, ...]:
+    version = coordinates.get("minecraft_version")
+    if _is_unresolved(version):
+        return _BASE_REQUIRED_TARGET_FIELDS
+    if _uses_native_names(version):
+        return _BASE_REQUIRED_TARGET_FIELDS
+    return _BASE_REQUIRED_TARGET_FIELDS + _LEGACY_MAPPING_FIELDS
+
+
+def _legacy_mapping_claims(coordinates: Mapping[str, Any]) -> dict[str, str]:
+    claims: dict[str, str] = {}
+    for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings"):
+        value = _text(coordinates.get(field))
+        if value and value.casefold() != "unresolved":
+            claims[field] = value
+    return claims
+
+
 def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
-    missing = [field for field in _REQUIRED_TARGET_FIELDS if _is_unresolved(coordinates.get(field))]
+    required_fields = _required_target_fields(coordinates)
+    missing = [field for field in required_fields if _is_unresolved(coordinates.get(field))]
     if missing:
         raise _planning.EvidencePlanError(
             "TARGET_GROUNDING_INCOMPLETE: executable provider target is missing "
             + ", ".join(missing)
         )
 
-    mappings_kind = _text(coordinates.get("mappings_kind")).casefold()
-    mappings_version = _text(coordinates.get("mappings_version"))
-    if mappings_kind not in {"mojang", "yarn"}:
-        raise _planning.EvidencePlanError(
-            f"TARGET_MAPPINGS_KIND: unsupported mappings kind {mappings_kind!r}."
-        )
-    legacy_mapping = _text(coordinates.get("yarn_mappings"))
-    if legacy_mapping and legacy_mapping.casefold() != "unresolved" and legacy_mapping != mappings_version:
-        raise _planning.EvidencePlanError(
-            "TARGET_MAPPINGS_ALIAS: legacy yarn_mappings disagrees with mappings_version."
-        )
+    minecraft_version = _text(coordinates.get("minecraft_version"))
+    native_names = _uses_native_names(minecraft_version)
+    mappings_receipt: dict[str, str] | None = None
+    if native_names:
+        legacy_claims = _legacy_mapping_claims(coordinates)
+        if legacy_claims:
+            raise _planning.EvidencePlanError(
+                "TARGET_MAPPINGS_INAPPLICABLE: Minecraft 26.1+ uses the native/unobfuscated "
+                "naming regime; legacy mapping coordinates must not be fabricated or accepted "
+                f"for this target ({', '.join(sorted(legacy_claims))})."
+            )
+        naming_regime = {
+            "kind": "native_unobfuscated",
+            "mappings_applicable": False,
+            "minecraft_version": minecraft_version,
+        }
+    else:
+        mappings_kind = _text(coordinates.get("mappings_kind")).casefold()
+        mappings_version = _text(coordinates.get("mappings_version"))
+        if mappings_kind not in {"mojang", "yarn"}:
+            raise _planning.EvidencePlanError(
+                f"TARGET_MAPPINGS_KIND: unsupported mappings kind {mappings_kind!r}."
+            )
+        legacy_mapping = _text(coordinates.get("yarn_mappings"))
+        if (
+            legacy_mapping
+            and legacy_mapping.casefold() != "unresolved"
+            and legacy_mapping != mappings_version
+        ):
+            raise _planning.EvidencePlanError(
+                "TARGET_MAPPINGS_ALIAS: legacy yarn_mappings disagrees with mappings_version."
+            )
+        mappings_receipt = {"kind": mappings_kind, "version": mappings_version}
+        naming_regime = {
+            "kind": "mapped_obfuscated",
+            "mappings_applicable": True,
+            "minecraft_version": minecraft_version,
+        }
 
     gradle_sha = _text(coordinates.get("gradle_sha256")).casefold()
     if not re.fullmatch(r"[0-9a-f]{64}", gradle_sha):
@@ -102,13 +168,19 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     result = dict(coordinates)
-    result["mappings"] = {"kind": mappings_kind, "version": mappings_version}
+    if mappings_receipt is None:
+        # Inapplicable legacy fields are not retained in the canonical target profile.
+        for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings"):
+            result.pop(field, None)
+    else:
+        result["mappings"] = mappings_receipt
+    result["naming_regime"] = naming_regime
     result["pack_versions"] = {
         "data": data_pack,
         "resource": resource_pack,
         "resource_major": resource_format,
     }
-    result["target_schema_version"] = "2"
+    result["target_schema_version"] = "3"
     return result
 
 
@@ -218,22 +290,24 @@ def _harden_target_decision(original: Any, game_design: Mapping[str, Any], targe
     materially_selected = (
         version and version.casefold() != "unresolved" and loader and loader.casefold() != "unresolved"
     )
+    required_fields = list(_required_target_fields(coordinates))
     if materially_selected:
         coordinates = _validate_complete_target(coordinates)
         result["coordinates"] = coordinates
         result["hard_gate_status"] = "passed"
         result["target_grounding"] = {
-            "schema_version": "mmm/target-grounding-v2",
+            "schema_version": "mmm/target-grounding-v3",
             "status": "COMPLETE",
-            "required_fields": list(_REQUIRED_TARGET_FIELDS),
+            "required_fields": required_fields,
             "release_metadata_url": coordinates["release_metadata_url"],
+            "naming_regime": dict(coordinates["naming_regime"]),
         }
     else:
         result["hard_gate_status"] = "deferred"
         result["target_grounding"] = {
-            "schema_version": "mmm/target-grounding-v2",
+            "schema_version": "mmm/target-grounding-v3",
             "status": "UNRESOLVED",
-            "required_fields": list(_REQUIRED_TARGET_FIELDS),
+            "required_fields": required_fields,
         }
 
     current_topology = result.get("project_topology")
@@ -249,12 +323,12 @@ def install_target_grounding_contract() -> None:
     if _INSTALLED:
         return
     current = _planning._target_decision
-    if not getattr(current, "_mmm_complete_target_grounding_v2", False):
+    if not getattr(current, "_mmm_complete_target_grounding_v3", False):
         @wraps(current)
         def target_decision(game_design: Mapping[str, Any], target_decision: Any = None):
             return _harden_target_decision(current, game_design, target_decision)
 
-        target_decision._mmm_complete_target_grounding_v2 = True
+        target_decision._mmm_complete_target_grounding_v3 = True
         _planning._target_decision = target_decision
     _INSTALLED = True
 
