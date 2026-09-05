@@ -7,7 +7,7 @@ is one host-owned clause per model turn and is explicitly recorded as unmeasured
 
 Only semantic leaf extraction is batched. Stable source records are created by the host
 before any model call, all approved leaves are merged before requirement IDs are built,
-and the existing global catalog/dependency passes remain authoritative.
+and host feature-model dependency resolution runs only after that global merge.
 
 This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
 directly; installation validates that static call graph and never rewires another
@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import semantic_requirement_authority as _semantic
+from .minecraft_requirement_dependencies import bind_selected_feature_dependencies
 
 _INSTALLED = False
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
@@ -157,7 +158,7 @@ def build_bounded_requirement_catalog(
     prompt: str,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Compile bounded semantic leaves, then reconcile the full catalog globally."""
+    """Compile semantic leaves, then let the host resolve the global feature DAG."""
 
     if router is None:
         return _semantic.build_approved_requirement_catalog(prompt, router=None)
@@ -175,9 +176,14 @@ def build_bounded_requirement_catalog(
         batch_size=batch_size,
     )
 
-    # _build_catalog resolves prerequisite capability IDs only after every batch has
-    # been merged. Cross-batch prerequisites therefore cannot be lost at a batch edge.
     catalog = _semantic._build_catalog(prompt, nodes, clauses)
+    try:
+        catalog = bind_selected_feature_dependencies(catalog)
+    except ValueError as exc:
+        raise _semantic._evidence.EvidencePlanError(
+            "host Minecraft feature dependency resolution failed: " + str(exc)
+        ) from exc
+
     audit = dict(catalog.get("semantic_audit") or {})
     batch_count = len(batch_receipts)
     audit.update(
@@ -201,8 +207,9 @@ def build_bounded_requirement_catalog(
             "semantic_batches": list(batch_receipts),
             "max_clauses_per_model_turn": batch_size,
             "cross_batch_prerequisite_reconciliation": (
-                "global_catalog_capability_resolution"
+                "host_minecraft_feature_model_after_global_merge"
             ),
+            "feature_dependency_owner": "host_minecraft_feature_model",
             "source_clause_index_owner": "host",
             "source_anchor_owner": "host",
             "source_grounding_owner": "host",
@@ -213,8 +220,6 @@ def build_bounded_requirement_catalog(
     catalog["catalog_sha256"] = _semantic._evidence._hash_without(
         catalog, "catalog_sha256"
     )
-    # Strong approved-graph validation stays on the direct construction path. Callers
-    # that reuse this catalog also validate the exact catalog/prompt pair before handoff.
     _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
     return catalog
 
@@ -244,13 +249,7 @@ def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
 
 
 def install_semantic_batching_contract() -> None:
-    """Revalidate static bounded owners on every reconciliation pass.
-
-    The function is intentionally safe to call repeatedly. Runtime finalization may
-    compose compatibility wrappers after the initial package bootstrap, so returning
-    early after the first validation would make the documented post-finalization check
-    a no-op and allow a late owner replacement to escape detection.
-    """
+    """Revalidate static bounded owners on every reconciliation pass."""
 
     global _INSTALLED
 
