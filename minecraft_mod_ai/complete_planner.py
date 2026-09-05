@@ -15,6 +15,7 @@ from .complete_spec import (
 from .evidence_execution_contract import task_batches
 from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
+from .planner_hole_filling import fill_evidence_page
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .research_derived_requirements import (
@@ -213,12 +214,26 @@ class CompleteGameDesignPlanner:
                 ),
                 acceptance_tests=batch.acceptance_tests,
             )
-            page = skeleton
             expected_ids = {
                 str(item["module_id"])
                 for item in skeleton["modules"]
                 if isinstance(item, dict) and item.get("module_id")
             }
+            if evidence_mode and batch.task_contract is not None:
+                try:
+                    page = fill_evidence_page(
+                        self.router,
+                        skeleton,
+                        valid_module_catalog={*known_module_ids, *expected_ids},
+                    )
+                except Exception as exc:
+                    raise PlanningStageError(
+                        PlanningStage.EVIDENCE,
+                        f"production batch {batch.batch_id!r} implementation-hole filling failed",
+                        cause=exc,
+                    ) from exc
+            else:
+                page = skeleton
             accepted_modules = [
                 _module(raw)
                 for raw in page["modules"]
