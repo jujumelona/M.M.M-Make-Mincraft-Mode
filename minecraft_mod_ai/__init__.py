@@ -6,9 +6,9 @@ from .runtime_finalization import finalize_runtime
 from .semantic_requirement_authority import install_semantic_requirement_authority
 
 initialize_runtime()
-finalize_runtime()
 install_evidence_request_guard()
 install_semantic_requirement_authority()
+finalize_runtime()
 
 from .api import (
     ChatReply,
@@ -43,11 +43,6 @@ from .model_registry import ModelRegistry
 from .model_router import ModelRouter
 from .pipeline import PipelineResult
 from .planner import HeuristicPlanner, OpenAICompatiblePlanner
-from .preference_training import (
-    PreferenceCandidate,
-    PreferenceTraceError,
-    PreferenceTraceStore,
-)
 from .production_contract import (
     ProductionContractCompilation,
     compile_production_contract,
@@ -68,7 +63,6 @@ from .technology_radar import (
     build_technology_radar,
     technology_research_routes,
 )
-from .training import TrainingTraceStore
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
@@ -102,9 +96,6 @@ __all__ = [
     "OpenAICompatiblePlanner",
     "PipelineResult",
     "PlatformLock",
-    "PreferenceCandidate",
-    "PreferenceTraceError",
-    "PreferenceTraceStore",
     "ProductionContractCompilation",
     "ProductionModule",
     "ProductionToolService",
@@ -116,7 +107,6 @@ __all__ = [
     "ScalableMinecraftModPipeline",
     "ScalePolicy",
     "ScalePolicyError",
-    "TrainingTraceStore",
     "assess_technology_compatibility",
     "build_technology_radar",
     "compile_production_contract",
