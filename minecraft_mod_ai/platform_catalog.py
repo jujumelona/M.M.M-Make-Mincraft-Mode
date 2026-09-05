@@ -22,6 +22,20 @@ from .platform_live_discovery import (
     latest_stable_versions,
 )
 
+_NATIVE_NAME_MIN_VERSION = (26, 1)
+
+
+def _version_key(value: str) -> tuple[int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)(?:\D|$)", str(value or "").strip())
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _uses_native_names(value: str) -> bool:
+    version = _version_key(value)
+    return version is not None and version >= _NATIVE_NAME_MIN_VERSION
+
 
 @dataclass(frozen=True)
 class PlatformAdapter:
@@ -30,8 +44,8 @@ class PlatformAdapter:
     loader: str
     minecraft_version: str
     java_version: str
-    # Backward-compatible coordinate consumed by existing generators. New code must use
-    # mappings_kind/mappings_version so "mojang" is not mislabeled as Yarn semantics.
+    # Backward-compatible coordinate consumed by existing generators. It is empty for
+    # Minecraft 26.1+ native/unobfuscated targets where mappings are inapplicable.
     yarn_mappings: str
     mappings_kind: str
     mappings_version: str
@@ -47,6 +61,10 @@ class PlatformAdapter:
     source_api_family: str
     deterministic_module_kinds: frozenset[str]
 
+    @property
+    def mappings_applicable(self) -> bool:
+        return not _uses_native_names(self.minecraft_version)
+
     def validate(self) -> None:
         required = {
             "adapter_id": self.adapter_id,
@@ -54,9 +72,6 @@ class PlatformAdapter:
             "loader": self.loader,
             "minecraft_version": self.minecraft_version,
             "java_version": self.java_version,
-            "yarn_mappings": self.yarn_mappings,
-            "mappings_kind": self.mappings_kind,
-            "mappings_version": self.mappings_version,
             "fabric_loader": self.fabric_loader,
             "fabric_api": self.fabric_api,
             "fabric_loom": self.fabric_loom,
@@ -67,20 +82,38 @@ class PlatformAdapter:
             "release_metadata_url": self.release_metadata_url,
             "source_api_family": self.source_api_family,
         }
+        if self.mappings_applicable:
+            required.update(
+                {
+                    "yarn_mappings": self.yarn_mappings,
+                    "mappings_kind": self.mappings_kind,
+                    "mappings_version": self.mappings_version,
+                }
+            )
         missing = sorted(key for key, value in required.items() if not str(value).strip())
         if missing:
             raise ValueError(
                 "Executable platform provider returned partial target metadata: "
                 f"{missing}."
             )
-        if self.mappings_kind not in {"mojang", "yarn"}:
-            raise ValueError(f"Unsupported mappings kind: {self.mappings_kind!r}.")
-        if self.mappings_kind == "mojang" and self.mappings_version != "mojang":
-            raise ValueError("Mojang mappings must use the canonical mappings_version='mojang'.")
-        if self.yarn_mappings != self.mappings_version:
+        if self.mappings_applicable:
+            if self.mappings_kind not in {"mojang", "yarn"}:
+                raise ValueError(f"Unsupported mappings kind: {self.mappings_kind!r}.")
+            if self.mappings_kind == "mojang" and self.mappings_version != "mojang":
+                raise ValueError("Mojang mappings must use the canonical mappings_version='mojang'.")
+            if self.yarn_mappings != self.mappings_version:
+                raise ValueError(
+                    "Legacy yarn_mappings compatibility coordinate disagrees with mappings_version."
+                )
+        elif any((self.yarn_mappings, self.mappings_kind, self.mappings_version)):
             raise ValueError(
-                "Legacy yarn_mappings compatibility coordinate disagrees with mappings_version."
+                "Minecraft 26.1+ native/unobfuscated targets must not expose legacy mapping coordinates."
             )
+        if _uses_native_names(self.minecraft_version):
+            if not str(self.java_version).isdigit() or int(self.java_version) < 25:
+                raise ValueError(
+                    f"Minecraft {self.minecraft_version} native-name target requires Java 25+."
+                )
         if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256):
             raise ValueError("Executable platform provider returned an invalid Gradle SHA-256.")
         if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.data_pack_version):
@@ -110,9 +143,19 @@ class PlatformAdapter:
         self.validate()
         value = asdict(self)
         value["deterministic_module_kinds"] = sorted(self.deterministic_module_kinds)
-        value["mappings"] = {
-            "kind": self.mappings_kind,
-            "version": self.mappings_version,
+        if self.mappings_applicable:
+            value["mappings"] = {
+                "kind": self.mappings_kind,
+                "version": self.mappings_version,
+            }
+        else:
+            value.pop("yarn_mappings", None)
+            value.pop("mappings_kind", None)
+            value.pop("mappings_version", None)
+        value["naming_regime"] = {
+            "kind": "mapped_obfuscated" if self.mappings_applicable else "native_unobfuscated",
+            "mappings_applicable": self.mappings_applicable,
+            "minecraft_version": self.minecraft_version,
         }
         value["pack_versions"] = {
             "data": self.data_pack_version,
@@ -327,8 +370,6 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
         adapter.validate()
         return adapter
     except (PlatformDiscoveryError, ValueError) as exc:
-        # An unavailable/incompatible target is an ordinary resolution result. Do not
-        # print a chained traceback for every candidate the selector considers.
         _emit_discovery_log(
             f"target resolution failed loader={normalized_loader} version={version}: "
             f"{type(exc).__name__}: {exc}"
@@ -337,7 +378,6 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
             raise
         raise ValueError(str(exc)) from None
     except Exception as exc:
-        # Unexpected implementation/infrastructure failures remain visible with a trace.
         _emit_discovery_log(
             f"target resolution crashed loader={normalized_loader} version={version}: "
             f"{type(exc).__name__}: {exc}",
@@ -358,17 +398,18 @@ def adapter_for_lock_values(value: Any) -> PlatformAdapter:
         str(getattr(value, "minecraft_version", "")),
         str(getattr(value, "loader", "")),
     )
-    fields = (
+    fields = [
         "edition",
         "loader",
         "minecraft_version",
         "java_version",
-        "yarn_mappings",
         "fabric_loader",
         "fabric_api",
         "fabric_loom",
         "gradle",
-    )
+    ]
+    if adapter.mappings_applicable:
+        fields.append("yarn_mappings")
     mismatches = [
         field for field in fields if getattr(value, field, None) != getattr(adapter, field)
     ]
@@ -392,17 +433,19 @@ def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
         loader = str(raw.get("loader") or "").strip()
         version = str(raw.get("minecraft_version") or "").strip()
         adapter = adapter_for_target(version, loader)
-        for field in (
+        fields = [
             "minecraft_version",
             "loader",
             "java_version",
-            "yarn_mappings",
             "fabric_loader",
             "fabric_api",
             "fabric_loom",
             "gradle",
-        ):
-            if raw.get(field) != getattr(adapter, field):
+        ]
+        if adapter.mappings_applicable:
+            fields.append("yarn_mappings")
+        for field in fields:
+            if str(raw.get(field) or "") != str(getattr(adapter, field) or ""):
                 raise ValueError(
                     f"Generated platform lock disagrees with executable provider: {field}"
                 )
@@ -470,7 +513,6 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
     try:
         target = discover_fabric_target(version)
     except PlatformDiscoveryError as exc:
-        # Expected target incompatibility must not create a chained traceback.
         raise ValueError(str(exc)) from None
     digest = target.discovery_sha256.split(":", 1)[-1][:12]
     try:
@@ -479,15 +521,18 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
         raise ValueError(
             "Official target discovery returned an invalid resource-pack version."
         ) from exc
+    native_names = _uses_native_names(target.minecraft_version)
+    mappings_kind = "" if native_names else target.mappings_kind
+    mappings_version = "" if native_names else target.mappings_version
     adapter = PlatformAdapter(
         adapter_id=f"fabric_live_{_safe_id(version)}_{digest}",
         edition="java",
         loader="fabric",
         minecraft_version=target.minecraft_version,
         java_version=target.java_version,
-        yarn_mappings=target.mappings_version,
-        mappings_kind=target.mappings_kind,
-        mappings_version=target.mappings_version,
+        yarn_mappings=mappings_version,
+        mappings_kind=mappings_kind,
+        mappings_version=mappings_version,
         fabric_loader=target.loader_version,
         fabric_api=target.fabric_api_version,
         fabric_loom=target.loom_version,
