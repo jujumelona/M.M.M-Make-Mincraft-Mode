@@ -39,13 +39,12 @@ def _skillbank_lock(path: Path):
         lock.release()
         with _PATH_LOCKS_GUARD:
             current = _PATH_LOCKS.get(key)
-            if current is None or current[0] is not lock:
-                return
-            remaining = current[1] - 1
-            if remaining <= 0:
-                _PATH_LOCKS.pop(key, None)
-            else:
-                _PATH_LOCKS[key] = (lock, remaining)
+            if current is not None and current[0] is lock:
+                remaining = current[1] - 1
+                if remaining <= 0:
+                    _PATH_LOCKS.pop(key, None)
+                else:
+                    _PATH_LOCKS[key] = (lock, remaining)
 
 
 def _bounded_strings(value: Any, *, limit: int, chars: int = 320) -> list[str]:
