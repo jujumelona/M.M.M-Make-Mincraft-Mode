@@ -7,6 +7,7 @@ evidence pipeline. It contains no legacy optimizer, no post-admission re-resolut
 fresh-only recovery, and no semantic top-k shortlist.
 """
 
+import os
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -48,6 +49,51 @@ def optimize_platform_fail_closed(
     )
 
 
+def _provider_only_adapter(
+    loaders: tuple[str, ...],
+    *,
+    version_constraint: str | None,
+):
+    """Resolve one executable receipt without consulting ecosystem/live catalogues.
+
+    ``MMM_ECOSYSTEM_DISCOVERY=off`` is an explicit isolation boundary. In that mode the
+    platform provider is the sole authority for candidate versions; using Mojang's live
+    stable catalogue here both violated that boundary and made deterministic tests drift
+    to whatever release happened to be newest.
+    """
+
+    requested = str(version_constraint or "").strip()
+    failures: list[str] = []
+    for loader in loaders:
+        provider = provider_for_loader(loader)
+        if requested:
+            versions = (requested,)
+        else:
+            try:
+                versions = tuple(
+                    dict.fromkeys(
+                        value
+                        for item in provider.discover_versions(32)
+                        if (value := str(item).strip())
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{loader}: discovery {type(exc).__name__}: {exc}")
+                continue
+        for version in versions:
+            try:
+                adapter = provider.resolve(version)
+                adapter.validate()
+                return adapter
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"{loader}/{version}: {type(exc).__name__}: {exc}")
+    detail = "; ".join(failures) or "providers returned no executable candidates"
+    raise SpecValidationError(
+        "No executable platform target survived provider-only resolution. Diagnostics: "
+        + detail
+    )
+
+
 def resolve_platform_fail_closed(
     prompt: str,
     *,
@@ -86,6 +132,33 @@ def resolve_platform_fail_closed(
             explicit_version=False,
             explicit_loader=False,
             preserved_existing_target=True,
+        )
+
+    discovery_mode = str(os.getenv("MMM_ECOSYSTEM_DISCOVERY", "auto")).strip().casefold()
+    if discovery_mode not in {"auto", "on", "off"}:
+        raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
+
+    if discovery_mode == "off":
+        loaders = (
+            (provider_for_loader(explicit_loader).loader,)
+            if explicit_loader
+            else resolver.executable_loaders()
+        )
+        adapter = _provider_only_adapter(
+            tuple(loaders),
+            version_constraint=explicit_version,
+        )
+        resolver._require_supported_kinds(adapter, kinds, explicit=bool(explicit_version))
+        return PlatformSelection(
+            adapter=adapter,
+            source="provider_receipt_only",
+            reason=(
+                f"Ecosystem discovery is disabled; executable provider receipt "
+                f"{adapter.adapter_id} selected {adapter.minecraft_version}/{adapter.loader}."
+            ),
+            explicit_version=bool(explicit_version),
+            explicit_loader=bool(explicit_loader),
+            migration_requested=migration_requested,
         )
 
     optimization = optimize_platform_evidence(
