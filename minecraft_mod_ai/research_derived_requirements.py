@@ -6,6 +6,10 @@ Authored requirements remain immutable.  This module performs a second, research
 requirements-engineering pass and records implementation obligations that are implied by
 repository/API/runtime evidence but were not necessarily written by the user.  Every
 facet receives an explicit disposition so omission cannot silently mean "not needed".
+
+The model-facing contract is deliberately bounded for small local models: the host owns
+the facet matrix, selects a small evidence window for one facet at a time, and accepts one
+native tool decision per facet. Free-form model JSON is not part of this protocol.
 """
 
 import hashlib
@@ -46,6 +50,40 @@ _EVIDENCE_KEYS = frozenset(
         "rationale",
     }
 )
+_MAX_EVIDENCE_PER_FACET = 12
+_MAX_EVIDENCE_VALUE_CHARS = 360
+_FACET_HINTS: dict[str, tuple[str, ...]] = {
+    "state_lifecycle": ("lifecycle", "state", "init", "tick", "update", "cleanup", "dispose"),
+    "interfaces_integration": ("interface", "integration", "api", "method", "hook", "event", "callback"),
+    "persistence_reload": ("persist", "save", "load", "reload", "serialize", "codec", "nbt", "data"),
+    "server_network_authority": ("server", "client", "network", "packet", "sync", "authority", "multiplayer"),
+    "registration_data_resources": ("registry", "register", "resource", "datapack", "tag", "recipe", "asset", "data"),
+    "failure_edge_cases": ("error", "failure", "missing", "invalid", "edge", "exception", "fallback"),
+    "verification_testing": ("test", "verify", "verification", "validation", "assert", "unit", "regression"),
+}
+_FACET_TOOL_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "disposition": {
+            "type": "string",
+            "enum": ["derived", "already_covered", "not_applicable", "unresolved"],
+        },
+        "statement": {"type": "string"},
+        "rationale": {"type": "string"},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "acceptance": {"type": "array", "items": {"type": "string"}},
+        "implementation_obligations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "disposition",
+        "statement",
+        "rationale",
+        "evidence_refs",
+        "acceptance",
+        "implementation_obligations",
+    ],
+    "additionalProperties": False,
+}
 
 
 class ResearchRequirementError(ValueError):
@@ -134,49 +172,113 @@ def _require_text(value: Any, *, field: str) -> str:
     return text
 
 
+def _bounded_text(value: Any, *, limit: int = _MAX_EVIDENCE_VALUE_CHARS) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _facet_evidence_window(
+    evidence: Sequence[Mapping[str, Any]],
+    *,
+    facet: str,
+) -> tuple[Mapping[str, Any], ...]:
+    """Rank and cap evidence before it reaches the model context."""
+
+    hints = _FACET_HINTS[facet]
+    scored: list[tuple[int, str, Mapping[str, Any]]] = []
+    for receipt in evidence:
+        searchable = _canonical(receipt).casefold()
+        score = sum(1 for hint in hints if hint in searchable)
+        scored.append((score, str(receipt.get("evidence_ref") or ""), receipt))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return tuple(item[2] for item in scored[:_MAX_EVIDENCE_PER_FACET])
+
+
+def _render_evidence_window(evidence: Sequence[Mapping[str, Any]]) -> str:
+    lines: list[str] = []
+    for receipt in evidence:
+        lines.append(f"- evidence_ref: {_bounded_text(receipt.get('evidence_ref'), limit=96)}")
+        lines.append(f"  path: {_bounded_text(receipt.get('path'), limit=220)}")
+        summary = receipt.get("summary")
+        if not isinstance(summary, Mapping):
+            continue
+        for key in sorted(summary):
+            raw = summary[key]
+            if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+                raw = "; ".join(_bounded_text(item, limit=120) for item in raw[:4])
+            lines.append(f"  {key}: {_bounded_text(raw)}")
+    return "\n".join(lines)
+
+
+def _requirement_prompt(requirement: Mapping[str, Any]) -> str:
+    fields: list[str] = []
+    for key in ("requirement_id", "title", "summary", "description", "statement"):
+        if requirement.get(key) is not None:
+            fields.append(f"{key}: {_bounded_text(requirement.get(key), limit=700)}")
+    return "\n".join(fields)[:1600]
+
+
 def _model_facets(
     router: Any,
     *,
     requirement: Mapping[str, Any],
     evidence: Sequence[Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
-    system = (
-        "You are the research-to-requirements authority for a Minecraft mod production planner. "
-        "The authored requirement is immutable. Determine implementation requirements that are "
-        "logically required by the supplied repository/API/runtime evidence. Do NOT add generic "
-        "features merely because mods often have them. For each required facet return exactly one "
-        "disposition: derived, already_covered, not_applicable, or unresolved. A derived item must "
-        "cite one or more supplied evidence_ref values and include an observable acceptance check "
-        "plus concrete implementation obligations. not_applicable and already_covered require a "
-        "specific rationale. Use unresolved when the evidence is insufficient; never guess.\n\n"
-        "Return JSON only: {\"facets\":[{\"facet\":...,\"disposition\":...,"
-        "\"statement\":...,\"rationale\":...,\"evidence_refs\":[...],"
-        "\"acceptance\":[...],\"implementation_obligations\":[...]}]}."
-    )
-    payload = {
-        "parent_requirement": dict(requirement),
-        "required_facets": list(FACETS),
-        "evidence_catalog": list(evidence),
-    }
-    try:
-        raw = router.generate_text(
-            "planner",
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": _canonical(payload)},
-            ],
-            response_format="json",
-            enable_tools=False,
+    """Resolve host-owned facets one at a time with bounded native tool decisions."""
+
+    parent = _require_text(requirement.get("requirement_id"), field="parent_requirement_ref")
+    requirement_text = _requirement_prompt(requirement)
+    decisions: list[Mapping[str, Any]] = []
+    for facet in FACETS:
+        selected = _facet_evidence_window(evidence, facet=facet)
+        system = (
+            "You are the research-to-requirements authority for a Minecraft mod production planner. "
+            "The authored requirement and facet name are host-owned and immutable. Evaluate only "
+            f"the fixed facet '{facet}'. Do not rename, replace, add, or omit the facet. Choose one "
+            "disposition: derived, already_covered, not_applicable, or unresolved. A derived decision "
+            "must cite supplied evidence_ref values and include an observable acceptance check plus "
+            "concrete implementation obligations. Use unresolved whenever the bounded evidence is "
+            "insufficient. Never invent platform, loader, API, version, lifecycle, or repository facts."
         )
-        parsed = json.loads(raw)
-    except Exception as exc:  # fail closed: downstream small agents must not inherit missing design work
-        raise ResearchRequirementError(
-            f"research-derived requirement analysis failed for {requirement.get('requirement_id')!r}"
-        ) from exc
-    facets = parsed.get("facets") if isinstance(parsed, Mapping) else None
-    if not isinstance(facets, list):
-        raise ResearchRequirementError("research-derived requirement response has no facets list")
-    return [item for item in facets if isinstance(item, Mapping)]
+        user = (
+            f"Parent requirement: {parent}\n{requirement_text}\n\n"
+            f"Fixed facet: {facet}\n"
+            "Bounded evidence window; cite only refs shown below:\n"
+            f"{_render_evidence_window(selected) or '- no evidence selected'}"
+        )
+        try:
+            result = router.generate_tool_decision(
+                "planner",
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                tool_name="record_research_facet_decision",
+                description="Record one decision for the single host-fixed research facet.",
+                parameters=_FACET_TOOL_PARAMETERS,
+            )
+        except Exception as exc:  # fail closed: downstream small agents must not inherit missing design work
+            raise ResearchRequirementError(
+                f"research-derived facet decision failed for {parent!r} facet {facet!r}"
+            ) from exc
+        if not isinstance(result, Mapping):
+            raise ResearchRequirementError(
+                f"research-derived facet decision for {parent!r} facet {facet!r} is not an object"
+            )
+        decisions.append(
+            {
+                "facet": facet,
+                "disposition": result.get("disposition"),
+                "statement": result.get("statement"),
+                "rationale": result.get("rationale"),
+                "evidence_refs": result.get("evidence_refs"),
+                "acceptance": result.get("acceptance"),
+                "implementation_obligations": result.get("implementation_obligations"),
+            }
+        )
+    return decisions
 
 
 def derive_research_requirements(
