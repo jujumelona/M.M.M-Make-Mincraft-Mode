@@ -17,6 +17,7 @@ from typing import Any
 from .spec import PlatformLock, SpecValidationError, platform_receipt_sha256
 
 _INSTALLED = False
+_NATIVE_NAME_MIN_VERSION = (26, 1)
 
 
 def _receipt_value(value: Any, name: str, default: Any = "") -> Any:
@@ -36,6 +37,11 @@ def _version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in parts)
 
 
+def _uses_native_names(value: Any) -> bool:
+    version = _version_tuple(str(_receipt_value(value, "minecraft_version", "")))
+    return len(version) >= 2 and version[:2] >= _NATIVE_NAME_MIN_VERSION
+
+
 def _validate_base_coordinate_consistency(lock: PlatformLock) -> None:
     """Reject mixed target tuples even for older narrow persisted locks."""
 
@@ -47,6 +53,10 @@ def _validate_base_coordinate_consistency(lock: PlatformLock) -> None:
             raise SpecValidationError(
                 f"Minecraft {minecraft} requires a Java 21+ execution target; got Java {java}."
             )
+    if _uses_native_names(lock) and java.isdigit() and int(java) < 25:
+        raise SpecValidationError(
+            f"Minecraft {minecraft} native-name target requires Java 25+; got Java {java}."
+        )
 
     yarn = str(lock.yarn_mappings)
     if yarn.casefold() not in {"mojang", "official", "official_mojang"}:
@@ -68,8 +78,6 @@ def _full_receipt_present(value: Any) -> bool:
         return value.has_full_execution_receipt()
     required_nonempty = (
         "adapter_id",
-        "mappings_kind",
-        "mappings_version",
         "gradle_sha256",
         "gradle_distribution_url",
         "data_pack_version",
@@ -82,6 +90,17 @@ def _full_receipt_present(value: Any) -> bool:
     if not all(
         _receipt_value(value, name, None) not in (None, "", 0)
         for name in required_nonempty
+    ):
+        return False
+    if _uses_native_names(value):
+        if any(
+            str(_receipt_value(value, name, "") or "").strip()
+            for name in ("yarn_mappings", "mappings_kind", "mappings_version")
+        ):
+            return False
+    elif not all(
+        _receipt_value(value, name, None) not in (None, "", 0)
+        for name in ("yarn_mappings", "mappings_kind", "mappings_version")
     ):
         return False
     return _receipt_value(value, "deterministic_module_kinds", None) is not None
@@ -211,8 +230,6 @@ def install() -> None:
     original_adapter_from_project = platform_catalog.adapter_from_project
 
     def adapter_for_lock_values(value):
-        # This is an execution boundary. Missing receipt fields are never rediscovered
-        # from mutable provider state after approval.
         if hasattr(value, "validate"):
             value.validate()
         return _adapter_from_receipt(value)
@@ -226,8 +243,6 @@ def install() -> None:
                     "Generated platform lock is incomplete; re-plan instead of live re-resolution."
                 )
             return _adapter_from_receipt(raw)
-        # A foreign/existing project without an MMM lock may still be inspected before
-        # approval. Once MMM writes a lock, that lock is authoritative and fail-closed.
         return original_adapter_from_project(project_root)
 
     def write_project_platform_lock(
@@ -285,13 +300,10 @@ def install() -> None:
     platform_catalog.adapter_for_lock_values = adapter_for_lock_values
     platform_catalog.adapter_from_project = adapter_from_project
 
-    # Modules may have imported these functions before late reconciliation.
     generator.adapter_for_lock_values = adapter_for_lock_values
     generator.FabricProjectGenerator._write_contract = write_contract
     runner.adapter_from_project = adapter_from_project
 
-    # Bootstrap-installed contracts imported these callables by value. Rebind their
-    # module globals so every approved execution/validation path uses the frozen receipt.
     platform_generation_contract.adapter_for_lock_values = adapter_for_lock_values
     platform_runtime_contract.adapter_for_lock_values = adapter_for_lock_values
     platform_runtime_contract.adapter_from_project = adapter_from_project
