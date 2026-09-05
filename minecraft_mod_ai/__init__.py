@@ -13,6 +13,9 @@ from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
+# Runtime finalization still imports compatibility installers. Reconcile the exact
+# statically captured bounded owners before any public package API is exposed.
+install_semantic_batching_contract()
 
 from .api import (
     ChatReply,
