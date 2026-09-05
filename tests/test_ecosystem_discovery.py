@@ -27,12 +27,12 @@ def test_modrinth_search_uses_exact_facets_and_bound_offset_pagination() -> None
         offset = int(request.url.params['offset'])
         return httpx.Response(200, json={'total_hits': 5, 'hits': [{'project_id': f'project-{offset}', 'slug': f'project-{offset}', 'project_type': 'mod', 'title': f'Project {offset}', 'description': 'A Fabric mod', 'license': 'MIT', 'versions': ['1.20.1'], 'categories': ['fabric'], 'icon_url': 'https://cdn.modrinth.com/data/icon.png'}]})
     client = _client(handler)
-    first = client.search('modrinth', 'ship navigation', limit=2)
+    first = client.search('modrinth', 'ship navigation', limit=2, minecraft_version='1.20.1', loader='fabric')
     assert first['returned'] == 1
     assert first['provider_total_estimate'] == 5
     assert first['next_cursor'].startswith('offset:2:')
     assert first['download_performed'] is False
-    second = client.search('modrinth', 'ship navigation', limit=2, cursor=first['next_cursor'])
+    second = client.search('modrinth', 'ship navigation', limit=2, cursor=first['next_cursor'], minecraft_version='1.20.1', loader='fabric')
     assert len(requests) == 2
     assert requests[1].url.params['offset'] == '2'
     assert second['next_cursor'].startswith('offset:4:')
@@ -66,7 +66,7 @@ def test_modrinth_project_inspection_preserves_exact_hashes_dependencies_and_lic
         assert json.loads(request.url.params['game_versions']) == ['1.20.1']
         assert request.url.params['include_changelog'] == 'false'
         return httpx.Response(200, json=[{'id': 'version-1', 'version_number': '4.2.0+1.20.1', 'version_type': 'release', 'status': 'listed', 'date_published': '2026-07-01T00:00:00Z', 'game_versions': ['1.20.1'], 'loaders': ['fabric'], 'dependencies': [{'project_id': 'fabric-api', 'version_id': None, 'dependency_type': 'required'}, {'project_id': 'incompatible-mod', 'version_id': 'bad-version', 'dependency_type': 'incompatible'}], 'files': [{'filename': 'exact-project.jar', 'url': 'https://cdn.modrinth.com/data/abc/versions/v1/exact.jar', 'size': 123456, 'primary': True, 'hashes': {'sha1': sha1, 'sha512': sha512}}]}])
-    result = _client(handler).inspect_modrinth_project('exact-project')
+    result = _client(handler).inspect_modrinth_project('exact-project', minecraft_version='1.20.1', loader='fabric')
     assert len(requests) == 2
     assert result['license_id'] == 'Apache-2.0'
     assert result['license_policy'].startswith('permissive_candidate')
@@ -84,7 +84,7 @@ def test_modrinth_inspection_does_not_accept_off_target_or_ambiguous_files() -> 
         if request.url.path == '/v2/project/not-exact':
             return httpx.Response(200, json={'id': 'not-exact', 'slug': 'not-exact', 'title': 'Not Exact', 'license': {'id': 'MIT', 'url': ''}})
         return httpx.Response(200, json=[{'id': 'off-target-version', 'version_number': '1.0.0', 'version_type': 'release', 'status': 'listed', 'game_versions': ['1.20.4'], 'loaders': ['fabric'], 'dependencies': [], 'files': [{'filename': 'one.jar', 'url': 'https://cdn.modrinth.com/data/one.jar', 'size': 1, 'primary': True, 'hashes': {'sha1': '1' * 40, 'sha512': 'a' * 128}}, {'filename': 'two.jar', 'url': 'https://cdn.modrinth.com/data/two.jar', 'size': 1, 'primary': True, 'hashes': {'sha1': '2' * 40, 'sha512': 'b' * 128}}]}])
-    result = _client(handler).inspect_modrinth_project('not-exact')
+    result = _client(handler).inspect_modrinth_project('not-exact', minecraft_version='1.20.1', loader='fabric')
     assert result['exact_compatible_version_found'] is False
     assert result['eligible_version_ids'] == []
     version = result['versions'][0]
