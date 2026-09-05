@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -74,13 +72,9 @@ def test_pyproject_has_no_orphaned_training_surface() -> None:
     assert "mmm-training" not in text
 
 
-def test_retired_training_mcp_tools_reject_cleanly() -> None:
-    """Ensure calling retired training MCP tools raises RuntimeError instead of AttributeError."""
+def test_retired_training_mcp_tools_stay_absent() -> None:
+    """Retired custom-training RPCs must not remain as callable compatibility stubs."""
     from minecraft_mod_ai import mcp_server
 
-    with pytest.raises(RuntimeError, match="Custom model training surface has been retired."):
-        mcp_server.record_training_trace({})
-
-    with pytest.raises(RuntimeError, match="Custom model training surface has been retired."):
-        mcp_server.export_training_dataset()
-
+    assert not hasattr(mcp_server, "record_training_trace")
+    assert not hasattr(mcp_server, "export_training_dataset")
