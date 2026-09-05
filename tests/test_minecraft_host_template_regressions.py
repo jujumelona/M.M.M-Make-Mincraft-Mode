@@ -22,6 +22,7 @@ class _SemanticQueueRouter:
 
 
 def _semantic_leaf(
+    source_clause_index: int,
     capability: str,
     anchor: str,
     *,
@@ -32,7 +33,7 @@ def _semantic_leaf(
     return {
         "requirements": [
             {
-                "source_clause_index": 0,
+                "source_clause_index": source_clause_index,
                 "capability_id": capability,
                 "source_anchor": anchor,
                 "semantic_statement": anchor,
@@ -115,10 +116,11 @@ def test_production_semantic_catalog_binds_resource_and_economy_to_spacecraft() 
     )
     router = _SemanticQueueRouter(
         [
-            _semantic_leaf("resource.farming", "Gather farm resources"),
-            _semantic_leaf("economy.currency", "Earn credits"),
-            _semantic_leaf("economy.trade", "Trade with merchants"),
+            _semantic_leaf(0, "resource.farming", "Gather farm resources"),
+            _semantic_leaf(1, "economy.currency", "Earn credits"),
+            _semantic_leaf(2, "economy.trade", "Trade with merchants"),
             _semantic_leaf(
+                3,
                 "spacecraft.component_construction",
                 "Construct spacecraft components",
             ),
@@ -159,6 +161,7 @@ def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> N
     router = _SemanticQueueRouter(
         [
             _semantic_leaf(
+                0,
                 "space.travel",
                 "Travel to another planet",
                 given="a valid spacecraft and destination exist",
