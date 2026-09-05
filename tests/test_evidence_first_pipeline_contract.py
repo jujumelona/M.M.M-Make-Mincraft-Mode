@@ -76,36 +76,42 @@ def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> No
             },
         ],
     }
-    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
-    monkeypatch.setattr(
-        contract,
-        "build_evidence_first_handoff",
-        lambda _plan: {
-            "source_plan_sha256": "plan-sha",
-            "handoff_sha256": "handoff-sha",
-            "work_graph": {
-                "task_refs": ["task_a", "task_b"],
-                "edges": [
-                    {"from_task_ref": "task_a", "to_task_ref": "task_b"}
-                ],
-            },
-            "production_modules": [
-                {
-                    "production_module_id": "pm-a",
-                    "task_ref": "task_a",
-                    "module_id": "common",
-                    "source_set": "main",
-                }
-            ],
-            "asset_requests": [
-                {
-                    "asset_request_id": "asset-b",
-                    "task_ref": "task_b",
-                    "locator": "assets/example/model.json",
-                }
+    handoff = {
+        "source_plan_sha256": "plan-sha",
+        "handoff_sha256": "handoff-sha",
+        "work_graph": {
+            "task_refs": ["task_a", "task_b"],
+            "edges": [
+                {"from_task_ref": "task_a", "to_task_ref": "task_b"}
             ],
         },
+        "production_modules": [
+            {
+                "production_module_id": "pm-a",
+                "task_ref": "task_a",
+                "module_id": "common",
+                "source_set": "main",
+            }
+        ],
+        "asset_requests": [
+            {
+                "asset_request_id": "asset-b",
+                "task_ref": "task_b",
+                "locator": "assets/example/model.json",
+            }
+        ],
+    }
+    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
+    monkeypatch.setattr(contract, "build_evidence_first_handoff", lambda _plan: handoff)
+    # Typed execution lowering has its own contract tests. This fixture intentionally
+    # isolates the canonical WorkGraph-to-batch ownership behavior.
+    monkeypatch.setattr(contract, "execution_plan", lambda value: value)
+    monkeypatch.setattr(
+        contract,
+        "execution_handoff",
+        lambda _plan, canonical, _lowered: canonical,
     )
+    monkeypatch.setattr(contract, "validate_plan_collect_all", lambda _plan, _handoff: None)
 
     batches = contract._batches_from_handoff(plan, batch_type=_Batch)
 
