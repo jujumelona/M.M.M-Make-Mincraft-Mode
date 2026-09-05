@@ -21,20 +21,11 @@ from .platform_live_discovery import (
     discover_fabric_target,
     latest_stable_versions,
 )
-
-_NATIVE_NAME_MIN_VERSION = (26, 1)
-
-
-def _version_key(value: str) -> tuple[int, int] | None:
-    match = re.match(r"^(\d+)\.(\d+)(?:\D|$)", str(value or "").strip())
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def _uses_native_names(value: str) -> bool:
-    version = _version_key(value)
-    return version is not None and version >= _NATIVE_NAME_MIN_VERSION
+from .target_profile_semantics import (
+    mappings_applicable as target_mappings_applicable,
+    minimum_java_major,
+    uses_native_names,
+)
 
 
 @dataclass(frozen=True)
@@ -63,7 +54,7 @@ class PlatformAdapter:
 
     @property
     def mappings_applicable(self) -> bool:
-        return not _uses_native_names(self.minecraft_version)
+        return target_mappings_applicable(self.minecraft_version)
 
     def validate(self) -> None:
         required = {
@@ -109,10 +100,12 @@ class PlatformAdapter:
             raise ValueError(
                 "Minecraft 26.1+ native/unobfuscated targets must not expose legacy mapping coordinates."
             )
-        if _uses_native_names(self.minecraft_version):
-            if not str(self.java_version).isdigit() or int(self.java_version) < 25:
+        minimum_java = minimum_java_major(self.minecraft_version)
+        if minimum_java is not None:
+            if not str(self.java_version).isdigit() or int(self.java_version) < minimum_java:
                 raise ValueError(
-                    f"Minecraft {self.minecraft_version} native-name target requires Java 25+."
+                    f"Minecraft {self.minecraft_version} requires Java {minimum_java}+; "
+                    f"got {self.java_version}."
                 )
         if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256):
             raise ValueError("Executable platform provider returned an invalid Gradle SHA-256.")
@@ -215,14 +208,6 @@ def _candidate_versions(
     *,
     limit: int,
 ) -> tuple[str, ...]:
-    """Read one bounded newest-first candidate page from a provider.
-
-    The old implementation repeatedly doubled the page size until every historical
-    Minecraft release had been enumerated. That converted ordinary target selection
-    into an unbounded compatibility crawl. Providers are now asked once and the caller's
-    candidate bound is authoritative even if a provider accidentally returns more rows.
-    """
-
     bound = max(1, int(limit))
     raw = provider.discover_versions(bound)
     normalized = tuple(
@@ -239,15 +224,13 @@ def _resolve_candidate(
     provider: PlatformProvider,
     version: str,
 ) -> tuple[PlatformAdapter | None, str | None]:
-    """Resolve a candidate without emitting a traceback for normal incompatibility."""
-
     try:
         adapter = provider.resolve(version)
         adapter.validate()
         return adapter, None
     except (PlatformDiscoveryError, ValueError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
-    except Exception as exc:  # noqa: BLE001 - a bad candidate must not poison discovery
+    except Exception as exc:  # noqa: BLE001
         return None, f"{type(exc).__name__}: {exc}"
 
 
@@ -270,13 +253,6 @@ def discover_target_keys(
     limit_per_loader: int = 12,
     diagnostics: list[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
-    """Return only complete executable platform targets.
-
-    Exact version requests bypass catalogue enumeration and resolve that target directly.
-    Automatic selection examines at most ``limit_per_loader`` newest candidates per
-    provider and rejects incomplete candidates before they become optimizer inputs.
-    """
-
     loaders = (provider_for_loader(loader).loader,) if loader else executable_loaders()
     requested_version = str(minecraft_version or "").strip()
     bound = max(1, int(limit_per_loader))
@@ -284,7 +260,6 @@ def discover_target_keys(
 
     for loader_id in loaders:
         provider = provider_for_loader(loader_id)
-
         if requested_version:
             adapter, error = _resolve_candidate(provider, requested_version)
             if adapter is not None:
@@ -298,14 +273,12 @@ def discover_target_keys(
 
         try:
             versions = _candidate_versions(provider, limit=bound)
-        except Exception as exc:  # noqa: BLE001 - one provider must not hide other providers
+        except Exception as exc:  # noqa: BLE001
             _record_diagnostic(
-                f"version discovery failed loader={loader_id}: "
-                f"{type(exc).__name__}: {exc}",
+                f"version discovery failed loader={loader_id}: {type(exc).__name__}: {exc}",
                 diagnostics,
             )
             continue
-
         if not versions:
             _record_diagnostic(
                 f"provider returned no candidate Minecraft versions loader={loader_id}",
@@ -324,20 +297,15 @@ def discover_target_keys(
                 continue
             executable_count += 1
             result.append((loader_id, version))
-
         if executable_count == 0:
             _record_diagnostic(
-                f"provider exposed no executable target in newest {len(versions)} candidates "
-                f"loader={loader_id}",
+                f"provider exposed no executable target in newest {len(versions)} candidates loader={loader_id}",
                 diagnostics,
             )
-
     return tuple(result)
 
 
 def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    """Return bounded, provider-validated executable Minecraft versions."""
-
     keys = discover_target_keys(loader=loader, limit_per_loader=32)
     values: list[str] = []
     seen: set[str] = set()
@@ -521,7 +489,7 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
         raise ValueError(
             "Official target discovery returned an invalid resource-pack version."
         ) from exc
-    native_names = _uses_native_names(target.minecraft_version)
+    native_names = uses_native_names(target.minecraft_version)
     mappings_kind = "" if native_names else target.mappings_kind
     mappings_version = "" if native_names else target.mappings_version
     adapter = PlatformAdapter(
