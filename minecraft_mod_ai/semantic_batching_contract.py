@@ -9,11 +9,9 @@ Only semantic leaf extraction is batched. Stable source records are created by t
 before any model call, all approved leaves are merged before requirement IDs are built,
 and the existing global catalog/dependency passes remain authoritative.
 
-Production owners call ``build_bounded_requirement_catalog`` directly. Installation
-captures those static owners once, and a later reconciliation call restores only those
-same owner functions if a legacy installer replaced the module attributes during runtime
-finalization. This is intentionally narrow: no model routing, validator, or planner body
-is replaced here.
+This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
+directly; installation validates that static call graph and never rewires another
+module's validator, request builder, or runtime routing implementation.
 """
 
 from __future__ import annotations
@@ -25,8 +23,6 @@ from typing import Any
 from . import semantic_requirement_authority as _semantic
 
 _INSTALLED = False
-_STATIC_REQUEST_OWNER: Any | None = None
-_STATIC_PLANNING_OWNER: Any | None = None
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
 _MEASURED_STATUS = "MEASURED"
 _FALLBACK_BATCH_SIZE = 1
@@ -217,6 +213,8 @@ def build_bounded_requirement_catalog(
     catalog["catalog_sha256"] = _semantic._evidence._hash_without(
         catalog, "catalog_sha256"
     )
+    # Strong approved-graph validation stays on the direct construction path. Callers
+    # that reuse this catalog also validate the exact catalog/prompt pair before handoff.
     _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
     return catalog
 
@@ -235,30 +233,15 @@ def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
 
 
 def install_semantic_batching_contract() -> None:
-    """Capture the static bounded owners and restore those exact owners if displaced."""
+    """Validate static bounded owners exactly once without mutating their validators."""
 
-    global _INSTALLED, _STATIC_REQUEST_OWNER, _STATIC_PLANNING_OWNER
+    global _INSTALLED
+    if _INSTALLED:
+        return
+
     from . import evidence_request_guard as guard
     from . import planning_authority as planning
 
-    if not _INSTALLED:
-        _assert_static_bounded_owner(
-            guard.build_authoritative_request_catalog,
-            owner="evidence_request_guard.build_authoritative_request_catalog",
-        )
-        _assert_static_bounded_owner(
-            planning._compile_semantic_catalog,
-            owner="planning_authority._compile_semantic_catalog",
-        )
-        _STATIC_REQUEST_OWNER = guard.build_authoritative_request_catalog
-        _STATIC_PLANNING_OWNER = planning._compile_semantic_catalog
-        _INSTALLED = True
-        return
-
-    if _STATIC_REQUEST_OWNER is None or _STATIC_PLANNING_OWNER is None:
-        raise RuntimeError("bounded semantic owner capture is incomplete")
-    guard.build_authoritative_request_catalog = _STATIC_REQUEST_OWNER
-    planning._compile_semantic_catalog = _STATIC_PLANNING_OWNER
     _assert_static_bounded_owner(
         guard.build_authoritative_request_catalog,
         owner="evidence_request_guard.build_authoritative_request_catalog",
@@ -267,6 +250,7 @@ def install_semantic_batching_contract() -> None:
         planning._compile_semantic_catalog,
         owner="planning_authority._compile_semantic_catalog",
     )
+    _INSTALLED = True
 
 
 __all__ = [
