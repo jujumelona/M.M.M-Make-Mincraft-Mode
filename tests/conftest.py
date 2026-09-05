@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-_TEST_MINECRAFT_VERSION = "mmm-test-target"
+_TEST_MINECRAFT_VERSION = "1.21.11+mmm-test"
 _TEST_LOADER = "fabric"
 
 
@@ -27,7 +27,10 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
     normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
     mappings_version = f"{normalized}+test-mappings"
     return PlatformAdapter(
-        adapter_id="fabric_unit_test_" + "_".join(part for part in normalized.replace("-", "_").split(".")),
+        adapter_id="fabric_unit_test_" + "_".join(
+            part
+            for part in normalized.replace("-", "_").replace("+", "_").split(".")
+        ),
         edition="java",
         loader=_TEST_LOADER,
         minecraft_version=normalized,
@@ -43,7 +46,7 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
         data_pack_version="1",
         resource_pack_version="1",
         resource_pack_format=1,
-        release_metadata_url="https://www.minecraft.net/test-fixture/mmm-test-target",
+        release_metadata_url="https://www.minecraft.net/test-fixture/1.21.11+mmm-test",
         source_api_family="fabric_reviewed_test_template",
         deterministic_module_kinds=frozenset((
             *MODULE_KINDS,
@@ -101,7 +104,7 @@ def _complete_partial_test_target(target):
     completed.setdefault("resource_pack_format", 1)
     completed.setdefault(
         "release_metadata_url",
-        "https://www.minecraft.net/test-fixture/mmm-test-target",
+        "https://www.minecraft.net/test-fixture/1.21.11+mmm-test",
     )
     return completed
 
@@ -135,8 +138,8 @@ def _isolate_test_runtime_state(
 
     # Source/catalog tests must not acquire a historical Minecraft default merely
     # because they need a generated project directory. Install one synthetic target
-    # that is never advertised by discovery and inject it only when the caller left
-    # the platform intentionally unresolved.
+    # for intentionally unresolved test scaffolds without replacing real-release
+    # provider semantics elsewhere in the suite.
     from minecraft_mod_ai import platform_catalog
     from minecraft_mod_ai.generator import FabricProjectGenerator
     from minecraft_mod_ai.platform_catalog import PlatformProvider
@@ -150,7 +153,7 @@ def _isolate_test_runtime_state(
             raise ValueError("Test platform target must be explicit.")
         if normalized == _TEST_MINECRAFT_VERSION:
             return synthetic_adapter
-        return _synthetic_test_adapter(normalized)
+        return production_provider.resolve(normalized)
 
     monkeypatch.setitem(
         platform_catalog._PROVIDERS,
