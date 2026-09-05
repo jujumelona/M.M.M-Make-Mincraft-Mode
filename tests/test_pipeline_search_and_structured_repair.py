@@ -40,6 +40,7 @@ def test_retired_pipeline_hardening_monkeypatch_modules_are_absent() -> None:
 def test_machine_pack_metadata_preserves_three_value_contract(monkeypatch) -> None:
     from minecraft_mod_ai import platform_live_discovery as live
 
+    live._official_pack_versions.cache_clear()
     monkeypatch.setattr(
         live,
         "_mojang_pack_versions",
@@ -55,6 +56,7 @@ def test_machine_pack_metadata_preserves_three_value_contract(monkeypatch) -> No
     assert data_pack == "61"
     assert resource_pack == "46"
     assert source_url.endswith("/1.21.1.json")
+    live._official_pack_versions.cache_clear()
 
 
 def test_lossless_page_research_has_single_canonical_owner() -> None:
