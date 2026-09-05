@@ -59,10 +59,11 @@ image = [
   "transformers>=4.56.0",
 ]
 # These named capability groups are requested by the Colab runtime setup but add no
-# separate Python packages: speech is remote/provider configured and production audio
-# is generated through the existing runtime/tool stack.
+# separate Python packages. They keep setup capability declarations explicit without
+# inventing dependencies that are not part of the runtime contract.
 speech = []
 production-audio = []
+training = []
 dev = [
   "nbformat>=5.10,<6",
   "numpy>=1.26,<3",
