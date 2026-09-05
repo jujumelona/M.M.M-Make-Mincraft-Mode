@@ -50,6 +50,8 @@ _PLATFORM_EXTENDED_FIELDS = (
     "source_api_family",
     "receipt_sha256",
 )
+_PLATFORM_MAPPING_FIELDS = ("mappings_kind", "mappings_version")
+_NATIVE_NAME_MIN_VERSION = (26, 1)
 JAVA_RESERVED_WORDS = frozenset(
     {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
@@ -135,6 +137,11 @@ def _version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in parts)
 
 
+def _uses_native_names(value: str) -> bool:
+    version = _version_tuple(value)
+    return len(version) >= 2 and version[:2] >= _NATIVE_NAME_MIN_VERSION
+
+
 @dataclass(frozen=True)
 class PlatformLock:
     """Immutable coordinates copied from one already-validated provider receipt.
@@ -182,23 +189,40 @@ class PlatformLock:
         )
 
     def has_full_execution_receipt(self) -> bool:
+        required = tuple(
+            field_name
+            for field_name in _PLATFORM_EXTENDED_FIELDS
+            if field_name not in _PLATFORM_MAPPING_FIELDS
+        )
+        if not all(
+            _platform_receipt_value(self, field_name, None) not in (None, "", 0)
+            for field_name in required
+        ):
+            return False
+        if _uses_native_names(self.minecraft_version):
+            return not any(
+                str(_platform_receipt_value(self, field_name, "") or "").strip()
+                for field_name in (*_PLATFORM_MAPPING_FIELDS, "yarn_mappings")
+            )
         return all(
             _platform_receipt_value(self, field_name, None) not in (None, "", 0)
-            for field_name in _PLATFORM_EXTENDED_FIELDS
-        )
+            for field_name in _PLATFORM_MAPPING_FIELDS
+        ) and bool(self.yarn_mappings.strip())
 
     def validate(self) -> None:
+        native_names = _uses_native_names(self.minecraft_version)
         coordinates = {
             "edition": self.edition,
             "loader": self.loader,
             "minecraft_version": self.minecraft_version,
             "java_version": self.java_version,
-            "yarn_mappings": self.yarn_mappings,
             "fabric_loader": self.fabric_loader,
             "fabric_api": self.fabric_api,
             "fabric_loom": self.fabric_loom,
             "gradle": self.gradle,
         }
+        if not native_names:
+            coordinates["yarn_mappings"] = self.yarn_mappings
         if not any(coordinates.values()):
             raise SpecValidationError(
                 "Platform target is unresolved. Resolve one executable provider receipt "
@@ -228,7 +252,7 @@ class PlatformLock:
             return
         if not self.has_full_execution_receipt():
             raise SpecValidationError(
-                "Execution platform receipt is partial; all immutable provider fields are required."
+                "Execution platform receipt is partial or incompatible with the target naming regime."
             )
         if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256.casefold()):
             raise SpecValidationError("Platform lock gradle_sha256 must be a full SHA-256.")
@@ -252,12 +276,18 @@ class PlatformLock:
             raise SpecValidationError(
                 "Platform lock Gradle distribution URL must use the official HTTPS host."
             )
-        if self.mappings_kind not in {"mojang", "yarn"}:
-            raise SpecValidationError("Platform lock mappings_kind must be mojang or yarn.")
-        if self.mappings_version != self.yarn_mappings:
-            raise SpecValidationError(
-                "Platform lock mappings_version must equal the executable mappings coordinate."
-            )
+        if native_names:
+            if any((self.yarn_mappings, self.mappings_kind, self.mappings_version)):
+                raise SpecValidationError(
+                    "Minecraft 26.1+ native/unobfuscated targets must not carry legacy mapping coordinates."
+                )
+        else:
+            if self.mappings_kind not in {"mojang", "yarn"}:
+                raise SpecValidationError("Platform lock mappings_kind must be mojang or yarn.")
+            if self.mappings_version != self.yarn_mappings:
+                raise SpecValidationError(
+                    "Platform lock mappings_version must equal the executable mappings coordinate."
+                )
         if any(not str(item).strip() for item in self.deterministic_module_kinds):
             raise SpecValidationError(
                 "Platform lock deterministic_module_kinds contains an empty capability."
@@ -294,6 +324,11 @@ class PlatformLock:
         if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5) and int(self.java_version) < 21:
             raise SpecValidationError(
                 f"Minecraft {self.minecraft_version} requires a Java 21+ execution target; "
+                f"got Java {self.java_version}."
+            )
+        if native_names and int(self.java_version) < 25:
+            raise SpecValidationError(
+                f"Minecraft {self.minecraft_version} native-name target requires Java 25+; "
                 f"got Java {self.java_version}."
             )
         if self.mappings_kind == "yarn":
