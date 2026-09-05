@@ -69,7 +69,6 @@ def _tool_request() -> GenerationRequest:
     ("profile", "family"),
     [
         ("Qwen3.5-9B_6GB", "qwen3.5"),
-        ("Qwen3.6-35B_23GB", "qwen3.6"),
         ("Qwen3.8-27B_18GB", "qwen3.8"),
     ],
 )
@@ -194,7 +193,7 @@ def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None
 
 @pytest.mark.parametrize(
     "profile",
-    ("Qwen3.5-9B_6GB", "Qwen3.6-35B_23GB", "Qwen3.8-27B_18GB"),
+    ("Qwen3.5-9B_6GB", "Qwen3.8-27B_18GB"),
 )
 @pytest.mark.parametrize("request_kind", ("plain", "json", "tool"))
 def test_all_local_qwen_families_use_finite_dynamic_completion(
