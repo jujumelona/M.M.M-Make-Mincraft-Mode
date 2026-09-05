@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-"""Make durable work-node success mean exactly what its stage can prove.
+"""Validate durable work-node completion evidence before receipt persistence.
 
 Generation is a phase completion, never semantic verification. Validation/build/package
 nodes may become durable SUCCEEDED only when their receipt contains independently
-checkable evidence tied to the ledger's exact input hash. This contract is installed
-outside the orchestrator so no planner/model metadata can manufacture PASS.
+checkable evidence tied to the ledger's exact input hash. This module is deliberately
+pure: the canonical work-graph receipt owner calls the decorator instead of installing
+another runtime wrapper around ``DurableWorkLedger.succeed``.
 """
 
 from collections.abc import Mapping, Sequence
-from functools import wraps
-from pathlib import Path
 from typing import Any
-
-_INSTALLED = False
 
 
 class VerifierReceiptTruthError(RuntimeError):
@@ -37,7 +34,11 @@ def _commands_passed(build: Mapping[str, Any]) -> bool:
     )
 
 
-def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
+def _validation_evidence(
+    stage: str,
+    node_id: str,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
     status = str(receipt.get("status") or "").strip().upper()
     if status not in {"PASS", "NOT_REQUIRED"}:
         raise VerifierReceiptTruthError(
@@ -49,9 +50,14 @@ def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -
         manifest = str(receipt.get("project_manifest") or "")
         if type(checks) is not int or checks <= 0 or not manifest:
             raise VerifierReceiptTruthError(
-                "VERIFIER_RECEIPT_MISSING: source validation requires positive checks_run and project_manifest."
+                "VERIFIER_RECEIPT_MISSING: source validation requires positive "
+                "checks_run and project_manifest."
             )
-        return {"verifier": "source_validator", "checks_run": checks, "project_manifest": manifest}
+        return {
+            "verifier": "source_validator",
+            "checks_run": checks,
+            "project_manifest": manifest,
+        }
 
     if stage == "validate:jar":
         checks = receipt.get("checks_run")
@@ -60,7 +66,11 @@ def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -
             raise VerifierReceiptTruthError(
                 "VERIFIER_RECEIPT_MISSING: JAR validation requires checks_run and jar_sha256."
             )
-        return {"verifier": "jar_validator", "checks_run": checks, "artifact_sha256": jar_sha}
+        return {
+            "verifier": "jar_validator",
+            "checks_run": checks,
+            "artifact_sha256": jar_sha,
+        }
 
     if stage == "validate:quality":
         receipt_id = str(receipt.get("receipt_id") or "")
@@ -68,7 +78,8 @@ def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -
         dimension_id = str(receipt.get("dimension_id") or "")
         if not receipt_id or not dimension_id or not receipt_sha.startswith("sha256:"):
             raise VerifierReceiptTruthError(
-                "VERIFIER_RECEIPT_MISSING: quality validation requires dimension/receipt identity and hash."
+                "VERIFIER_RECEIPT_MISSING: quality validation requires "
+                "dimension/receipt identity and hash."
             )
         return {
             "verifier": "quality_contract",
@@ -99,11 +110,13 @@ def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -
             or int(playtest.get("assertion_count") or 0) <= 0
         ):
             raise VerifierReceiptTruthError(
-                "VERIFIER_RECEIPT_MISSING: runtime PASS requires an executed assertion-bearing playtest."
+                "VERIFIER_RECEIPT_MISSING: runtime PASS requires an executed "
+                "assertion-bearing playtest."
             )
         if visual.get("status") != "PASS":
             raise VerifierReceiptTruthError(
-                "VERIFIER_RECEIPT_MISSING: runtime PASS requires visual verification when declared complete."
+                "VERIFIER_RECEIPT_MISSING: runtime PASS requires visual verification "
+                "when declared complete."
             )
         return {
             "verifier": "runtime_playtest_visual",
@@ -128,7 +141,8 @@ def _build_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
     artifact = _mapping(build.get("artifact_receipt"))
     if build.get("status") != "PASS" or not _commands_passed(build):
         raise VerifierReceiptTruthError(
-            "VERIFIER_RECEIPT_MISSING: build success requires a passing full Gradle command receipt."
+            "VERIFIER_RECEIPT_MISSING: build success requires a passing full Gradle "
+            "command receipt."
         )
     if final.get("status") != "PASS" or final.get("production_jar") != "PASS":
         raise VerifierReceiptTruthError(
@@ -148,18 +162,34 @@ def _build_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
 
 def _package_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
     if node_id != "package-release":
-        return {"verifier": "package_phase", "status": str(receipt.get("status") or "")}
+        return {
+            "verifier": "package_phase",
+            "status": str(receipt.get("status") or ""),
+        }
     release_zip = str(receipt.get("release_zip") or "")
     if str(receipt.get("status") or "").upper() != "PASS" or not release_zip:
         raise VerifierReceiptTruthError(
-            "VERIFIER_RECEIPT_MISSING: release package success requires an explicit release artifact path."
+            "VERIFIER_RECEIPT_MISSING: release package success requires an explicit "
+            "release artifact path."
         )
     return {"verifier": "release_package", "release_zip": release_zip}
 
 
-def _decorate_receipt(row: Mapping[str, Any], receipt: Mapping[str, Any]) -> dict[str, Any]:
-    stage = str(row.get("stage") or "")
+def _decorate_receipt(
+    row: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(row, Mapping):
+        raise VerifierReceiptTruthError(
+            "VERIFIER_RECEIPT_INVALID: work row must be an object."
+        )
     node_id = str(row.get("node_id") or "")
+    if not isinstance(receipt, Mapping):
+        raise VerifierReceiptTruthError(
+            f"VERIFIER_RECEIPT_INVALID: work node {node_id!r} receipt must be an object."
+        )
+
+    stage = str(row.get("stage") or "")
     input_hash = str(row.get("input_hash") or "")
     if not input_hash:
         raise VerifierReceiptTruthError(
@@ -172,7 +202,8 @@ def _decorate_receipt(row: Mapping[str, Any], receipt: Mapping[str, Any]) -> dic
         existing_map = _mapping(existing)
         if existing_map.get("input_hash") != input_hash or existing_map.get("stage") != stage:
             raise VerifierReceiptTruthError(
-                f"VERIFIER_RECEIPT_STALE: work node {node_id!r} carries mismatched completion evidence."
+                f"VERIFIER_RECEIPT_STALE: work node {node_id!r} carries mismatched "
+                "completion evidence."
             )
         return result
 
@@ -184,9 +215,15 @@ def _decorate_receipt(row: Mapping[str, Any], receipt: Mapping[str, Any]) -> dic
             **_validation_evidence(stage, node_id, result),
         }
     elif stage == "build":
-        evidence = {"completion_scope": "verified_stage", **_build_evidence(node_id, result)}
+        evidence = {
+            "completion_scope": "verified_stage",
+            **_build_evidence(node_id, result),
+        }
     elif stage.startswith("package"):
-        evidence = {"completion_scope": "packaging_stage", **_package_evidence(node_id, result)}
+        evidence = {
+            "completion_scope": "packaging_stage",
+            **_package_evidence(node_id, result),
+        }
     else:
         evidence = {"completion_scope": "phase_only", "verifier": None}
 
@@ -201,37 +238,14 @@ def _decorate_receipt(row: Mapping[str, Any], receipt: Mapping[str, Any]) -> dic
 
 
 def install(work_graph_module: Any) -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    ledger_cls = work_graph_module.DurableWorkLedger
-    current = ledger_cls.succeed
-    if getattr(current, "_mmm_verifier_receipt_truth", False):
-        _INSTALLED = True
-        return
+    """Fail closed unless verifier truth is owned by the canonical receipt wrapper."""
 
-    @wraps(current)
-    def succeed(
-        self: Any,
-        node_id: str,
-        receipt: dict[str, Any],
-        *,
-        output_hash: str = "",
-    ) -> dict[str, Any]:
-        if not isinstance(receipt, Mapping):
-            raise VerifierReceiptTruthError(
-                f"VERIFIER_RECEIPT_INVALID: work node {node_id!r} receipt must be an object."
-            )
-        row = self.task(node_id)
-        decorated = _decorate_receipt(row, receipt)
-        return current(self, node_id, decorated, output_hash=output_hash)
-
-    succeed._mmm_verifier_receipt_truth = True  # type: ignore[attr-defined]
-    ledger_cls.succeed = succeed
-    _INSTALLED = True
+    succeed = work_graph_module.DurableWorkLedger.succeed
+    if not getattr(succeed, "_mmm_verifier_receipt_truth_integrated", False):
+        raise RuntimeError(
+            "verifier receipt truth is not integrated into the canonical durable "
+            "receipt owner"
+        )
 
 
-__all__ = [
-    "VerifierReceiptTruthError",
-    "install",
-]
+__all__ = ["VerifierReceiptTruthError", "_decorate_receipt", "install"]

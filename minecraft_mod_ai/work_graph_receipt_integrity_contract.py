@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Bind durable work state to independently verified receipt identity.
+"""Own durable work receipt verification, integrity, and persistence.
 
 ``output_hash`` may identify a produced artifact, so it must not double as the
 integrity proof for ``receipt_json``. This contract adds a separate receipt hash,
 migrates only legacy rows whose old output hash actually proves the receipt body,
-and invalidates unverifiable successful state at resume/read boundaries.
+invalidates unverifiable successful state at resume/read boundaries, and applies
+stage-specific verifier truth before a success receipt can be persisted.
 """
 
 import hashlib
@@ -16,6 +17,8 @@ import time
 from functools import wraps
 from pathlib import Path
 from typing import Any
+
+from .verifier_receipt_truth_contract import _decorate_receipt
 
 _INSTALLED = False
 _INTEGRITY_ERROR = "receipt integrity verification failed"
@@ -74,7 +77,11 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def _audit_legacy_receipts(ledger: Any, module: Any, connection: sqlite3.Connection) -> None:
+def _audit_legacy_receipts(
+    ledger: Any,
+    module: Any,
+    connection: sqlite3.Connection,
+) -> None:
     succeeded = module.WorkState.SUCCEEDED.value
     task_invalid: list[str] = []
     for node_id, output_hash, receipt_json, receipt_hash in connection.execute(
@@ -170,7 +177,9 @@ def install(work_graph_module: Any) -> None:
         *,
         output_hash: str = "",
     ) -> dict[str, Any]:
-        receipt_json = canonical_json(receipt)
+        task_row = self.task(node_id)
+        decorated_receipt = _decorate_receipt(task_row, receipt)
+        receipt_json = canonical_json(decorated_receipt)
         receipt_hash = _receipt_hash(receipt_json)
         artifact_hash = output_hash or receipt_hash
         with self._connect() as connection:
@@ -280,7 +289,10 @@ def install(work_graph_module: Any) -> None:
             return None
         try:
             return _verified_receipt(
-                row[2], row[3], label=f"Work node {node_id}", error_type=error_type
+                row[2],
+                row[3],
+                label=f"Work node {node_id}",
+                error_type=error_type,
             )
         except error_type:
             self.invalidate(node_id)
@@ -446,6 +458,8 @@ def install(work_graph_module: Any) -> None:
                     )
         temporary.replace(target)
         return target
+
+    succeed._mmm_verifier_receipt_truth_integrated = True  # type: ignore[attr-defined]
 
     ledger_cls._initialize = initialize
     ledger_cls.succeed = succeed
