@@ -3,8 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from minecraft_mod_ai import authored_scope_research_contract as retrieval
 from minecraft_mod_ai import evidence_first_planning as planning
-from minecraft_mod_ai.minecraft_template_catalog import profile_for_capability
+from minecraft_mod_ai import planning_authority as authority
+from minecraft_mod_ai.minecraft_template_catalog import (
+    profile_for_capability,
+    selected_predecessor_capabilities,
+)
 from minecraft_mod_ai.minecraft_template_steps import steps_for_profile
 from minecraft_mod_ai.semantic_batching_contract import build_bounded_requirement_catalog
 
@@ -153,6 +158,70 @@ def test_production_semantic_catalog_binds_resource_and_economy_to_spacecraft() 
     )
     assert construction["dependency_provenance"]["owner"] == (
         "host_minecraft_feature_model"
+    )
+
+
+def test_component_crafting_alias_feeds_upgrade_and_launch_progression() -> None:
+    selected = (
+        "economy.trade",
+        "spaceship.component_crafting",
+        "spacecraft.performance_upgrade",
+        "spacecraft.expansion",
+        "space.launch",
+    )
+
+    assert selected_predecessor_capabilities(
+        "spacecraft.performance_upgrade",
+        selected,
+    ) == ("spaceship.component_crafting", "economy.trade")
+    assert selected_predecessor_capabilities(
+        "spacecraft.expansion",
+        selected,
+    ) == ("spaceship.component_crafting", "economy.trade")
+    assert selected_predecessor_capabilities("space.launch", selected) == (
+        "spaceship.component_crafting",
+    )
+
+
+def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
+    prompt = "Launch the ship into space.\nTravel to the selected destination."
+    router = _SemanticQueueRouter(
+        [
+            _semantic_leaf(
+                0,
+                "space.launch",
+                "Launch the ship into space",
+                given="a spacecraft is ready",
+                when="the player initiates launch",
+                then="the player travels into space",
+            ),
+            _semantic_leaf(
+                1,
+                "space.travel",
+                "Travel to the selected destination",
+                given="space travel is available",
+                when="the player selects a destination",
+                then="the player arrives at the destination",
+            ),
+        ]
+    )
+
+    catalog = build_bounded_requirement_catalog(prompt, router=router)
+    requirements = [
+        item for item in catalog["requirements"] if isinstance(item, Mapping)
+    ]
+    by_capability = {str(item["capability"]): item for item in requirements}
+    launch_id = str(by_capability["space.launch"]["requirement_id"])
+    travel_id = str(by_capability["space.travel"]["requirement_id"])
+
+    inferred, _provenance = authority._host_causal_dependencies(requirements)
+    assert travel_id not in inferred[launch_id]
+    assert launch_id in inferred[travel_id]
+
+    known = set(inferred)
+    retrieval._validate_dependency_dag(
+        {requirement_id: tuple(dependencies) for requirement_id, dependencies in inferred.items()},
+        known,
     )
 
 
