@@ -28,6 +28,7 @@ from typing import Any
 from .evidence_first_execution import impacted_task_ids_for_paths, refresh_project_index
 from .evidence_first_handoff import build_evidence_first_handoff
 from .evidence_first_planning import validate_evidence_first_plan
+from .plan_collect_all_linker import validate_plan_collect_all
 from .project_index import ProjectIndex
 
 _INSTALLED = False
@@ -56,6 +57,7 @@ def _batches_from_handoff(
 
     validate_evidence_first_plan(plan)
     handoff = build_evidence_first_handoff(plan)
+    validate_plan_collect_all(plan, handoff)
     plan_sha256 = str(plan.get("plan_sha256") or "")
     if str(handoff.get("source_plan_sha256") or "") != plan_sha256:
         raise ValueError("Evidence handoff is not bound to the exact source plan hash.")
@@ -140,9 +142,6 @@ def _batches_from_handoff(
                 exports=(task_ref,),
                 task_contract=task,
                 evidence_plan_sha256=plan_sha256,
-                # Task acceptance is an internal integrity predicate. Public/release
-                # acceptance is projected only from request_catalog requirements and
-                # acceptance_release_bindings by CompleteGameDesignPlanner.
                 acceptance_tests=(),
             )
         )
