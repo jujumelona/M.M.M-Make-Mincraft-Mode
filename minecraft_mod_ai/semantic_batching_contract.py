@@ -1,13 +1,16 @@
 """Bound semantic extraction without weakening host-owned requirement authority.
 
 The requirements ledger forbids treating an arbitrarily large authored request as one
-structured model call.  This module does not invent an "optimal" batch size.  It uses a
+structured model call. This module does not invent an "optimal" batch size. It uses a
 strict measured receipt when one is attached to the router; otherwise it falls back to
 one host-owned clause per model turn and records that the value is unmeasured.
 
-Only semantic leaf extraction is batched.  Stable source records are created by the host
+Only semantic leaf extraction is batched. Stable source records are created by the host
 before any model call, all approved leaves are merged before requirement IDs are built,
 and the existing global catalog/dependency passes remain authoritative.
+
+This module is a pure helper. Production owners call ``build_bounded_requirement_catalog``
+directly; installation never rewires another module at runtime.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from . import semantic_requirement_authority as _semantic
 
 _INSTALLED = False
 _ORIGINAL_SEMANTIC_BUILD = _semantic.build_approved_requirement_catalog
-_ORIGINAL_PLANNING_COMPILE: Any | None = None
 
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
 _MEASURED_STATUS = "MEASURED"
@@ -144,7 +146,7 @@ def build_bounded_requirement_catalog(
     )
 
     # _build_catalog resolves prerequisite capability IDs only after every batch has
-    # been merged.  Cross-batch prerequisites therefore cannot be lost at a batch edge.
+    # been merged. Cross-batch prerequisites therefore cannot be lost at a batch edge.
     catalog = _semantic._build_catalog(prompt, nodes, clauses)
     audit = dict(catalog.get("semantic_audit") or {})
     audit.update(
@@ -185,66 +187,10 @@ def build_bounded_requirement_catalog(
 build_bounded_requirement_catalog.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
 
 
-def _compile_with_bounded_audit(prompt: str, router: Any | None) -> dict[str, Any]:
-    if _ORIGINAL_PLANNING_COMPILE is None:
-        raise RuntimeError("bounded semantic batching installed without planning compiler")
-
-    catalog = dict(_ORIGINAL_PLANNING_COMPILE(prompt, router))
-    if router is None:
-        return catalog
-
-    audit = dict(catalog.get("semantic_audit") or {})
-    batch_size = audit.get("semantic_batch_size")
-    batch_count = audit.get("semantic_batch_count")
-    if type(batch_size) is not int or batch_size <= 0:
-        raise _semantic._evidence.EvidencePlanError(
-            "REQ_SCALE_BATCH_AUDIT: semantic batch size was lost before planning finalization."
-        )
-    if type(batch_count) is not int or batch_count <= 0:
-        raise _semantic._evidence.EvidencePlanError(
-            "REQ_SCALE_BATCH_AUDIT: semantic batch count was lost before planning finalization."
-        )
-
-    audit.update(
-        {
-            "normal_model_turns": batch_count,
-            "semantic_model_turns": batch_count,
-            "semantic_discovery_model_turns": batch_count,
-            "semantic_detail_model_turns": 0,
-            "generation_policy": "bounded_host_owned_semantic_batches",
-            "semantic_generation_protocol": "bounded_host_owned_semantic_batches",
-            "max_clauses_per_model_turn": batch_size,
-            "global_dependency_reconciliation": (
-                "global_catalog_capability_resolution_then_host_causal_dag"
-            ),
-        }
-    )
-    catalog["semantic_audit"] = audit
-    catalog["catalog_sha256"] = ""
-    catalog["catalog_sha256"] = _semantic._evidence._hash_without(
-        catalog, "catalog_sha256"
-    )
-    _semantic.validate_approved_requirement_catalog(catalog, prompt=prompt)
-    return catalog
-
-
-_compile_with_bounded_audit.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
-
-
 def install_semantic_batching_contract() -> None:
-    """Install one bounded semantic path while preserving the existing authorities."""
+    """Mark the pure batching helper available without runtime rebinding."""
 
-    global _INSTALLED, _ORIGINAL_PLANNING_COMPILE
-    if _INSTALLED:
-        return
-
-    from . import evidence_request_guard as guard
-    from . import planning_authority as planning
-
-    _ORIGINAL_PLANNING_COMPILE = planning._compile_semantic_catalog
-    _semantic.build_approved_requirement_catalog = build_bounded_requirement_catalog
-    guard.build_authoritative_request_catalog = build_bounded_requirement_catalog
-    planning._compile_semantic_catalog = _compile_with_bounded_audit
+    global _INSTALLED
     _INSTALLED = True
 
 
