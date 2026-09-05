@@ -277,6 +277,12 @@ def _decorate_receipt(row: Mapping[str, Any], receipt: Mapping[str, Any]) -> dic
     if existing is not None:
         _assert_reusable(node_id, expected, _mapping(existing))
         return result
+    # Phase-only work has no independent verifier identity to persist. Keeping its
+    # receipt payload unchanged preserves the producer contract and makes receipt_hash
+    # an integrity hash of exactly what the producer returned. Verified stages still
+    # persist fingerprints because they need verifier-version/config reuse protection.
+    if expected.get("verifier") is None:
+        return result
     result["_mmm_completion_evidence"] = expected
     return result
 
