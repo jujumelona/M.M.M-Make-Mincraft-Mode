@@ -14,7 +14,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .preference_training import PreferenceCandidate, PreferenceTraceStore
 from .validation_diagnostic_contract import (
     diagnostic_errors,
     diagnostic_items,
@@ -280,13 +279,6 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
             self._mmm_last_java_paths = tuple(sorted(str(item.get('path', '')).replace('\\', '/') for item in winner_ops if str(item.get('path', '')).lower().endswith('.java')))
             trace = {'signature': signature, 'evidence': _compact_evidence(evidence), 'repair_pattern': _repair_pattern(winner_ops), 'winner_index': winner_index, 'winner_score': winner_score, 'winner_verifier': winner_verifier, 'candidate_count': len(evaluations)}
             self._mmm_agentic_last_search = trace
-            if root is not None and len(evaluations) >= 2:
-                try:
-                    preference_candidates = [PreferenceCandidate(candidate_id=f'repair-{candidate_index}', response=operations, score=score, verifier=verifier) for score, candidate_index, operations, verifier in sorted(evaluations, key=lambda item: item[1])]
-                    ordered_indices = [item[1] for item in sorted(evaluations, key=lambda item: item[1])]
-                    PreferenceTraceStore(root / '.minecraft_ai' / 'agentic-preferences.jsonl').record(task='repair_patch_selection', prompt={'signature': signature, 'evidence': _compact_evidence(evidence)}, candidates=preference_candidates, winner_index=ordered_indices.index(winner_index), metadata={'search_width': width, 'verified_memory_matches': len(memory)})
-                except Exception as exc:
-                    print('repair preference trace skipped:', f'{type(exc).__name__}: {exc}', flush=True)
             print('repair search:', f'candidates={len(evaluations)}', f'winner={winner_index + 1}', f'score={winner_score:.3f}', f'memory={len(memory)}', flush=True)
             return winner_ops
         request_patch_with_search._mmm_verifier_repair_search = True
@@ -400,7 +392,6 @@ def install(*, repair_module: Any, work_graph_module: Any) -> None:
     """Install repair search and balanced execution without planner mutation.
 
     * repair: verifier-guided candidates, parallel JDT checks and verified memory;
-    * learning: rejected candidates are retained for later DPO/ranker training;
     * execution: ready work is claimed across resource lanes instead of pre-claiming
       a queue for one scarce executor.
 
