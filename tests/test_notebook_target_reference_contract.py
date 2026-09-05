@@ -31,7 +31,22 @@ def test_notebook_exposes_target_and_reference_inputs_to_complete_session() -> N
     cells = _notebook_cells()
     configuration = cells["configuration"]
     plan = cells["plan"]
-    assert 'MINECRAFT_VERSION = "Auto"' in configuration
+    assert 'MINECRAFT_VERSION = "Auto" #@param [' in configuration
+    assert 'MINECRAFT_VERSION = "Auto" #@param {type:"string"}' not in configuration
+    for version in (
+        "26.2",
+        "26.1.1",
+        "26.1",
+        "1.21.10",
+        "1.21.8",
+        "1.21.5",
+        "1.21.4",
+        "1.21.1",
+        "1.20.6",
+        "1.20.4",
+        "1.20.1",
+    ):
+        assert f'"{version}"' in configuration
     assert 'MOD_LOADER = "Auto"' in configuration
     assert 'REFERENCE_MOD_URLS = ""' in configuration
     assert 'os.environ["MMM_REFERENCE_MOD_URLS"] = reference_mod_urls' in configuration
