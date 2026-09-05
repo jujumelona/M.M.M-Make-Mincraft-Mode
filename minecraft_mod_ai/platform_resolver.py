@@ -20,7 +20,7 @@ from .platform_catalog import (
     provider_for_loader,
 )
 from .platform_evidence_pipeline import PlatformOptimization, TargetResearchFn
-from .spec import PlatformLock, Proposal, SpecValidationError
+from .spec import PlatformLock, Proposal, SpecValidationError, platform_receipt_sha256
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
 _ASCII_WORD = r"A-Za-z0-9_"
@@ -87,18 +87,41 @@ class PlatformSelection:
 
 
 def lock_from_adapter(adapter: PlatformAdapter) -> PlatformLock:
+    """Copy the already-validated provider receipt without re-resolving it.
+
+    PlatformLock is the immutable execution boundary.  Dropping the extended receipt
+    fields here used to turn a fully verified adapter back into a legacy/partial lock,
+    which then failed native-name and receipt validation downstream.
+    """
+
     adapter.validate()
-    return PlatformLock(
+    lock = PlatformLock(
+        adapter_id=adapter.adapter_id,
         edition=adapter.edition,
         loader=adapter.loader,
         minecraft_version=adapter.minecraft_version,
         java_version=adapter.java_version,
         yarn_mappings=adapter.yarn_mappings,
+        mappings_kind=adapter.mappings_kind,
+        mappings_version=adapter.mappings_version,
         fabric_loader=adapter.fabric_loader,
         fabric_api=adapter.fabric_api,
         fabric_loom=adapter.fabric_loom,
         gradle=adapter.gradle,
+        gradle_sha256=adapter.gradle_sha256,
+        gradle_distribution_url=(
+            f"https://services.gradle.org/distributions/gradle-{adapter.gradle}-bin.zip"
+        ),
+        data_pack_version=adapter.data_pack_version,
+        resource_pack_version=adapter.resource_pack_version,
+        resource_pack_format=adapter.resource_pack_format,
+        release_metadata_url=adapter.release_metadata_url,
+        source_api_family=adapter.source_api_family,
+        deterministic_module_kinds=tuple(sorted(adapter.deterministic_module_kinds)),
     )
+    lock = replace(lock, receipt_sha256=platform_receipt_sha256(lock))
+    lock.validate()
+    return lock
 
 
 def resolve_platform(
