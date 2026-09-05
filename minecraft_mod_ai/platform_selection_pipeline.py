@@ -8,6 +8,7 @@ fresh-only recovery, and no semantic top-k shortlist.
 """
 
 import os
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -19,6 +20,42 @@ from .platform_evidence_pipeline import (
 )
 from .platform_resolver import PlatformSelection
 from .spec import SpecValidationError
+
+_HOST_VERSION_CONSTRAINT_RE = re.compile(
+    r"\[HOST_TARGET_CONSTRAINT\s+Minecraft\s+([^\]\s]+)\]",
+    re.IGNORECASE,
+)
+_HOST_LOADER_CONSTRAINT_RE = re.compile(
+    r"\[HOST_LOADER_CONSTRAINT\s+([^\]\s]+)\]",
+    re.IGNORECASE,
+)
+
+
+def _host_target_constraints(text: str) -> tuple[str | None, str | None]:
+    """Read host-owned target markers without granting them semantic authority."""
+    version_matches = _HOST_VERSION_CONSTRAINT_RE.findall(str(text or ""))
+    loader_matches = _HOST_LOADER_CONSTRAINT_RE.findall(str(text or ""))
+    version = str(version_matches[-1]).strip() if version_matches else None
+    loader = str(loader_matches[-1]).strip().casefold() if loader_matches else None
+    return version or None, loader or None
+
+
+def _host_retarget_requested(
+    *,
+    existing_version: str | None,
+    existing_loader: str | None,
+    host_version: str | None,
+    host_loader: str | None,
+) -> bool:
+    """Return whether an explicit host target differs from the imported project target."""
+    if not str(existing_version or "").strip():
+        return False
+    existing_version_value = str(existing_version or "").strip()
+    existing_loader_value = str(existing_loader or "").strip().casefold()
+    return bool(
+        (host_version and host_version != existing_version_value)
+        or (host_loader and host_loader != existing_loader_value)
+    )
 
 
 def optimize_platform_fail_closed(
@@ -108,9 +145,20 @@ def resolve_platform_fail_closed(
     from . import platform_resolver as resolver
 
     text = str(prompt or "")
-    explicit_version = resolver._explicit_minecraft_version(text)
-    explicit_loader = resolver._explicit_loader(text)
-    migration_requested = bool(existing_version and resolver._MIGRATION_RE.search(text))
+    host_version, host_loader = _host_target_constraints(text)
+    parsed_version = resolver._explicit_minecraft_version(text)
+    parsed_loader = None if host_loader else resolver._explicit_loader(text)
+    explicit_version = host_version or parsed_version
+    explicit_loader = host_loader or parsed_loader
+    host_retarget = _host_retarget_requested(
+        existing_version=existing_version,
+        existing_loader=existing_loader,
+        host_version=host_version,
+        host_loader=host_loader,
+    )
+    migration_requested = bool(
+        existing_version and (resolver._MIGRATION_RE.search(text) or host_retarget)
+    )
     kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
 
     if explicit_loader:
