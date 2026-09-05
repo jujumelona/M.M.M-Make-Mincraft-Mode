@@ -12,6 +12,7 @@ from . import authored_scope_research_contract as _retrieval
 from . import evidence_first_planning as _evidence
 from . import evidence_request_guard as _guard
 from . import semantic_requirement_authority as _semantic
+from .minecraft_template_catalog import selected_predecessor_capabilities
 from .root_cause_trace import emit_root_cause, trace_scope
 
 _STATE_TOKEN = re.compile(r"[A-Za-z0-9_]+|[가-힣]+", re.UNICODE)
@@ -60,9 +61,8 @@ _STATE_STOP = frozenset(
         "상태",
     }
 )
-# These are state-producing verbs, not gameplay design guesses. A dependency is
-# inferred only when a prior Then-state contains one of these producer actions and
-# shares a concrete state term with the later Given-state.
+# Lexical state inference is a secondary authored-evidence path.  The primary path for
+# known Minecraft capabilities is the host feature model below.
 _PRODUCER_STEMS = frozenset(
     {
         "acquir",
@@ -144,48 +144,101 @@ def _observable_text(item: Mapping[str, Any], field: str) -> str:
     return str(behavior.get(field) or "").strip()
 
 
-def _host_causal_dependencies(
+def _feature_model_dependencies(
     requirements: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
-    """Conservatively infer producer->consumer edges from approved observable states.
+    """Derive safe edges only between capabilities that the user actually selected.
 
-    The model already supplied semantic leaves. The host adds an edge only when the
-    producer source precedes the consumer source, producer Then and consumer Given share
-    a concrete normalized state term, the producer Then contains a state-producing
-    action, and exactly one prior producer has the strongest lexical state evidence.
-    Ambiguity yields no inferred edge. Mention order by itself never creates an edge.
+    Ontology/default and domain integration edges never synthesize a missing feature.  A
+    predecessor is bound only when exactly one explicit requirement in this request owns
+    that capability; ambiguity intentionally yields no inferred edge.
     """
+
+    selected = [
+        str(item.get("capability") or "").strip().casefold()
+        for item in requirements
+        if isinstance(item, Mapping) and str(item.get("capability") or "").strip()
+    ]
+    ids_by_capability: dict[str, list[str]] = {}
+    for item in requirements:
+        if not isinstance(item, Mapping):
+            continue
+        capability = str(item.get("capability") or "").strip().casefold()
+        requirement_id = str(item.get("requirement_id") or "").strip()
+        if capability and requirement_id:
+            ids_by_capability.setdefault(capability, []).append(requirement_id)
+
+    result: dict[str, list[str]] = {}
+    provenance: list[dict[str, Any]] = []
+    for item in requirements:
+        if not isinstance(item, Mapping):
+            continue
+        requirement_id = str(item.get("requirement_id") or "").strip()
+        capability = str(item.get("capability") or "").strip().casefold()
+        if not requirement_id or not capability:
+            continue
+        dependencies: list[str] = []
+        for predecessor_capability in selected_predecessor_capabilities(
+            capability,
+            selected,
+        ):
+            candidates = [
+                candidate
+                for candidate in ids_by_capability.get(predecessor_capability, ())
+                if candidate != requirement_id
+            ]
+            if len(candidates) != 1:
+                if candidates:
+                    provenance.append(
+                        {
+                            "requirement_id": requirement_id,
+                            "capability": capability,
+                            "predecessor_capability": predecessor_capability,
+                            "method": "host_feature_model_ambiguous_predecessor_skip",
+                            "candidate_requirement_refs": candidates,
+                        }
+                    )
+                continue
+            dependency = candidates[0]
+            if dependency not in dependencies:
+                dependencies.append(dependency)
+                provenance.append(
+                    {
+                        "dependency": dependency,
+                        "requirement_id": requirement_id,
+                        "capability": capability,
+                        "predecessor_capability": predecessor_capability,
+                        "method": "host_feature_model_selected_predecessor",
+                    }
+                )
+        result[requirement_id] = dependencies
+    return result, provenance
+
+
+def _observable_state_dependencies(
+    requirements: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
+    """Conservatively infer authored producer->consumer edges from observable states."""
 
     ordered = sorted(
         (dict(item) for item in requirements if isinstance(item, Mapping)),
         key=lambda item: (_source_start(item), str(item.get("requirement_id") or "")),
     )
-    known = {
-        str(item.get("requirement_id") or "").strip()
-        for item in ordered
-        if str(item.get("requirement_id") or "").strip()
-    }
     result: dict[str, list[str]] = {}
     provenance: list[dict[str, Any]] = []
     previous: list[dict[str, Any]] = []
 
     for item in ordered:
-        rid = str(item.get("requirement_id") or "").strip()
-        if not rid:
+        requirement_id = str(item.get("requirement_id") or "").strip()
+        if not requirement_id:
             continue
-
-        deps = [
-            dep
-            for dep in _declared_dependencies(item, rid)
-            if dep in known and dep != rid
-        ]
+        dependencies: list[str] = []
         given_terms = _state_terms(_observable_text(item, "given"))
         candidates: list[tuple[tuple[int, int], str, tuple[str, ...]]] = []
-
         if given_terms:
             for producer in previous:
                 producer_id = str(producer.get("requirement_id") or "").strip()
-                if not producer_id or producer_id == rid:
+                if not producer_id or producer_id == requirement_id:
                     continue
                 then_text = _observable_text(producer, "then")
                 then_terms = _state_terms(then_text)
@@ -195,40 +248,68 @@ def _host_causal_dependencies(
                 producer_actions = then_terms & _PRODUCER_STEMS
                 if not producer_actions:
                     continue
-                score = (len(shared), len(producer_actions))
-                candidates.append((score, producer_id, shared))
-
+                candidates.append(((len(shared), len(producer_actions)), producer_id, shared))
         if candidates:
-            best_score = max(score for score, _producer_id, _shared in candidates)
+            best_score = max(score for score, _producer, _shared in candidates)
             best = [
-                (producer_id, shared)
-                for score, producer_id, shared in candidates
+                (producer, shared)
+                for score, producer, shared in candidates
                 if score == best_score
             ]
             if len(best) == 1:
                 producer_id, shared = best[0]
-                if producer_id not in deps:
-                    deps.append(producer_id)
-                    producer = next(
-                        producer
-                        for producer in previous
-                        if str(producer.get("requirement_id") or "").strip() == producer_id
-                    )
-                    provenance.append(
-                        {
-                            "dependency": producer_id,
-                            "requirement_id": rid,
-                            "method": "host_observable_state_producer",
-                            "shared_state_terms": list(shared),
-                            "producer_then": _observable_text(producer, "then"),
-                            "consumer_given": _observable_text(item, "given"),
-                        }
-                    )
-
-        result[rid] = list(dict.fromkeys(deps))
+                dependencies.append(producer_id)
+                producer = next(
+                    previous_item
+                    for previous_item in previous
+                    if str(previous_item.get("requirement_id") or "").strip() == producer_id
+                )
+                provenance.append(
+                    {
+                        "dependency": producer_id,
+                        "requirement_id": requirement_id,
+                        "method": "host_observable_state_producer",
+                        "shared_state_terms": list(shared),
+                        "producer_then": _observable_text(producer, "then"),
+                        "consumer_given": _observable_text(item, "given"),
+                    }
+                )
+        result[requirement_id] = dependencies
         previous.append(item)
-
     return result, provenance
+
+
+def _host_causal_dependencies(
+    requirements: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
+    """Combine declared, feature-model, and strict authored-state dependency evidence."""
+
+    known = {
+        str(item.get("requirement_id") or "").strip()
+        for item in requirements
+        if isinstance(item, Mapping) and str(item.get("requirement_id") or "").strip()
+    }
+    feature_dependencies, feature_provenance = _feature_model_dependencies(requirements)
+    state_dependencies, state_provenance = _observable_state_dependencies(requirements)
+    result: dict[str, list[str]] = {}
+    for item in requirements:
+        if not isinstance(item, Mapping):
+            continue
+        requirement_id = str(item.get("requirement_id") or "").strip()
+        if not requirement_id:
+            continue
+        result[requirement_id] = list(
+            dict.fromkeys(
+                dependency
+                for dependency in (
+                    *_declared_dependencies(item, requirement_id),
+                    *feature_dependencies.get(requirement_id, ()),
+                    *state_dependencies.get(requirement_id, ()),
+                )
+                if dependency in known and dependency != requirement_id
+            )
+        )
+    return result, [*feature_provenance, *state_provenance]
 
 
 def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]:
@@ -259,17 +340,18 @@ def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]
             "semantic_discovery_model_turns": batch_count,
             "semantic_detail_model_turns": 0,
             "max_repair_turns": 0,
-            "generation_policy": "bounded_host_owned_semantic_batches",
-            "semantic_generation_protocol": "bounded_host_owned_semantic_batches",
+            "generation_policy": "bounded_host_catalog_classification_batches",
+            "semantic_generation_protocol": "bounded_host_catalog_classification_batches",
             "max_clauses_per_model_turn": batch_size,
             "max_semantic_leaves_per_detail_turn": 0,
             "model_generated_planning_json": False,
-            "global_dependency_reconciliation": (
-                "global_catalog_capability_resolution_then_host_causal_dag"
-            ),
+            "global_dependency_reconciliation": "host_feature_model_then_authored_state_dag",
             "source_clause_index_owner": "host",
             "source_anchor_owner": "host",
             "source_grounding_owner": "host",
+            "capability_id_owner": "host_catalog",
+            "dependency_owner": "host",
+            "implementation_architecture_owner": "host",
         }
     )
     catalog["semantic_audit"] = audit
@@ -284,7 +366,7 @@ def _enrich_retrieval_plan(
     catalog: Mapping[str, Any],
     router: Any | None,
 ) -> dict[str, Any]:
-    """Enrich every frozen requirement through host-owned retrieval planning."""
+    """Enrich frozen requirements with host-owned retrieval and dependency planning."""
 
     if router is None:
         return dict(catalog)
@@ -293,6 +375,8 @@ def _enrich_retrieval_plan(
     if not isinstance(requirements, list) or not requirements:
         return dict(catalog)
 
+    # The retrieval helper may use model embeddings/ranking internally, but requirement
+    # IDs, dependency edges and query ownership remain host-controlled after validation.
     payload = _retrieval._call_retrieval_planner(router, prompt, requirements)
     emit_root_cause(
         "dependency_and_retrieval_plan_candidate",
@@ -308,20 +392,13 @@ def _enrich_retrieval_plan(
     known = set(plan)
     dependency_map: dict[str, tuple[str, ...]] = {}
     for requirement_id, planned in plan.items():
+        # Dependency ownership is host-only.  Retrieval output is allowed to contribute
+        # search queries but not causal edges.
         merged = list(
             dict.fromkeys(
-                [
-                    *(
-                        str(dep)
-                        for dep in planned.get("depends_on", [])
-                        if str(dep) in known and str(dep) != requirement_id
-                    ),
-                    *(
-                        str(dep)
-                        for dep in inferred.get(requirement_id, [])
-                        if str(dep) in known and str(dep) != requirement_id
-                    ),
-                ]
+                str(dependency)
+                for dependency in inferred.get(requirement_id, ())
+                if str(dependency) in known and str(dependency) != requirement_id
             )
         )
         planned["depends_on"] = merged
@@ -338,6 +415,18 @@ def _enrich_retrieval_plan(
         planned = plan[requirement_id]
         item["depends_on"] = list(planned["depends_on"])
         item["search_queries"] = list(planned["search_queries"])
+        unlock = dict(item.get("unlock_policy") or {})
+        unlock["required_requirement_refs"] = list(planned["depends_on"])
+        unlock["required_capabilities"] = [
+            str(next(
+                requirement.get("capability")
+                for requirement in enriched["requirements"]
+                if isinstance(requirement, Mapping)
+                and str(requirement.get("requirement_id") or "") == dependency
+            ))
+            for dependency in planned["depends_on"]
+        ]
+        item["unlock_policy"] = unlock
         edges.extend([[dependency, requirement_id] for dependency in item["depends_on"]])
         enriched_requirements.append(item)
 
@@ -353,12 +442,13 @@ def _enrich_retrieval_plan(
         {
             "normal_model_turns": semantic_turns,
             "retrieval_model_turns": 0,
-            "retrieval_query_planning": "host_deterministic_all_requirements",
+            "retrieval_query_planning": "host_validated_all_requirements",
             "max_requirements_per_query_turn": len(requirements),
             "model_owned_requirement_ids": False,
+            "model_owned_dependency_edges": False,
             "model_generated_planning_json": False,
             "dependency_edge_count": len(edges),
-            "dependency_derivation": "declared_prerequisites_plus_host_observable_state_producers",
+            "dependency_derivation": "host_feature_model_plus_strict_authored_state_producers",
             "host_inferred_dependency_edge_count": len(dependency_provenance),
         }
     )
@@ -387,11 +477,7 @@ def build_authoritative_request_catalog(
     prompt: str,
     router: Any | None,
 ) -> dict[str, Any]:
-    """Compile request meaning and retrieval intent before any design/RAG execution.
-
-    Semantic extraction is bounded by a measured receipt when present and otherwise by
-    the conservative one-clause fallback. Retrieval planning is deterministic host work.
-    """
+    """Compile request meaning and retrieval intent before design/RAG execution."""
 
     with trace_scope("planner"):
         emit_root_cause(
@@ -435,7 +521,7 @@ def authoritative_request_scope(
     prompt: str,
     catalog: Mapping[str, Any],
 ) -> Iterator[None]:
-    """Expose one immutable request catalog to downstream read-only planning helpers."""
+    """Expose one immutable request catalog to downstream read-only helpers."""
 
     token = _guard._ACTIVE_REQUEST_CATALOG.set((prompt, deepcopy(dict(catalog))))
     try:
