@@ -19,7 +19,6 @@ _MIRRORED_CONFIGS = (
     "external_mcp_registry.yaml",
     "model_registry.yaml",
     "runtime_profiles.yaml",
-    "training_policy.yaml",
 )
 
 
