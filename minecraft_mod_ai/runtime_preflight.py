@@ -61,6 +61,34 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
+def _resolves_to_canonical_callable(target: Any, canonical: Any) -> bool:
+    """Return whether one finite transparent wrapper chain reaches ``canonical``.
+
+    Runtime authority must be established by callable identity, not by copying a marker
+    attribute onto an unrelated replacement. Malformed or excessively deep wrapper
+    chains fail closed instead of raising into callers that are performing a predicate
+    check.
+    """
+
+    if not callable(canonical):
+        return False
+    current = target
+    seen: set[int] = set()
+    depth = 0
+    while callable(current):
+        if current is canonical:
+            return True
+        identity = id(current)
+        if identity in seen:
+            return False
+        seen.add(identity)
+        depth += 1
+        if depth > 64:
+            return False
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _wrapper_chain_has_marker(target: Any, marker_name: str) -> bool:
     """Require a marked canonical owner somewhere in one finite wrapper chain.
 
