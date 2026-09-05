@@ -63,6 +63,19 @@ def test_evidence_handoff_keeps_task_acceptance_internal(monkeypatch) -> None:
         "build_evidence_first_handoff",
         lambda value: handoff,
     )
+    # This test owns the public/internal acceptance projection contract only. Typed
+    # execution lowering and linker behavior are covered independently.
+    monkeypatch.setattr(pipeline_contract, "execution_plan", lambda value: value)
+    monkeypatch.setattr(
+        pipeline_contract,
+        "execution_handoff",
+        lambda _plan, canonical, _lowered: canonical,
+    )
+    monkeypatch.setattr(
+        pipeline_contract,
+        "validate_plan_collect_all",
+        lambda _plan, _handoff: None,
+    )
 
     batches = pipeline_contract._batches_from_handoff(plan, batch_type=_Batch)
 
