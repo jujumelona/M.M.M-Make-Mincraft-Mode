@@ -8,8 +8,23 @@ from minecraft_mod_ai.verifier_receipt_truth_contract import (
 )
 
 
-def _row(stage: str, node_id: str = "node", input_hash: str = "sha256:input"):
-    return {"stage": stage, "node_id": node_id, "input_hash": input_hash}
+def _row(
+    stage: str,
+    node_id: str = "node",
+    input_hash: str = "sha256:input",
+    *,
+    payload: dict | None = None,
+):
+    return {
+        "stage": stage,
+        "node_id": node_id,
+        "input_hash": input_hash,
+        "payload": {} if payload is None else payload,
+    }
+
+
+def _source_receipt():
+    return {"status": "PASS", "checks_run": 12, "project_manifest": "sha256:tree"}
 
 
 def test_generation_success_is_explicitly_phase_only_not_verified():
@@ -32,12 +47,84 @@ def test_source_validation_pass_requires_actual_checks_and_snapshot_manifest():
 
     receipt = _decorate_receipt(
         _row("validate:source", "validate-source"),
-        {"status": "PASS", "checks_run": 12, "project_manifest": "sha256:tree"},
+        _source_receipt(),
     )
     evidence = receipt["_mmm_completion_evidence"]
     assert evidence["completion_scope"] == "verified_stage"
     assert evidence["verifier"] == "source_validator"
     assert evidence["checks_run"] == 12
+
+
+def test_verified_receipt_binds_input_verifier_version_and_config_hashes():
+    receipt = _decorate_receipt(
+        _row(
+            "validate:source",
+            "validate-source",
+            payload={"target": "fabric", "validator_config": {"strict": True}},
+        ),
+        _source_receipt(),
+    )
+    evidence = receipt["_mmm_completion_evidence"]
+    assert evidence["schema_version"] == "mmm/work-completion-evidence-v2"
+    assert evidence["verifier_input_hash"] == "sha256:input"
+    assert evidence["verifier_version_hash"].startswith("sha256:")
+    assert evidence["verifier_config_hash"].startswith("sha256:")
+
+
+def test_unchanged_verified_receipt_is_reusable_idempotently():
+    row = _row(
+        "validate:source",
+        "validate-source",
+        payload={"validator_config": {"strict": True}},
+    )
+    receipt = _decorate_receipt(row, _source_receipt())
+    assert _decorate_receipt(row, receipt) == receipt
+
+
+def test_same_input_hash_with_changed_verifier_config_rejects_stale_receipt():
+    original = _decorate_receipt(
+        _row(
+            "validate:source",
+            "validate-source",
+            payload={"validator_config": {"strict": True}},
+        ),
+        _source_receipt(),
+    )
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
+        _decorate_receipt(
+            _row(
+                "validate:source",
+                "validate-source",
+                payload={"validator_config": {"strict": False}},
+            ),
+            original,
+        )
+
+
+def test_changed_verifier_version_hash_rejects_stale_receipt():
+    row = _row("validate:source", "validate-source")
+    original = _decorate_receipt(row, _source_receipt())
+    tampered = dict(original)
+    evidence = dict(tampered["_mmm_completion_evidence"])
+    evidence["verifier_version_hash"] = "sha256:old-verifier"
+    tampered["_mmm_completion_evidence"] = evidence
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
+        _decorate_receipt(row, tampered)
+
+
+def test_legacy_verified_receipt_without_reuse_fingerprints_fails_closed():
+    row = _row("validate:source", "validate-source")
+    legacy = _source_receipt()
+    legacy["_mmm_completion_evidence"] = {
+        "schema_version": "mmm/work-completion-evidence-v1",
+        "node_id": "validate-source",
+        "stage": "validate:source",
+        "input_hash": "sha256:input",
+        "completion_scope": "verified_stage",
+        "verifier": "source_validator",
+    }
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
+        _decorate_receipt(row, legacy)
 
 
 def test_jar_validation_pass_requires_independent_jar_receipt_identity():

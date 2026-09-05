@@ -10,6 +10,9 @@ another runtime wrapper around ``DurableWorkLedger.succeed``.
 """
 
 from collections.abc import Mapping, Sequence
+import hashlib
+import json
+import marshal
 from typing import Any
 
 
@@ -17,8 +20,27 @@ class VerifierReceiptTruthError(RuntimeError):
     pass
 
 
+_EVIDENCE_SCHEMA = "mmm/work-completion-evidence-v2"
+_VERIFIER_REUSE_CONTRACT = "mmm/verifier-reuse-contract-v1"
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _canonical_hash(value: Any) -> str:
+    try:
+        rendered = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise VerifierReceiptTruthError(
+            "VERIFIER_CONFIG_INVALID: verifier configuration must be canonical JSON."
+        ) from exc
+    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
 def _commands_passed(build: Mapping[str, Any]) -> bool:
@@ -175,6 +197,126 @@ def _package_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any
     return {"verifier": "release_package", "release_zip": release_zip}
 
 
+def _verifier_implementation_hash(verifier: str) -> str:
+    if verifier in {
+        "source_validator",
+        "jar_validator",
+        "quality_contract",
+        "runtime_policy",
+        "runtime_playtest_visual",
+    }:
+        function = _validation_evidence
+    elif verifier == "gradle_and_final_artifact":
+        function = _build_evidence
+    elif verifier in {"package_phase", "release_package"}:
+        function = _package_evidence
+    else:
+        raise VerifierReceiptTruthError(
+            f"VERIFIER_ID_UNKNOWN: no implementation identity for verifier {verifier!r}."
+        )
+    code_hash = "sha256:" + hashlib.sha256(marshal.dumps(function.__code__)).hexdigest()
+    return _canonical_hash(
+        {
+            "contract": _VERIFIER_REUSE_CONTRACT,
+            "verifier": verifier,
+            "implementation_code_hash": code_hash,
+        }
+    )
+
+
+def _stage_evidence(
+    stage: str,
+    node_id: str,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    if stage.startswith("generate:"):
+        return {"completion_scope": "phase_only", "verifier": None}
+    if stage.startswith("validate:"):
+        return {
+            "completion_scope": "verified_stage",
+            **_validation_evidence(stage, node_id, receipt),
+        }
+    if stage == "build":
+        return {
+            "completion_scope": "verified_stage",
+            **_build_evidence(node_id, receipt),
+        }
+    if stage.startswith("package"):
+        return {
+            "completion_scope": "packaging_stage",
+            **_package_evidence(node_id, receipt),
+        }
+    return {"completion_scope": "phase_only", "verifier": None}
+
+
+def _completion_evidence(
+    row: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    node_id = str(row.get("node_id") or "")
+    stage = str(row.get("stage") or "")
+    input_hash = str(row.get("input_hash") or "")
+    evidence = _stage_evidence(stage, node_id, receipt)
+    result = {
+        "schema_version": _EVIDENCE_SCHEMA,
+        "node_id": node_id,
+        "stage": stage,
+        "input_hash": input_hash,
+        **evidence,
+    }
+    verifier = evidence.get("verifier")
+    if verifier:
+        payload = row.get("payload")
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, Mapping):
+            raise VerifierReceiptTruthError(
+                f"VERIFIER_CONFIG_INVALID: work node {node_id!r} payload must be an object."
+            )
+        result.update(
+            {
+                "verifier_input_hash": input_hash,
+                "verifier_version_hash": _verifier_implementation_hash(str(verifier)),
+                "verifier_config_hash": _canonical_hash(
+                    {"stage": stage, "payload": dict(payload)}
+                ),
+            }
+        )
+    return result
+
+
+def _assert_reusable(
+    node_id: str,
+    expected: Mapping[str, Any],
+    existing: Mapping[str, Any],
+) -> None:
+    if (
+        existing.get("input_hash") != expected.get("input_hash")
+        or existing.get("stage") != expected.get("stage")
+    ):
+        raise VerifierReceiptTruthError(
+            f"VERIFIER_RECEIPT_STALE: work node {node_id!r} carries mismatched "
+            "completion evidence."
+        )
+
+    if expected.get("verifier") is None:
+        return
+
+    required = (
+        "schema_version",
+        "completion_scope",
+        "verifier",
+        "verifier_input_hash",
+        "verifier_version_hash",
+        "verifier_config_hash",
+    )
+    if any(existing.get(key) != expected.get(key) for key in required):
+        raise VerifierReceiptTruthError(
+            f"VERIFIER_RECEIPT_STALE: work node {node_id!r} verifier identity, "
+            "version, configuration, or inputs changed."
+        )
+
+
 def _decorate_receipt(
     row: Mapping[str, Any],
     receipt: Mapping[str, Any],
@@ -189,7 +331,6 @@ def _decorate_receipt(
             f"VERIFIER_RECEIPT_INVALID: work node {node_id!r} receipt must be an object."
         )
 
-    stage = str(row.get("stage") or "")
     input_hash = str(row.get("input_hash") or "")
     if not input_hash:
         raise VerifierReceiptTruthError(
@@ -197,43 +338,13 @@ def _decorate_receipt(
         )
 
     result = dict(receipt)
+    expected = _completion_evidence(row, result)
     existing = result.get("_mmm_completion_evidence")
     if existing is not None:
-        existing_map = _mapping(existing)
-        if existing_map.get("input_hash") != input_hash or existing_map.get("stage") != stage:
-            raise VerifierReceiptTruthError(
-                f"VERIFIER_RECEIPT_STALE: work node {node_id!r} carries mismatched "
-                "completion evidence."
-            )
+        _assert_reusable(node_id, expected, _mapping(existing))
         return result
 
-    if stage.startswith("generate:"):
-        evidence = {"completion_scope": "phase_only", "verifier": None}
-    elif stage.startswith("validate:"):
-        evidence = {
-            "completion_scope": "verified_stage",
-            **_validation_evidence(stage, node_id, result),
-        }
-    elif stage == "build":
-        evidence = {
-            "completion_scope": "verified_stage",
-            **_build_evidence(node_id, result),
-        }
-    elif stage.startswith("package"):
-        evidence = {
-            "completion_scope": "packaging_stage",
-            **_package_evidence(node_id, result),
-        }
-    else:
-        evidence = {"completion_scope": "phase_only", "verifier": None}
-
-    result["_mmm_completion_evidence"] = {
-        "schema_version": "mmm/work-completion-evidence-v1",
-        "node_id": node_id,
-        "stage": stage,
-        "input_hash": input_hash,
-        **evidence,
-    }
+    result["_mmm_completion_evidence"] = expected
     return result
 
 
