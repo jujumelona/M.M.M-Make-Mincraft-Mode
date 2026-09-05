@@ -3,7 +3,7 @@ from __future__ import annotations
 """Host-owned templates for bounded research-to-requirement augmentation.
 
 The language model never owns target versions, requirement identity, facet identity,
-task identity, baseline acceptance, or template structure.  Host code freezes all of
+task identity, baseline acceptance, or template structure. Host code freezes all of
 those values and exposes exactly one semantic decision slot at a time.
 """
 
@@ -117,6 +117,16 @@ def _canonical_copy(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
 
 
+def _string_items(value: Any) -> list[str]:
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        return []
+    return [str(item) for item in values if str(item).strip()]
+
+
 def build_host_planning_context(
     router: Any,
     game_design: Mapping[str, Any],
@@ -183,21 +193,13 @@ def build_facet_slot(
                 "requirement_id": str(requirement.get("requirement_id") or ""),
                 "capability": requirement.get("capability"),
                 "statement": str(requirement.get("statement") or "")[:1200],
-                "implementation_capabilities": [
-                    str(item)
-                    for item in requirement.get("implementation_capabilities", ())
-                    if str(item).strip()
-                ],
-                "artifact_obligations": [
-                    str(item)
-                    for item in requirement.get("artifact_obligations", ())
-                    if str(item).strip()
-                ],
-                "acceptance": [
-                    str(item)
-                    for item in requirement.get("acceptance", ())
-                    if str(item).strip()
-                ],
+                "implementation_capabilities": _string_items(
+                    requirement.get("implementation_capabilities")
+                ),
+                "artifact_obligations": _string_items(
+                    requirement.get("artifact_obligations")
+                ),
+                "acceptance": _string_items(requirement.get("acceptance")),
             },
             "facet": facet,
             "facet_purpose": guidance["purpose"],
