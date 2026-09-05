@@ -7,18 +7,17 @@ from pathlib import Path
 
 import pytest
 
-_TEST_MINECRAFT_VERSION = "1.21.11+mmm-test"
+_TEST_MINECRAFT_VERSION = "1.21.11"
 _TEST_LOADER = "fabric"
 
 
 def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
-    """Return a deterministic non-release receipt used only by unit-test scaffolds.
+    """Return a deterministic test receipt used only by unit-test scaffolds.
 
-    The synthetic version is deliberately not a real Minecraft release. This keeps
-    tests that exercise source/catalog mechanics independent from a historical
-    production target while production discovery remains authoritative. The test
-    receipt advertises deterministic module capabilities directly so unit-only
-    generators exercise capability routing without impersonating a historical target.
+    The Minecraft coordinate itself remains canonical so mapping/API consistency checks
+    exercise the same invariants as production. Test isolation lives in the adapter id,
+    dependency coordinates, provider registry and deterministic capability set instead
+    of by inventing a non-canonical Minecraft version string.
     """
 
     from minecraft_mod_ai.complete_spec import MODULE_KINDS
@@ -46,7 +45,7 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
         data_pack_version="1",
         resource_pack_version="1",
         resource_pack_format=1,
-        release_metadata_url="https://www.minecraft.net/test-fixture/1.21.11+mmm-test",
+        release_metadata_url="https://www.minecraft.net/test-fixture/1.21.11",
         source_api_family="fabric_reviewed_test_template",
         deterministic_module_kinds=frozenset((
             *MODULE_KINDS,
@@ -123,14 +122,14 @@ def _complete_partial_test_target(target):
     completed.setdefault("resource_pack_format", 1)
     completed.setdefault(
         "release_metadata_url",
-        "https://www.minecraft.net/test-fixture/1.21.11+mmm-test",
+        "https://www.minecraft.net/test-fixture/1.21.11",
     )
     return completed
 
 
 @pytest.fixture
 def synthetic_platform_lock():
-    """Resolved non-release target for version-independent generation tests."""
+    """Resolved deterministic target for version-independent generation tests."""
 
     return _platform_lock_from_adapter(_synthetic_test_adapter())
 
@@ -155,10 +154,9 @@ def _isolate_test_runtime_state(
         str(tmp_path / "research-evidence"),
     )
 
-    # Source/catalog tests must not acquire a historical Minecraft default merely
-    # because they need a generated project directory. Install one synthetic target
-    # for intentionally unresolved test scaffolds without replacing real-release
-    # provider semantics elsewhere in the suite.
+    # Source/catalog tests must not acquire a moving production target merely because
+    # they need a generated project directory. Install one deterministic target for
+    # intentionally unresolved test scaffolds without weakening production discovery.
     from minecraft_mod_ai import platform_catalog
     from minecraft_mod_ai.generator import FabricProjectGenerator
     from minecraft_mod_ai.platform_catalog import PlatformProvider
