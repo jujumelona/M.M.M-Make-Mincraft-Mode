@@ -19,7 +19,7 @@ from .evidence_first_planning import validate_evidence_first_plan
 _PRODUCTION_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
 _RESOURCE_KINDS = frozenset({"resource"})
 _TEST_KIND = "test"
-_SOURCE_OWNERSHIP_GATE = "source_static_validation"
+_SOURCE_COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
 
 
 def _canonical(value: Any) -> str:
@@ -136,13 +136,13 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     else:
         task["execution_role"] = "invalid"
 
-    # source_static_validation asserts task-local source ownership. Remove only that
-    # gate when the task owns no source symbol. target_compile is deliberately retained:
-    # registry/resource changes can still invalidate the target build even though they
-    # do not own a Java source file themselves.
+    # The semantic compiler emits source/compile gates at capability level. At execution
+    # time they belong only to a task that owns a source symbol; registry-id, resource,
+    # and verification-only steps are validated by their own gates and by downstream
+    # source owners. This prevents both fake source classes and false linker failures.
     gates = list(_strings(task.get("required_gates")))
     if not has_source:
-        gates = [gate for gate in gates if gate != _SOURCE_OWNERSHIP_GATE]
+        gates = [gate for gate in gates if gate not in _SOURCE_COMPILE_GATES]
     task["required_gates"] = gates
     task["owned_anchors"] = anchors
 
