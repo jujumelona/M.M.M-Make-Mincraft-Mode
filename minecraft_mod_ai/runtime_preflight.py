@@ -61,6 +61,30 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
+def _assert_authoritative_requirement_path() -> None:
+    """Require the sole host-owned semantic request path before production decode."""
+
+    from . import evidence_first_planning, evidence_request_guard
+    from .game_design import GameDesignPlanner
+    from .semantic_requirement_authority import build_approved_requirement_catalog
+
+    failures: list[str] = []
+    if getattr(GameDesignPlanner.plan, "__mmm_request_contract_guard__", False) is not True:
+        failures.append("GameDesignPlanner request freeze/guard")
+    if evidence_request_guard.build_authoritative_request_catalog is not build_approved_requirement_catalog:
+        failures.append("approved requirement catalog authority")
+    if getattr(
+        evidence_first_planning._validate_request_catalog,
+        "__mmm_approved_requirement_authority__",
+        False,
+    ) is not True:
+        failures.append("approved requirement catalog validator")
+    if failures:
+        raise RuntimePreflightError(
+            "authoritative semantic requirement path is incomplete: " + ", ".join(failures)
+        )
+
+
 def _assert_tool_schema_contracts() -> None:
     """Require every fail-closed schema/request boundary installed by finalization."""
 
@@ -200,6 +224,7 @@ def run_runtime_preflight() -> None:
             return
         checks = (
             ("wrapper-chain", _assert_wrapper_chain),
+            ("authoritative-requirements", _assert_authoritative_requirement_path),
             ("tool-schema-contracts", _assert_tool_schema_contracts),
             ("routing-intent", _assert_routing_intent_alignment),
             ("generation-concurrency", _assert_generation_concurrency_guards),
