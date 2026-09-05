@@ -239,7 +239,7 @@ def _assert_unordered_retrieval_canonicalization() -> None:
     if stable != {"facts": ["a", "b"]}:
         raise RuntimePreflightError(f"set-valued retrieval state is not canonical: {stable!r}")
     left = evidence_fingerprint({"facts": {"a", "b"}})
-    right = evidence_fingerprint({"facts": frozenset(("b", "a")))
+    right = evidence_fingerprint({"facts": frozenset(("b", "a"))})
     if not left or left != right:
         raise RuntimePreflightError("equivalent unordered retrieval evidence fingerprints diverged")
 
