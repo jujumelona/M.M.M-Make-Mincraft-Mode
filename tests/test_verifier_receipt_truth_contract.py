@@ -28,14 +28,13 @@ def _source_receipt():
 
 
 def test_generation_success_is_explicitly_phase_only_not_verified():
+    original = {"schema_version": "mmm/generation-work-node-v1", "status": "SUCCEEDED"}
     receipt = _decorate_receipt(
         _row("generate:custom", "generate-custom-00000001"),
-        {"schema_version": "mmm/generation-work-node-v1", "status": "SUCCEEDED"},
+        original,
     )
-    evidence = receipt["_mmm_completion_evidence"]
-    assert evidence["completion_scope"] == "phase_only"
-    assert evidence["verifier"] is None
-    assert evidence["input_hash"] == "sha256:input"
+    assert receipt == original
+    assert "_mmm_completion_evidence" not in receipt
 
 
 def test_source_validation_pass_requires_actual_checks_and_snapshot_manifest():
