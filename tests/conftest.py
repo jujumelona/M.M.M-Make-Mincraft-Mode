@@ -85,8 +85,8 @@ def _complete_partial_test_target(target):
     planning layer directly and therefore bypass the normal provider-resolution owner.
     For those modules only, fill missing receipt metadata with deterministic synthetic
     evidence while preserving every explicitly supplied coordinate, including invalid
-    values that a test may be exercising. Minecraft 26.1+ uses native names, so missing
-    legacy mapping coordinates stay empty and the Java baseline is 25 rather than 21.
+    values that a test may be exercising. Minecraft 26.1+ uses native names, so absent
+    legacy mapping coordinates remain absent and the Java baseline is 25 rather than 21.
     """
 
     if not isinstance(target, dict):
@@ -99,9 +99,6 @@ def _complete_partial_test_target(target):
     native_naming = _uses_native_naming(version)
     if native_naming:
         completed.setdefault("java_version", 25)
-        completed.setdefault("mappings_kind", "")
-        completed.setdefault("mappings_version", "")
-        completed.setdefault("yarn_mappings", "")
     else:
         mappings_version = str(
             completed.get("mappings_version")
