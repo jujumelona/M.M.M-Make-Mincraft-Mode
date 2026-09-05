@@ -17,7 +17,6 @@ from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
 from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
-from .training import TrainingTraceStore
 
 
 class ProductionToolService:
@@ -236,12 +235,6 @@ class ProductionToolService:
         target = self._resolve(output_dir)
         target.mkdir(parents=True, exist_ok=True)
         return run_model_smoke(role=role, profile=self.profile, output_dir=target, media_path=self._existing_file(media_path) if media_path else None)
-
-    def record_training_trace(self, trace: dict[str, Any], store_path: str='training/traces') -> dict[str, Any]:
-        return TrainingTraceStore(self._resolve(store_path)).record(trace)
-
-    def export_training_dataset(self, store_path: str='training/traces', output_path: str='training/mmm-fabric-coder-1201.jsonl') -> dict[str, Any]:
-        return TrainingTraceStore(self._resolve(store_path)).export_sft(self._resolve(output_path))
 
     @staticmethod
     def system_plugin_ids() -> dict[str, Any]:
