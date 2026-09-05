@@ -21,6 +21,7 @@ from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
 
+from .implementation_template_contract import build_implementation_template
 from .root_cause_trace import emit_root_cause, trace_scope
 
 _MARKER = "_mmm_small_model_task_capsule_v2"
@@ -394,6 +395,7 @@ def compact_task_local_module_contract(module: Any) -> dict[str, Any]:
     compact_task = {
         key: copy.deepcopy(task[key]) for key in _COMPACT_TASK_FIELDS if key in task
     }
+    compact_task["implementation_template"] = build_implementation_template(task)
     return {
         "module_id": str(getattr(module, "module_id", "")),
         "kind": str(getattr(module, "kind", "")),
