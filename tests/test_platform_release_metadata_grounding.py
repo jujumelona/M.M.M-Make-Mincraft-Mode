@@ -12,7 +12,7 @@ def _adapter(release_metadata_url: str) -> PlatformAdapter:
         edition="java",
         loader="fabric",
         minecraft_version="26.1.2",
-        java_version="21",
+        java_version="25",
         yarn_mappings="",
         mappings_kind="",
         mappings_version="",
