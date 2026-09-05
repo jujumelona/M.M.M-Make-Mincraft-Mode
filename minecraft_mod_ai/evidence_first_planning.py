@@ -1943,21 +1943,20 @@ def validate_evidence_first_plan(
             raise EvidencePlanError(f"Task {task_id} must own at least one anchor.")
         if not _strings(task.get("acceptance")):
             raise EvidencePlanError(f"Task {task_id} must declare acceptance checks.")
+        task_requirements = [
+            requirement
+            for requirement in requirements
+            if str(requirement.get("requirement_id") or "") in requirement_refs
+        ]
+        if len(task_requirements) != 1:
+            raise EvidencePlanError(
+                f"Task {task_id} must bind exactly one requirement for template validation."
+            )
+        task_requirement = task_requirements[0]
         profile = profile_for_capability(
-            str(next(iter(requirement_refs and [next(
-                requirement.get("capability")
-                for requirement in requirements
-                if str(requirement.get("requirement_id") or "") in requirement_refs
-            )], [""]))),
+            str(task_requirement.get("capability") or ""),
             semantic_type=str(
-                next(
-                    (
-                        requirement.get("semantic_type")
-                        for requirement in requirements
-                        if str(requirement.get("requirement_id") or "") in requirement_refs
-                    ),
-                    "gameplay_mechanic",
-                )
+                task_requirement.get("semantic_type") or "gameplay_mechanic"
             ),
         )
         if task.get("template_id") != profile.template_id:
