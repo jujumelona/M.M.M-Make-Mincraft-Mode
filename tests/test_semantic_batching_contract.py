@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
+from minecraft_mod_ai import evidence_request_guard
 from minecraft_mod_ai import planning_authority
+from minecraft_mod_ai import semantic_batching_contract as batching
 from minecraft_mod_ai import semantic_requirement_authority as semantic
 from minecraft_mod_ai.semantic_batching_contract import build_bounded_requirement_catalog
 
@@ -192,3 +194,19 @@ def test_model_cannot_emit_a_source_index_outside_its_current_batch():
         match="rejected bounded-batch model output",
     ):
         build_bounded_requirement_catalog(PROMPT, router=router)
+
+
+def test_reconciliation_rechecks_static_owner_after_initial_install(monkeypatch):
+    batching.install_semantic_batching_contract()
+
+    def unbounded_replacement(prompt: str, router: Any | None = None) -> dict[str, Any]:
+        return {"prompt": prompt, "router": router}
+
+    monkeypatch.setattr(
+        evidence_request_guard,
+        "build_authoritative_request_catalog",
+        unbounded_replacement,
+    )
+
+    with pytest.raises(RuntimeError, match="not statically wired"):
+        batching.install_semantic_batching_contract()
