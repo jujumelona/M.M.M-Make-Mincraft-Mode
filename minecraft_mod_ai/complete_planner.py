@@ -12,10 +12,15 @@ from .complete_spec import (
     ProductionModule,
     complete_proposal_from_parts,
 )
-from .evidence_first_planning import compile_evidence_first_plan, task_batches
+from .evidence_execution_contract import task_batches
+from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
+from .research_derived_requirements import (
+    attach_derived_requirement_ledger,
+    derive_research_requirements,
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +40,8 @@ class CompleteGameDesignPlanner:
 
     The live path is a compiler-like sequence owned by :class:`PlanningPipeline`:
     semantic design -> platform receipt -> target evidence -> evidence PlanIR ->
-    production DAG. Runtime installers do not decide whether a failed stage may advance.
+    research-derived implementation requirements -> typed production DAG.
+    Runtime installers do not decide whether a failed stage may advance.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -87,8 +93,27 @@ class CompleteGameDesignPlanner:
                 "evidence-first PlanIR compilation failed",
                 cause=exc,
             ) from exc
+
+        try:
+            derived_ledger = derive_research_requirements(
+                self.router,
+                prompt=prompt,
+                evidence_plan=evidence_plan,
+                research_brief=artifacts.research_brief,
+                technical_evidence=artifacts.technical_evidence,
+                game_design=internal_design,
+            )
+            evidence_plan = attach_derived_requirement_ledger(evidence_plan, derived_ledger)
+        except Exception as exc:
+            raise PlanningStageError(
+                PlanningStage.EVIDENCE,
+                "research-derived requirement closure failed",
+                cause=exc,
+            ) from exc
+
         internal_design = {
             **internal_design,
+            "_derived_requirement_ledger": derived_ledger,
             "_evidence_first_plan": evidence_plan,
         }
         batches = _evidence_host_batches(evidence_plan)
@@ -292,6 +317,7 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
                 for reference in task.get("requirement_refs", ())
                 if reference in requirements
             ],
+            "derived_requirements": list(task.get("derived_requirements") or ()),
         }
         batches.append(
             _ProductionBatch(
