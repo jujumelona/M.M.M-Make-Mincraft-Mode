@@ -33,6 +33,7 @@ def finalize_runtime() -> None:
             complete_orchestrator,
             complete_orchestrator_support,
             complete_spec,
+            evidence_first_planning,
             execution_feedback_replan_contract,
             external_agent_bridge,
             external_mcp_router,
@@ -53,6 +54,7 @@ def finalize_runtime() -> None:
             retrieval_cpu_budget_contract,
             small_model_hybrid_search_contract,
             small_model_max_agent_contract,
+            small_model_task_capsule_contract,
             work_graph,
         )
         from .agent_observation_determinism import install as install_observation_determinism
@@ -72,6 +74,7 @@ def finalize_runtime() -> None:
         from .generation_boundary_reconciliation import install as install_generation_boundary_reconciliation
         from .generation_concurrency_safety import install as install_generation_safety
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
+        from .implementation_template_contract import install as install_implementation_template
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
@@ -158,6 +161,11 @@ def finalize_runtime() -> None:
         install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
+        install_implementation_template(
+            planning_module=evidence_first_planning,
+            planner_template_module=planner_template_schema,
+            task_capsule_module=small_model_task_capsule_contract,
+        )
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
