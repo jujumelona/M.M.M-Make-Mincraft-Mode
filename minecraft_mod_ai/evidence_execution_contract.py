@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Typed lowering from immutable EvidenceFirstPlan to executable task contracts.
 
-The semantic PlanIR remains reproducible and independently validated.  This layer fixes
+The semantic PlanIR remains reproducible and independently validated. This layer fixes
 execution concerns that must not be encoded as fake user requirements: production vs
 resource vs verification ownership, task-local source gates, and evidence-backed derived
 implementation obligations handed to the coding agent.
@@ -19,7 +19,7 @@ from .evidence_first_planning import validate_evidence_first_plan
 _PRODUCTION_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
 _RESOURCE_KINDS = frozenset({"resource"})
 _TEST_KIND = "test"
-_PRODUCTION_COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
+_SOURCE_OWNERSHIP_GATE = "source_static_validation"
 
 
 def _canonical(value: Any) -> str:
@@ -104,22 +104,30 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     ownership = _mapping(plan.get("ownership_context"))
     anchors = _anchors(task)
     kinds = {str(item.get("kind") or "") for item in anchors}
-    has_production = bool(kinds & _PRODUCTION_KINDS)
+    has_production_binding = bool(kinds & _PRODUCTION_KINDS)
+    has_source = "symbol" in kinds
     has_resource = bool(kinds & _RESOURCE_KINDS)
     has_test = _TEST_KIND in kinds
 
-    # A semantic runtime verification step must not be handed to a small coder as a
-    # test-only implementation. Give it a concrete production symbol and keep its
-    # GameTest anchor so implementation and verification stay in one bounded task.
-    if _runtime_capability(task) and has_test and not has_production and not has_resource:
+    # A final runtime capability cannot be handed to a small coder as a test-only
+    # implementation. Give that task one concrete source owner while retaining its
+    # GameTest. Registry/resource-only planning steps are not source files and must not
+    # receive fabricated Java classes merely to satisfy a validator.
+    if (
+        _runtime_capability(task)
+        and has_test
+        and not has_production_binding
+        and not has_resource
+    ):
         anchors.append(_source_anchor(task_id, ownership))
-        has_production = True
+        has_production_binding = True
+        has_source = True
         task["semantic_outcome"] = (
             "Implement the production behavior, then verify the complete semantic outcome: "
             + str(task.get("semantic_outcome") or task_id)
         )
         task["execution_role"] = "production_with_verification"
-    elif has_production:
+    elif has_production_binding:
         task["execution_role"] = "production"
     elif has_resource:
         task["execution_role"] = "resource"
@@ -128,12 +136,13 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     else:
         task["execution_role"] = "invalid"
 
-    # source_static_validation and target_compile are production-owner gates in this
-    # task graph. Resource/verification work participates through its downstream
-    # production owner; assigning these gates locally falsely demands a Java symbol.
+    # source_static_validation asserts task-local source ownership. Remove only that
+    # gate when the task owns no source symbol. target_compile is deliberately retained:
+    # registry/resource changes can still invalidate the target build even though they
+    # do not own a Java source file themselves.
     gates = list(_strings(task.get("required_gates")))
-    if not has_production:
-        gates = [gate for gate in gates if gate not in _PRODUCTION_COMPILE_GATES]
+    if not has_source:
+        gates = [gate for gate in gates if gate != _SOURCE_OWNERSHIP_GATE]
     task["required_gates"] = gates
     task["owned_anchors"] = anchors
 
