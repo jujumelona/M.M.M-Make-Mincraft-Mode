@@ -7,16 +7,28 @@ from minecraft_mod_ai.ledger_regression_execution import (
     REGRESSION_EXECUTION_ROUTES,
     audit_regression_execution_routes,
 )
-from minecraft_mod_ai.ledger_traceability import REGRESSION_MANIFEST
+from minecraft_mod_ai.ledger_trace_registry import (
+    REGRESSION_MANIFEST,
+    validate_executable_manifest_snapshot,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_all_ledger_regressions_have_executable_routes() -> None:
+    validate_executable_manifest_snapshot()
     assert set(REGRESSION_MANIFEST) == EXPECTED_REGRESSION_IDS
     assert set(REGRESSION_EXECUTION_ROUTES) == EXPECTED_REGRESSION_IDS
     assert len(REGRESSION_EXECUTION_ROUTES) == 39
+    assert all(
+        route.execution_status == "executable"
+        for route in REGRESSION_MANIFEST.values()
+    )
+    assert all(
+        REGRESSION_MANIFEST[regression_id].test_case == route.pytest_target
+        for regression_id, route in REGRESSION_EXECUTION_ROUTES.items()
+    )
     assert audit_regression_execution_routes(REPOSITORY_ROOT) == ()
 
 
