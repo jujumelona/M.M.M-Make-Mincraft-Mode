@@ -62,8 +62,8 @@ def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
         [
             {
                 "requirements": [
-                    _item("resource.gathering", "gather crystals", clause_index=0),
-                    _item("world.travel", "travel to a new region", clause_index=1),
+                    _item("resource.mining", "gather crystals", clause_index=0),
+                    _item("space.travel", "travel to a new region", clause_index=1),
                 ]
             }
         ]
@@ -79,8 +79,8 @@ def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
     assert router.calls[0]["kwargs"]["response_format"] == "text"
     assert router.calls[0]["kwargs"]["response_schema"] is None
     assert {item["capability"] for item in catalog["requirements"]} == {
-        "resource.gathering",
-        "world.travel",
+        "resource.mining",
+        "space.travel",
     }
     assert catalog["semantic_audit"]["normal_model_turns"] == 1
     assert catalog["semantic_audit"]["max_repair_turns"] == 0
@@ -95,7 +95,7 @@ def test_minor_model_copy_error_is_host_aligned_without_retry():
             {
                 "requirements": [
                     _item(
-                        "vehicle.spacecraft.assembly",
+                        "spacecraft.component_construction",
                         "우무선을 부위마다 만들어서 만들수있고",
                     )
                 ]
@@ -120,7 +120,7 @@ def test_native_tool_schema_exposes_semantics_not_provenance():
         [
             {
                 "requirements": [
-                    _item("resource.collection", "collect fragments")
+                    _item("resource.mining", "collect fragments")
                 ]
             }
         ]
@@ -151,7 +151,7 @@ def test_two_requirements_in_one_clause_receive_distinct_exact_host_spans():
         [
             {
                 "requirements": [
-                    _item("resource.gathering", "gather"),
+                    _item("resource.mining", "gather"),
                     _item("economy.trade", "trade crystals"),
                 ]
             }
@@ -176,7 +176,7 @@ def test_invalid_clause_rejects_atomic_batch_without_second_model_call():
         [
             {
                 "requirements": [
-                    _item("resource.gathering", "gather crystals", clause_index=0),
+                    _item("resource.mining", "gather crystals", clause_index=0),
                     _item("semantic_13ee7693e9ed", "open a portal", clause_index=1),
                 ]
             },
@@ -201,8 +201,8 @@ def test_unrelated_anchor_is_rejected_without_repair_call():
     prompt = "Players gather crystals."
     router = TextRouter(
         [
-            {"requirements": [_item("resource.gathering", "build a submarine")]},
-            {"requirements": [_item("resource.gathering", "gather crystals")]},
+            {"requirements": [_item("resource.mining", "build a submarine")]},
+            {"requirements": [_item("resource.mining", "gather crystals")]},
         ]
     )
 
@@ -235,14 +235,15 @@ def test_invalid_semantics_make_exactly_one_model_call():
 
 def test_model_cannot_promote_design_provenance_or_dependencies():
     prompt = "Players exchange collected items."
-    supplied = _item("economy.exchange", "exchange collected items")
+    supplied = _item("economy.trade", "exchange collected items")
     supplied["provenance_role"] = "selected_design_alternative"
     supplied["depends_on"] = ["anything"]
     router = TextRouter([{"requirements": [supplied]}])
 
-    catalog = build_approved_requirement_catalog(prompt, router)
+    with pytest.raises(
+        EvidencePlanError,
+        match="semantic requirement authority rejected invalid model output",
+    ):
+        build_approved_requirement_catalog(prompt, router)
 
-    requirement = catalog["requirements"][0]
-    assert requirement["provenance_role"] == "explicit"
-    assert requirement["depends_on"] == []
-    assert requirement["derived_from"] == []
+    assert len(router.calls) == 1
