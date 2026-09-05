@@ -19,9 +19,9 @@ def _adapter() -> PlatformAdapter:
         loader="fabric",
         minecraft_version="27.0",
         java_version="21",
-        yarn_mappings="mojang",
-        mappings_kind="mojang",
-        mappings_version="mojang",
+        yarn_mappings="",
+        mappings_kind="",
+        mappings_version="",
         fabric_loader="0.18.2",
         fabric_api="0.140.0+27.0",
         fabric_loom="1.11.8",
@@ -145,8 +145,9 @@ def test_official_bootstrap_writer_preserves_full_immutable_receipt(tmp_path) ->
     )
     assert payload["schema_version"] == "mmm/generated-platform-lock-v4"
     assert payload["adapter_id"] == adapter.adapter_id
-    assert payload["mappings_kind"] == adapter.mappings_kind
-    assert payload["mappings_version"] == adapter.mappings_version
+    assert "yarn_mappings" not in payload
+    assert "mappings_kind" not in payload
+    assert "mappings_version" not in payload
     assert payload["gradle_sha256"] == adapter.gradle_sha256
     assert payload["gradle_distribution_url"].endswith("gradle-9.1.0-bin.zip")
     assert payload["data_pack_version"] == adapter.data_pack_version
@@ -176,8 +177,9 @@ def test_final_rebind_writer_cannot_downgrade_complete_lock(tmp_path) -> None:
         (tmp_path / ".minecraft_ai" / "platform-lock.json").read_text(encoding="utf-8")
     )
     assert payload["schema_version"] == "mmm/generated-platform-lock-v4"
-    assert payload["mappings_kind"] == adapter.mappings_kind
-    assert payload["mappings_version"] == adapter.mappings_version
+    assert "yarn_mappings" not in payload
+    assert "mappings_kind" not in payload
+    assert "mappings_version" not in payload
     assert payload["data_pack_version"] == adapter.data_pack_version
     assert payload["resource_pack_version"] == adapter.resource_pack_version
     assert payload["resource_pack_format"] == adapter.resource_pack_format
