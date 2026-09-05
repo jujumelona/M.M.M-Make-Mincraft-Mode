@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .json_stream import canonical_json_sha256
+from .target_profile_semantics import minimum_java_major, uses_native_names
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
@@ -51,7 +52,6 @@ _PLATFORM_EXTENDED_FIELDS = (
     "receipt_sha256",
 )
 _PLATFORM_MAPPING_FIELDS = ("mappings_kind", "mappings_version")
-_NATIVE_NAME_MIN_VERSION = (26, 1)
 JAVA_RESERVED_WORDS = frozenset(
     {
         "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
@@ -130,26 +130,9 @@ def platform_receipt_sha256(value: Any) -> str:
     return canonical_json_sha256(platform_receipt_payload(value))
 
 
-def _version_tuple(value: str) -> tuple[int, ...]:
-    parts = str(value or "").split(".")
-    if not parts or not all(part.isdigit() for part in parts):
-        return ()
-    return tuple(int(part) for part in parts)
-
-
-def _uses_native_names(value: str) -> bool:
-    version = _version_tuple(value)
-    return len(version) >= 2 and version[:2] >= _NATIVE_NAME_MIN_VERSION
-
-
 @dataclass(frozen=True)
 class PlatformLock:
-    """Immutable coordinates copied from one already-validated provider receipt.
-
-    Provider/network validation belongs to platform resolution. This value object is
-    intentionally validated offline so proposal hashing, persistence, loading, approval,
-    and deterministic validation cannot rediscover the target or depend on network state.
-    """
+    """Immutable coordinates copied from one already-validated provider receipt."""
 
     edition: str = ""
     loader: str = ""
@@ -199,7 +182,10 @@ class PlatformLock:
             for field_name in required
         ):
             return False
-        if _uses_native_names(self.minecraft_version):
+        if not self.minecraft_version.strip():
+            return False
+        native_names = uses_native_names(self.minecraft_version)
+        if native_names:
             return not any(
                 str(_platform_receipt_value(self, field_name, "") or "").strip()
                 for field_name in (*_PLATFORM_MAPPING_FIELDS, "yarn_mappings")
@@ -210,7 +196,15 @@ class PlatformLock:
         ) and bool(self.yarn_mappings.strip())
 
     def validate(self) -> None:
-        native_names = _uses_native_names(self.minecraft_version)
+        if self.is_unresolved():
+            raise SpecValidationError(
+                "Platform target is unresolved. Resolve one executable provider receipt "
+                "before approval or generation."
+            )
+        try:
+            native_names = uses_native_names(self.minecraft_version)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
         coordinates = {
             "edition": self.edition,
             "loader": self.loader,
@@ -223,11 +217,6 @@ class PlatformLock:
         }
         if not native_names:
             coordinates["yarn_mappings"] = self.yarn_mappings
-        if not any(coordinates.values()):
-            raise SpecValidationError(
-                "Platform target is unresolved. Resolve one executable provider receipt "
-                "before approval or generation."
-            )
         if not all(str(value).strip() for value in coordinates.values()):
             raise SpecValidationError(
                 "Platform target is partial. A platform lock must be either fully "
@@ -320,15 +309,10 @@ class PlatformLock:
             raise SpecValidationError(
                 "Platform lock release metadata must be an official Minecraft/Mojang HTTPS URL."
             )
-        mc_tuple = _version_tuple(self.minecraft_version)
-        if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5) and int(self.java_version) < 21:
+        minimum_java = minimum_java_major(self.minecraft_version)
+        if minimum_java is not None and int(self.java_version) < minimum_java:
             raise SpecValidationError(
-                f"Minecraft {self.minecraft_version} requires a Java 21+ execution target; "
-                f"got Java {self.java_version}."
-            )
-        if native_names and int(self.java_version) < 25:
-            raise SpecValidationError(
-                f"Minecraft {self.minecraft_version} native-name target requires Java 25+; "
+                f"Minecraft {self.minecraft_version} requires Java {minimum_java}+ execution target; "
                 f"got Java {self.java_version}."
             )
         if self.mappings_kind == "yarn":
