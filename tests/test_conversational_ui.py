@@ -90,12 +90,16 @@ def test_ui_uses_server_state_without_raw_json_or_hash_controls(tmp_path) -> Non
 
 
 def test_each_ui_execution_gets_a_new_output_root(tmp_path) -> None:
-    proposal = MinecraftModPipeline().plan("단풍 아이템 하나를 만들어줘")
+    # This test owns output-root isolation, not live platform discovery. Keep the
+    # proposal unresolved so the test runtime fixture supplies its reviewed synthetic
+    # deterministic target instead of accidentally exercising an unsupported live
+    # release through the legacy FabricProjectGenerator path.
+    proposal = HeuristicPlanner().plan("단풍 아이템 하나를 만들어줘")
     first_root = _new_execution_root(tmp_path)
     second_root = _new_execution_root(tmp_path)
     assert first_root != second_root
 
-    pipeline = MinecraftModPipeline()
+    pipeline = MinecraftModPipeline(planner=HeuristicPlanner())
     first = pipeline.execute(
         proposal,
         approval_hash=proposal.approval_hash,
