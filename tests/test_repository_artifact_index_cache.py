@@ -46,6 +46,7 @@ def test_immutable_repository_index_and_graph_are_reused() -> None:
     assert calls == [("owner/reference-mod", "b" * 40)]
     assert first.metadata["index_cache_hits"] == 1
     assert first.metadata["graph_cache_hits"] == 1
+    assert first.text_by_path == {}
 
 
 def test_cache_identity_includes_tree_and_fetcher_provenance() -> None:
@@ -112,3 +113,45 @@ def test_dependency_graph_is_not_reused_for_a_different_target_context() -> None
 
     assert neoforge_graph is not fabric_graph
     assert calls == 1
+
+
+def test_local_blob_retention_is_byte_bounded(
+    monkeypatch,
+) -> None:
+    clear_repository_artifact_index_cache()
+    monkeypatch.setenv("MMM_REPOSITORY_ARTIFACT_BLOB_CACHE_BYTE_BUDGET", "65536")
+    source_a = (
+        b"package demo.reference; public class First { public void trade() {} }\n"
+        + b"// padding\n" * 3500
+    )
+    source_b = (
+        b"package demo.reference; public class Second { public void purchase() {} }\n"
+        + b"// padding\n" * 3500
+    )
+    blobs = {"b" * 40: source_a, "c" * 40: source_b}
+    tree = [
+        {
+            "path": "src/main/java/demo/reference/First.java",
+            "sha": "b" * 40,
+            "type": "blob",
+        },
+        {
+            "path": "src/main/java/demo/reference/Second.java",
+            "sha": "c" * 40,
+            "type": "blob",
+        },
+    ]
+
+    index = RepositoryArtifactIndex.build_from_tree(
+        "owner/large-reference-mod",
+        "a" * 40,
+        tree,
+        blob_fetcher=lambda _repository, sha: blobs[sha],
+    )
+    graph = index.build_dependency_graph()
+
+    assert graph.nodes
+    assert index._blob_cache_bytes <= 65536
+    assert index.metadata["blob_cache_bytes"] <= 65536
+    assert index.metadata["blob_cache_evictions"] >= 1
+    assert index.text_by_path == {}
