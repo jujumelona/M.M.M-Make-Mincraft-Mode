@@ -55,18 +55,20 @@ def _step(
     )
 
 
-def _semantic_contract(capability: str) -> tuple[TemplateStep, str]:
+def _semantic_contract(capability: str) -> tuple[tuple[TemplateStep, ...], str]:
     contract = _token("semantic_contract", capability)
     return (
-        _step(
-            "semantic_contract",
-            (
-                f"Freeze the authored inputs, authoritative state owner, state transitions, "
-                f"integration boundary and observable success/rejection contract for {capability}"
+        (
+            _step(
+                "semantic_contract",
+                (
+                    f"Freeze the authored inputs, authoritative state owner, state transitions, "
+                    f"integration boundary and observable success/rejection contract for {capability}"
+                ),
+                (ROOT_PROVIDE,),
+                (contract,),
+                ("symbol", "test"),
             ),
-            (ROOT_PROVIDE,),
-            (contract,),
-            ("symbol", "test"),
         ),
         contract,
     )
