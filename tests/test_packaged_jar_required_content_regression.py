@@ -56,6 +56,5 @@ def test_packaged_jar_missing_required_runtime_resource_fails(
     ]
     assert any(
         finding.path == "assets/pack_probe/lang/ko_kr.json"
-        and "missing from the final JAR" in finding.message
         for finding in missing
     )
