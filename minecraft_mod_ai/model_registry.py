@@ -27,6 +27,7 @@ REQUIRED_ROLES = frozenset(
         "image_generator",
     }
 )
+_FOUNDATION_ROLES = ("planner", "researcher", "coder", "coder_safe")
 ALLOWED_ADAPTERS = frozenset(
     {
         "mock",
@@ -91,6 +92,55 @@ def _read_registry_source(path: Path) -> tuple[str, dict[str, Any]]:
     return value
 
 
+def _foundation_identity(config: AdapterConfig) -> tuple[str, str, str, str]:
+    return (
+        str(config.provider or ""),
+        str(config.adapter or ""),
+        str(config.model_id or ""),
+        str(config.base_url or ""),
+    )
+
+
+def _validate_single_foundation_model(
+    profile_name: str,
+    roles: Mapping[str, AdapterConfig],
+) -> None:
+    """Reject hidden role-to-role foundation-model orchestration.
+
+    Embedding, reranking and image generation are dedicated capabilities and are not
+    foundation-agent roles. Planner/researcher/coder/coder_safe must share one selected
+    foundation runtime identity for the run. Role-specific prompt/sampling/token budgets
+    remain allowed because they do not load a second foundation model.
+    """
+
+    selected = [
+        (role, roles[role])
+        for role in _FOUNDATION_ROLES
+        if role in roles
+    ]
+    if len(selected) <= 1:
+        return
+    identities = {
+        _foundation_identity(config)
+        for _role, config in selected
+    }
+    if len(identities) == 1:
+        return
+    rendered = {
+        role: {
+            "provider": config.provider,
+            "adapter": config.adapter,
+            "model_id": config.model_id,
+            "base_url": config.base_url,
+        }
+        for role, config in selected
+    }
+    raise ModelConfigurationError(
+        f"Profile {profile_name!r} assigns different foundation models/endpoints by role; "
+        f"MMM requires one selected foundation model per run: {rendered!r}"
+    )
+
+
 class ModelRegistry:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = (
@@ -128,6 +178,7 @@ class ModelRegistry:
             role: self._resolve_role(role, config)
             for role, config in raw_roles.items()
         }
+        _validate_single_foundation_model(name, roles)
         profile = ModelProfile(
             name=name,
             description=str(raw_profile.get("description", "")),
@@ -249,11 +300,11 @@ def _positive_int(value: Any, field: str) -> int:
 
 
 def _completion_budget(value: Any, field: str) -> int:
-    """Accept a positive bound or llama.cpp's native unlimited sentinel."""
+    """Require a finite positive generation bound for every model request."""
 
-    if type(value) is not int or (value != -1 and value <= 0):
+    if type(value) is not int or value <= 0:
         raise ModelConfigurationError(
-            f"{field} must be -1 (unlimited) or a positive integer."
+            f"{field} must be a finite positive integer; unlimited generation is forbidden."
         )
     return value
 
