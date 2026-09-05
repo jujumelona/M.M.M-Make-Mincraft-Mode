@@ -16,4 +16,4 @@ def test_local_model_pins_verified_qwen_runtime_and_published_fastpath() -> None
     assert all(not requirement.startswith('bitsandbytes') for requirement in local_model)
     assert bnb == ["bitsandbytes>=0.45,<1; sys_platform == 'linux'"]
     assert qwen_fastpath == [fla_requirement]
-    assert extras['training'] == []
+    assert 'training' not in extras
