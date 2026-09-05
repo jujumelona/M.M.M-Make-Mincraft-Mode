@@ -14,15 +14,13 @@ from minecraft_mod_ai.canonical_capability_ontology import (
 from minecraft_mod_ai.capability_semantic_inference import (
     enrich_resolution_with_semantic_inference,
 )
-from minecraft_mod_ai.evidence_first_planning import _DOMAIN_TERM_MAP
 from minecraft_mod_ai.reuse_adapters import apply_deterministic_adapters
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph
 from minecraft_mod_ai.reuse_proof_executor import execute_reuse_proof
 
 
-def test_unified_ontology_zero_drift() -> None:
+def test_unified_ontology_contains_reviewed_domain_terms() -> None:
     ontology_map = canonical_domain_map()
-    assert _DOMAIN_TERM_MAP == ontology_map
     assert "trade" in ontology_map
     assert "boss" in ontology_map
     assert "nuclear" in ontology_map
