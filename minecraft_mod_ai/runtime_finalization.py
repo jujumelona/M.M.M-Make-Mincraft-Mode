@@ -103,6 +103,7 @@ def finalize_runtime() -> None:
         from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
+        from .verifier_receipt_truth_contract import install as install_verifier_receipt_truth
         from .work_graph_receipt_integrity_contract import install as install_work_graph_receipt_integrity
 
         install_agent_mcp_transport_pool()
@@ -118,8 +119,6 @@ def finalize_runtime() -> None:
             external_mcp_router_module=external_mcp_router,
             research_rag_performance_module=research_rag_performance,
         )
-        # Keep one-run root-cause tracing outside the performance wrapper so transport
-        # START/PASS/FAIL evidence cannot be bypassed by the non-blocking hot path.
         install_mcp_child_trace(mcp_transport_pool)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
@@ -148,6 +147,7 @@ def finalize_runtime() -> None:
         install_llama_finish_reason(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
         install_work_graph_receipt_integrity(work_graph)
+        install_verifier_receipt_truth(work_graph)
 
         install_evidence_first_pipeline()
         install_evidence_task_receipts()
@@ -174,17 +174,12 @@ def finalize_runtime() -> None:
             work_graph_module=work_graph,
         )
 
-        # Approval-bound execution contracts are deliberately finalized here, after the
-        # baseline runtime has been composed. This file is the sole approved late owner.
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
         install_planner_graph_integrity()
         install_runtime_regression_reconciliation()
         install_generation_boundary_reconciliation()
 
-        # This must remain the outermost generation contract. The planner and generic
-        # RAG/localization layers are useful inputs, but they may never regain authority
-        # to select a different writable file or make a small coder reproduce long paths.
         install_small_model_task_capsule()
         assert_small_model_task_capsule()
 
