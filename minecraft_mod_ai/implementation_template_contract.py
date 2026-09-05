@@ -11,7 +11,6 @@ change target coordinates, or rewrite host-owned dependency/artifact contracts.
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from functools import wraps
 from typing import Any
 
 SCHEMA = "mmm/implementation-template-v1"
@@ -465,155 +464,9 @@ def sanitize_hole_fills(
     return result
 
 
-def _evidence_contracts(value: Any) -> tuple[Mapping[str, Any], ...]:
-    if not isinstance(value, Mapping):
-        return ()
-    return tuple(item for item in value.values() if isinstance(item, Mapping))
-
-
-def install(
-    *,
-    planning_module: Any,
-    planner_template_module: Any,
-    task_capsule_module: Any,
-) -> None:
-    """Install one explicit template authority after task/artifact enrichment."""
-    current_tasks = planning_module._compile_tasks
-    if not getattr(current_tasks, "_mmm_detailed_implementation_template", False):
-
-        @wraps(current_tasks)
-        def compile_tasks(gaps, reuse, target, branches, ownership):
-            tasks = current_tasks(gaps, reuse, target, branches, ownership)
-            result: list[dict[str, Any]] = []
-            for raw in tasks:
-                task = dict(raw)
-                task["implementation_template"] = build_implementation_template(task)
-                task["task_sha256"] = ""
-                task["task_sha256"] = planning_module._hash_without(task, "task_sha256")
-                result.append(task)
-            return tuple(result)
-
-        compile_tasks._mmm_detailed_implementation_template = True
-        planning_module._compile_tasks = compile_tasks
-
-    existing_fields = tuple(task_capsule_module._COMPACT_TASK_FIELDS)
-    task_capsule_module._COMPACT_TASK_FIELDS = tuple(
-        dict.fromkeys(
-            [
-                *existing_fields,
-                "implementation_capabilities",
-                "design_resolution_obligations",
-                "runtime_acceptance",
-                "semantic_type",
-                "unlock_policy",
-                "implementation_template",
-            ]
-        )
-    )
-
-    planner_template_module.MODEL_TASK_DETAIL_KEYS = frozenset(
-        {
-            *planner_template_module.MODEL_TASK_DETAIL_KEYS,
-            "hole_fills",
-        }
-    )
-
-    current_skeleton = planner_template_module.build_batch_skeleton
-    if not getattr(current_skeleton, "_mmm_detailed_implementation_template", False):
-
-        @wraps(current_skeleton)
-        def build_batch_skeleton(*args: Any, **kwargs: Any):
-            result = current_skeleton(*args, **kwargs)
-            contracts = _evidence_contracts(kwargs.get("host_module_contracts"))
-            if not contracts and len(args) >= 7:
-                contracts = _evidence_contracts(args[6])
-            if not contracts:
-                return result
-
-            for module in result.get("modules", []):
-                if not isinstance(module, dict):
-                    continue
-                config = module.get("config")
-                if not isinstance(config, dict):
-                    continue
-                evidence_task = config.get("evidence_task")
-                if isinstance(evidence_task, Mapping):
-                    implementation_template = evidence_task.get("implementation_template")
-                    if isinstance(implementation_template, Mapping):
-                        config["implementation_template"] = dict(implementation_template)
-
-            acceptance_explicit = bool(kwargs.get("acceptance_tests")) or (
-                len(args) >= 8 and bool(args[7])
-            )
-            deliverables_explicit = bool(kwargs.get("deliverables")) or (
-                len(args) >= 3 and bool(args[2])
-            )
-            if not acceptance_explicit:
-                result["acceptance_tests"] = list(
-                    dict.fromkeys(
-                        item
-                        for contract in contracts
-                        for item in _strings(
-                            contract.get("public_acceptance")
-                            or contract.get("acceptance")
-                            or contract.get("internal_invariants")
-                        )
-                    )
-                )
-            if not deliverables_explicit:
-                result["completed_deliverables"] = list(
-                    dict.fromkeys(
-                        item
-                        for contract in contracts
-                        for item in _strings(contract.get("provides"))
-                    )
-                )
-            return result
-
-        build_batch_skeleton._mmm_detailed_implementation_template = True
-        planner_template_module.build_batch_skeleton = build_batch_skeleton
-
-    current_merge = planner_template_module.merge_model_output_into_skeleton
-    if not getattr(current_merge, "_mmm_hole_fill_authority", False):
-
-        @wraps(current_merge)
-        def merge_model_output_into_skeleton(skeleton, model_output, valid_module_catalog):
-            result = current_merge(skeleton, model_output, valid_module_catalog)
-            for module in result.get("modules", []):
-                if not isinstance(module, dict):
-                    continue
-                config = module.get("config")
-                if not isinstance(config, dict):
-                    continue
-                implementation_template = config.get("implementation_template")
-                if not isinstance(implementation_template, Mapping):
-                    evidence_task = config.get("evidence_task")
-                    implementation_template = (
-                        evidence_task.get("implementation_template")
-                        if isinstance(evidence_task, Mapping)
-                        else None
-                    )
-                model_fill = config.get("model_fill")
-                if not isinstance(model_fill, dict) or not isinstance(
-                    implementation_template, Mapping
-                ):
-                    continue
-                model_fill["hole_fills"] = sanitize_hole_fills(
-                    implementation_template,
-                    model_fill.get("hole_fills"),
-                )
-            return result
-
-        merge_model_output_into_skeleton._mmm_hole_fill_authority = True
-        planner_template_module.merge_model_output_into_skeleton = (
-            merge_model_output_into_skeleton
-        )
-
-
 __all__ = [
     "MODEL_FILL_FIELDS",
     "SCHEMA",
     "build_implementation_template",
-    "install",
     "sanitize_hole_fills",
 ]
