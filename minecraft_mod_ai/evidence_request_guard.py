@@ -17,6 +17,7 @@ from typing import Any
 
 from . import evidence_first_planning as _evidence
 from .game_design import GameDesignPlanner
+from .requirement_acceptance import requirement_acceptance
 
 _INSTALLED = False
 _ORIGINAL_BUILD_REQUEST_CATALOG = _evidence.build_request_catalog
@@ -36,13 +37,7 @@ def active_authoritative_request_catalog(prompt: str) -> dict[str, Any] | None:
 
 
 class _StrictSemanticRouterProxy:
-    """Observe production semantic failures even if a downstream caller catches them.
-
-    ``evidence_first_planning`` historically caught router/JSON failures and silently
-    substituted its deterministic stub. That made a configured semantic model appear
-    successful while changing request meaning. This proxy records the original model
-    contract result so the request guard can fail closed after the legacy call returns.
-    """
+    """Observe production semantic failures even if a downstream caller catches them."""
 
     def __init__(self, router: Any) -> None:
         self._router = router
@@ -72,7 +67,9 @@ class _StrictSemanticRouterProxy:
             return raw
 
         candidates = payload.get("gameplay_capability_candidates")
-        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes, bytearray)):
+        if not isinstance(candidates, Sequence) or isinstance(
+            candidates, (str, bytes, bytearray)
+        ):
             self.failure_reason = "semantic router omitted gameplay_capability_candidates"
             return raw
         roots = tuple(str(item).strip() for item in candidates if str(item).strip())
@@ -101,12 +98,7 @@ def _original_catalog_strict(
 
 
 def _normalize_public_acceptance_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
-    """Re-establish the public/internal acceptance boundary for every requirement.
-
-    Stored or intermediate catalogs are not trusted to keep task-local integrity text
-    out of public acceptance. Normalize every requirement through the host-owned public
-    acceptance predicate and rebind the catalog hash whenever anything changes.
-    """
+    """Re-establish the public/internal acceptance boundary for every requirement."""
 
     raw_requirements = catalog.get("requirements")
     if not isinstance(raw_requirements, list):
@@ -127,9 +119,7 @@ def _normalize_public_acceptance_catalog(catalog: dict[str, Any]) -> dict[str, A
             else ()
         )
         capability = str(item.get("capability") or "requested behavior").strip()
-        public_acceptance = list(
-            _evidence._requirement_acceptance(capability, candidates)
-        )
+        public_acceptance = list(requirement_acceptance(capability, candidates))
         if item.get("acceptance") != public_acceptance:
             item["acceptance"] = public_acceptance
             changed = True
@@ -193,9 +183,6 @@ def _split_multi_root_requirements(catalog: dict[str, Any]) -> dict[str, Any]:
                     {"requirement_id": requirement_id, "layer": "artifact"},
                 )
             ]
-            # Raw authored text belongs in source_span/provenance, not repeated in
-            # every public acceptance criterion. Each semantic root gets a concise,
-            # independent observable contract instead.
             item["acceptance"] = [
                 f"Verify the observable player-facing behavior for capability {root}."
             ]
@@ -230,12 +217,7 @@ def build_authoritative_request_catalog(
     prompt: str,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Build one immutable host-owned request catalog.
-
-    Host-only callers keep the deterministic fallback. Production semantic callers use
-    the bounded approved-requirement helper directly, so bounded extraction is part of
-    the normal call graph rather than a runtime monkey-patch.
-    """
+    """Build one immutable host-owned request catalog."""
 
     if router is None:
         catalog = _original_catalog_strict(prompt, {}, router=None)
@@ -266,9 +248,6 @@ def install_evidence_request_guard() -> None:
         _INSTALLED = True
         return
 
-    # Capture the statically composed catalog builder before later compatibility
-    # installers can replace the public module attribute. The live guard therefore
-    # keeps one bounded production path without adding another runtime rebinding.
     request_catalog_builder = build_authoritative_request_catalog
 
     @wraps(original_plan)
