@@ -222,10 +222,21 @@ def build_bounded_requirement_catalog(
 build_bounded_requirement_catalog.__mmm_bounded_semantic_batching__ = True  # type: ignore[attr-defined]
 
 
+def _static_owner_chain_contains_bounded_builder(target: Any) -> bool:
+    current = target
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = getattr(current, "__code__", None)
+        names = set(getattr(code, "co_names", ()))
+        if "build_bounded_requirement_catalog" in names:
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
-    code = getattr(target, "__code__", None)
-    names = set(getattr(code, "co_names", ()))
-    if "build_bounded_requirement_catalog" not in names:
+    if not _static_owner_chain_contains_bounded_builder(target):
         raise RuntimeError(
             f"{owner} is not statically wired to build_bounded_requirement_catalog"
         )
