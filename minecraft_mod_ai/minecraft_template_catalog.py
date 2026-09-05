@@ -616,9 +616,13 @@ _TEMPLATE_DESIGN_OBLIGATIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# If both capabilities are explicitly selected, these edges are safe host-owned
-# integration dependencies. They never cause a missing feature to be invented.
+# Requirement-DAG predecessors are deliberately separate from ontology
+# ``default_dependencies``.  Ontology dependencies describe implementation/feature
+# composition and may point opposite authored gameplay progression (for example, a
+# launch implementation can reuse travel machinery).  Only causal gameplay edges that
+# are safe when both capabilities are explicitly selected belong here.
 _SELECTED_PREDECESSORS: dict[str, tuple[str, ...]] = {
+    "economy.trade": ("economy.currency",),
     "spacecraft.component_construction": (
         "resource.farming",
         "resource.mining",
@@ -628,23 +632,28 @@ _SELECTED_PREDECESSORS: dict[str, tuple[str, ...]] = {
     ),
     "spacecraft.weapon_upgrade": (
         "spacecraft.component_construction",
+        "spaceship.component_crafting",
         "economy.trade",
     ),
     "spacecraft.performance_upgrade": (
         "spacecraft.component_construction",
+        "spaceship.component_crafting",
         "economy.trade",
     ),
     "spacecraft.expansion": (
         "spacecraft.component_construction",
+        "spaceship.component_crafting",
         "economy.trade",
     ),
     "space.launch": (
         "spaceship.vehicle",
         "spacecraft.component_construction",
+        "spaceship.component_crafting",
     ),
-    "planet.special_mineral": ("space.launch",),
-    "alien.combat": ("space.launch", "combat.weapon"),
-    "colony.colonization": ("space.launch",),
+    "space.travel": ("space.launch",),
+    "planet.special_mineral": ("worldgen.planet", "space.launch"),
+    "alien.combat": ("space.launch", "combat.weapon", "item.weapon"),
+    "colony.colonization": ("worldgen.planet", "space.launch"),
 }
 
 RESEARCH_BASIS: tuple[dict[str, str], ...] = (
@@ -800,14 +809,7 @@ def selected_predecessor_capabilities(
         for item in selected_capabilities
         if (known := _known_capability(item)) is not None
     }
-    candidates = [
-        *(
-            dependency
-            for dependency in _DEFINITIONS[canonical].default_dependencies
-            if dependency in _DEFINITIONS
-        ),
-        *_SELECTED_PREDECESSORS.get(canonical, ()),
-    ]
+    candidates = _SELECTED_PREDECESSORS.get(canonical, ())
     return tuple(
         dict.fromkeys(
             candidate
