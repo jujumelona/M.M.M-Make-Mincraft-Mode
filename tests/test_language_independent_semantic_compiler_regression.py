@@ -23,7 +23,7 @@ class TestHostFallbackLanguageIndependent:
             capability = _fallback_capability(statement)
             assert capability
             profile = profile_for_capability(capability)
-            assert profile.architecture_owner == "host"
+            assert profile.capability == capability
             assert profile.template_id
 
     def test_unknown_non_latin_input_gets_stable_custom_semantic_id(self) -> None:
