@@ -10,9 +10,9 @@ from minecraft_mod_ai.dependency_decode_monitor import (
     activate_dependency_decode_monitor,
 )
 
-_TEST_MINECRAFT_VERSION = "1.21.11+mmm-test"
+_TEST_MINECRAFT_VERSION = "1.21.11"
 _TEST_LOADER = "fabric"
-_TEST_MAPPINGS = "1.21.11+mmm-test+test-mappings"
+_TEST_MAPPINGS = "1.21.11+test-mappings"
 _TEST_FABRIC_LOADER = "test-loader"
 _TEST_FABRIC_API = "test-api"
 _TEST_FABRIC_LOOM = "test-loom"
