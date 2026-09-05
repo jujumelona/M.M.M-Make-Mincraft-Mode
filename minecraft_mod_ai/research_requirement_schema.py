@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-"""Shared fixed schema for research-derived implementation facets."""
+"""Fixed host-owned research facet taxonomy and structural matching hints.
 
-from typing import Any
+This module intentionally contains no language-model response schema.  Model-owned
+seven-facet generation was removed; bounded model slots live in
+``research_requirement_template`` and cannot redefine these host facets.
+"""
 
 FACETS = (
     "state_lifecycle",
@@ -12,10 +15,6 @@ FACETS = (
     "registration_data_resources",
     "failure_edge_cases",
     "verification_testing",
-)
-
-DISPOSITIONS = frozenset(
-    {"derived", "already_covered", "not_applicable", "unresolved"}
 )
 
 FACET_HINTS: dict[str, tuple[str, ...]] = {
@@ -158,60 +157,9 @@ STOPWORDS = frozenset(
     }
 )
 
-FACET_ITEM_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "facet": {"type": "string", "enum": list(FACETS)},
-        "disposition": {
-            "type": "string",
-            "enum": [
-                "derived",
-                "already_covered",
-                "not_applicable",
-                "unresolved",
-            ],
-        },
-        "statement": {"type": "string"},
-        "rationale": {"type": "string"},
-        "evidence_refs": {"type": "array", "items": {"type": "string"}},
-        "acceptance": {"type": "array", "items": {"type": "string"}},
-        "implementation_obligations": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-    },
-    "required": [
-        "facet",
-        "disposition",
-        "statement",
-        "rationale",
-        "evidence_refs",
-        "acceptance",
-        "implementation_obligations",
-    ],
-    "additionalProperties": False,
-}
-
-REQUIREMENT_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "facets": {
-            "type": "array",
-            "minItems": len(FACETS),
-            "maxItems": len(FACETS),
-            "items": FACET_ITEM_SCHEMA,
-        }
-    },
-    "required": ["facets"],
-    "additionalProperties": False,
-}
-
 __all__ = [
-    "DISPOSITIONS",
     "FACET_HINTS",
-    "FACET_ITEM_SCHEMA",
     "FACETS",
-    "REQUIREMENT_RESPONSE_SCHEMA",
     "STOPWORDS",
     "STRUCTURAL_HINTS",
 ]
