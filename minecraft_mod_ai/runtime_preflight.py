@@ -61,6 +61,35 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
+def _wrapper_chain_has_marker(target: Any, marker_name: str) -> bool:
+    """Require a marked canonical owner somewhere in one finite wrapper chain.
+
+    Downstream decorators may add retrieval or evidence views around the bounded semantic
+    owner. They are acceptable only when they preserve ``__wrapped__`` back to that exact
+    owner; a replacement that severs the chain still fails closed.
+    """
+
+    current = target
+    seen: set[int] = set()
+    depth = 0
+    while callable(current):
+        identity = id(current)
+        if identity in seen:
+            raise RuntimePreflightError(
+                "authoritative requirement wrapper chain contains a cycle"
+            )
+        seen.add(identity)
+        if getattr(current, marker_name, False) is True:
+            return True
+        depth += 1
+        if depth > 64:
+            raise RuntimePreflightError(
+                "authoritative requirement wrapper chain is unexpectedly deep"
+            )
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _assert_authoritative_requirement_path() -> None:
     """Require the sole host-owned bounded semantic request path before decode."""
 
@@ -68,26 +97,18 @@ def _assert_authoritative_requirement_path() -> None:
     from .game_design import GameDesignPlanner
     from .semantic_batching_contract import build_bounded_requirement_catalog
 
+    marker = "__mmm_bounded_semantic_batching__"
     failures: list[str] = []
     if getattr(GameDesignPlanner.plan, "__mmm_request_contract_guard__", False) is not True:
         failures.append("GameDesignPlanner request freeze/guard")
-    if getattr(
-        build_bounded_requirement_catalog,
-        "__mmm_bounded_semantic_batching__",
-        False,
-    ) is not True:
+    if not _wrapper_chain_has_marker(build_bounded_requirement_catalog, marker):
         failures.append("bounded semantic catalog builder")
-    if getattr(
+    if not _wrapper_chain_has_marker(
         evidence_request_guard.build_authoritative_request_catalog,
-        "__mmm_bounded_semantic_batching__",
-        False,
-    ) is not True:
+        marker,
+    ):
         failures.append("bounded request catalog owner")
-    if getattr(
-        planning_authority._compile_semantic_catalog,
-        "__mmm_bounded_semantic_batching__",
-        False,
-    ) is not True:
+    if not _wrapper_chain_has_marker(planning_authority._compile_semantic_catalog, marker):
         failures.append("bounded planning semantic compiler")
     if failures:
         raise RuntimePreflightError(
@@ -218,7 +239,7 @@ def _assert_unordered_retrieval_canonicalization() -> None:
     if stable != {"facts": ["a", "b"]}:
         raise RuntimePreflightError(f"set-valued retrieval state is not canonical: {stable!r}")
     left = evidence_fingerprint({"facts": {"a", "b"}})
-    right = evidence_fingerprint({"facts": frozenset(("b", "a"))})
+    right = evidence_fingerprint({"facts": frozenset(("b", "a")))
     if not left or left != right:
         raise RuntimePreflightError("equivalent unordered retrieval evidence fingerprints diverged")
 
