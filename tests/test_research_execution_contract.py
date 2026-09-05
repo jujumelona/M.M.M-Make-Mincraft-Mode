@@ -37,8 +37,22 @@ def _task(
     }
 
 
-def test_execution_lowering_binds_runtime_to_production_and_keeps_resource_typed(monkeypatch):
+def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monkeypatch):
     monkeypatch.setattr(execution, "validate_evidence_first_plan", lambda _plan: None)
+    registry = _task(
+        "task_registry_identity",
+        provides=["registry_id:demo"],
+        anchors=[
+            {
+                "kind": "registry_id",
+                "locator": "registry:demo:block/registry_identity",
+                "ownership": "exclusive",
+                "status": "host_reserved",
+                "module_id": ":",
+                "source_set": "main",
+            }
+        ],
+    )
     runtime = _task(
         "task_runtime_scenario",
         provides=["capability:space_travel"],
@@ -79,7 +93,7 @@ def test_execution_lowering_binds_runtime_to_production_and_keeps_resource_typed
         "reuse_decisions": [
             {"requirement_ref": "req_demo", "action": "fresh"},
         ],
-        "tasks": [resource, runtime],
+        "tasks": [registry, resource, runtime],
     }
     canonical_handoff = {
         "handoff_sha256": "canonical-handoff",
@@ -102,6 +116,16 @@ def test_execution_lowering_binds_runtime_to_production_and_keeps_resource_typed
     assert {anchor["kind"] for anchor in runtime_lowered["owned_anchors"]} == {"symbol", "test"}
     assert any(
         binding["task_ref"] == "task_runtime_scenario"
+        for binding in handoff["production_modules"]
+    )
+
+    registry_lowered = by_id["task_registry_identity"]
+    assert registry_lowered["execution_role"] == "production"
+    assert {anchor["kind"] for anchor in registry_lowered["owned_anchors"]} == {"registry_id"}
+    assert "source_static_validation" not in registry_lowered["required_gates"]
+    assert "target_compile" not in registry_lowered["required_gates"]
+    assert any(
+        binding["task_ref"] == "task_registry_identity"
         for binding in handoff["production_modules"]
     )
 
