@@ -10,6 +10,7 @@ and the normal model tool/observation loop; preflight must not require a second 
 or forced-routing stack.
 """
 
+import inspect
 import json
 import sys
 import threading
@@ -61,6 +62,24 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
+def _resolves_to_canonical_callable(actual: Any, canonical: Any) -> bool:
+    """Return whether a callable's transparent wrapper chain terminates at canonical.
+
+    Runtime contracts legitimately compose functions with ``functools.wraps``. Exact
+    object identity therefore rejects valid composition. ``inspect.unwrap`` preserves
+    a fail-closed authority check while accepting only transparent wrapper chains whose
+    root is the canonical host-owned callable.
+    """
+
+    if not callable(actual) or not callable(canonical):
+        return False
+    try:
+        return inspect.unwrap(actual) is canonical
+    except (ValueError, TypeError):
+        # Wrapper cycles or malformed ``__wrapped__`` chains are never authority.
+        return False
+
+
 def _assert_authoritative_requirement_path() -> None:
     """Require the sole host-owned semantic request path before production decode."""
 
@@ -71,7 +90,10 @@ def _assert_authoritative_requirement_path() -> None:
     failures: list[str] = []
     if getattr(GameDesignPlanner.plan, "__mmm_request_contract_guard__", False) is not True:
         failures.append("GameDesignPlanner request freeze/guard")
-    if evidence_request_guard.build_authoritative_request_catalog is not build_approved_requirement_catalog:
+    if not _resolves_to_canonical_callable(
+        evidence_request_guard.build_authoritative_request_catalog,
+        build_approved_requirement_catalog,
+    ):
         failures.append("approved requirement catalog authority")
     if getattr(
         evidence_first_planning._validate_request_catalog,
