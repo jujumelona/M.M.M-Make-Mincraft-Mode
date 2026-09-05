@@ -7,6 +7,7 @@ def test_authoritative_catalog_uses_one_constant_model_turn(monkeypatch):
     prompt = "build a rover; drive it to a launch pad"
     router = object()
     calls: list[str] = []
+    clause_records = authority._semantic._clause_records(prompt)
 
     catalog = {
         "schema_version": "mmm/approved-requirement-graph-v1",
@@ -55,10 +56,7 @@ def test_authoritative_catalog_uses_one_constant_model_turn(monkeypatch):
     monkeypatch.setattr(
         authority._semantic,
         "_clause_records",
-        lambda value: [
-            {"clause_index": 0, "text": "build a rover"},
-            {"clause_index": 1, "text": "drive it to a launch pad"},
-        ],
+        lambda value: [dict(item) for item in clause_records],
     )
     monkeypatch.setattr(
         authority._semantic,
