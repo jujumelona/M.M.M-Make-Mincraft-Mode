@@ -19,6 +19,7 @@ from .evidence_first_planning import validate_evidence_first_plan
 _PRODUCTION_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
 _RESOURCE_KINDS = frozenset({"resource"})
 _TEST_KIND = "test"
+_PRODUCTION_COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
 
 
 def _canonical(value: Any) -> str:
@@ -108,8 +109,8 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     has_test = _TEST_KIND in kinds
 
     # A semantic runtime verification step must not be handed to a small coder as a
-    # test-only implementation.  Give it a concrete production symbol and keep its
-    # GameTest anchor so implementation and verification stay in the same bounded task.
+    # test-only implementation. Give it a concrete production symbol and keep its
+    # GameTest anchor so implementation and verification stay in one bounded task.
     if _runtime_capability(task) and has_test and not has_production and not has_resource:
         anchors.append(_source_anchor(task_id, ownership))
         has_production = True
@@ -127,12 +128,12 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     else:
         task["execution_role"] = "invalid"
 
-    # source_static_validation is a task-local ownership assertion.  A resource or
-    # verification task may still participate in target_compile, but it must not claim
-    # to own a Java source symbol it does not have.
+    # source_static_validation and target_compile are production-owner gates in this
+    # task graph. Resource/verification work participates through its downstream
+    # production owner; assigning these gates locally falsely demands a Java symbol.
     gates = list(_strings(task.get("required_gates")))
     if not has_production:
-        gates = [gate for gate in gates if gate != "source_static_validation"]
+        gates = [gate for gate in gates if gate not in _PRODUCTION_COMPILE_GATES]
     task["required_gates"] = gates
     task["owned_anchors"] = anchors
 
