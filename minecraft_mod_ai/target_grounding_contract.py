@@ -4,10 +4,7 @@ from __future__ import annotations
 
 Planning may not pass the target barrier with only a Minecraft version and loader. The
 selected executable provider receipt must be semantically complete for the selected target.
-Legacy obfuscation mappings are required only for targets where mappings are applicable;
-Minecraft 26.1+ native-name targets must not fabricate legacy mapping coordinates merely to
-satisfy a schema. Gradle project paths (including the root ':') are represented separately
-from logical module IDs.
+Target-version semantics come exclusively from ``target_profile_semantics``.
 """
 
 import re
@@ -16,6 +13,7 @@ from functools import wraps
 from typing import Any
 
 from . import evidence_first_planning as _planning
+from .target_profile_semantics import uses_native_names
 
 _INSTALLED = False
 _BASE_REQUIRED_TARGET_FIELDS = (
@@ -32,16 +30,10 @@ _BASE_REQUIRED_TARGET_FIELDS = (
     "resource_pack_format",
     "release_metadata_url",
 )
-_LEGACY_MAPPING_FIELDS = (
-    "mappings_kind",
-    "mappings_version",
-)
-_NATIVE_NAME_MIN_VERSION = (26, 1)
+_LEGACY_MAPPING_FIELDS = ("mappings_kind", "mappings_version")
 
 
 def _text(value: Any) -> str:
-    # Presence and validity are separate contracts. Numeric zero is present and must
-    # reach the field-specific validator so it is reported as invalid, not missing.
     return "" if value is None else str(value).strip()
 
 
@@ -49,25 +41,9 @@ def _is_unresolved(value: Any) -> bool:
     return not _text(value) or _text(value).casefold() == "unresolved"
 
 
-def _minecraft_version_key(value: Any) -> tuple[int, int]:
-    text = _text(value)
-    match = re.match(r"^(\d+)\.(\d+)(?:\D|$)", text)
-    if not match:
-        raise _planning.EvidencePlanError(
-            f"TARGET_MINECRAFT_VERSION: unsupported or unparseable Minecraft version {text!r}."
-        )
-    return int(match.group(1)), int(match.group(2))
-
-
-def _uses_native_names(version: Any) -> bool:
-    return _minecraft_version_key(version) >= _NATIVE_NAME_MIN_VERSION
-
-
 def _required_target_fields(coordinates: Mapping[str, Any]) -> tuple[str, ...]:
     version = coordinates.get("minecraft_version")
-    if _is_unresolved(version):
-        return _BASE_REQUIRED_TARGET_FIELDS
-    if _uses_native_names(version):
+    if _is_unresolved(version) or uses_native_names(version):
         return _BASE_REQUIRED_TARGET_FIELDS
     return _BASE_REQUIRED_TARGET_FIELDS + _LEGACY_MAPPING_FIELDS
 
@@ -91,7 +67,11 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     minecraft_version = _text(coordinates.get("minecraft_version"))
-    native_names = _uses_native_names(minecraft_version)
+    try:
+        native_names = uses_native_names(minecraft_version)
+    except ValueError as exc:
+        raise _planning.EvidencePlanError(str(exc)) from exc
+
     mappings_receipt: dict[str, str] | None = None
     if native_names:
         legacy_claims = _legacy_mapping_claims(coordinates)
@@ -169,7 +149,6 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
 
     result = dict(coordinates)
     if mappings_receipt is None:
-        # Inapplicable legacy fields are not retained in the canonical target profile.
         for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings"):
             result.pop(field, None)
     else:
@@ -220,7 +199,6 @@ def _project_topology(game_design: Mapping[str, Any], current: Mapping[str, Any]
             continue
         source_sets = list(_planning._strings(raw.get("source_sets")))
         if len(raw_modules) > 1 and raw_identity == ":" and not source_sets:
-            # Gradle root aggregator: topology path exists, but it is not a production module.
             continue
         gradle_path = _text(raw.get("gradle_project_path"))
         if not gradle_path and (raw_identity == ":" or raw_identity.startswith(":")):
@@ -243,7 +221,6 @@ def _project_topology(game_design: Mapping[str, Any], current: Mapping[str, Any]
         )
 
     if not modules:
-        # New projects have a logical root module even though ':' is only a Gradle path.
         for value in current.get("module_ids", []) if isinstance(current.get("module_ids"), list) else []:
             raw_identity = _text(value)
             if not raw_identity:
@@ -290,7 +267,10 @@ def _harden_target_decision(original: Any, game_design: Mapping[str, Any], targe
     materially_selected = (
         version and version.casefold() != "unresolved" and loader and loader.casefold() != "unresolved"
     )
-    required_fields = list(_required_target_fields(coordinates))
+    try:
+        required_fields = list(_required_target_fields(coordinates))
+    except ValueError as exc:
+        raise _planning.EvidencePlanError(str(exc)) from exc
     if materially_selected:
         coordinates = _validate_complete_target(coordinates)
         result["coordinates"] = coordinates
