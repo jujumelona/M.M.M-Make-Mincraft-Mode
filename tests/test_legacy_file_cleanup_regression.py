@@ -72,6 +72,20 @@ def test_pyproject_has_no_orphaned_training_surface() -> None:
     assert "mmm-training" not in text
 
 
+def test_colab_install_targets_exclude_retired_training_extra() -> None:
+    """Colab must not request a custom-training extra that no longer exists."""
+    text = (ROOT / "tools" / "colab_runtime_setup.py").read_text(encoding="utf-8")
+    assert (
+        'REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio]"'
+        in text
+    )
+    assert (
+        'LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio]"'
+        in text
+    )
+    assert ",training]" not in text
+
+
 def test_retired_training_mcp_tools_stay_absent() -> None:
     """Retired custom-training RPCs must not remain as callable compatibility stubs."""
     from minecraft_mod_ai import mcp_server
