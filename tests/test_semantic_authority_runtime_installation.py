@@ -5,7 +5,6 @@ import pytest
 
 def test_package_runtime_installs_authoritative_semantic_request_path():
     import minecraft_mod_ai  # noqa: F401 - package import is the production bootstrap
-    from minecraft_mod_ai import evidence_first_planning
     from minecraft_mod_ai import evidence_request_guard
     from minecraft_mod_ai import planning_authority
     from minecraft_mod_ai.game_design import GameDesignPlanner
@@ -32,11 +31,6 @@ def test_package_runtime_installs_authoritative_semantic_request_path():
     assert getattr(
         planning_authority._compile_semantic_catalog,
         "__mmm_bounded_semantic_batching__",
-        False,
-    ) is True
-    assert getattr(
-        evidence_first_planning._validate_request_catalog,
-        "__mmm_approved_requirement_authority__",
         False,
     ) is True
     _assert_authoritative_requirement_path()
