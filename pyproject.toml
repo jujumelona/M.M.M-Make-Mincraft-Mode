@@ -63,9 +63,6 @@ image = [
 # is generated through the existing runtime/tool stack.
 speech = []
 production-audio = []
-# The current mmm-training command records/exports trace data and does not import
-# PEFT. Keep the named extra for compatibility without resolving an unused stack.
-training = []
 dev = [
   "nbformat>=5.10,<6",
   "numpy>=1.26,<3",
@@ -81,7 +78,6 @@ mmm = "minecraft_mod_ai.cli:main"
 minecraft-mod-ai = "minecraft_mod_ai.cli:main"
 mmm-mcp = "minecraft_mod_ai.mcp_server:main"
 mmm-mod-generation-mcp = "minecraft_mod_ai.mod_generation_mcp_server:main"
-mmm-training = "minecraft_mod_ai.training_cli:main"
 jdtls = "minecraft_mod_ai.jdtls_bootstrap:main"
 
 [project.urls]
@@ -94,7 +90,7 @@ packages = ["minecraft_mod_ai", "minecraft_mod_ai.config", "minecraft_mod_ai.int
 py-modules = ["mcp_gateway", "download_resources"]
 
 [tool.setuptools.package-data]
-minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/mineflayer/*", "training_configs/*"]
+minecraft_mod_ai = ["config/*.yaml", "packaged_skills.json", "integrations/mineflayer/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
