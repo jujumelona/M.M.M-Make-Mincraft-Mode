@@ -52,13 +52,13 @@ def _batches_from_handoff(
 
     validate_evidence_first_plan(plan)
     canonical_handoff = build_evidence_first_handoff(plan)
-    lowered_plan = execution_plan(plan)
-    handoff = execution_handoff(plan, canonical_handoff, lowered_plan)
-    validate_plan_collect_all(lowered_plan, handoff)
-
     plan_sha256 = str(plan.get("plan_sha256") or "")
     if str(canonical_handoff.get("source_plan_sha256") or "") != plan_sha256:
         raise ValueError("Evidence handoff is not bound to the exact source plan hash.")
+
+    lowered_plan = execution_plan(plan)
+    handoff = execution_handoff(plan, canonical_handoff, lowered_plan)
+    validate_plan_collect_all(lowered_plan, handoff)
 
     tasks = {
         str(item.get("task_id") or ""): dict(item)
