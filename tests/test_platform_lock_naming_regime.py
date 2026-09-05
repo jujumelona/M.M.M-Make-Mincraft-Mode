@@ -8,7 +8,7 @@ from minecraft_mod_ai.spec import PlatformLock, SpecValidationError, platform_re
 
 
 def _seal(lock: PlatformLock) -> PlatformLock:
-    return replace(lock, receipt_sha256=f"sha256:{platform_receipt_sha256(lock)}")
+    return replace(lock, receipt_sha256=platform_receipt_sha256(lock))
 
 
 def _base(**overrides: object) -> PlatformLock:
