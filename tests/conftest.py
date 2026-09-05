@@ -154,7 +154,7 @@ def _isolate_test_runtime_state(
     # Source/catalog tests must not acquire a moving production target merely because
     # they need a generated project directory. Install one deterministic target for
     # intentionally unresolved test scaffolds without weakening production discovery.
-    from minecraft_mod_ai import platform_catalog
+    from minecraft_mod_ai import platform_catalog, platform_evidence_pipeline
     from minecraft_mod_ai.generator import FabricProjectGenerator
     from minecraft_mod_ai.platform_catalog import PlatformProvider
 
@@ -178,6 +178,14 @@ def _isolate_test_runtime_state(
             discover_versions=lambda limit=32: (_TEST_MINECRAFT_VERSION,)[: max(1, int(limit))],
             resolve=resolve_test_or_production,
         ),
+    )
+    # The optimizer has its own official-version helper. In offline test mode it must
+    # see the same provider-owned target instead of leaking the moving live release
+    # catalogue into otherwise deterministic unit tests.
+    monkeypatch.setattr(
+        platform_evidence_pipeline,
+        "_stable_game_versions",
+        lambda: (_TEST_MINECRAFT_VERSION,),
     )
 
     # Runtime-manager unit tests receive a synthetic run-scoped profile instead of
