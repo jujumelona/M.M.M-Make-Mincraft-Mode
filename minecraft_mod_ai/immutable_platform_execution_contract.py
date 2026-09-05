@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-"""Freeze the complete executable platform receipt across approval and execution.
-
-Resolution may use live provider evidence. Once an adapter is selected, every coordinate
-needed by generation/build validation is copied into the canonical approval-bound
-``PlatformLock``. Downstream reconstruction uses only that receipt and therefore cannot
-silently drift when Fabric/Minecraft metadata changes later.
-"""
+"""Freeze the complete executable platform receipt across approval and execution."""
 
 import json
 import re
@@ -15,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from .spec import PlatformLock, SpecValidationError, platform_receipt_sha256
+from .target_profile_semantics import minimum_java_major, uses_native_names
 
 _INSTALLED = False
-_NATIVE_NAME_MIN_VERSION = (26, 1)
 
 
 def _receipt_value(value: Any, name: str, default: Any = "") -> Any:
@@ -30,32 +24,17 @@ def _gradle_distribution_url(version: str) -> str:
     return f"https://services.gradle.org/distributions/gradle-{version}-bin.zip"
 
 
-def _version_tuple(value: str) -> tuple[int, ...]:
-    parts = str(value or "").split(".")
-    if not parts or not all(part.isdigit() for part in parts):
-        return ()
-    return tuple(int(part) for part in parts)
-
-
-def _uses_native_names(value: Any) -> bool:
-    version = _version_tuple(str(_receipt_value(value, "minecraft_version", "")))
-    return len(version) >= 2 and version[:2] >= _NATIVE_NAME_MIN_VERSION
+def _receipt_uses_native_names(value: Any) -> bool:
+    return uses_native_names(_receipt_value(value, "minecraft_version", ""))
 
 
 def _validate_base_coordinate_consistency(lock: PlatformLock) -> None:
-    """Reject mixed target tuples even for older narrow persisted locks."""
-
     minecraft = str(lock.minecraft_version)
     java = str(lock.java_version)
-    mc_tuple = _version_tuple(minecraft)
-    if mc_tuple and mc_tuple[0] == 1 and mc_tuple >= (1, 20, 5):
-        if java.isdigit() and int(java) < 21:
-            raise SpecValidationError(
-                f"Minecraft {minecraft} requires a Java 21+ execution target; got Java {java}."
-            )
-    if _uses_native_names(lock) and java.isdigit() and int(java) < 25:
+    minimum_java = minimum_java_major(minecraft)
+    if minimum_java is not None and java.isdigit() and int(java) < minimum_java:
         raise SpecValidationError(
-            f"Minecraft {minecraft} native-name target requires Java 25+; got Java {java}."
+            f"Minecraft {minecraft} requires Java {minimum_java}+ execution target; got Java {java}."
         )
 
     yarn = str(lock.yarn_mappings)
@@ -92,7 +71,7 @@ def _full_receipt_present(value: Any) -> bool:
         for name in required_nonempty
     ):
         return False
-    if _uses_native_names(value):
+    if _receipt_uses_native_names(value):
         if any(
             str(_receipt_value(value, name, "") or "").strip()
             for name in ("yarn_mappings", "mappings_kind", "mappings_version")
@@ -299,11 +278,9 @@ def install() -> None:
     platform_resolver.lock_from_adapter = lock_from_adapter
     platform_catalog.adapter_for_lock_values = adapter_for_lock_values
     platform_catalog.adapter_from_project = adapter_from_project
-
     generator.adapter_for_lock_values = adapter_for_lock_values
     generator.FabricProjectGenerator._write_contract = write_contract
     runner.adapter_from_project = adapter_from_project
-
     platform_generation_contract.adapter_for_lock_values = adapter_for_lock_values
     platform_runtime_contract.adapter_for_lock_values = adapter_for_lock_values
     platform_runtime_contract.adapter_from_project = adapter_from_project
@@ -316,7 +293,6 @@ def install() -> None:
         write_project_platform_lock(project_root, adapter)
 
     platform_generation_contract._write_platform_lock = generation_lock_writer
-
     _INSTALLED = True
 
 
