@@ -183,10 +183,13 @@ def facet_relevant_refs(
         ranked: list[tuple[int, str]] = []
         for receipt in evidence:
             req_score = requirement_score(receipt, requirement)
+            if req_score <= 0:
+                # A facet keyword is never sufficient provenance.  Research evidence
+                # must first belong to (or materially match) the authored requirement
+                # before it may close or derive any facet for that requirement.
+                continue
             f_score = facet_score(receipt, facet)
             if f_score <= 0:
-                continue
-            if baseline[facet]["disposition"] == "not_applicable" and req_score <= 0:
                 continue
             ref = str(receipt.get("evidence_ref") or "")
             if ref:
