@@ -4,15 +4,9 @@ from __future__ import annotations
 
 This module deliberately does not implement another planner, target resolver, branch
 classifier, or checkpoint store. Those responsibilities stay with their existing
-host-owned components. The only responsibilities here are:
-
-* lower the validated EvidenceFirstPlan through evidence_first_handoff before the
-  CompleteGameDesignPlanner creates model-fill templates; and
-* enrich the existing CompleteProductionOrchestrator / DurableWorkLedger execution
-  receipts with incremental ProjectIndex may-impact evidence.
-
-That keeps one owner for planning semantics, one owner for target selection, one
-production handoff, and one durable execution ledger.
+host-owned components. It validates immutable semantic PlanIR, lowers it through the
+canonical handoff, then applies the typed execution contract before model-fill templates
+are created. Execution receipts are enriched with bounded ProjectIndex impact evidence.
 """
 
 import hashlib
@@ -25,6 +19,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .evidence_execution_contract import execution_handoff, execution_plan
 from .evidence_first_execution import impacted_task_ids_for_paths, refresh_project_index
 from .evidence_first_handoff import build_evidence_first_handoff
 from .evidence_first_planning import validate_evidence_first_plan
@@ -53,18 +48,21 @@ def _batches_from_handoff(
     *,
     batch_type: type,
 ) -> tuple[Any, ...]:
-    """Lower one validated semantic plan through the canonical production handoff."""
+    """Lower one validated semantic plan through canonical + typed execution handoff."""
 
     validate_evidence_first_plan(plan)
-    handoff = build_evidence_first_handoff(plan)
-    validate_plan_collect_all(plan, handoff)
+    canonical_handoff = build_evidence_first_handoff(plan)
+    lowered_plan = execution_plan(plan)
+    handoff = execution_handoff(plan, canonical_handoff, lowered_plan)
+    validate_plan_collect_all(lowered_plan, handoff)
+
     plan_sha256 = str(plan.get("plan_sha256") or "")
-    if str(handoff.get("source_plan_sha256") or "") != plan_sha256:
+    if str(canonical_handoff.get("source_plan_sha256") or "") != plan_sha256:
         raise ValueError("Evidence handoff is not bound to the exact source plan hash.")
 
     tasks = {
         str(item.get("task_id") or ""): dict(item)
-        for item in plan.get("tasks", ())
+        for item in lowered_plan.get("tasks", ())
         if isinstance(item, Mapping) and str(item.get("task_id") or "")
     }
     requirements = {
@@ -73,10 +71,10 @@ def _batches_from_handoff(
         if isinstance(item, Mapping) and str(item.get("requirement_id") or "")
     }
 
-    work_graph = _mapping(handoff.get("work_graph"))
+    work_graph = _mapping(canonical_handoff.get("work_graph"))
     task_refs = _strings(work_graph.get("task_refs"))
     if set(task_refs) != set(tasks) or len(task_refs) != len(tasks):
-        raise ValueError("Evidence handoff task set drifted from the validated semantic plan.")
+        raise ValueError("Evidence handoff task set drifted from the typed execution plan.")
 
     dependencies: dict[str, list[str]] = {task_ref: [] for task_ref in task_refs}
     seen_edges: set[tuple[str, str]] = set()
@@ -119,10 +117,12 @@ def _batches_from_handoff(
         assets_by_task.setdefault(task_ref, []).append(dict(item))
 
     batches: list[Any] = []
-    handoff_sha256 = str(handoff.get("handoff_sha256") or "")
+    canonical_handoff_sha256 = str(canonical_handoff.get("handoff_sha256") or "")
+    execution_overlay_sha256 = str(handoff.get("execution_overlay_sha256") or "")
     for task_ref in task_refs:
         task = dict(tasks[task_ref])
-        task["handoff_sha256"] = handoff_sha256
+        task["handoff_sha256"] = canonical_handoff_sha256
+        task["execution_overlay_sha256"] = execution_overlay_sha256
         task["production_bindings"] = production_by_task.get(task_ref, [])
         task["asset_bindings"] = assets_by_task.get(task_ref, [])
         task["request_context"] = {
@@ -132,6 +132,7 @@ def _batches_from_handoff(
                 for reference in _strings(task.get("requirement_refs"))
                 if reference in requirements
             ],
+            "derived_requirements": list(task.get("derived_requirements") or ()),
         }
         batches.append(
             batch_type(
@@ -308,9 +309,10 @@ def _install_execution_impact() -> None:
             return current_generation(self, *args, **kwargs)
 
         validate_evidence_first_plan(plan)
+        lowered = execution_plan(plan)
         tasks = tuple(
             dict(item)
-            for item in plan.get("tasks", ())
+            for item in lowered.get("tasks", ())
             if isinstance(item, Mapping)
         )
         index = ProjectIndex(Path(project_root), policy=self.policy)
