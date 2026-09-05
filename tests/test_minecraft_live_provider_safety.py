@@ -15,7 +15,7 @@ def test_live_fabric_provider_never_advertises_unreviewed_deterministic_template
         resource_pack_version="70.0",
         data_pack_version="88.0",
         minecraft_version="26.2",
-        java_version="21",
+        java_version="25",
         mappings_version="mojang",
         mappings_kind="mojang",
         loader_version="0.17.2",
