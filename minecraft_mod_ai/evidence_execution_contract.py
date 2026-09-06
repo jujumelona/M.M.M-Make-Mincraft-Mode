@@ -136,25 +136,25 @@ def _execution_task(
     has_source = any(is_source_symbol(item) for item in anchors)
     has_resource = bool(resource_anchors)
     has_test = any(is_test_anchor(item) for item in anchors)
+    runtime_task = _runtime_capability(task)
 
-    # A final runtime capability cannot be handed to a small coder as a test-only
-    # implementation. Give that task one concrete source owner while retaining its
-    # GameTest. Runtime classification and test-path classification are canonical and
-    # shared with the preflight linker, so the two stages cannot disagree on ownership.
-    if (
-        _runtime_capability(task)
-        and has_test
-        and not has_production_binding
-        and not has_resource
-    ):
+    # Every player-facing runtime task must own an exact editable source symbol. A registry,
+    # build-config, resource, or GameTest anchor is not an implementation body. Previously a
+    # registry anchor could make ``has_production_binding`` true and suppress source lowering,
+    # leaving the small coder with no executable Java destination. Source ownership is now an
+    # unconditional runtime invariant, independent of which other anchors are already present.
+    if runtime_task and not has_source:
         anchors.append(_source_anchor(task_id, ownership))
-        has_production_binding = True
         has_source = True
-        task["semantic_outcome"] = (
-            "Implement the production behavior, then verify the complete semantic outcome: "
-            + str(task.get("semantic_outcome") or task_id)
-        )
-        task["execution_role"] = "production_with_verification"
+        has_production_binding = True
+        if has_test:
+            task["semantic_outcome"] = (
+                "Implement the production behavior, then verify the complete semantic outcome: "
+                + str(task.get("semantic_outcome") or task_id)
+            )
+            task["execution_role"] = "production_with_verification"
+        else:
+            task["execution_role"] = "production"
     elif has_production_binding:
         task["execution_role"] = "production"
     elif has_resource:
@@ -164,10 +164,9 @@ def _execution_task(
     else:
         task["execution_role"] = "invalid"
 
-    # The semantic compiler emits source/compile gates at capability level. At execution
-    # time they belong only to a task that owns a source symbol; registry-id, resource,
-    # and verification-only steps are validated by their own gates and by downstream
-    # source owners. This prevents both fake source classes and false linker failures.
+    # Source/compile gates belong only to tasks that own an actual source symbol. Runtime
+    # tasks are guaranteed one above; non-runtime resource/verification tasks keep only the
+    # gates that can be executed against their real owned artifacts.
     gates = list(_strings(task.get("required_gates")))
     if not has_source:
         gates = [gate for gate in gates if gate not in _SOURCE_COMPILE_GATES]
