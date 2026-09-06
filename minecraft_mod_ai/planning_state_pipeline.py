@@ -90,17 +90,23 @@ def prepare_planning_state(
         checkpoint(deepcopy(state))
 
     if not _requirements_exist(state):
-        state = _transition(
-            "collect_prompt_research",
-            lambda: collect_planning_state_research(
-                router,
-                prompt,
-                state,
-                trace_metadata=trace_metadata,
-            ),
-        )
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
+        # Some valid blocked states (for example user_only ambiguity) deliberately have
+        # no research queue. Sending those through research-brief normalization would
+        # replace the real requirement blocker with an unrelated empty-domain error.
+        # Only invoke retrieval when the host state actually contains research work.
+        if state.get("research_queue"):
+            state = _transition(
+                "collect_prompt_research",
+                lambda: collect_planning_state_research(
+                    router,
+                    prompt,
+                    state,
+                    trace_metadata=trace_metadata,
+                ),
+            )
+            if checkpoint is not None:
+                checkpoint(deepcopy(state))
+
         state = _transition(
             "compile_researched_requirements",
             lambda: compile_researched_requirements(router, prompt, state),
