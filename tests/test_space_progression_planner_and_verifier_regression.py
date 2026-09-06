@@ -34,7 +34,6 @@ def _semantic_item(
     when: str,
     then: str,
     *,
-    required=(),
     semantic_type="gameplay_mechanic",
 ):
     return {
@@ -46,8 +45,6 @@ def _semantic_item(
         "when": when,
         "then": then,
         "semantic_type": semantic_type,
-        "required_prerequisite_capabilities": list(required),
-        "optional_prerequisite_capabilities": [],
     }
 
 
@@ -66,7 +63,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "the player owns gathered resources",
             "the player earns money",
             "currency balance increases",
-            required=("resource.farming",),
         ),
         _semantic_item(
             "economy.trade",
@@ -74,7 +70,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "resources and currency are available",
             "the player accepts a priced stocked trade",
             "inventory, stock and balance change atomically",
-            required=("resource.farming", "economy.currency"),
         ),
         _semantic_item(
             "spacecraft.component_construction",
@@ -82,7 +77,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "resources, currency and trading are available",
             "the player acquires and assembles compatible ship parts",
             "the assembled spacecraft records its parts",
-            required=("resource.farming", "economy.currency", "economy.trade"),
         ),
         _semantic_item(
             "spacecraft.weapon_upgrade",
@@ -90,7 +84,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "a spacecraft and trading are available",
             "the player buys and installs a weapon tier",
             "the weapon slot and combat stats increase",
-            required=("spacecraft.component_construction", "economy.trade"),
         ),
         _semantic_item(
             "crew.recruitment",
@@ -98,7 +91,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "a spacecraft and trading are available",
             "the player hires and assigns crew",
             "crew roles and skills affect the spacecraft",
-            required=("spacecraft.component_construction", "economy.trade"),
         ),
         _semantic_item(
             "spacecraft.performance_upgrade",
@@ -106,7 +98,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "a spacecraft and trading are available",
             "the player buys a performance tier",
             "thrust, speed, fuel capacity or durability increases",
-            required=("spacecraft.component_construction", "economy.trade"),
             semantic_type="software_quality",
         ),
         _semantic_item(
@@ -115,7 +106,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "a spacecraft and trading are available",
             "the player buys and installs expansion modules",
             "cargo or module capacity increases",
-            required=("spacecraft.component_construction", "economy.trade"),
         ),
         _semantic_item(
             "space.launch",
@@ -123,13 +113,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "the spacecraft, weapons, crew, performance and expansion meet launch requirements",
             "the player spends fuel and selects a destination",
             "the player and spacecraft enter space",
-            required=(
-                "spacecraft.component_construction",
-                "spacecraft.weapon_upgrade",
-                "crew.recruitment",
-                "spacecraft.performance_upgrade",
-                "spacecraft.expansion",
-            ),
         ),
         _semantic_item(
             "planet.special_mineral",
@@ -137,7 +120,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "the player is in space and has reached another planet",
             "the player mines a special mineral",
             "the special mineral enters inventory",
-            required=("space.launch",),
         ),
         _semantic_item(
             "alien.combat",
@@ -145,7 +127,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "the player is in space on an alien planet",
             "the player and an alien exchange attacks",
             "combat damage, death and drops are observable",
-            required=("space.launch",),
         ),
         _semantic_item(
             "colony.colonization",
@@ -153,7 +134,6 @@ def _semantic_requirements() -> list[dict[str, object]]:
             "the player is in space on a colonizable planet",
             "the player establishes a colony",
             "colony ownership, storage and development persist",
-            required=("space.launch",),
         ),
     ]
 
@@ -161,51 +141,19 @@ def _semantic_requirements() -> list[dict[str, object]]:
 class _SemanticRouter:
     def generate_tool_decision(self, role, messages, **kwargs):
         assert role == "planner"
+        assert kwargs["tool_name"] == "compile_semantic_requirements"
         payload = json.loads(messages[-1]["content"])
-        requirements = _semantic_requirements()
-        tool_name = kwargs["tool_name"]
-        if tool_name == "segment_semantic_requirements":
-            clause_indices = {
-                int(item["source_clause_index"])
-                for item in payload["host_owned_clauses"]
-            }
-            return {
-                "leaves": [
-                    {
-                        key: value
-                        for key, value in item.items()
-                        if key
-                        in {
-                            "source_clause_index",
-                            "source_anchor",
-                            "semantic_statement",
-                            "given",
-                            "when",
-                            "then",
-                            "semantic_type",
-                        }
-                    }
-                    for item in requirements
-                    if int(item["source_clause_index"]) in clause_indices
-                ]
-            }
-        if tool_name == "classify_semantic_requirements":
-            capability_by_statement = {
-                str(item["semantic_statement"]): str(item["capability_id"])
-                for item in requirements
-            }
-            return {
-                "classifications": [
-                    {
-                        "leaf_index": int(leaf["leaf_index"]),
-                        "capability_id": capability_by_statement[
-                            str(leaf["semantic_statement"])
-                        ],
-                    }
-                    for leaf in payload["host_grounded_leaves"]
-                ]
-            }
-        raise AssertionError(f"unexpected semantic tool: {tool_name}")
+        clause_indices = {
+            int(item["source_clause_index"])
+            for item in payload["host_owned_clauses"]
+        }
+        return {
+            "requirements": [
+                item
+                for item in _semantic_requirements()
+                if int(item["source_clause_index"]) in clause_indices
+            ]
+        }
 
 
 def test_space_progression_semantics_dependencies_and_obligations_are_complete() -> None:
