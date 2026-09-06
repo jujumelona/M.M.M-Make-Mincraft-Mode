@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-"""Turn resolved prompt/reference knowledge into research-backed implementation requirements.
+"""Compile evidence-backed user-visible requirements into the planning-state SSOT.
 
-This is the second bounded planner template. It runs only after initial unknowns were
-resolved. The model selects user-visible requirements from authored text and grounded
-reference evidence; host code validates every provenance reference and automatically
-creates implementation-research obligations before any code plan may become ready.
+This stage never turns an unresolved state into a crash just because information is still
+missing. Blocking unknowns remain explicit blockers and keep plan_ready false. Once the
+semantic/research state is resolved, the bounded model selects testable requirements and
+cites structural prompt IDs and/or grounded evidence IDs; literal prompt-string equality
+is not a provenance gate.
 """
 
 from collections.abc import Mapping, Sequence
@@ -13,7 +14,7 @@ from copy import deepcopy
 from typing import Any
 
 from .planner_operation import planner_operation
-from .planning_state_contract import validate_planning_state
+from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
 _REQUIREMENT_PARAMETERS: dict[str, Any] = {
@@ -26,11 +27,11 @@ _REQUIREMENT_PARAMETERS: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "statement": {"type": "string"},
-                    "prompt_quote": {"type": "string"},
+                    "prompt_refs": {"type": "array", "items": {"type": "string"}},
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                     "acceptance": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["statement", "prompt_quote", "evidence_refs", "acceptance"],
+                "required": ["statement", "prompt_refs", "evidence_refs", "acceptance"],
                 "additionalProperties": False,
             },
         }
@@ -44,15 +45,32 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return list(dict.fromkeys(text for item in value if (text := _text(item))))
+
+
 def _known_evidence_refs(state: Mapping[str, Any]) -> set[str]:
     refs: set[str] = set()
-    for evidence in state.get("evidence", []) if isinstance(state.get("evidence"), list) else []:
+    rows = state.get("evidence", [])
+    if not isinstance(rows, list):
+        return refs
+    for evidence in rows:
         if not isinstance(evidence, Mapping) or evidence.get("sufficient") is not True:
             continue
+        refs.update(_strings(evidence.get("evidence_refs")))
+    return refs
+
+
+def _known_prompt_refs(state: Mapping[str, Any]) -> set[str]:
+    refs = {"goal"}
+    rows = state.get("known", [])
+    if isinstance(rows, list):
         refs.update(
-            _text(item)
-            for item in evidence.get("evidence_refs", [])
-            if _text(item)
+            str(item.get("known_id") or "")
+            for item in rows
+            if isinstance(item, Mapping) and str(item.get("known_id") or "")
         )
     return refs
 
@@ -76,11 +94,12 @@ def _next_id(items: Sequence[Mapping[str, Any]], key: str, prefix: str) -> str:
     maximum = 0
     for item in items:
         raw = str(item.get(key) or "")
-        if raw.startswith(prefix):
-            try:
-                maximum = max(maximum, int(raw.removeprefix(prefix)))
-            except ValueError:
-                pass
+        if not raw.startswith(prefix):
+            continue
+        try:
+            maximum = max(maximum, int(raw.removeprefix(prefix)))
+        except ValueError:
+            continue
     return f"{prefix}{maximum + 1:03d}"
 
 
@@ -92,33 +111,62 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def compile_researched_requirements(router: Any, prompt: str, state: Mapping[str, Any]) -> dict[str, Any]:
-    """Add requirement decisions plus implementation-research work to the SSOT state."""
-
-    validate_planning_state(state, prompt=prompt)
-    open_blocking = [
-        item for item in state.get("unresolved", [])
-        if isinstance(item, Mapping)
-        and item.get("status") == "open"
+def _blocking_unknowns(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    rows = state.get("unresolved", [])
+    if not isinstance(rows, list):
+        return []
+    return [
+        item
+        for item in rows
+        if isinstance(item, Mapping) and item.get("status") != "resolved"
     ]
-    if open_blocking:
-        raise ValueError(
-            "PLANNING_REQUIREMENTS_BLOCKED: prompt/reference research is still unresolved: "
-            + ", ".join(str(item.get("unresolved_id") or "") for item in open_blocking)
+
+
+def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Represent incomplete knowledge in state instead of throwing it away as an exception."""
+    value = deepcopy(dict(state))
+    blocking = _blocking_unknowns(value)
+    existing = [
+        item
+        for item in value.get("blockers", [])
+        if isinstance(item, Mapping) and item.get("stage") != "requirement_selection"
+    ]
+    if blocking:
+        existing.append(
+            {
+                "blocker_id": "blocker_requirement_selection",
+                "stage": "requirement_selection",
+                "statement": "Requirement selection is waiting for unresolved task-state knowledge.",
+                "caused_by": [str(item.get("unresolved_id") or "") for item in blocking],
+            }
         )
+    value["blockers"] = existing
+    value["plan_ready"] = False
+    return _rehash(value)
+
+
+def compile_researched_requirements(
+    router: Any,
+    prompt: str,
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Add requirement decisions and implementation-research work to the same SSOT state."""
+    validate_planning_state(state, prompt=prompt)
+    if _blocking_unknowns(state):
+        return _preserve_blocked_state(state)
 
     messages = [
         {
             "role": "system",
             "content": (
-                "Compile the user-visible requirements that the implementation must satisfy. "
-                "Use only the authored prompt and supplied grounded evidence. Do not invent Minecraft APIs, "
-                "files, classes, registrations, or implementation architecture. For a reference-driven request, "
-                "use only externally evidenced reference systems within the resolved host scope policy. "
-                "Each requirement must be independently testable at the player-facing behavior level. "
-                "prompt_quote must be an exact substring when the requirement is directly authored; otherwise "
-                "use an empty string and cite one or more evidence_refs. Every non-authored requirement must cite "
-                "evidence. Do not output implementation steps."
+                "Compile independently testable, player-visible requirements from only the "
+                "supplied canonical task state. Do not reinterpret the raw request and do not "
+                "invent Minecraft APIs, files, classes, registrations, or implementation "
+                "architecture. Cite prompt provenance structurally with prompt_refs: use 'goal' "
+                "or known_id values present in the supplied state. Cite grounded external facts "
+                "with evidence_refs. Every requirement needs at least one prompt_ref or evidence_ref. "
+                "For reference-driven requirements, use only grounded reference evidence inside the "
+                "resolved scope. Return behavior requirements and acceptance observations only."
             ),
         },
         {"role": "user", "content": str(_resolved_context(state))},
@@ -129,51 +177,71 @@ def compile_researched_requirements(router: Any, prompt: str, state: Mapping[str
             messages,
             tool_name=_REQUIREMENT_TOOL,
             parameters=_REQUIREMENT_PARAMETERS,
-            description="Submit only evidence-backed, player-visible requirements for the resolved request scope.",
+            description=(
+                "Submit evidence-backed player-visible requirements for the resolved task state."
+            ),
         )
+
     raw_requirements = raw.get("requirements") if isinstance(raw, Mapping) else None
     if not isinstance(raw_requirements, list) or not raw_requirements:
-        raise ValueError("PLANNING_REQUIREMENTS_EMPTY: planner returned no researched requirements")
+        raise ValueError(
+            "PLANNING_REQUIREMENTS_EMPTY: planner returned no researched requirements"
+        )
 
-    allowed_refs = _known_evidence_refs(state)
-    value = deepcopy(dict(state))
+    allowed_evidence = _known_evidence_refs(state)
+    allowed_prompt = _known_prompt_refs(state)
     requirement_decisions: list[dict[str, Any]] = []
     for index, item in enumerate(raw_requirements, start=1):
         if not isinstance(item, Mapping):
             raise ValueError("PLANNING_REQUIREMENT_SHAPE: requirement must be an object")
         statement = _text(item.get("statement"))
-        quote = str(item.get("prompt_quote") or "").strip()
-        refs = list(dict.fromkeys(_text(ref) for ref in item.get("evidence_refs", []) if _text(ref)))
-        acceptance = list(dict.fromkeys(_text(check) for check in item.get("acceptance", []) if _text(check)))
+        prompt_refs = _strings(item.get("prompt_refs"))
+        evidence_refs = _strings(item.get("evidence_refs"))
+        acceptance = _strings(item.get("acceptance"))
         if not statement or not acceptance:
-            raise ValueError("PLANNING_REQUIREMENT_CONTENT: statement and acceptance are required")
-        if quote and quote not in prompt:
-            raise ValueError(f"PLANNING_REQUIREMENT_SOURCE: prompt_quote is not authored text: {quote!r}")
-        unknown_refs = [ref for ref in refs if ref not in allowed_refs]
-        if unknown_refs:
             raise ValueError(
-                "PLANNING_REQUIREMENT_EVIDENCE: requirement cited unknown evidence refs: "
-                + ", ".join(unknown_refs)
+                "PLANNING_REQUIREMENT_CONTENT: statement and acceptance are required"
             )
-        if not quote and not refs:
+        invalid_prompt = [ref for ref in prompt_refs if ref not in allowed_prompt]
+        if invalid_prompt:
             raise ValueError(
-                "PLANNING_REQUIREMENT_PROVENANCE: every derived requirement needs grounded evidence"
+                "PLANNING_REQUIREMENT_PROMPT_REFS: unknown prompt refs: "
+                + ", ".join(invalid_prompt)
+            )
+        invalid_evidence = [ref for ref in evidence_refs if ref not in allowed_evidence]
+        if invalid_evidence:
+            raise ValueError(
+                "PLANNING_REQUIREMENT_EVIDENCE: unknown evidence refs: "
+                + ", ".join(invalid_evidence)
+            )
+        if not prompt_refs and not evidence_refs:
+            raise ValueError(
+                "PLANNING_REQUIREMENT_PROVENANCE: requirement needs prompt or evidence basis"
             )
         requirement_decisions.append(
             {
                 "requirement_id": f"req_{index:03d}",
                 "statement": statement,
-                "prompt_quote": quote,
-                "evidence_refs": refs,
+                "prompt_refs": prompt_refs,
+                "evidence_refs": evidence_refs,
                 "acceptance": acceptance,
                 "status": "implementation_research_pending",
             }
         )
 
+    value = deepcopy(dict(state))
+    value["blockers"] = [
+        item
+        for item in value.get("blockers", [])
+        if not (isinstance(item, Mapping) and item.get("stage") == "requirement_selection")
+    ]
     value["decisions"] = [
-        item for item in value.get("decisions", [])
+        item
+        for item in value.get("decisions", [])
         if not (isinstance(item, Mapping) and item.get("decision_type") == "requirement")
     ]
+
+    implementation_sources = list(ROUTE_SOURCES["implementation_research"])
     for requirement in requirement_decisions:
         value["decisions"].append(
             {
@@ -187,17 +255,19 @@ def compile_researched_requirements(router: Any, prompt: str, state: Mapping[str
         value["unresolved"].append(
             {
                 "unresolved_id": unresolved_id,
-                "question": f"How can this requirement be implemented correctly for the resolved Minecraft target: {requirement['statement']}",
+                "question": (
+                    "How can this requirement be implemented correctly for the resolved "
+                    f"Minecraft target: {requirement['statement']}"
+                ),
                 "reason": "implementation_method",
                 "blocks": [requirement["requirement_id"], "implementation_plan"],
                 "information_needed": (
-                    "Verified reusable mod/code patterns, Minecraft API/source behavior, required artifacts, "
-                    "dependencies, and verification obligations for: " + requirement["statement"]
+                    "Verified reusable mod/code patterns, Minecraft API/source behavior, "
+                    "required artifacts, dependencies, and verification obligations for: "
+                    + requirement["statement"]
                 ),
                 "resolution_route": "implementation_research",
-                "source_kinds": [
-                    "repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"
-                ],
+                "source_kinds": implementation_sources,
                 "status": "open",
                 "research_ref": research_id,
                 "requirement_ref": requirement["requirement_id"],
@@ -208,14 +278,15 @@ def compile_researched_requirements(router: Any, prompt: str, state: Mapping[str
                 "research_id": research_id,
                 "resolves": [unresolved_id],
                 "requirement_ref": requirement["requirement_id"],
-                "objective": f"Find evidence-backed implementation/reuse options for {requirement['statement']}",
-                "information_needed": (
-                    "Concrete implementation patterns and all required support artifacts/dependencies, "
-                    "without inventing APIs or assuming prompt vocabulary matches code vocabulary."
+                "objective": (
+                    "Find evidence-backed implementation/reuse options for "
+                    + requirement["statement"]
                 ),
-                "source_kinds": [
-                    "repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"
-                ],
+                "information_needed": (
+                    "Concrete implementation patterns and all required support artifacts and "
+                    "dependencies, without inventing APIs or assuming prompt vocabulary matches code."
+                ),
+                "source_kinds": implementation_sources,
                 "queries": [],
                 "status": "pending",
             }
