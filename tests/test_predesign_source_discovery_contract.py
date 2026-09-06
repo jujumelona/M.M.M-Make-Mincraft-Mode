@@ -3,13 +3,22 @@ from __future__ import annotations
 import urllib.error
 from pathlib import Path
 
+from minecraft_mod_ai import catalog_first_grounded_rag as catalog_rag
 from minecraft_mod_ai import pre_design_grounded_rag as rag
 from minecraft_mod_ai.pre_design_rag_quality_contract import _source_body
 
 
 def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
     queries = [f"requirement {index} unique mechanic" for index in range(11)]
-    brief = {"domains": [{"domain_id": "request", "queries": queries}]}
+    brief = {
+        "domains": [
+            {
+                "domain_id": "request",
+                "providers": ["modrinth"],
+                "queries": queries,
+            }
+        ]
+    }
     modrinth_calls: list[str] = []
     github_calls: list[str] = []
 
@@ -32,25 +41,9 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
         )
 
     monkeypatch.setattr(rag, "_search_modrinth", modrinth)
-    monkeypatch.setattr(
-        rag,
-        "_search_curseforge",
-        lambda query: ([], {"provider": "curseforge", "status": "not_configured", "result_count": 0}),
-    )
     monkeypatch.setattr(rag, "_search_github", github)
-    monkeypatch.setattr(
-        rag,
-        "_search_authoritative_catalog",
-        lambda query, versions: {"sources": [], "errors": []},
-    )
-    monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
-    monkeypatch.setattr(
-        rag,
-        "_search_code_index",
-        lambda index, query: {"status": "not_indexed", "hits": []},
-    )
 
-    bundle = rag._forced_rag_bundle(object(), brief)
+    bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
 
     assert bundle["query_count"] == 11
     assert len(modrinth_calls) == 11
@@ -58,10 +51,6 @@ def test_github_403_does_not_stop_remaining_requirements(monkeypatch):
     rows = bundle["domains"][0]["queries"]
     assert len(rows) == 11
     assert all(not row["external_rag"]["sources"] for row in rows)
-    assert rows[0]["external_rag"]["github_retrieval"]["provider_status"] in {
-        "error",
-        "disabled_after_rate_or_auth_failure",
-    }
     assert all(
         row["external_rag"]["github_retrieval"]["provider_status"]
         in {"error", "disabled_after_rate_or_auth_failure"}
@@ -144,73 +133,77 @@ def test_duplicate_queries_are_executed_once(monkeypatch):
     monkeypatch.setattr(
         rag,
         "_search_github",
-        lambda query, **kwargs: ([], {"provider": "github", "status": "available", "result_count": 0}),
+        lambda query, **kwargs: (
+            [],
+            {"provider": "github", "status": "available", "result_count": 0},
+        ),
     )
-    monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
-    monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
-    monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
     brief = {
         "domains": [
-            {"domain_id": "request", "queries": ["same query", "same query", "other query"]}
+            {
+                "domain_id": "request",
+                "providers": ["modrinth"],
+                "queries": ["same query", "same query", "other query"],
+            }
         ]
     }
-    bundle = rag._forced_rag_bundle(object(), brief)
+    bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
     assert bundle["query_count"] == 3
     assert bundle["unique_query_count"] == 2
     assert sorted(calls) == ["other query", "same query"]
 
 
-def test_ecosystem_metadata_without_source_still_searches_github(monkeypatch):
+def test_catalog_candidate_without_source_link_never_triggers_broad_github_search(monkeypatch):
     body = "implementation body"
     monkeypatch.setattr(
         rag,
         "_search_modrinth",
-        lambda query: ([{
-            "source_id": "modrinth:one",
-            "source_type": "modrinth_project_body",
-            "source_locator": "modrinth:one",
-            "url": "https://modrinth.com/mod/one",
-            "title": "one",
-            "content": body,
-            "content_sha256": rag._sha256_text(body),
-            "body_retrieved": True,
-            "metadata": {"source_url": ""},
-        }], {"provider": "modrinth", "status": "available", "result_count": 1}),
+        lambda query: (
+            [
+                {
+                    "source_id": "modrinth:one",
+                    "source_type": "modrinth_project_body",
+                    "source_locator": "modrinth:one",
+                    "url": "https://modrinth.com/mod/one",
+                    "title": "one",
+                    "content": body,
+                    "content_sha256": rag._sha256_text(body),
+                    "body_retrieved": True,
+                    "metadata": {"source_url": ""},
+                }
+            ],
+            {"provider": "modrinth", "status": "available", "result_count": 1},
+        ),
     )
-    github_body = "source repository implementation body"
-    monkeypatch.setattr(
+
+    def broad_search_must_not_run(*args, **kwargs):
+        raise AssertionError(f"broad GitHub search escaped catalog-first policy: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(rag, "_search_github", broad_search_must_not_run)
+    bundle = catalog_rag.forced_rag_bundle(
         rag,
-        "_search_github",
-        lambda *args, **kwargs: ([{
-            "source_id": "github:example/one-source",
-            "source_type": "github_repository_body",
-            "source_locator": "github:example/one-source",
-            "url": "https://github.com/example/one-source",
-            "title": "one-source",
-            "content": github_body,
-            "content_sha256": rag._sha256_text(github_body),
-            "body_retrieved": True,
-            "metadata": {"repository": "example/one-source"},
-        }], {
-            "provider": "github",
-            "status": "available",
-            "result_count": 1,
-            "search_requests": 1,
-            "source_requests": 1,
-        }),
-    )
-    monkeypatch.setattr(rag, "_search_authoritative_catalog", lambda query, versions: {"sources": [], "errors": []})
-    monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
-    monkeypatch.setattr(rag, "_search_code_index", lambda index, query: {"status": "not_indexed", "hits": []})
-    bundle = rag._forced_rag_bundle(
-        object(), {"domains": [{"domain_id": "request", "queries": ["one query"]}]}
+        object(),
+        {
+            "domains": [
+                {
+                    "domain_id": "request",
+                    "providers": ["modrinth"],
+                    "queries": ["one query"],
+                }
+            ]
+        },
     )
     row = bundle["domains"][0]["queries"][0]
     source_ids = {
         source["source_id"] for source in row["external_rag"]["sources"]
     }
-    assert source_ids == {"modrinth:one", "github:example/one-source"}
-    assert row["external_rag"]["github_retrieval"]["provider_status"] == "available"
+    assert source_ids == {"modrinth:one"}
+    assert row["external_rag"]["github_retrieval"]["provider_status"] == (
+        "skipped_catalog_without_linked_source"
+    )
+    assert row["external_rag"]["provider_policy"]["github_broad_search"] == (
+        "fallback_only_after_empty_catalog"
+    )
 
 
 def test_query_terms_do_not_drop_late_authored_terms():
