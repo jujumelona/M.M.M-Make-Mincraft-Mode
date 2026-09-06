@@ -9,10 +9,10 @@ fragile free-text quote contract.
 """
 
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
 
 from . import evidence_first_planning as _evidence
+from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
 
 
@@ -22,7 +22,8 @@ def _text(value: Any) -> str:
 
 def _requirements(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [
-        item for item in state.get("decisions", [])
+        item
+        for item in state.get("decisions", [])
         if isinstance(item, Mapping) and item.get("decision_type") == "requirement"
     ]
 
@@ -37,12 +38,26 @@ def _details(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     }
 
 
-def _prompt_source_by_ref(state: Mapping[str, Any], ref: str) -> Mapping[str, Any] | None:
+def _sufficient_refs(state: Mapping[str, Any]) -> set[str]:
+    return {
+        _text(ref)
+        for item in state.get("evidence", [])
+        if isinstance(item, Mapping) and item.get("sufficient") is True
+        for ref in item.get("evidence_refs", [])
+        if _text(ref)
+    }
+
+
+def _prompt_source_by_ref(
+    state: Mapping[str, Any], ref: str
+) -> Mapping[str, Any] | None:
     if ref == "goal":
         goal = state.get("goal")
         source = goal.get("source") if isinstance(goal, Mapping) else None
         return source if isinstance(source, Mapping) else None
-    for item in state.get("known", []) if isinstance(state.get("known"), list) else []:
+    for item in (
+        state.get("known", []) if isinstance(state.get("known"), list) else []
+    ):
         if not isinstance(item, Mapping) or str(item.get("known_id") or "") != ref:
             continue
         source = item.get("source")
@@ -50,7 +65,9 @@ def _prompt_source_by_ref(state: Mapping[str, Any], ref: str) -> Mapping[str, An
     return None
 
 
-def _validated_source_span(prompt: str, source: Mapping[str, Any] | None) -> dict[str, Any]:
+def _validated_source_span(
+    prompt: str, source: Mapping[str, Any] | None
+) -> dict[str, Any]:
     if isinstance(source, Mapping):
         start = source.get("char_start")
         end = source.get("char_end")
@@ -83,12 +100,14 @@ def _validated_source_span(prompt: str, source: Mapping[str, Any] | None) -> dic
     }
 
 
-def _source_span(prompt: str, requirement: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
-    prompt_refs = [
-        _text(ref)
-        for ref in requirement.get("prompt_refs", [])
-        if _text(ref)
-    ] if isinstance(requirement.get("prompt_refs"), list) else []
+def _source_span(
+    prompt: str, requirement: Mapping[str, Any], state: Mapping[str, Any]
+) -> dict[str, Any]:
+    prompt_refs = (
+        [_text(ref) for ref in requirement.get("prompt_refs", []) if _text(ref)]
+        if isinstance(requirement.get("prompt_refs"), list)
+        else []
+    )
     for ref in prompt_refs:
         source = _prompt_source_by_ref(state, ref)
         if source is not None:
@@ -99,76 +118,63 @@ def _source_span(prompt: str, requirement: Mapping[str, Any], state: Mapping[str
     # receipt (or, for old checkpoints, to the entire immutable prompt).
     goal = state.get("goal")
     source = goal.get("source") if isinstance(goal, Mapping) else None
-    return _validated_source_span(prompt, source if isinstance(source, Mapping) else None)
+    return _validated_source_span(
+        prompt, source if isinstance(source, Mapping) else None
+    )
 
 
 def _implementation_queries(state: Mapping[str, Any], requirement_ref: str) -> list[str]:
     values: list[str] = []
-    for item in state.get("research_queue", []) if isinstance(state.get("research_queue"), list) else []:
-        if not isinstance(item, Mapping) or str(item.get("requirement_ref") or "") != requirement_ref:
+    for item in (
+        state.get("research_queue", [])
+        if isinstance(state.get("research_queue"), list)
+        else []
+    ):
+        if (
+            not isinstance(item, Mapping)
+            or str(item.get("requirement_ref") or "") != requirement_ref
+        ):
             continue
-        for query in item.get("queries", []) if isinstance(item.get("queries"), list) else []:
+        for query in (
+            item.get("queries", []) if isinstance(item.get("queries"), list) else []
+        ):
             text = _text(query)
             if text and text not in values:
                 values.append(text)
     return values
 
 
-def _flatten_detail(detail: Mapping[str, Any], key: str, value_key: str) -> list[str]:
-    raw = detail.get(key)
-    if not isinstance(raw, list):
-        return []
-    return list(
-        dict.fromkeys(
-            _text(item.get(value_key))
-            for item in raw
-            if isinstance(item, Mapping) and _text(item.get(value_key))
-        )
-    )
-
-
-def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, Any]) -> dict[str, Any]:
+def build_request_catalog_from_planning_state(
+    prompt: str, state: Mapping[str, Any]
+) -> dict[str, Any]:
     validate_planning_state(state, prompt=prompt)
     if state.get("plan_ready") is not True:
-        raise ValueError("PLANNING_HANDOFF_READY: request catalog requires a plan-ready state")
+        raise ValueError(
+            "PLANNING_HANDOFF_READY: request catalog requires a plan-ready state"
+        )
 
     requirements = _requirements(state)
     details = _details(state)
     if not requirements or len(details) != len(requirements):
-        raise ValueError("PLANNING_HANDOFF_COVERAGE: every requirement needs one detailed plan")
+        raise ValueError(
+            "PLANNING_HANDOFF_COVERAGE: every requirement needs one detailed plan"
+        )
 
+    sufficient_refs = _sufficient_refs(state)
     output: list[dict[str, Any]] = []
     for index, requirement in enumerate(requirements):
         requirement_id = str(requirement.get("requirement_id") or "")
         detail = details.get(requirement_id)
         if detail is None:
-            raise ValueError(f"PLANNING_HANDOFF_DETAIL: missing detail for {requirement_id}")
-        statement = _text(requirement.get("statement"))
-        implementation_capabilities = _flatten_detail(
-            detail, "implementation_capabilities", "capability"
-        )
-        implementation_obligations = _flatten_detail(
-            detail, "implementation_obligations", "obligation"
-        )
-        if not implementation_capabilities or not implementation_obligations:
             raise ValueError(
-                f"PLANNING_HANDOFF_SEMANTIC_ONLY: {requirement_id} has no concrete implementation detail"
+                f"PLANNING_HANDOFF_DETAIL: missing detail for {requirement_id}"
             )
-        capability = "researched." + _evidence._sha(
-            {"requirement": statement, "index": index}
-        )[7:23]
-        artifacts = []
-        for artifact in detail.get("artifact_obligations", []) if isinstance(detail.get("artifact_obligations"), list) else []:
-            if not isinstance(artifact, Mapping):
-                continue
-            artifacts.append(
-                {
-                    "kind": _text(artifact.get("kind")),
-                    "purpose": _text(artifact.get("purpose")),
-                    "status": "REQUIRED_DESIGN_AND_GENERATION",
-                    "evidence_refs": list(artifact.get("evidence_refs") or []),
-                }
-            )
+        statement = _text(requirement.get("statement"))
+        projection = project_detailed_plan_for_request_catalog(
+            detail, sufficient_refs
+        )
+        implementation_capabilities = projection["implementation_capabilities"]
+        implementation_obligations = projection["implementation_obligations"]
         acceptance = list(
             dict.fromkeys(
                 [
@@ -176,14 +182,17 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                     for item in requirement.get("acceptance", [])
                     if _text(item)
                 ]
-                + _flatten_detail(detail, "verification_obligations", "check")
+                + projection["verification_checks"]
             )
         )
-        prompt_refs = [
-            _text(ref)
-            for ref in requirement.get("prompt_refs", [])
-            if _text(ref)
-        ] if isinstance(requirement.get("prompt_refs"), list) else []
+        capability = "researched." + _evidence._sha(
+            {"requirement": statement, "index": index}
+        )[7:23]
+        prompt_refs = (
+            [_text(ref) for ref in requirement.get("prompt_refs", []) if _text(ref)]
+            if isinstance(requirement.get("prompt_refs"), list)
+            else []
+        )
         output.append(
             {
                 "requirement_id": requirement_id,
@@ -191,19 +200,24 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                 "statement": statement,
                 "semantic_statement": statement,
                 "mandatory": True,
-                "provenance_role": "authored" if prompt_refs else "grounded_reference_derivation",
+                "provenance_role": (
+                    "authored" if prompt_refs else "grounded_reference_derivation"
+                ),
                 "source_span": _source_span(prompt, requirement, state),
                 "evidence_refs": list(requirement.get("evidence_refs") or []),
                 "derived_from": list(requirement.get("evidence_refs") or []),
                 "depends_on": [],
                 "provides": [_evidence._canonical_capability(capability)],
                 "gameplay_capabilities": [capability],
-                "implementation_capabilities": implementation_capabilities,
-                "implementation_obligations": implementation_obligations,
+                **projection,
                 "artifact_task_ids": [
                     _evidence._stable_id(
-                        "task", implementation,
-                        {"requirement_id": requirement_id, "layer": "researched_implementation"},
+                        "task",
+                        implementation,
+                        {
+                            "requirement_id": requirement_id,
+                            "layer": "researched_implementation",
+                        },
                     )
                     for implementation in implementation_capabilities
                 ],
@@ -215,7 +229,6 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                     "optional_requirement_refs": [],
                     "policy": "grounded_planning_state_only",
                 },
-                "artifact_obligations": artifacts,
                 "design_resolution_obligations": implementation_obligations,
                 "runtime_acceptance": list(acceptance),
                 "semantic_status": "RESOLVED",
@@ -231,16 +244,18 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                     "architecture_owner": "planning_state",
                 },
                 "search_queries": _implementation_queries(state, requirement_id),
-                "reuse_candidates": deepcopy(detail.get("reuse_candidates") or []),
                 "detailed_plan_ref": str(detail.get("decision_id") or ""),
-                "engineering_worksheet": deepcopy(detail.get("engineering_worksheet")),
             }
         )
 
     catalog: dict[str, Any] = {
         "prompt_sha256": _evidence._sha(prompt),
         "prompt_char_length": len(prompt),
-        "purpose": _text(state.get("goal", {}).get("statement") if isinstance(state.get("goal"), Mapping) else prompt),
+        "purpose": _text(
+            state.get("goal", {}).get("statement")
+            if isinstance(state.get("goal"), Mapping)
+            else prompt
+        ),
         "requirements": output,
         "constraints": [],
         "non_goals": [],
@@ -270,7 +285,9 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
         "planning_state_sha256": state.get("state_sha256"),
         "catalog_sha256": "",
     }
-    catalog["catalog_sha256"] = _evidence._hash_without(catalog, "catalog_sha256")
+    catalog["catalog_sha256"] = _evidence._hash_without(
+        catalog, "catalog_sha256"
+    )
     _evidence._validate_request_catalog(catalog, prompt=prompt)
     return catalog
 
