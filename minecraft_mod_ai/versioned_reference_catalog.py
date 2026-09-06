@@ -105,12 +105,12 @@ class _ResolvedReference:
     compatibility: Mapping[str, Any]
 
 
-# Curated families are intentionally few.  Exact target resolution happens at runtime,
+# Curated families are intentionally few. Exact target resolution happens at runtime,
 # so a family contributes only when that repository exposes a branch/ref whose own
 # metadata proves the selected Minecraft/loader target.
 _BUILTIN_REFERENCE_FAMILIES: tuple[ReferenceFamily, ...] = (
     ReferenceFamily(
-        repository="FabricMC/fabric",
+        repository="FabricMC/fabric-api",
         capabilities=(
             "fabric api events registry networking packets lifecycle worldgen world generation rendering "
             "resources datagen data commands blocks items entities server client"
@@ -278,7 +278,7 @@ def _metadata_compatibility(
     yarn_value = properties.get("yarn_mappings", "")
     if adapter.mappings_applicable and yarn_value:
         # Mapping build numbers may differ, but a donor mapping must be anchored to
-        # the exact same Minecraft version.  This rejects cross-version names while
+        # the exact same Minecraft version. This rejects cross-version names while
         # allowing compatible Yarn build revisions.
         if not (
             yarn_value == adapter.yarn_mappings
@@ -509,7 +509,7 @@ class VersionedReferenceCatalog:
             (
                 (score, family)
                 for score, family in scored_families
-                if score > 0.0 or family.repository == "FabricMC/fabric"
+                if score > 0.0 or family.repository == "FabricMC/fabric-api"
             ),
             key=lambda item: (
                 -item[0],
@@ -606,7 +606,16 @@ class VersionedReferenceCatalog:
                         family_score=family_score,
                         priority=resolved.family.priority,
                     )
-                    score = max(score, min(1.0, 0.7 * score + 0.3 * min(1.0, window_score)))
+                    score = max(
+                        score,
+                        min(1.0, 0.7 * score + 0.3 * min(1.0, window_score)),
+                    )
+                    minimum_score = (
+                        _env_int("MMM_REFERENCE_MIN_SCORE_PERCENT", 32, 0, 100)
+                        / 100.0
+                    )
+                    if score < minimum_score:
+                        continue
                     digest = "sha256:" + hashlib.sha256(
                         excerpt.encode("utf-8")
                     ).hexdigest()
@@ -647,8 +656,10 @@ class VersionedReferenceCatalog:
             if used + size > byte_budget:
                 continue
             # Prefer repository diversity before taking a second excerpt from the same
-            # donor.  This reduces correlated example errors for a small coder model.
-            if item.repository in repositories and len(repositories) < min(max_examples, len(family_pool)):
+            # donor. This reduces correlated example errors for a small coder model.
+            if item.repository in repositories and len(repositories) < min(
+                max_examples, len(family_pool)
+            ):
                 continue
             selected.append(item)
             repositories.add(item.repository)
