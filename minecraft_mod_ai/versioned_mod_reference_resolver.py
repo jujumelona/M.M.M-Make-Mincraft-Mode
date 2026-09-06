@@ -147,6 +147,7 @@ class ExactReferenceResolver:
         self.fabric_loader = str(fabric_loader or "").strip()
         self.fabric_api = str(fabric_api or "").strip()
         self.ref_probe_limit = _env_int("MMM_REFERENCE_REF_PROBES", 12, 2, 32)
+        self.ref_pages = _env_int("MMM_REFERENCE_REF_PAGES", 2, 1, 4)
         token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
         headers = {
             "Accept": "application/vnd.github+json",
@@ -158,6 +159,9 @@ class ExactReferenceResolver:
         self._client = httpx.Client(headers=headers, timeout=httpx.Timeout(12.0, read=18.0))
         self._lock = threading.RLock()
         self._resolved: dict[str, ResolvedReference | None] = {}
+        self._refs_cache: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {}
+        self._commit_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._license_cache: dict[tuple[str, str], str] = {}
         self._blob_cache: dict[tuple[str, str], str] = {}
 
     def close(self) -> None:
@@ -173,30 +177,25 @@ class ExactReferenceResolver:
             repo = self._json(f"{_GITHUB}/repos/{family.repository}")
             if not isinstance(repo, dict):
                 return None
-            license_info = repo.get("license")
-            spdx = str(license_info.get("spdx_id") or "").strip() if isinstance(
-                license_info, dict
-            ) else ""
-            if not is_reusable_source_license(spdx):
-                resolved = None
-            else:
-                default_branch = str(repo.get("default_branch") or "").strip()
-                refs = self._refs(family.repository, default_branch)
-                refs.sort(
-                    key=lambda item: self._ref_score(item[0], default_branch),
-                    reverse=True,
-                )
-                resolved = None
-                for ref_name, sha in refs[: self.ref_probe_limit]:
+            default_branch = str(repo.get("default_branch") or "").strip()
+            refs = self._refs(family.repository, default_branch)
+            refs.sort(
+                key=lambda item: self._ref_score(item[0], default_branch),
+                reverse=True,
+            )
+            resolved = None
+            for ref_name, sha in refs[: self.ref_probe_limit]:
+                try:
                     candidate = self._inspect(
                         family,
                         ref_name=ref_name,
-                        commit_sha=sha,
-                        license_spdx=spdx,
+                        ref_sha=sha,
                     )
-                    if candidate is not None:
-                        resolved = candidate
-                        break
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                    continue
+                if candidate is not None:
+                    resolved = candidate
+                    break
         except (httpx.HTTPError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
         with self._lock:
@@ -233,18 +232,30 @@ class ExactReferenceResolver:
         return response.json()
 
     def _refs(self, repository: str, default_branch: str) -> list[tuple[str, str]]:
+        cache_key = (repository, default_branch)
+        with self._lock:
+            cached = self._refs_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
         refs: list[tuple[str, str]] = []
         for endpoint in ("branches", "tags"):
-            payload = self._json(f"{_GITHUB}/repos/{repository}/{endpoint}?per_page=100")
-            if not isinstance(payload, list):
-                continue
-            for row in payload:
-                if not isinstance(row, dict) or not isinstance(row.get("commit"), dict):
-                    continue
-                name = str(row.get("name") or "").strip()
-                sha = str(row["commit"].get("sha") or "").strip()
-                if name and sha:
-                    refs.append((name, sha))
+            for page in range(1, self.ref_pages + 1):
+                payload = self._json(
+                    f"{_GITHUB}/repos/{repository}/{endpoint}?per_page=100&page={page}"
+                )
+                if not isinstance(payload, list):
+                    break
+                for row in payload:
+                    if not isinstance(row, dict) or not isinstance(row.get("commit"), dict):
+                        continue
+                    name = str(row.get("name") or "").strip()
+                    sha = str(row["commit"].get("sha") or "").strip()
+                    if name and sha:
+                        refs.append((name, sha))
+                if len(payload) < 100:
+                    break
+
         if default_branch and all(name != default_branch for name, _sha in refs):
             branch = self._json(
                 f"{_GITHUB}/repos/{repository}/branches/{quote(default_branch, safe='')}"
@@ -253,10 +264,14 @@ class ExactReferenceResolver:
                 sha = str(branch["commit"].get("sha") or "").strip()
                 if sha:
                     refs.append((default_branch, sha))
+
         unique: dict[str, str] = {}
         for name, sha in refs:
             unique.setdefault(name, sha)
-        return list(unique.items())
+        result = tuple(unique.items())
+        with self._lock:
+            self._refs_cache[cache_key] = result
+        return list(result)
 
     def _ref_score(self, name: str, default_branch: str) -> tuple[int, int, str]:
         exact = exact_version_in_text(name, self.minecraft_version)
@@ -266,18 +281,80 @@ class ExactReferenceResolver:
         default = name == default_branch
         return (3 if exact else 2 if broad else 1 if default else 0, int(default), name)
 
+    def _commit_object(self, repository: str, ref_sha: str) -> dict[str, Any] | None:
+        current_sha = str(ref_sha or "").strip()
+        if not current_sha:
+            return None
+        seen: set[str] = set()
+        for _depth in range(4):
+            key = (repository, current_sha)
+            with self._lock:
+                cached = self._commit_cache.get(key)
+            if cached is not None:
+                return cached
+            if current_sha in seen:
+                return None
+            seen.add(current_sha)
+            try:
+                commit = self._json(
+                    f"{_GITHUB}/repos/{repository}/git/commits/{quote(current_sha, safe='')}"
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+                tag = self._json(
+                    f"{_GITHUB}/repos/{repository}/git/tags/{quote(current_sha, safe='')}"
+                )
+                if not isinstance(tag, dict) or not isinstance(tag.get("object"), dict):
+                    return None
+                target = tag["object"]
+                target_type = str(target.get("type") or "").strip().casefold()
+                target_sha = str(target.get("sha") or "").strip()
+                if target_type not in {"commit", "tag"} or not target_sha:
+                    return None
+                current_sha = target_sha
+                continue
+            if not isinstance(commit, dict) or not isinstance(commit.get("tree"), dict):
+                return None
+            immutable_sha = str(commit.get("sha") or current_sha).strip()
+            if not immutable_sha:
+                return None
+            with self._lock:
+                self._commit_cache[(repository, immutable_sha)] = commit
+                self._commit_cache[(repository, ref_sha)] = commit
+            return commit
+        return None
+
+    def _license_at_commit(self, repository: str, commit_sha: str) -> str:
+        key = (repository, commit_sha)
+        with self._lock:
+            cached = self._license_cache.get(key)
+        if cached is not None:
+            return cached
+        payload = self._json(
+            f"{_GITHUB}/repos/{repository}/license?ref={quote(commit_sha, safe='')}"
+        )
+        license_info = payload.get("license") if isinstance(payload, dict) else None
+        spdx = (
+            str(license_info.get("spdx_id") or "").strip()
+            if isinstance(license_info, dict)
+            else ""
+        )
+        with self._lock:
+            self._license_cache[key] = spdx
+        return spdx
+
     def _inspect(
         self,
         family: ReferenceFamily,
         *,
         ref_name: str,
-        commit_sha: str,
-        license_spdx: str,
+        ref_sha: str,
     ) -> ResolvedReference | None:
-        commit = self._json(f"{_GITHUB}/repos/{family.repository}/git/commits/{commit_sha}")
+        commit = self._commit_object(family.repository, ref_sha)
         if not isinstance(commit, dict) or not isinstance(commit.get("tree"), dict):
             return None
-        immutable_sha = str(commit.get("sha") or commit_sha).strip()
+        immutable_sha = str(commit.get("sha") or "").strip()
         tree_sha = str(commit["tree"].get("sha") or "").strip()
         if not immutable_sha or not tree_sha:
             return None
@@ -308,6 +385,9 @@ class ExactReferenceResolver:
             return None
         proof = self._compatibility(metadata, family)
         if not proof.admitted:
+            return None
+        license_spdx = self._license_at_commit(family.repository, immutable_sha)
+        if not is_reusable_source_license(license_spdx):
             return None
         return ResolvedReference(
             family=family,
