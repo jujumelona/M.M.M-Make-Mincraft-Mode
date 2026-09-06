@@ -19,6 +19,8 @@ from types import SimpleNamespace
 import minecraft_mod_ai.pre_design_grounded_rag as project_rag
 import minecraft_mod_ai.agentic_research_game_design as agentic
 import minecraft_mod_ai.pre_design_research_pipeline as pipeline
+from minecraft_mod_ai.planning_authority import authoritative_request_scope
+from tests.planning_authority_fixtures import request_catalog
 
 assert not hasattr(agentic, "collect_pre_design_research")
 
@@ -29,7 +31,7 @@ calls = {
 }
 
 
-def grounded(_router, brief):
+def grounded(_project_rag, _router, brief):
     calls["grounded"] += 1
     domains = []
     for domain in brief.get("domains", []):
@@ -96,7 +98,7 @@ def domain_worker(_agentic, _project_rag, _router, *, prompt, domain, document, 
     }
 
 
-project_rag._forced_rag_bundle = grounded
+pipeline.forced_rag_bundle = grounded
 pipeline.collect_technology_radar = radar
 pipeline.research_document_domain = domain_worker
 
@@ -114,10 +116,21 @@ class ProbeRouter:
     )
 
 
-result = pipeline.collect_design_research(
-    ProbeRouter(),
-    "Add one custom item.",
+prompt = "Add one custom item."
+catalog = request_catalog(
+    prompt,
+    [
+        {
+            "requirement_id": "req_item",
+            "capability": "item.custom_registration",
+            "statement": "Add one custom item.",
+            "implementation_capabilities": ["item.registration"],
+            "search_queries": ["Minecraft Fabric custom item registration implementation"],
+        }
+    ],
 )
+with authoritative_request_scope(prompt, catalog):
+    result = pipeline.collect_design_research(ProbeRouter(), prompt)
 
 brief_ids = [
     item["domain_id"]
