@@ -5,6 +5,8 @@ from __future__ import annotations
 The planner must finish evidence-backed implementation design before coding starts. This
 module lowers one validated execution task into exact ownership, obligations, target
 constraints and verification gates. Semantic task labels are never implementation steps.
+Each step also carries an explicit execution checklist so a small coder model does not
+need to invent its own edit/verification procedure.
 """
 
 import hashlib
@@ -18,7 +20,14 @@ SCHEMA = "mmm/coder-execution-contract-v2"
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _sha(value: Any) -> str:
@@ -35,11 +44,15 @@ def _hash_without(value: Mapping[str, Any], field: str) -> str:
 def _strings(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         raw: Sequence[Any] = (value,)
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
         raw = value
     else:
         return ()
-    return tuple(dict.fromkeys(text for item in raw if (text := str(item or "").strip())))
+    return tuple(
+        dict.fromkeys(text for item in raw if (text := str(item or "").strip()))
+    )
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -85,7 +98,11 @@ def _anchor_target(anchor: Mapping[str, Any]) -> dict[str, str]:
     path, separator, symbol = locator.partition("#")
     kind = str(anchor.get("kind") or "").strip()
     status = str(anchor.get("status") or "").strip().casefold()
-    operation = "modify" if status in {"existing", "reuse", "modify", "host_existing"} else "create_or_modify"
+    operation = (
+        "modify"
+        if status in {"existing", "reuse", "modify", "host_existing"}
+        else "create_or_modify"
+    )
     return {
         "kind": kind,
         "locator": locator,
@@ -107,7 +124,10 @@ def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
             "sequence": sequence,
             "gate": gate,
             "executor": "host_gate_runner",
-            "pass_condition": "The named host gate returns PASS for this task and immutable target.",
+            "pass_condition": (
+                "The named host gate returns PASS for this task and immutable target; "
+                "do not reinterpret, skip or replace the gate."
+            ),
         }
         for sequence, gate in enumerate(gates)
     ]
@@ -120,7 +140,10 @@ def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "public_acceptance": list(public),
                 "runtime_acceptance": list(runtime),
                 "acceptance": list(acceptance),
-                "pass_condition": "Every declared observable acceptance statement is proven; compile success alone is insufficient.",
+                "pass_condition": (
+                    "Every declared observable acceptance statement is proven with its "
+                    "expected state/output; compile success or model self-report alone is insufficient."
+                ),
             }
         )
     return plan
@@ -138,7 +161,9 @@ def _artifact_obligation_text(artifact: Mapping[str, Any]) -> str:
     )
 
 
-def _implementation_steps(task: Mapping[str, Any], targets: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
+def _implementation_steps(
+    task: Mapping[str, Any], targets: Sequence[Mapping[str, str]]
+) -> list[dict[str, Any]]:
     obligations = list(_strings(task.get("implementation_obligations")))
     obligations.extend(_strings(task.get("design_resolution_obligations")))
     obligations.extend(_strings(task.get("implementation_capabilities")))
@@ -154,13 +179,31 @@ def _implementation_steps(task: Mapping[str, Any], targets: Sequence[Mapping[str
             f"coder execution contract {task_id!r} is semantic-only: concrete researched implementation obligations are required"
         )
     target_refs = [item["locator"] for item in targets if item.get("locator")]
+    consumes = list(_strings(task.get("consumes")))
+    provides = list(_strings(task.get("provides")))
+    execution_checklist = [
+        "Read the complete engineering_worksheet, this obligation, target_refs, consumes/provides and relevant reuse evidence before editing.",
+        "Inspect the existing owned target before changing it; preserve working behavior and public contracts not explicitly changed by this task.",
+        "Implement exactly this obligation in writable owned targets. Do not redesign architecture, dependency edges, target coordinates or neighboring tasks.",
+        "Use verified target APIs/symbols from evidence or repository context. If a required binding is still unknown, stop that binding rather than inventing an API, path, identifier or signature.",
+        "Keep server/common/client ownership, validation, persistence and resource behavior consistent with the engineering_worksheet sections that apply.",
+        "Do not leave TODO, FIXME, stub, placeholder return, silent exception swallowing, fake success, dead compatibility branch or duplicated obsolete implementation behind.",
+        "After the edit, check imports/types/control flow, every declared consume/provide relation, failure paths and affected tests/resources before advancing.",
+        "Treat the model's own confidence as non-authoritative; completion requires the host verification_plan to pass.",
+    ]
     return [
         {
             "sequence": index,
             "obligation": obligation,
             "target_refs": target_refs,
-            "consumes": list(_strings(task.get("consumes"))),
-            "must_provide": list(_strings(task.get("provides"))),
+            "consumes": consumes,
+            "must_provide": provides,
+            "execution_checklist": execution_checklist,
+            "done_when": (
+                "The obligation is concretely realized in owned targets, no obsolete/placeholder "
+                "implementation for the same responsibility remains, declared outputs are produced, "
+                "and the task is ready for host verification."
+            ),
         }
         for index, obligation in enumerate(obligations)
     ]
@@ -178,22 +221,44 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
     try:
         target_coordinates_from_mapping(target_constraints)
     except TargetContractError as exc:
-        raise ValueError(f"coder execution contract {task_ref!r} target is invalid: {exc}") from exc
+        raise ValueError(
+            f"coder execution contract {task_ref!r} target is invalid: {exc}"
+        ) from exc
     targets = contract.get("targets")
     if not isinstance(targets, list) or not targets:
         raise ValueError(f"coder execution contract {task_ref!r} has no exact target")
     for index, target in enumerate(targets):
         if not isinstance(target, Mapping):
             raise ValueError(f"coder target {index} is not an object")
-        if not str(target.get("locator") or "").strip() or not str(target.get("path") or "").strip():
+        if not str(target.get("locator") or "").strip() or not str(
+            target.get("path") or ""
+        ).strip():
             raise ValueError(f"coder target {index} has no exact locator/path")
-        if str(target.get("kind") or "") == "symbol" and not str(target.get("symbol") or "").strip():
+        if str(target.get("kind") or "") == "symbol" and not str(
+            target.get("symbol") or ""
+        ).strip():
             raise ValueError(f"coder symbol target {index} has no exact symbol")
     steps = contract.get("implementation_steps")
     if not isinstance(steps, list) or not steps:
-        raise ValueError(f"coder execution contract {task_ref!r} has no implementation steps")
-    if [item.get("sequence") for item in steps if isinstance(item, Mapping)] != list(range(len(steps))):
-        raise ValueError(f"coder execution contract {task_ref!r} has unstable step ordering")
+        raise ValueError(
+            f"coder execution contract {task_ref!r} has no implementation steps"
+        )
+    if [
+        item.get("sequence") for item in steps if isinstance(item, Mapping)
+    ] != list(range(len(steps))):
+        raise ValueError(
+            f"coder execution contract {task_ref!r} has unstable step ordering"
+        )
+    for index, step in enumerate(steps):
+        if not isinstance(step, Mapping):
+            raise ValueError(f"coder execution step {index} is not an object")
+        checklist = step.get("execution_checklist")
+        if not isinstance(checklist, list) or len(checklist) < 6:
+            raise ValueError(
+                f"coder execution step {index} has no complete small-model checklist"
+            )
+        if not str(step.get("done_when") or "").strip():
+            raise ValueError(f"coder execution step {index} has no completion condition")
     if contract.get("contract_sha256") != _hash_without(contract, "contract_sha256"):
         raise ValueError(f"coder execution contract {task_ref!r} hash mismatch")
 
@@ -206,7 +271,9 @@ def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
     targets = [_anchor_target(anchor) for anchor in _owned_anchors(task)]
     targets = [target for target in targets if target["locator"] and target["path"]]
     if not targets:
-        raise ValueError(f"coder execution contract {task_id!r} has no owned target anchor")
+        raise ValueError(
+            f"coder execution contract {task_id!r} has no owned target anchor"
+        )
 
     target_paths = list(dict.fromkeys(target["path"] for target in targets))
     contract: dict[str, Any] = {
@@ -231,18 +298,35 @@ def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
         "reuse_refs": list(_strings(task.get("reuse_refs"))),
         "protected_boundaries": {
             "writable_paths": target_paths,
-            "rule": "Do not create, edit, rename, or delete files outside writable_paths unless a later host task explicitly owns them.",
-            "dependency_rule": "Do not implement this task before every depends_on task has completed and exported its declared provides.",
-            "architecture_rule": "Do not change task IDs, dependency edges, target coordinates, public acceptance, or artifact ownership.",
+            "rule": (
+                "Do not create, edit, rename, move or delete files outside writable_paths "
+                "unless a later host task explicitly owns them. Read-only inspection may cross "
+                "the boundary when needed to understand dependencies."
+            ),
+            "dependency_rule": (
+                "Do not implement this task before every depends_on task has completed and "
+                "exported its declared provides. Never emulate a missing dependency with a local duplicate."
+            ),
+            "architecture_rule": (
+                "Do not change task IDs, dependency edges, target coordinates, public acceptance, "
+                "artifact ownership, authority boundaries or planner-owned semantics."
+            ),
+            "cleanup_rule": (
+                "When this task replaces an owned implementation, remove obsolete duplicate/dead code "
+                "inside writable_paths instead of leaving parallel legacy and new paths."
+            ),
         },
         "verification_plan": _verification_plan(task),
         "completion_predicate": {
             "operator": "all",
             "conditions": [
                 "every implementation_step is realized in its owned target",
-                "every declared provides value is produced",
+                "every declared provides value is produced from the declared consumes/dependencies",
                 "every verification_plan entry passes",
                 "no protected boundary is violated",
+                "no TODO/FIXME/stub/placeholder/fake-success path remains for this task",
+                "no obsolete duplicate implementation remains in owned writable paths after a replacement",
+                "runtime/public acceptance is not inferred from compilation or model self-report alone",
             ],
             "model_self_report_is_authoritative": False,
         },
