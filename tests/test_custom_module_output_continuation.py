@@ -78,7 +78,16 @@ def test_output_continuation_preserves_host_grounding_receipts() -> None:
     task = {
         "task_id": "task_example",
         "semantic_outcome": "Implement the approved example task.",
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "1.21.1+build.3",
+            "java_version": "21",
+        },
         "owned_anchors": [anchor],
+        "implementation_obligations": [
+            "Implement the approved example behavior in the exact owned target."
+        ],
         "production_bindings": [
             {
                 "task_ref": "task_example",
