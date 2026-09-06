@@ -98,7 +98,6 @@ class PlanningPipeline:
         """
         del media_paths
         from . import agentic_research_game_design as host_design
-        from . import game_design as gd
         from .planning_authority import (
             authoritative_request_scope,
             build_authoritative_request_catalog,
@@ -108,12 +107,14 @@ class PlanningPipeline:
         request_catalog = build_authoritative_request_catalog(prompt, self.router)
         with authoritative_request_scope(prompt, request_catalog):
             design = host_design.generate_sectioned_game_design(
-                gd,
                 self.router,
                 prompt,
                 research={},
             )
-            design = gd._validate_ready_design(prompt, gd._canonical_game_design(design))
+            design = host_design.validate_ready_design(
+                prompt,
+                host_design.canonical_game_design(design),
+            )
             design = self._bind_existing_project(design)
             design = {
                 **design,
@@ -136,7 +137,7 @@ class PlanningPipeline:
                 },
             }
 
-        build_slice = gd._deterministic_bootstrap(prompt, design)
+        build_slice = host_design.deterministic_bootstrap(prompt, design)
         proposal = _proposal_from_model_data(prompt, build_slice)
         if proposal.requested_prompt != prompt:
             proposal = replace(
