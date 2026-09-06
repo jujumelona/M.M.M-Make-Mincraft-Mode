@@ -134,16 +134,14 @@ def test_revision_generation_fails_closed_without_reviewed_templates(
             existing_input=archive,
         )
 
-    # Fail closed without publishing a final project/release, but retain the failed
-    # staging workspace so the real generation failure remains diagnosable.
+    # The generator rejects this unsupported revision before it creates its staging
+    # project.  Fail closed: no final project, failed staging tree, or release may exist.
     workspaces = output_root / "workspaces"
     releases = output_root / "releases"
-    assert not (workspaces / proposal.spec.mod_id).exists()
+    assert workspaces.is_dir()
     assert releases.is_dir()
+    assert not any(workspaces.iterdir())
     assert not any(releases.iterdir())
-    failed = list(workspaces.glob(f"failed-{proposal.spec.mod_id}-*"))
-    assert len(failed) == 1
-    assert failed[0].is_dir()
 
 
 def test_generated_release_bundle_recovers_nested_editable_source_inventory(
