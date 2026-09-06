@@ -10,9 +10,7 @@ from minecraft_mod_ai.versioned_mod_reference_catalog import (
     task_families,
 )
 from minecraft_mod_ai.versioned_mod_reference_resolver import ExactReferenceResolver
-from minecraft_mod_ai.versioned_reference_context_installation import (
-    install_versioned_reference_context,
-)
+from minecraft_mod_ai.versioned_reference_context_installation import install
 from minecraft_mod_ai.versioned_research_context import VersionedResearchCodeContext
 
 
@@ -177,5 +175,5 @@ java_version=17
 
 
 def test_hot_path_installer_points_coder_engine_at_versioned_context() -> None:
-    install_versioned_reference_context()
+    install()
     assert custom_generation_research.ResearchCodeContext is VersionedResearchCodeContext
