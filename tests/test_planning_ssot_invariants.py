@@ -44,6 +44,20 @@ def test_user_only_never_bypasses_requirement_gate():
     assert any(item.get("stage") == "requirement_selection" for item in state["blockers"])
 
 
+def test_pipeline_stops_on_blocked_requirement_selection_before_detail_plan():
+    from minecraft_mod_ai.planning_state_pipeline import prepare_planning_state
+
+    with pytest.raises(
+        ValueError,
+        match="PLANNING_REQUIREMENT_SELECTION_BLOCKED:.*user_only",
+    ):
+        prepare_planning_state(
+            None,
+            "Build my favorite game",
+            existing_state=initial(),
+        )
+
+
 def test_user_only_never_bypasses_ready_gate():
     state = initial()
     state.update(plan_ready=True, coverage=[{"status": "covered"}])
