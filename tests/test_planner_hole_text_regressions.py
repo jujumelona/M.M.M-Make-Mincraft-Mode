@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.generation_output_budget import generation_output_token_budget
-from minecraft_mod_ai.planner_hole_filling import PlanningHoleFillError, _fill_page
+from minecraft_mod_ai.planner_hole_filling import _fill_page
 from minecraft_mod_ai.planner_hole_text import parse_hole_text
 from minecraft_mod_ai.planner_operation import current_output_limit, planner_operation
 
@@ -40,48 +40,69 @@ def test_text_protocol_preserves_quotes_and_discards_truncated_block():
         parse_hole_text(_block(1) + _block(1), [{"hole_id": "host_a"}])
 
 
-@pytest.mark.parametrize(
-    "repair", [_block(1, "Repair B only"), '{"bad": "unterminated']
-)
-def test_repair_keeps_accepted_neighbor_and_never_accepts_malformed_json(repair):
+def test_partial_refinement_keeps_neighbor_host_default_without_retry():
     class Router:
         calls = 0
 
         def generate_text(self, role, messages, **kwargs):
             self.calls += 1
             assert kwargs == {"response_format": "text", "enable_tools": False}
-            if self.calls == 1:
-                return _block(1, "Keep A") + "### Hole 2\nDecision: truncated"
-            import json
+            assert current_output_limit() == 640
+            return _block(1, "Refine A") + "### Hole 2\nDecision: truncated"
 
-            packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-            assert packet["modules"][0]["implementation_template"]["holes"] == [
-                {"hole_id": "b"}
-            ]
-            assert current_output_limit() == 384
-            return repair
-
+    router = Router()
     trace = _Trace()
     module = {
         "module_id": "host",
         "implementation_template": {
             "holes": [
-                {"hole_id": "a"},
-                {"hole_id": "b"},
+                {"hole_id": "a", "kind": "implementation", "subject": "A"},
+                {"hole_id": "b", "kind": "implementation", "subject": "B"},
             ]
         },
     }
-    if repair.startswith("{"):
-        with pytest.raises(PlanningHoleFillError, match="bounded repair"):
-            _fill_page(Router(), module, trace)
-        assert trace.attempts[-1]["raw_output"] == repair
-    else:
-        fills = _fill_page(Router(), module, trace)
-        assert [fill["implementation_decision"] for fill in fills] == [
-            "Keep A",
-            "Repair B only",
-        ]
-    assert len(trace.attempts) == 2
+
+    fills = _fill_page(router, module, trace)
+
+    assert router.calls == 1
+    assert len(trace.attempts) == 1
+    assert fills[0]["implementation_decision"] == "Refine A"
+    assert fills[0]["fill_source"] == "model_refined_host_template"
+    assert fills[1]["hole_id"] == "b"
+    assert fills[1]["fill_source"] == "host_template_default"
+    assert fills[1]["implementation_decision"]
+    assert fills[1]["local_steps"]
+    assert fills[1]["verification_intent"]
+
+
+def test_malformed_refinement_is_ignored_and_host_defaults_complete_plan():
+    class Router:
+        calls = 0
+
+        def generate_text(self, role, messages, **kwargs):
+            self.calls += 1
+            return '{"bad": "unterminated'
+
+    router = Router()
+    trace = _Trace()
+    module = {
+        "module_id": "host",
+        "implementation_template": {
+            "holes": [
+                {"hole_id": "a", "kind": "implementation", "subject": "A"},
+                {"hole_id": "b", "kind": "implementation", "subject": "B"},
+            ]
+        },
+    }
+
+    fills = _fill_page(router, module, trace)
+
+    assert router.calls == 1
+    assert len(trace.attempts) == 1
+    assert {fill["hole_id"] for fill in fills} == {"a", "b"}
+    assert all(fill["fill_source"] == "host_template_default" for fill in fills)
+    assert all(fill["implementation_decision"] for fill in fills)
+    assert all(fill["verification_intent"] for fill in fills)
 
 
 def test_operation_budget_caps_dynamic_context_and_restores_after_failure():
