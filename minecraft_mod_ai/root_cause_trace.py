@@ -6,11 +6,10 @@ The trace is independent of model output. It records what the host actually atte
 what gate/result was observed, and the original exception chain before callers wrap or
 aggregate the failure.
 
-Every event is mirrored to stderr for interactive visibility and appended to a durable
-JSONL trace journal so process/UI truncation cannot erase the critical tail. The
-durable writer deliberately uses only primitive os-level append/write/fsync operations
-and has a minimal emergency fallback so a diagnostic serialization failure cannot
-replace the first production failure.
+Every event is mirrored to stderr and appended to the JSONL journal. Failure and
+emergency records force an fsync, which also flushes earlier journal writes, so the
+critical failure tail is durable without forcing a disk barrier for every successful
+hot-path event.
 """
 
 import heapq
@@ -19,6 +18,7 @@ import itertools
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -34,6 +34,7 @@ _TRACE_SEQUENCE = itertools.count(1)
 _TRACE_ID: ContextVar[str] = ContextVar("mmm_root_trace_id", default="")
 _SPAN_ID: ContextVar[str] = ContextVar("mmm_root_span_id", default="")
 _FIRST_FAILURE_SEQ: ContextVar[int] = ContextVar("mmm_root_first_failure_seq", default=0)
+_TRACE_WRITE_LOCK = threading.Lock()
 _STRING_LIMIT = 512
 _COLLECTION_LIMIT = 64
 _DEPTH_LIMIT = 5
@@ -236,23 +237,25 @@ def _is_failure(result: str, exc: BaseException | None) -> bool:
     return str(result or "").strip().upper() in _FAILURE_STATUSES
 
 
-def _append_durable_line(line: bytes) -> None:
-    """Append one already-serialized JSONL record using primitive os operations."""
+def _append_durable_line(line: bytes, *, sync: bool) -> None:
+    """Append one JSONL record; force durability only at failure boundaries."""
 
     path = durable_trace_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
-    fd = os.open(os.fspath(path), flags, 0o600)
-    try:
-        offset = 0
-        while offset < len(line):
-            written = os.write(fd, line[offset:])
-            if written <= 0:
-                raise OSError("durable trace write returned zero bytes")
-            offset += written
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with _TRACE_WRITE_LOCK:
+        fd = os.open(os.fspath(path), flags, 0o600)
+        try:
+            offset = 0
+            while offset < len(line):
+                written = os.write(fd, line[offset:])
+                if written <= 0:
+                    raise OSError("durable trace write returned zero bytes")
+                offset += written
+            if sync:
+                os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _stderr_line(line: str) -> None:
@@ -298,7 +301,7 @@ def _emergency_trace(
             b'"event":"trace_emergency_fallback"}\n'
         )
     try:
-        _append_durable_line(encoded)
+        _append_durable_line(encoded, sync=True)
     except BaseException:
         pass
     try:
@@ -318,7 +321,7 @@ def emit_root_cause(
     details: Mapping[str, Any] | None = None,
     exc: BaseException | None = None,
 ) -> None:
-    """Emit one durable event without allowing diagnostics to replace first cause."""
+    """Emit one append-only event without allowing diagnostics to replace first cause."""
 
     trace_seq = next(_TRACE_SEQUENCE)
     trace_id = current_trace_id()
@@ -347,7 +350,8 @@ def emit_root_cause(
         if exc is not None:
             payload["exception_chain"] = exception_chain(exc)
 
-        if _is_failure(result, exc):
+        failure = _is_failure(result, exc)
+        if failure:
             first_failure_seq = _FIRST_FAILURE_SEQ.get()
             if first_failure_seq <= 0:
                 first_failure_seq = trace_seq
@@ -364,7 +368,10 @@ def emit_root_cause(
             separators=(",", ":"),
             default=str,
         )
-        _append_durable_line((serialized + "\n").encode("utf-8", "backslashreplace"))
+        _append_durable_line(
+            (serialized + "\n").encode("utf-8", "backslashreplace"),
+            sync=failure,
+        )
         _stderr_line(serialized)
     except BaseException as logger_exc:
         _emergency_trace(

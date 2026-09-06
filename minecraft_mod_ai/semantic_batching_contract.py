@@ -8,17 +8,22 @@ recorded as unmeasured.
 Each batch uses two deliberately narrow small-model stages. Stage 1 segments authored
 behaviors without capability authority; the host grounds and source-validates those leaves.
 Stage 2 classifies only the immutable approved leaves into the host capability catalog.
-All approved leaves are globally merged before host feature-model dependency resolution.
+Independent bounded batches may run concurrently only when the router proves ownership of
+a local native model with measured parallel slots. Results are merged in source-batch order
+before host feature-model dependency resolution.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 
 from . import semantic_requirement_authority as _semantic
 from .minecraft_requirement_dependencies import bind_selected_feature_dependencies
+from .model_concurrency import router_native_model_parallelism
 from .semantic_leaf_pipeline import compile_semantic_batch
 
 _INSTALLED = False
@@ -117,27 +122,67 @@ def _source_batch_receipt(
     }
 
 
+def _compile_bounded_batch(
+    router: Any,
+    batch_index: int,
+    batch: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    try:
+        batch_nodes, metrics = compile_semantic_batch(router, batch)
+    except Exception as exc:
+        if isinstance(exc, _semantic._evidence.EvidencePlanError):
+            raise
+        raise _semantic._evidence.EvidencePlanError(
+            "two-stage semantic compilation failed for bounded batch "
+            f"{batch_index}: {type(exc).__name__}: {exc}"
+        ) from exc
+    return batch_nodes, _source_batch_receipt(batch_index, batch, metrics)
+
+
+def _batch_worker_count(router: Any, batch_count: int) -> int:
+    if batch_count <= 1:
+        return 1
+    return max(1, min(batch_count, router_native_model_parallelism(router)))
+
+
 def _generate_bounded_nodes(
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
     *,
     batch_size: int,
 ) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], ...]]:
+    batches = _chunks(clauses, batch_size)
+    workers = _batch_worker_count(router, len(batches))
+
+    if workers == 1:
+        compiled = tuple(
+            _compile_bounded_batch(router, batch_index, batch)
+            for batch_index, batch in enumerate(batches)
+        )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mmm-semantic",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    copy_context().run,
+                    _compile_bounded_batch,
+                    router,
+                    batch_index,
+                    batch,
+                )
+                for batch_index, batch in enumerate(batches)
+            ]
+            # Consume futures in source-batch order. Execution is parallel but merge
+            # order, local-ID assignment, and final catalog hashing stay deterministic.
+            compiled = tuple(future.result() for future in futures)
+
     nodes: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
-
-    for batch_index, batch in enumerate(_chunks(clauses, batch_size)):
-        try:
-            batch_nodes, metrics = compile_semantic_batch(router, batch)
-        except Exception as exc:
-            if isinstance(exc, _semantic._evidence.EvidencePlanError):
-                raise
-            raise _semantic._evidence.EvidencePlanError(
-                "two-stage semantic compilation failed for bounded batch "
-                f"{batch_index}: {type(exc).__name__}: {exc}"
-            ) from exc
+    for batch_nodes, receipt in compiled:
         nodes.extend(batch_nodes)
-        receipts.append(_source_batch_receipt(batch_index, batch, metrics))
+        receipts.append(receipt)
 
     assigned = _semantic._assign_local_ids(nodes)
     if not assigned:
@@ -179,6 +224,7 @@ def build_bounded_requirement_catalog(
 
     audit = dict(catalog.get("semantic_audit") or {})
     batch_count = len(batch_receipts)
+    parallel_workers = _batch_worker_count(router, batch_count)
     model_calls_total = sum(
         int(receipt["semantic_model_calls_total"]) for receipt in batch_receipts
     )
@@ -205,6 +251,12 @@ def build_bounded_requirement_catalog(
             "semantic_leaf_mutability_after_grounding": "immutable",
             "semantic_batch_size": batch_size,
             "semantic_batch_count": batch_count,
+            "semantic_batch_parallel_workers": parallel_workers,
+            "semantic_batch_parallelism_policy": (
+                "measured_native_model_slots"
+                if parallel_workers > 1
+                else "serial_unproven_or_single_batch"
+            ),
             "semantic_batch_size_source": contract["source"],
             "semantic_batch_size_measured": bool(contract["measured"]),
             "semantic_batch_model_identity_sha256": contract["model_identity_sha256"],

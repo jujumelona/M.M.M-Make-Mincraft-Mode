@@ -34,6 +34,27 @@ def test_root_cause_trace_is_durable_and_preserves_first_failure(tmp_path, monke
     assert first_failure["exception_chain"][0]["type"] == "RuntimeError"
 
 
+def test_success_events_do_not_force_fsync_but_failure_boundary_does(tmp_path, monkeypatch):
+    trace_path = tmp_path / "root_cause.jsonl"
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))
+    fsync_calls: list[int] = []
+    real_fsync = trace.os.fsync
+
+    def observed_fsync(fd: int) -> None:
+        fsync_calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(trace.os, "fsync", observed_fsync)
+
+    trace.emit_root_cause("start", result="START")
+    trace.emit_root_cause("pass", result="PASS")
+    assert fsync_calls == []
+
+    trace.emit_root_cause("failure", result="FAIL", reason="synthetic")
+    assert len(fsync_calls) == 1
+    assert [item["event"] for item in _records(trace_path)] == ["start", "pass", "failure"]
+
+
 def test_trace_serialization_failure_uses_emergency_record(tmp_path, monkeypatch):
     trace_path = tmp_path / "root_cause.jsonl"
     monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))

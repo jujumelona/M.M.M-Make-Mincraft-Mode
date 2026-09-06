@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
+from .model_concurrency import router_owns_native_model
+
 _MARKER = "_mmm_central_model_capacity_v3"
 _ROUTER_CAPACITY_MARKER = "_mmm_router_owned_model_capacity_v1"
 _LEGACY_MARKERS = (
@@ -26,20 +28,6 @@ def _unwrap_legacy(current: Any) -> Any:
     return current
 
 
-def _owns_native_model(router: Any) -> bool:
-    """Require router-local proof before process-global llama capacity may be reused."""
-
-    try:
-        config = router.registry.role(router.profile, "planner")
-    except Exception:
-        return False
-    return (
-        bool(getattr(config, "exclusive_gpu", False))
-        and str(getattr(config, "provider", "")) == "local"
-        and str(getattr(config, "adapter", "")) in {"llama_cpp", "vllm"}
-    )
-
-
 def harden(agentic_module: Any, central_module: Any) -> None:
     """Reuse central's canonical planner-capacity helper for every model-backed pool.
 
@@ -58,7 +46,7 @@ def harden(agentic_module: Any, central_module: Any) -> None:
                 requested = max(1, int(width))
             except (TypeError, ValueError):
                 return 1
-            if requested <= 1 or not _owns_native_model(router):
+            if requested <= 1 or not router_owns_native_model(router):
                 return 1
             try:
                 capacity = current_domain_workers(router, requested)

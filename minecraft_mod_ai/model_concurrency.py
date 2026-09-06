@@ -4,6 +4,7 @@ import os
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import Any
 
 
 class ReentrantReadWriteLock:
@@ -156,8 +157,32 @@ def active_llama_parallelism() -> int:
         return 1
 
 
+def router_owns_native_model(router: Any, *, role: str = "planner") -> bool:
+    """Return True only when this router proves ownership of the local native model."""
+
+    try:
+        config = router.registry.role(router.profile, role)
+    except Exception:
+        return False
+    return (
+        bool(getattr(config, "exclusive_gpu", False))
+        and str(getattr(config, "provider", "")) == "local"
+        and str(getattr(config, "adapter", "")) in {"llama_cpp", "vllm"}
+    )
+
+
+def router_native_model_parallelism(router: Any, *, role: str = "planner") -> int:
+    """Return measured native-model slots, or one for unproven/remote routers."""
+
+    if not router_owns_native_model(router, role=role):
+        return 1
+    return active_llama_parallelism()
+
+
 __all__ = [
     "ReentrantCapacityGate",
     "ReentrantReadWriteLock",
     "active_llama_parallelism",
+    "router_native_model_parallelism",
+    "router_owns_native_model",
 ]
