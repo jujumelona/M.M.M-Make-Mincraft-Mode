@@ -3,8 +3,9 @@ from __future__ import annotations
 """Lower a plan-ready planning-state SSOT into the existing evidence-plan catalog.
 
 The legacy catalog remains a downstream interchange shape, not a semantic authority.
-Every implementation capability/obligation in it originates from the detailed grounded
-planning state and carries its research provenance.
+Every implementation capability/obligation originates from the detailed grounded planning
+state. Prompt provenance is resolved from structural ``prompt_refs`` rather than a second,
+fragile free-text quote contract.
 """
 
 from collections.abc import Mapping
@@ -36,29 +37,69 @@ def _details(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     }
 
 
-def _source_span(prompt: str, requirement: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
-    quote = str(requirement.get("prompt_quote") or "").strip()
-    if quote:
-        start = prompt.find(quote)
-        if start < 0:
-            raise ValueError("PLANNING_HANDOFF_SOURCE: requirement prompt quote is stale")
-        text = quote
-    else:
+def _prompt_source_by_ref(state: Mapping[str, Any], ref: str) -> Mapping[str, Any] | None:
+    if ref == "goal":
         goal = state.get("goal")
         source = goal.get("source") if isinstance(goal, Mapping) else None
-        if not isinstance(source, Mapping):
-            raise ValueError("PLANNING_HANDOFF_SOURCE: derived requirement has no authored goal anchor")
-        start = int(source.get("char_start"))
+        return source if isinstance(source, Mapping) else None
+    for item in state.get("known", []) if isinstance(state.get("known"), list) else []:
+        if not isinstance(item, Mapping) or str(item.get("known_id") or "") != ref:
+            continue
+        source = item.get("source")
+        return source if isinstance(source, Mapping) else None
+    return None
+
+
+def _validated_source_span(prompt: str, source: Mapping[str, Any] | None) -> dict[str, Any]:
+    if isinstance(source, Mapping):
+        start = source.get("char_start")
+        end = source.get("char_end")
         text = str(source.get("text") or "")
-        if prompt[start : start + len(text)] != text:
-            raise ValueError("PLANNING_HANDOFF_SOURCE: authored goal anchor is stale")
+        if (
+            type(start) is int
+            and type(end) is int
+            and 0 <= start < end <= len(prompt)
+            and prompt[start:end] == text
+        ):
+            return {
+                "source_id": "requested_prompt",
+                "char_start": start,
+                "char_end": end,
+                "text": text,
+                "text_sha256": _evidence._sha(text),
+            }
+
+    # Old checkpoints may contain the pre-fix -1/empty receipt. The immutable raw prompt
+    # is still authoritative, so use it as the broad source anchor instead of crashing or
+    # fabricating a quote.
+    if not prompt:
+        raise ValueError("PLANNING_HANDOFF_SOURCE: request prompt is empty")
     return {
         "source_id": "requested_prompt",
-        "char_start": start,
-        "char_end": start + len(text),
-        "text": text,
-        "text_sha256": _evidence._sha(text),
+        "char_start": 0,
+        "char_end": len(prompt),
+        "text": prompt,
+        "text_sha256": _evidence._sha(prompt),
     }
+
+
+def _source_span(prompt: str, requirement: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    prompt_refs = [
+        _text(ref)
+        for ref in requirement.get("prompt_refs", [])
+        if _text(ref)
+    ] if isinstance(requirement.get("prompt_refs"), list) else []
+    for ref in prompt_refs:
+        source = _prompt_source_by_ref(state, ref)
+        if source is not None:
+            return _validated_source_span(prompt, source)
+
+    # Evidence-derived reference requirements can legitimately have no prompt_ref. They
+    # still belong to this request, so anchor their legacy interchange record to the goal
+    # receipt (or, for old checkpoints, to the entire immutable prompt).
+    goal = state.get("goal")
+    source = goal.get("source") if isinstance(goal, Mapping) else None
+    return _validated_source_span(prompt, source if isinstance(source, Mapping) else None)
 
 
 def _implementation_queries(state: Mapping[str, Any], requirement_ref: str) -> list[str]:
@@ -138,6 +179,11 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                 + _flatten_detail(detail, "verification_obligations", "check")
             )
         )
+        prompt_refs = [
+            _text(ref)
+            for ref in requirement.get("prompt_refs", [])
+            if _text(ref)
+        ] if isinstance(requirement.get("prompt_refs"), list) else []
         output.append(
             {
                 "requirement_id": requirement_id,
@@ -145,7 +191,7 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                 "statement": statement,
                 "semantic_statement": statement,
                 "mandatory": True,
-                "provenance_role": "authored" if requirement.get("prompt_quote") else "grounded_reference_derivation",
+                "provenance_role": "authored" if prompt_refs else "grounded_reference_derivation",
                 "source_span": _source_span(prompt, requirement, state),
                 "evidence_refs": list(requirement.get("evidence_refs") or []),
                 "derived_from": list(requirement.get("evidence_refs") or []),
