@@ -18,7 +18,7 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 
 
-def test_evidence_task_projection_does_not_replay_unrelated_global_config() -> None:
+def test_evidence_task_projection_preserves_task_and_adds_only_host_template() -> None:
     task = {
         "task_id": "task_example",
         "semantic_outcome": "Implement one independently verifiable outcome",
@@ -43,7 +43,14 @@ def test_evidence_task_projection_does_not_replay_unrelated_global_config() -> N
         },
     )
     projected = _task_local_module_contract(module)
-    assert projected["evidence_task"] == task
+    projected_task = projected["evidence_task"]
+    for key, value in task.items():
+        assert projected_task[key] == value
+    template = projected_task["implementation_template"]
+    assert template["completion_policy"]["required_hole_ids"]
+    assert {hole["hole_id"] for hole in template["holes"]} == set(
+        template["completion_policy"]["required_hole_ids"]
+    )
     assert "config" not in projected
     assert "unrelated_global_design" not in repr(projected)
 
