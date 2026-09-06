@@ -18,15 +18,19 @@ def _adapter(
     mappings_kind: str = "mojang",
     mappings_version: str = "mojang",
 ) -> PlatformAdapter:
+    major = version.split(".", 1)[0]
+    native_names = major.isdigit() and int(major) >= 26
+    resolved_mappings_kind = "" if native_names else mappings_kind
+    resolved_mappings_version = "" if native_names else mappings_version
     return PlatformAdapter(
         adapter_id=f"{loader}-{version}-receipt",
         edition="java",
         loader=loader,
         minecraft_version=version,
         java_version="21",
-        yarn_mappings=mappings_version,
-        mappings_kind=mappings_kind,
-        mappings_version=mappings_version,
+        yarn_mappings=resolved_mappings_version,
+        mappings_kind=resolved_mappings_kind,
+        mappings_version=resolved_mappings_version,
         fabric_loader="0.18.0",
         fabric_api=f"0.140.0+{version}",
         fabric_loom="1.17-SNAPSHOT",
