@@ -12,11 +12,14 @@ from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.spec import SpecValidationError
 
 
+_SUPPORTED_EXISTING_TARGET = "1.21.1"
+
+
 def _source_zip(
     path: Path,
     *,
     marker: str = "v1",
-    minecraft_version: str = "mmm-existing-target",
+    minecraft_version: str = _SUPPORTED_EXISTING_TARGET,
 ) -> Path:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
@@ -89,12 +92,12 @@ def test_bound_existing_input_is_required_and_rechecked_before_writes(
     assert not output_root.exists()
 
 
-def test_existing_project_version_is_preserved_without_silent_migration(
+def test_existing_project_supported_version_is_preserved_without_silent_migration(
     tmp_path: Path,
 ) -> None:
     archive = _source_zip(
-        tmp_path / "future.zip",
-        minecraft_version="mmm-future-target",
+        tmp_path / "existing-supported.zip",
+        minecraft_version=_SUPPORTED_EXISTING_TARGET,
     )
 
     proposal = MinecraftModPipeline().plan(
@@ -102,7 +105,7 @@ def test_existing_project_version_is_preserved_without_silent_migration(
         existing_input=archive,
     )
 
-    assert proposal.spec.platform.minecraft_version == "mmm-future-target"
+    assert proposal.spec.platform.minecraft_version == _SUPPORTED_EXISTING_TARGET
     assert proposal.spec.platform.loader == "fabric"
     assert proposal.imported_source_snapshot_hash.startswith("sha256:")
 
