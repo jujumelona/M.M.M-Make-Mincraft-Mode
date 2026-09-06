@@ -35,8 +35,7 @@ local-model = [
   "uvicorn>=0.22.0",
   "websockets>=12,<16",
 ]
-# Legacy/custom TransformersTextAdapter profiles that explicitly request bnb_4bit
-# can opt in without making every native-GGUF Colab install a CUDA BNB wheel.
+# Keep bitsandbytes opt-in so native GGUF installs do not pull its CUDA wheel.
 transformers-bnb = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
 ]
@@ -47,9 +46,6 @@ rag = [
   "numpy>=1.26,<3",
   "sentence-transformers>=3.0,<6",
 ]
-# Colab currently ships Gradio 6.x. Keep MMM on that compatible line instead of
-# downgrading to Gradio 5.50, which pins gradio-client 1.14, pydantic<=2.12.3 and
-# starlette<1 and conflicts with the current Colab/Hugging Face/Google stack.
 ui = ["gradio>=6.24,<7"]
 image = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
@@ -97,6 +93,5 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.vulture]
-# The staged-operation helper keeps this positional compatibility input while the
-# canonical recovery refactor removes the legacy protocol around it.
+# Intentional compatibility parameter retained by the staged-operation helper.
 ignore_names = ["original_root"]
