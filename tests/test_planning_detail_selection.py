@@ -17,7 +17,7 @@ from minecraft_mod_ai.planning_detail_template import (
 def _row(label: str) -> dict[str, object]:
     return {
         "specification": f"Concrete {label} contract with observable behavior and bounded outcomes.",
-        "evidence_refs": ["EVD-1"],
+        "constraint_evidence_refs": ["EVD-1"],
     }
 
 
