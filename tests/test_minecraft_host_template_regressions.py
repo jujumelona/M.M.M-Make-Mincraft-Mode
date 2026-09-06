@@ -194,6 +194,8 @@ def test_component_crafting_alias_feeds_upgrade_and_launch_progression() -> None
     ) == ("spaceship.component_crafting", "economy.trade")
     assert selected_predecessor_capabilities("space.launch", selected) == (
         "spaceship.component_crafting",
+        "spacecraft.performance_upgrade",
+        "spacecraft.expansion",
     )
 
 
