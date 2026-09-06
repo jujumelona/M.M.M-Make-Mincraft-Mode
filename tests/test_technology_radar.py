@@ -16,6 +16,28 @@ from minecraft_mod_ai.technology_radar import (
 )
 
 _RECEIPT_KEY = b"mmm-test-receipt-key-32-bytes-minimum"
+_TARGET = {
+    "edition": "java",
+    "minecraft_version": "1.20.1",
+    "loader": "fabric",
+    "mappings": "1.20.1+build.10",
+    "java_version": "17",
+    "fabric_loader": "0.15.11",
+    "fabric_api": "0.92.11+1.20.1",
+}
+
+
+def _radar(
+    prompt: str,
+    research_brief: dict[str, object] | None = None,
+    **kwargs,
+) -> dict[str, object]:
+    return build_technology_radar(
+        prompt,
+        research_brief,
+        target=_TARGET,
+        **kwargs,
+    )
 
 
 def _requirement(radar: dict[str, object], kind: str) -> dict[str, object]:
@@ -163,7 +185,7 @@ def _technology_test_receipt(
 
 
 def test_reviewed_candidate_can_pass_but_newest_is_never_an_automatic_winner() -> None:
-    radar = build_technology_radar("Use AI inference for request-derived NPC behavior.")
+    radar = _radar("Use AI inference for request-derived NPC behavior.")
     requirement = _requirement(radar, "ai_inference")
     reviewed = _complete_candidate(requirement, candidate_id="older-reviewed")
     reviewed_assessment = _assess_technology_candidate_with_receipt_key(
@@ -185,7 +207,7 @@ def test_reviewed_candidate_can_pass_but_newest_is_never_an_automatic_winner() -
 
 
 def test_official_target_receipt_cannot_be_missing_or_tampered() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     missing = _complete_candidate(requirement)
     missing["official_target_evidence"] = {}
@@ -202,7 +224,7 @@ def test_official_target_receipt_cannot_be_missing_or_tampered() -> None:
 
 
 def test_public_hash_cannot_forge_code_owned_target_receipt() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     forged = _complete_candidate(requirement)
     receipt = forged["official_target_evidence"]
@@ -219,7 +241,7 @@ def test_public_hash_cannot_forge_code_owned_target_receipt() -> None:
 
 
 def test_public_hash_cannot_forge_executed_test_receipts() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     forged = _complete_candidate(requirement)
     receipts = list(forged["tests"].values()) + [forged["fallback"]["test_receipt"]]
@@ -238,7 +260,7 @@ def test_public_hash_cannot_forge_executed_test_receipts() -> None:
 
 
 def test_authenticated_receipts_do_not_validate_without_the_service_key() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     candidate = _complete_candidate(requirement)
     assessment = assess_technology_candidate(requirement, candidate)
@@ -254,7 +276,7 @@ def test_authenticated_receipts_do_not_validate_without_the_service_key() -> Non
 
 
 def test_executed_receipts_cannot_be_replayed_for_another_candidate() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     original = _complete_candidate(requirement, candidate_id="candidate-a")
     replayed = deepcopy(original)
@@ -271,7 +293,7 @@ def test_executed_receipts_cannot_be_replayed_for_another_candidate() -> None:
 
 
 def test_executed_receipts_bind_the_entire_assessed_candidate_snapshot() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     changed = _complete_candidate(requirement)
     changed["benchmarks"]["p95_latency_ms"] = 79
@@ -286,7 +308,7 @@ def test_executed_receipts_bind_the_entire_assessed_candidate_snapshot() -> None
 
 
 def test_test_names_and_booleans_are_not_execution_evidence() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     candidate = _complete_candidate(requirement)
     candidate["tests"] = {name: True for name in requirement["required_tests"]}
@@ -303,7 +325,7 @@ def test_test_names_and_booleans_are_not_execution_evidence() -> None:
 
 
 def test_mismatched_minecraft_bridge_and_unsafe_weights_fail_closed() -> None:
-    radar = build_technology_radar("Use AI inference for NPC dialogue.")
+    radar = _radar("Use AI inference for NPC dialogue.")
     requirement = _requirement(radar, "ai_inference")
     candidate = _complete_candidate(requirement)
     candidate["compatibility"]["minecraft_version"] = "1.21.1"
@@ -333,7 +355,7 @@ def test_large_research_graph_uses_bound_pages_without_a_project_wide_cap() -> N
     found: list[str] = []
     pages = 0
     while True:
-        page = build_technology_radar(prompt, brief, page_size=19, cursor=cursor)
+        page = _radar(prompt, brief, page_size=19, cursor=cursor)
         pages += 1
         found.extend(item["requirement_id"] for item in page["requirements"])
         cursor = page["pagination"]["next_cursor"]
@@ -344,9 +366,9 @@ def test_large_research_graph_uses_bound_pages_without_a_project_wide_cap() -> N
     assert len(set(found)) == 137
     assert page["pagination"]["total_requirements"] == 137
     assert "no project-wide" in page["scale_policy"]
-    first = build_technology_radar(prompt, brief, page_size=19)
+    first = _radar(prompt, brief, page_size=19)
     with pytest.raises(SpecValidationError, match="does not match"):
-        build_technology_radar(
+        _radar(
             prompt + " changed",
             brief,
             page_size=19,
