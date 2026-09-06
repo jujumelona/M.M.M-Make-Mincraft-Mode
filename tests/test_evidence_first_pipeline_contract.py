@@ -47,71 +47,48 @@ def test_install_keeps_existing_planning_and_target_owners(
     assert platform_resolver._optimize is target_owner
 
 
-def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    plan = {
+def test_execution_receipt_bundle_is_the_batch_graph_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = {"plan_sha256": "plan-sha"}
+    bundle = {
         "plan_sha256": "plan-sha",
-        "request_catalog": {
-            "prompt_sha256": "prompt-sha",
-            "requirements": [
-                {"requirement_id": "req_a", "capability": "a", "statement": "A"},
-                {"requirement_id": "req_b", "capability": "b", "statement": "B"},
-            ],
+        "task_refs": ("task_a", "task_b"),
+        "dependencies": {
+            "task_a": (),
+            "task_b": ("task_a",),
         },
-        "tasks": [
-            {
+        "receipts": {
+            "task_a": {
                 "task_id": "task_a",
                 "semantic_outcome": "Implement A",
-                "requirement_refs": ["req_a"],
-                "depends_on": [],
                 "provides": ["a"],
-                "acceptance": ["A passes"],
+                "handoff_sha256": "handoff-sha",
+                "production_bindings": [
+                    {"task_ref": "task_a", "module_id": "common"}
+                ],
+                "asset_bindings": [],
             },
-            {
+            "task_b": {
                 "task_id": "task_b",
                 "semantic_outcome": "Implement B",
-                "requirement_refs": ["req_b"],
-                "depends_on": [],
                 "provides": ["b"],
-                "acceptance": ["B passes"],
+                "handoff_sha256": "handoff-sha",
+                "production_bindings": [],
+                "asset_bindings": [
+                    {
+                        "task_ref": "task_b",
+                        "locator": "assets/example/model.json",
+                    }
+                ],
             },
-        ],
-    }
-    handoff = {
-        "source_plan_sha256": "plan-sha",
-        "handoff_sha256": "handoff-sha",
-        "work_graph": {
-            "task_refs": ["task_a", "task_b"],
-            "edges": [
-                {"from_task_ref": "task_a", "to_task_ref": "task_b"}
-            ],
         },
-        "production_modules": [
-            {
-                "production_module_id": "pm-a",
-                "task_ref": "task_a",
-                "module_id": "common",
-                "source_set": "main",
-            }
-        ],
-        "asset_requests": [
-            {
-                "asset_request_id": "asset-b",
-                "task_ref": "task_b",
-                "locator": "assets/example/model.json",
-            }
-        ],
     }
-    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
-    monkeypatch.setattr(contract, "build_evidence_first_handoff", lambda _plan: handoff)
-    # Typed execution lowering has its own contract tests. This fixture intentionally
-    # isolates the canonical WorkGraph-to-batch ownership behavior.
-    monkeypatch.setattr(contract, "execution_plan", lambda value: value)
     monkeypatch.setattr(
         contract,
-        "execution_handoff",
-        lambda _plan, canonical, _lowered: canonical,
+        "build_execution_receipt_bundle",
+        lambda _plan: bundle,
     )
-    monkeypatch.setattr(contract, "validate_plan_collect_all", lambda _plan, _handoff: None)
 
     batches = contract._batches_from_handoff(plan, batch_type=_Batch)
 
@@ -120,35 +97,30 @@ def test_handoff_is_the_batch_graph_owner(monkeypatch: pytest.MonkeyPatch) -> No
     assert batches[1].depends_on_batches == ("task_a",)
     assert batches[0].task_contract["handoff_sha256"] == "handoff-sha"
     assert batches[0].task_contract["production_bindings"][0]["module_id"] == "common"
-    assert (
-        batches[1].task_contract["asset_bindings"][0]["locator"]
-        == "assets/example/model.json"
+    assert batches[1].task_contract["asset_bindings"][0]["locator"] == (
+        "assets/example/model.json"
     )
 
 
-def test_handoff_must_bind_the_exact_validated_plan(
+def test_incomplete_execution_receipt_bundle_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = {
-        "plan_sha256": "expected",
-        "request_catalog": {"requirements": []},
-        "tasks": [],
-    }
-    monkeypatch.setattr(contract, "validate_evidence_first_plan", lambda _plan: None)
     monkeypatch.setattr(
         contract,
-        "build_evidence_first_handoff",
+        "build_execution_receipt_bundle",
         lambda _plan: {
-            "source_plan_sha256": "stale",
-            "handoff_sha256": "handoff",
-            "work_graph": {"task_refs": [], "edges": []},
-            "production_modules": [],
-            "asset_requests": [],
+            "plan_sha256": "plan-sha",
+            "task_refs": ("task_a", "task_b"),
+            "dependencies": {"task_a": (), "task_b": ("task_a",)},
+            "receipts": {"task_a": {"task_id": "task_a"}},
         },
     )
 
-    with pytest.raises(ValueError, match="exact source plan hash"):
-        contract._batches_from_handoff(plan, batch_type=_Batch)
+    with pytest.raises(ValueError, match="incomplete or out of order"):
+        contract._batches_from_handoff(
+            {"plan_sha256": "plan-sha"},
+            batch_type=_Batch,
+        )
 
 
 def _impact_tasks() -> list[dict]:
