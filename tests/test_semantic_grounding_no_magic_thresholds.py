@@ -54,12 +54,12 @@ def test_typo_locator_uses_authored_semantic_evidence_without_ratio_cutoff() -> 
         {
             "requirements": [
                 _item(
-                    "vehicle.spacecraft.assembly",
+                    "spacecraft.component_construction",
                     "우무선을 부위마다 만들어서",
                     "우주선을 부위마다 만들어서 조립한다",
                 ),
                 _item(
-                    "vehicle.spacecraft.upgrade",
+                    "spacecraft.performance_upgrade",
                     "우주선 성능을 업그레이드",
                     "우주선 성능을 업그레이드한다",
                 ),
@@ -71,12 +71,12 @@ def test_typo_locator_uses_authored_semantic_evidence_without_ratio_cutoff() -> 
 
     assert router.calls == 1
     assert {item["capability"] for item in catalog["requirements"]} == {
-        "vehicle.spacecraft.assembly",
-        "vehicle.spacecraft.upgrade",
+        "spacecraft.component_construction",
+        "spacecraft.performance_upgrade",
     }
     assembly = next(
         item for item in catalog["requirements"]
-        if item["capability"] == "vehicle.spacecraft.assembly"
+        if item["capability"] == "spacecraft.component_construction"
     )
     assert "만들어서" in assembly["source_span"]["text"]
     assert assembly["source_span"]["grounding_method"] == "fuzzy_host_alignment"
@@ -93,13 +93,13 @@ def test_invalid_leaf_does_not_erase_valid_siblings_from_same_clause() -> None:
     }
     payload = {
         "requirements": [
-            _item("resource.gathering", "gather crystals", "gather crystals"),
+            _item("resource.mining", "gather crystals", "gather crystals"),
             _item("semantic_deadbeef", "trade crystals", "trade crystals"),
         ]
     }
 
     nodes, invalid_clauses, diagnostics = _evaluate_batch(payload, [clause])
 
-    assert [node["capability_id"] for node in nodes] == ["resource.gathering"]
+    assert [node["capability_id"] for node in nodes] == ["resource.mining"]
     assert invalid_clauses == {0}
     assert not any(item["error_code"] == "REQ_SOURCE_COVERAGE" for item in diagnostics)
