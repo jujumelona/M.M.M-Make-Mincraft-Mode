@@ -7,14 +7,20 @@ implementation obligation must cite grounded evidence already stored in the plan
 state. Host code owns readiness and refuses semantic-only or evidence-free handoffs.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
-from .planning_detail_template import WORKSHEET_SCHEMA, validate_worksheet, worksheet_prompt
+from .planning_detail_template import (
+    WORKSHEET_SCHEMA,
+    normalize_required_sections,
+    validate_worksheet,
+    worksheet_prompt,
+    worksheet_schema,
+)
 from .planning_state_contract import validate_planning_state
 
 _TOOL = "submit_detailed_implementation_plan"
@@ -142,19 +148,28 @@ _PARAMETERS: dict[str, Any] = {
 _SMALL_MODEL_PLAN_PROTOCOL = """SMALL-MODEL DETAILED-PLAN PROTOCOL
 1. Scope lock: plan exactly the supplied requirement. Do not redesign unrelated requirements or host-owned target coordinates.
 2. Evidence pass: read every supplied implementation_research record first; distinguish proved facts from examples, proposals and unresolved target bindings.
-3. Worksheet pass: fill all ten engineering_worksheet sections using the canonical checklist. Never copy one generic sentence into multiple sections.
+3. Worksheet pass: fill exactly the host-required engineering_worksheet sections using the canonical checklists. Never add omitted sections or copy one generic sentence into multiple sections.
 4. Capability pass: name the concrete technical capabilities the implementation must possess; each one needs allowed evidence.
 5. Obligation pass: decompose implementation into independently executable obligations. State owner/action/condition/result instead of 'implement/support/handle X' alone.
 6. Artifact pass: enumerate only artifacts actually required by the grounded design. Do not invent paths, symbols, IDs or APIs that evidence does not establish.
 7. Reuse pass: classify each relevant source as reuse/adapt/reference_only/new_required and explain compatibility plus the adaptation boundary.
 8. Verification pass: prove authored success, rejection/failure and important boundaries. Add reload, multiplayer/authority and resource checks when those branches apply.
-9. Consistency pass: cross-check state transitions against algorithm, integration, network/persistence, artifacts and verification. Resolve contradictions before submission.
+9. Consistency pass: cross-check state transitions against algorithm, integration, applicable network/persistence/resource branches, artifacts and verification. Resolve contradictions before submission.
 10. Fail closed: if evidence cannot safely establish an implementation detail, keep it explicitly unresolved instead of fabricating a target-specific fact.
 """
 
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _parameters_for_sections(required_sections: Iterable[str] | None) -> dict[str, Any]:
+    """Build one tool schema from the same trusted section selection used by prompt/validation."""
+
+    selected = normalize_required_sections(required_sections)
+    parameters = deepcopy(_PARAMETERS)
+    parameters["properties"]["engineering_worksheet"] = worksheet_schema(selected)
+    return parameters
 
 
 def _requirement_decisions(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -217,9 +232,11 @@ def _compile_requirement_plan(
     router: Any,
     state: Mapping[str, Any],
     requirement: Mapping[str, Any],
+    required_sections: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Compile and validate one independent requirement without mutating shared state."""
 
+    selected_sections = normalize_required_sections(required_sections)
     requirement_ref = str(requirement.get("requirement_id") or "")
     evidence = _implementation_evidence(state, requirement_ref)
     allowed = _allowed_refs(evidence)
@@ -231,6 +248,7 @@ def _compile_requirement_plan(
         "requirement": deepcopy(dict(requirement)),
         "implementation_research": deepcopy(evidence),
         "allowed_evidence_refs": sorted(allowed),
+        "host_required_worksheet_sections": list(selected_sections),
     }
     messages = [
         {
@@ -238,7 +256,7 @@ def _compile_requirement_plan(
             "content": (
                 _SMALL_MODEL_PLAN_PROTOCOL
                 + "\n"
-                + worksheet_prompt()
+                + worksheet_prompt(selected_sections)
                 + "\nGROUNDING RULES:\n"
                 "- This is a fill-and-verify task, not a redesign task.\n"
                 "- Never invent API names, files, symbols, dependencies, versions, identifiers or implementation mechanisms absent from evidence.\n"
@@ -246,7 +264,7 @@ def _compile_requirement_plan(
                 "- Artifact entries must state a concrete artifact purpose supported by evidence; omit artifacts that are not required.\n"
                 "- Reuse mode must reflect what the cited source really supports; a retrieved pattern is not proof that it can be copied unchanged.\n"
                 "- Verification checks must prove the user-visible requirement or an evidence-backed invariant; compilation alone never proves behavior.\n"
-                "- An inapplicable worksheet section must explain why using cited evidence; never silently omit it.\n"
+                "- Fill exactly the host-required worksheet sections; never add a branch the host omitted.\n"
                 "- New algorithms and proposed identifiers are design decisions, not retrieved facts.\n"
                 "- Keep unverified target-specific bindings explicitly separate from source examples.\n"
                 "- Prefer explicit numbers, units, state owners, branch conditions and expected outcomes over vague quality adjectives."
@@ -259,15 +277,19 @@ def _compile_requirement_plan(
             "planner",
             messages,
             tool_name=_TOOL,
-            parameters=_PARAMETERS,
+            parameters=_parameters_for_sections(selected_sections),
             description=(
-                "Fill the complete grounded engineering worksheet and concrete implementation, artifact, reuse and verification obligations for exactly one requirement."
+                "Fill the host-required grounded engineering worksheet and concrete implementation, artifact, reuse and verification obligations for exactly one requirement."
             ),
         )
     if not isinstance(raw, Mapping):
         raise ValueError("DETAILED_PLAN_MODEL: planner returned a non-object")
 
-    worksheet = validate_worksheet(raw.get("engineering_worksheet"), allowed)
+    worksheet = validate_worksheet(
+        raw.get("engineering_worksheet"),
+        allowed,
+        selected_sections,
+    )
     capabilities: list[dict[str, Any]] = []
     for item in raw.get("implementation_capabilities", []):
         if not isinstance(item, Mapping) or not _text(item.get("capability")):
@@ -337,6 +359,7 @@ def _compile_requirement_plan(
 
     return {
         "requirement_ref": requirement_ref,
+        "required_detail_sections": list(selected_sections),
         "engineering_worksheet": worksheet,
         "implementation_capabilities": capabilities,
         "implementation_obligations": obligations,
@@ -346,29 +369,72 @@ def _compile_requirement_plan(
     }
 
 
+def _host_section_selection(
+    requirements: list[Mapping[str, Any]],
+    required_sections_by_requirement: Mapping[str, Iterable[str]] | None,
+) -> dict[str, tuple[str, ...]]:
+    """Normalize trusted per-requirement selections before any concurrent model call."""
+
+    requirement_ids = [str(item.get("requirement_id") or "") for item in requirements]
+    if required_sections_by_requirement is None:
+        return {requirement_id: normalize_required_sections() for requirement_id in requirement_ids}
+    if not isinstance(required_sections_by_requirement, Mapping):
+        raise ValueError("DETAILED_PLAN_SECTIONS: host selection must be a requirement mapping")
+
+    unknown = set(str(key) for key in required_sections_by_requirement) - set(requirement_ids)
+    if unknown:
+        raise ValueError(
+            "DETAILED_PLAN_SECTIONS: selection cites unknown requirement(s): "
+            + ", ".join(sorted(unknown))
+        )
+    return {
+        requirement_id: normalize_required_sections(
+            required_sections_by_requirement.get(requirement_id)
+        )
+        for requirement_id in requirement_ids
+    }
+
+
 def compile_detailed_implementation_plans(
     router: Any,
     prompt: str,
     state: Mapping[str, Any],
+    *,
+    required_sections_by_requirement: Mapping[str, Iterable[str]] | None = None,
 ) -> dict[str, Any]:
-    """Compile all researched requirements into concrete evidence-backed plan slices."""
+    """Compile researched requirements using only host-owned worksheet applicability."""
 
     validate_planning_state(state, prompt=prompt)
     value = deepcopy(dict(state))
     requirements = _requirement_decisions(value)
     if not requirements:
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: no researched requirements exist")
+    section_selection = _host_section_selection(requirements, required_sections_by_requirement)
 
     workers = min(len(requirements), router_native_model_parallelism(router))
     if workers <= 1:
-        compiled = [_compile_requirement_plan(router, value, requirement) for requirement in requirements]
+        compiled = [
+            _compile_requirement_plan(
+                router,
+                value,
+                requirement,
+                section_selection[str(requirement.get("requirement_id") or "")],
+            )
+            for requirement in requirements
+        ]
     else:
         # Each requirement is evidence-isolated. Run only as many generations as the
         # active native backend proves it can serve concurrently, then consume futures
         # in authored order so decision IDs and coverage remain deterministic.
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
             futures = [
-                pool.submit(_compile_requirement_plan, router, value, requirement)
+                pool.submit(
+                    _compile_requirement_plan,
+                    router,
+                    value,
+                    requirement,
+                    section_selection[str(requirement.get("requirement_id") or "")],
+                )
                 for requirement in requirements
             ]
             compiled = [future.result() for future in futures]
