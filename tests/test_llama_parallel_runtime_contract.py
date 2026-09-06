@@ -122,12 +122,13 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
         str(message.get("content", ""))
         for message in request.messages
         if message.get("role") == "system"
-        and "mmm/agent-capability-context-v5" in str(message.get("content", ""))
+        and "mmm/agent-capability-context-v7" in str(message.get("content", ""))
     ]
     assert capability_messages
     capability = capability_messages[-1]
     assert "ground-production-with-live-evidence" in capability
-    assert "mmm/agent-capability-context-v5" in capability
+    assert "mmm/agent-capability-context-v7" in capability
+    assert len(capability.encode("utf-8")) < 24_000
 
     schema = {
         "type": "object",
