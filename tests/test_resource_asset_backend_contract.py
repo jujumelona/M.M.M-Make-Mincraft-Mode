@@ -41,7 +41,7 @@ def _asset() -> AssetRequest:
 
 def _evidence_proposal(
     *,
-    prompt: str = "Implement trade and quests.",
+    prompt: str = "Implement trade. Implement quests.",
     plan: dict | None = None,
     with_production_contract: bool = False,
 ):
@@ -57,13 +57,13 @@ def _evidence_proposal(
             "reuse_plan": {
                 "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
                 "capability_graph": {
-                    "nodes": ["trade", "quests"],
+                    "nodes": ["trade.transaction", "quest.state"],
                     "edges": [],
                     "sources": [],
                 },
                 "capabilities": [
-                    {"capability": "trade", "mode": "fresh", "source_id": ""},
-                    {"capability": "quests", "mode": "fresh", "source_id": ""},
+                    {"capability": "trade.transaction", "mode": "fresh", "source_id": ""},
+                    {"capability": "quest.state", "mode": "fresh", "source_id": ""},
                 ],
             },
         },
@@ -313,9 +313,10 @@ def test_evidence_reuse_binding_refreshes_v2_module_hash_contract() -> None:
 
 def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> None:
     prompt = "Implement trade."
+    capability = "trade.transaction"
     donor = {
         "schema_version": "mmm/source-transplant-slice-v1",
-        "capability": "trade",
+        "capability": capability,
         "repository": "owner/trade-mod",
         "commit_sha": "a" * 40,
         "license_id": "MIT",
@@ -331,10 +332,10 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
     }
     closure_hash = donor_closure_sha256(DonorSlice.from_dict(donor))
     reuse = {
-        "capability_graph": {"nodes": ["trade"], "edges": [], "sources": []},
+        "capability_graph": {"nodes": [capability], "edges": [], "sources": []},
         "capabilities": [
             {
-                "capability": "trade",
+                "capability": capability,
                 "mode": "source_transplant",
                 "source_id": "owner/trade-mod",
                 "component_refs": ["trade_candidate"],
@@ -342,13 +343,13 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
                 "proof_receipt": {
                     "schema_version": "mmm/reuse-proof-receipt-v1",
                     "candidate_id": "owner/trade-mod@" + "a" * 40,
-                    "capability": "trade",
+                    "capability": capability,
                     "commit_sha": "a" * 40,
                     "closure_hash": closure_hash,
                     "proof_level": "COMPILE_VERIFIED",
                     "authoritative_compile": True,
                     "compile_passed": True,
-                    "verified_capabilities": ["trade"],
+                    "verified_capabilities": [capability],
                     "verified_artifacts": ["src/main/java/example/Trade.java"],
                 },
             }
@@ -368,7 +369,7 @@ def test_evidence_reuse_binding_carries_only_exact_hashed_component_refs() -> No
             "kind": "symbol",
             "locator": "src/main/java/example/Trade.java#Trade",
             "content_sha256": "sha256:" + "d" * 64,
-            "provides": ["capability:trade"],
+            "provides": [f"capability:{capability}"],
             "provenance": {
                 "origin": "external",
                 "repository": "owner/trade-mod",
