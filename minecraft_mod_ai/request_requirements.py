@@ -96,6 +96,21 @@ _ACTION_FAMILIES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 _PARALLEL_JOIN = re.compile(r"(?:,|/|\band\b|\bor\b|\bthen\b|및|그리고|하거나|또는|하고|하며)", re.IGNORECASE)
 _CAPABILITY_IDENTIFIER = re.compile(r"\b[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\b", re.IGNORECASE)
+_ENGLISH_ACTION_PATTERNS: dict[str, re.Pattern[str]] = {
+    "create": re.compile(r"\b(?:craft|build|create|assemble|construct|place)\b", re.IGNORECASE),
+    "gather": re.compile(r"\b(?:gather|farm|mine|mining|harvest|collect|obtain)\b", re.IGNORECASE),
+    "trade": re.compile(r"\b(?:trade|exchange|buy|purchase|sell)\b", re.IGNORECASE),
+    "upgrade": re.compile(r"\b(?:upgrade|enhance|improve)\b", re.IGNORECASE),
+    "expand": re.compile(r"\b(?:expand|extend|increase\s+capacity)\b", re.IGNORECASE),
+    "manage": re.compile(r"\b(?:recruit|hire|assign|manage)\b", re.IGNORECASE),
+    "travel": re.compile(r"\b(?:travel|launch|fly|move|teleport|leave)\b", re.IGNORECASE),
+    "discover": re.compile(r"\b(?:explore|discover|find|locate)\b", re.IGNORECASE),
+    "combat": re.compile(r"\b(?:fight|combat|battle|attack|defend)\b", re.IGNORECASE),
+    "settle": re.compile(r"\b(?:settle|coloniz(?:e|es|ed|ing|ation)?|found\s+(?:a\s+)?colony)\b", re.IGNORECASE),
+    "produce": re.compile(r"\b(?:produce|process|smelt|cook|combine|refine)\b", re.IGNORECASE),
+    "interact": re.compile(r"\b(?:use|open|close|interact|select|change)\b", re.IGNORECASE),
+    "care": re.compile(r"\b(?:heal|recover|tame|breed)\b", re.IGNORECASE),
+}
 _RESEGMENT_FIELDS = frozenset(
     {
         "source_clause_index",
@@ -142,8 +157,11 @@ def detected_action_families(text: str) -> tuple[str, ...]:
     triggers a semantic re-segmentation turn.
     """
     prose = _CAPABILITY_IDENTIFIER.sub(" ", str(text or ""))
+    non_english = re.sub(r"[A-Za-z]+", " ", prose)
     return tuple(
-        name for name, pattern in _ACTION_FAMILIES if pattern.search(prose)
+        name
+        for name, pattern in _ACTION_FAMILIES
+        if pattern.search(non_english) or _ENGLISH_ACTION_PATTERNS[name].search(prose)
     )
 
 

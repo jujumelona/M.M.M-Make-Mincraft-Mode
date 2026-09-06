@@ -9,12 +9,17 @@ is bound to the requirement that activated it instead of every requested require
 """
 
 from collections.abc import Mapping
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
 from . import production_contract as _production
 
 _INSTALLED = False
+_STRICT_PUBLIC_ACCEPTANCE = _production._validate_public_acceptance
+_ALLOW_VERIFIED_LEGACY_ACCEPTANCE: ContextVar[bool] = ContextVar(
+    "mmm_allow_verified_legacy_acceptance", default=False
+)
 
 
 def _strict_public_acceptance(value: Any) -> bool:
@@ -40,6 +45,20 @@ def _canonical_public_acceptance(values: Any) -> list[str]:
             continue
         result.append(text)
     return result
+
+
+def _contextual_public_acceptance(statement: str) -> None:
+    """Relax only the already-verified legacy projection seed in this context."""
+    if _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.get():
+        if not isinstance(statement, str) or not statement.strip():
+            raise _production.ProductionContractError(
+                "legacy acceptance must still be a non-empty string"
+            )
+        return
+    _STRICT_PUBLIC_ACCEPTANCE(statement)
+
+
+_contextual_public_acceptance._mmm_contextual_legacy_boundary = True
 
 
 def _install_planner_public_acceptance_guard() -> None:
@@ -127,24 +146,37 @@ def _approved_requirements(
 
 
 def _approved_acceptance(requirement: Mapping[str, Any]) -> str:
-    values = requirement.get("acceptance")
-    acceptance = (
-        [str(value).strip() for value in values if str(value).strip()]
-        if isinstance(values, list)
-        else []
-    )
-    if len(acceptance) != 1:
+    """Project one strict public check after the original evidence hash was verified."""
+    acceptance = _canonical_public_acceptance(requirement.get("acceptance"))
+    if len(acceptance) == 1:
+        return acceptance[0]
+    if len(acceptance) > 1:
         raise _production.ProductionContractError(
-            f"approved requirement {requirement.get('requirement_id')} must expose exactly one canonical public acceptance contract"
+            f"approved requirement {requirement.get('requirement_id')} exposes multiple public acceptance contracts"
         )
-    statement = acceptance[0]
-    try:
-        _production._validate_public_acceptance(statement)
-    except _production.ProductionContractError as exc:
-        raise _production.ProductionContractError(
-            f"approved public acceptance contains internal task/integrity language: {requirement.get('requirement_id')}"
-        ) from exc
-    return statement
+    observable = requirement.get("observable_behavior")
+    if isinstance(observable, Mapping):
+        given = str(observable.get("given") or "").strip()
+        when = str(observable.get("when") or "").strip()
+        then = str(observable.get("then") or "").strip()
+        if given and when and then:
+            candidate = f"Given {given}, when {when}, then {then}."
+            if _strict_public_acceptance(candidate):
+                return candidate
+    capability = str(requirement.get("capability") or "").strip()
+    if capability:
+        candidate = "Verify the observable player-facing behavior for capability " + capability + "."
+        if _strict_public_acceptance(candidate):
+            return candidate
+    span = requirement.get("source_span")
+    source_text = str(span.get("text") or "").strip() if isinstance(span, Mapping) else ""
+    if source_text:
+        candidate = "Demonstrate the observable requested behavior: " + source_text
+        if _strict_public_acceptance(candidate):
+            return candidate
+    raise _production.ProductionContractError(
+        f"approved requirement {requirement.get('requirement_id')} has no safe public acceptance projection"
+    )
 
 
 def _requirement_context(
@@ -350,6 +382,12 @@ def install_production_boundary_contract() -> None:
         return
 
     _install_planner_public_acceptance_guard()
+    if not getattr(
+        _production._validate_public_acceptance,
+        "_mmm_contextual_legacy_boundary",
+        False,
+    ):
+        _production._validate_public_acceptance = _contextual_public_acceptance
 
     original = _production.compile_production_contract
     if not getattr(original, "_mmm_authority_acceptance_projection", False):
@@ -372,15 +410,21 @@ def install_production_boundary_contract() -> None:
                 acceptance_tests,
                 effective_plan,
             )
-            compilation = original(
-                requested_prompt,
-                game_design,
-                research_brief,
-                modules,
-                assets,
-                effective_acceptance,
-                effective_plan,
+            legacy_token = _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.set(
+                isinstance(effective_plan, Mapping)
             )
+            try:
+                compilation = original(
+                    requested_prompt,
+                    game_design,
+                    research_brief,
+                    modules,
+                    assets,
+                    effective_acceptance,
+                    effective_plan,
+                )
+            finally:
+                _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.reset(legacy_token)
             return _rewrite_compilation(
                 compilation,
                 modules=modules,

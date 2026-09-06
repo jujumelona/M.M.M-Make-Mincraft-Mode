@@ -399,32 +399,30 @@ def test_validated_multiloader_inventory_binds_cross_module_anchors(tmp_path) ->
     assert plan["ownership_context"]["module_id"] == "common"
 
 
-def _hole_fill_response(messages) -> str:
+def _hole_fill_response(messages) -> tuple[str, int]:
     payload = json.loads(messages[-1]["content"].split("\n", 1)[1])
-    modules = []
-    for module in payload["modules"]:
-        holes = module["implementation_template"]["holes"]
-        modules.append(
-            {
-                "module_id": module["module_id"],
-                "config": {
-                    "implementation_notes": "bounded host-owned hole fill",
-                    "hole_fills": [
-                        {
-                            "hole_id": hole["hole_id"],
-                            "implementation_decision": "Implement only the supplied host-owned contract.",
-                            "local_steps": ["Implement the bounded task-local behavior."],
-                            "code_bindings": [],
-                            "reference_uses": [],
-                            "verification_intent": "Run the host-owned required gates.",
-                            "uncertainties": [],
-                        }
-                        for hole in holes
-                    ],
-                },
-            }
+    if isinstance(payload.get("modules"), list):
+        holes = payload["modules"][0]["implementation_template"]["holes"]
+        response = "\n".join(
+            f"### Hole {index}\nDecision: Implement only the supplied host-owned contract.\n"
+            "Steps:\n- Implement the bounded task-local behavior.\n"
+            "Bindings: none\nReferences: none\n"
+            "Verification: Run the host-owned required gates.\nUncertainties: none"
+            for index, _hole in enumerate(holes, 1)
         )
-    return json.dumps({"modules": modules})
+        return response, len(holes)
+    pages = payload["pages"]
+    response = "\n".join(
+        f"BEGIN PAGE {page['page_id']}\nBEGIN {hole['hole_id']}\n"
+        "Decision: Implement only the supplied host-owned contract.\n"
+        "Steps:\n- Implement the bounded task-local behavior.\n"
+        "Bindings: none\nReferences: none\n"
+        "Verification: Run the host-owned required gates.\nUncertainties: none\n"
+        f"END {hole['hole_id']}\nEND PAGE {page['page_id']}"
+        for page in pages
+        for hole in page["holes"]
+    )
+    return response, sum(len(page["holes"]) for page in pages)
 
 
 def test_host_task_pages_allow_only_bounded_implementation_hole_fills() -> None:
@@ -435,10 +433,13 @@ def test_host_task_pages_allow_only_bounded_implementation_hole_fills() -> None:
     class Router:
         def __init__(self) -> None:
             self.calls = 0
+            self.requested_hole_counts: list[int] = []
 
         def generate_text(self, _role, messages, **_kwargs):
             self.calls += 1
-            return _hole_fill_response(messages)
+            response, hole_count = _hole_fill_response(messages)
+            self.requested_hole_counts.append(hole_count)
+            return response
 
     router = Router()
     modules, _assets, _tests = CompleteGameDesignPlanner(router)._expand_batches(
@@ -462,4 +463,6 @@ def test_host_task_pages_allow_only_bounded_implementation_hole_fills() -> None:
             item["hole_id"] for item in module.config["model_fill"]["hole_fills"]
         }
         assert filled == allowed
-    assert router.calls == len(batches)
+    assert router.calls == len(router.requested_hole_counts)
+    assert router.calls > 0
+    assert all(0 < count <= 12 for count in router.requested_hole_counts)

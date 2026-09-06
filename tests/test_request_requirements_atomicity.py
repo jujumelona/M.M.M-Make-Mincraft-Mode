@@ -83,6 +83,8 @@ def test_action_detection_is_authority_neutral() -> None:
     families = detected_action_families("mine ore, cook food, and sell it")
     assert set(families) >= {"gather", "produce", "trade"}
     assert all("." not in family for family in families)
+    assert detected_action_families("Travel to the selected destination") == ("travel",)
+    assert detected_action_families("spacecraft.weapon_upgrade") == ()
 
 
 def test_source_partition_is_computed_from_grounded_spans_not_fixed_offsets() -> None:

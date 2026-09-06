@@ -255,13 +255,25 @@ class _ImplementationFixtureRouter:
     def generate_text(self, role, messages, **kwargs):
         assert kwargs.get("response_format") == "text"
         packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-        holes = packet["modules"][0]["implementation_template"]["holes"]
+        if isinstance(packet.get("modules"), list):
+            holes = packet["modules"][0]["implementation_template"]["holes"]
+            return "\n".join(
+                f"### Hole {index}\nDecision: Implement {hole.get('subject') or hole['hole_id']}\n"
+                "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
+                "Bindings: none\nReferences: none\n"
+                "Verification: Check the declared observable result.\nUncertainties: none"
+                for index, hole in enumerate(holes, 1)
+            )
+        pages = packet["pages"]
         return "\n".join(
-            f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
+            f"BEGIN PAGE {page['page_id']}\nBEGIN {hole['hole_id']}\n"
+            f"Decision: Implement {hole.get('subject') or hole['hole_id']}\n"
             "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
             "Bindings: none\nReferences: none\n"
-            "Verification: Check the declared observable result.\nUncertainties: none"
-            for index, hole in enumerate(holes, 1)
+            "Verification: Check the declared observable result.\nUncertainties: none\n"
+            f"END {hole['hole_id']}\nEND PAGE {page['page_id']}"
+            for page in pages
+            for hole in page["holes"]
         )
 
 
