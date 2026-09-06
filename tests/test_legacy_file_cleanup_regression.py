@@ -12,6 +12,7 @@ def test_obsolete_and_duplicate_legacy_files_are_absent() -> None:
     """Ensure retired/dead files and duplicate broken scripts stay deleted."""
     retired_paths = (
         ROOT / "minecraft_mod_ai" / "temporary_skill_compatibility.py",
+        ROOT / "minecraft_mod_ai" / "planner_graph_integrity_contract",
         ROOT / "tests" / "test_colab_gpu_handoff_contract.py",
         ROOT / "tests" / "test_complete_technology_integration.py",
         ROOT / "tests" / "test_mcp_technology_tools.py",
