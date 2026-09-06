@@ -20,7 +20,6 @@ from typing import Any
 
 _TIMEOUT = 12.0
 _UA = "MMM-ReferenceResearch/1.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
-_WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 _GITHUB_API = "https://api.github.com"
 _MAX_WIKI_PAGES = 3
 _MAX_GITHUB_REPOS = 2
@@ -73,7 +72,25 @@ def _relevant(query: str, title: str, body: str) -> bool:
     return bool(wanted & available)
 
 
-def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _wikipedia_languages(query: str) -> tuple[str, ...]:
+    """Search the language implied by the authored reference, then English as fallback."""
+    languages: list[str] = []
+    if re.search(r"[가-힣]", query):
+        languages.append("ko")
+    elif re.search(r"[ぁ-ゟ゠-ヿ]", query):
+        languages.append("ja")
+    elif re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", query):
+        languages.append("zh")
+    if "en" not in languages:
+        languages.append("en")
+    return tuple(languages)
+
+
+def _wikipedia_language_sources(
+    query: str,
+    language: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    api = f"https://{language}.wikipedia.org/w/api.php"
     params = urllib.parse.urlencode(
         {
             "action": "query",
@@ -84,7 +101,7 @@ def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             "utf8": 1,
         }
     )
-    search = _json(f"{_WIKIPEDIA_API}?{params}")
+    search = _json(f"{api}?{params}")
     rows = search.get("query", {}).get("search", []) if isinstance(search, Mapping) else []
     titles = [
         _text(row.get("title"))
@@ -92,7 +109,11 @@ def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         if isinstance(row, Mapping) and _text(row.get("title"))
     ][: _MAX_WIKI_PAGES]
     if not titles:
-        return [], {"provider": "wikipedia", "status": "available", "result_count": 0}
+        return [], {
+            "provider": f"wikipedia_{language}",
+            "status": "available",
+            "result_count": 0,
+        }
 
     extract_params = urllib.parse.urlencode(
         {
@@ -106,7 +127,7 @@ def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             "titles": "|".join(titles),
         }
     )
-    payload = _json(f"{_WIKIPEDIA_API}?{extract_params}")
+    payload = _json(f"{api}?{extract_params}")
     pages = payload.get("query", {}).get("pages", {}) if isinstance(payload, Mapping) else {}
     records: list[dict[str, Any]] = []
     for page in pages.values() if isinstance(pages, Mapping) else []:
@@ -119,22 +140,59 @@ def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             continue
         records.append(
             {
-                "source_id": f"wikipedia:{page.get('pageid', title)}",
+                "source_id": f"wikipedia:{language}:{page.get('pageid', title)}",
                 "source_type": "reference_encyclopedia_body",
-                "source_locator": url or f"wikipedia:{title}",
+                "source_locator": url or f"wikipedia:{language}:{title}",
                 "url": url,
                 "title": title,
                 "content": body,
                 "content_sha256": _sha(body),
                 "body_retrieved": True,
                 "evidence_origin": "wikipedia_page_extract",
-                "metadata": {"provider": "wikipedia", "query": query},
+                "metadata": {
+                    "provider": "wikipedia",
+                    "language": language,
+                    "query": query,
+                },
             }
         )
     return records, {
-        "provider": "wikipedia",
+        "provider": f"wikipedia_{language}",
         "status": "available",
         "result_count": len(records),
+    }
+
+
+def _wikipedia_sources(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    receipts: dict[str, Any] = {}
+    errors: list[str] = []
+    for language in _wikipedia_languages(query):
+        try:
+            found, receipt = _wikipedia_language_sources(query, language)
+            records.extend(found)
+            receipts[language] = receipt
+        except Exception as exc:
+            receipts[language] = {
+                "provider": f"wikipedia_{language}",
+                "status": "error",
+                "result_count": 0,
+            }
+            errors.append(f"{language}:{type(exc).__name__}:{exc}")
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        key = str(record.get("content_sha256") or record.get("source_id") or "")
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(record)
+    return unique, {
+        "provider": "wikipedia",
+        "status": "available" if unique or not errors else "error",
+        "languages": list(_wikipedia_languages(query)),
+        "result_count": len(unique),
+        "language_receipts": receipts,
+        "errors": errors[:3],
     }
 
 
