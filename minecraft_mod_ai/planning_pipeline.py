@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Compiler-owned planning pipeline.
+"""Prompt-first compiler-owned planning pipeline.
 
-A valid authored request is converted to a complete host-owned requirement catalog and
-game-design projection before research or implementation work. Language-model output is
-not part of the mandatory planning contract and cannot decide whether a plan exists.
+The production order is now: prompt state -> grounded reference/scope research ->
+researched requirements -> grounded implementation research -> detailed plan -> legacy
+catalog/proposal lowering -> target binding. Raw prompt text is never compiled directly
+into implementation/search tasks.
 """
 
 from collections.abc import Mapping, Sequence
@@ -22,6 +23,7 @@ from .spec import Proposal, SpecValidationError
 
 class PlanningStage(str, Enum):
     REQUEST = "request"
+    RESEARCH = "research"
     DESIGN = "design"
     PRE_RETRIEVAL_PLAN = "pre_retrieval_plan"
     PLATFORM = "platform"
@@ -29,8 +31,6 @@ class PlanningStage(str, Enum):
 
 
 class PlanningStageError(SpecValidationError):
-    """Internal host-contract diagnostic for impossible or corrupt planner state."""
-
     def __init__(
         self,
         stage: PlanningStage,
@@ -46,6 +46,7 @@ class PlanningStageError(SpecValidationError):
 
 @dataclass(frozen=True)
 class PlanningArtifacts:
+    planning_state: dict[str, Any]
     game_design: dict[str, Any]
     base_proposal: Proposal
     research_brief: dict[str, Any]
@@ -53,7 +54,7 @@ class PlanningArtifacts:
 
 
 class PlanningPipeline:
-    """Compile an authored request into an implementation-ready host contract."""
+    """Compile an authored request into an implementation-ready grounded contract."""
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
@@ -67,8 +68,20 @@ class PlanningPipeline:
         if not str(prompt).strip():
             raise PlanningStageError(PlanningStage.REQUEST, "prompt is empty")
 
+        from .planning_state_pipeline import prepare_planning_state
+
+        try:
+            planning_state = prepare_planning_state(self.router, prompt)
+        except Exception as exc:
+            raise PlanningStageError(
+                PlanningStage.RESEARCH,
+                "prompt-first research state did not reach code-ready coverage",
+                cause=exc,
+            ) from exc
+
         game_design, base_proposal = self._semantic_design(
             prompt,
+            planning_state=planning_state,
             media_paths=media_paths,
         )
         game_design, base_proposal, research_brief, platform_evidence = self._bind_platform(
@@ -78,6 +91,7 @@ class PlanningPipeline:
         )
         technical_evidence = self._validated_evidence(platform_evidence)
         return PlanningArtifacts(
+            planning_state=planning_state,
             game_design=game_design,
             base_proposal=base_proposal,
             research_brief=research_brief,
@@ -88,14 +102,10 @@ class PlanningPipeline:
         self,
         prompt: str,
         *,
+        planning_state: Mapping[str, Any],
         media_paths: Sequence[str | Path],
     ) -> tuple[dict[str, Any], Proposal]:
-        """Project the frozen host catalog directly into game-design fields.
-
-        No model call, JSON generation, retry loop or request-page generation is allowed
-        here. Media remain implementation inputs; text planning authority is the exact
-        authored request catalog.
-        """
+        """Lower the already researched state into existing proposal/design shapes."""
         del media_paths
         from . import agentic_research_game_design as host_design
         from .planning_authority import (
@@ -104,12 +114,20 @@ class PlanningPipeline:
         )
         from .reuse_planner import compile_pre_retrieval_plan
 
-        request_catalog = build_authoritative_request_catalog(prompt, self.router)
-        with authoritative_request_scope(prompt, request_catalog):
+        request_catalog = build_authoritative_request_catalog(
+            prompt,
+            self.router,
+            planning_state=planning_state,
+        )
+        with authoritative_request_scope(
+            prompt,
+            request_catalog,
+            planning_state=planning_state,
+        ):
             design = host_design.generate_sectioned_game_design(
                 self.router,
                 prompt,
-                research={},
+                research={"planning_state_sha256": planning_state.get("state_sha256")},
             )
             design = host_design.validate_ready_design(
                 prompt,
@@ -119,21 +137,22 @@ class PlanningPipeline:
             design = {
                 **design,
                 "_evidence_request_catalog": request_catalog,
+                "_planning_state": dict(planning_state),
             }
+            # This reuse plan is now compiled only after two research passes and the
+            # detailed-plan coverage gate. It is no longer a raw-prompt pre-research plan.
             pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
-            design = {
-                **design,
-                "_pre_retrieval_plan": pre_retrieval_plan,
-            }
+            design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
             research_brief = central_research.normalize_research_brief(prompt, design)
             design = {
                 **design,
                 "_research_brief": research_brief,
                 "_planning_authority": {
-                    "owner": "host_compiler",
-                    "model_calls": 0,
-                    "model_generated_json": False,
+                    "owner": "prompt_first_grounded_state_machine",
+                    "planning_state_sha256": planning_state.get("state_sha256", ""),
                     "request_catalog_sha256": request_catalog.get("catalog_sha256", ""),
+                    "raw_prompt_compiler": False,
+                    "model_generated_json": True,
                 },
             }
 
@@ -176,9 +195,7 @@ class PlanningPipeline:
                 **design,
                 "_existing_project_inventory": inventory_payload,
                 "_existing_snapshot": inventory_payload,
-                "_component_catalog": dict(
-                    inventory_payload.get("component_catalog") or {}
-                ),
+                "_component_catalog": dict(inventory_payload.get("component_catalog") or {}),
             }
         return design
 
@@ -266,9 +283,4 @@ class PlanningPipeline:
         return payload
 
 
-__all__ = [
-    "PlanningArtifacts",
-    "PlanningPipeline",
-    "PlanningStage",
-    "PlanningStageError",
-]
+__all__ = ["PlanningArtifacts", "PlanningPipeline", "PlanningStage", "PlanningStageError"]
