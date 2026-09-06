@@ -164,7 +164,6 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                     "modrinth",
                     "official_docs",
                     "project_rag",
-                    "github",
                 ],
                 "depends_on": [],
             }
