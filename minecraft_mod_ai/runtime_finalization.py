@@ -83,7 +83,6 @@ def finalize_runtime() -> None:
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
-        from .planner_graph_integrity_contract import install as install_planner_graph_integrity
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
         from .quality_public_acceptance_view_contract import install as install_quality_public_acceptance_view
@@ -172,7 +171,6 @@ def finalize_runtime() -> None:
 
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
-        install_planner_graph_integrity()
         install_runtime_regression_reconciliation()
         install_generation_boundary_reconciliation()
 
