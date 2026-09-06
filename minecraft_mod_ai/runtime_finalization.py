@@ -63,7 +63,6 @@ def finalize_runtime() -> None:
         from .design_resolution_provenance_contract import install_design_resolution_provenance_contract
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .evidence_obligation_contract import install_evidence_obligation_contract
-        from .evidence_task_receipt_contract import install as install_evidence_task_receipts
         from .execution_feedback_exception_scope_contract import install as install_execution_feedback_exception_scope
         from .execution_feedback_owner_precision_contract import install as install_execution_feedback_owner_precision
         from .external_mcp_binding_concurrency_contract import install as install_external_mcp_binding_concurrency
@@ -150,7 +149,6 @@ def finalize_runtime() -> None:
         install_verifier_receipt_truth(work_graph)
 
         install_evidence_first_pipeline()
-        install_evidence_task_receipts()
         install_planner_design_readiness()
         install_deep_design_execution()
         install_evidence_obligation_contract()
