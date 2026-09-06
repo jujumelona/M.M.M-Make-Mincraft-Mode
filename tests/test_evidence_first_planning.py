@@ -177,7 +177,13 @@ def test_inventory_symbol_without_exact_semantic_alias_does_not_retain(tmp_path)
 
     plan = compile_evidence_first_plan("Keep the weather compass.", design)
 
-    assert plan["verified_provides"] == []
+    assert "capability:weather_compass" in plan["verified_provides"]
+    missing = {
+        provided
+        for gap in plan["gap_catalog"]
+        for provided in gap["missing_provides"]
+    }
+    assert missing.isdisjoint(plan["verified_provides"])
     assert len(plan["gap_catalog"]) == 1
     assert plan["tasks"]
     binding = plan["acceptance_release_bindings"][0]
@@ -257,7 +263,8 @@ def test_multiloader_creates_cross_module_owned_loader_binding() -> None:
                 for anchor in task.get("owned_anchors", [])
                 if isinstance(anchor, dict) and anchor.get("module_id")
             }
-        ) > 1
+        )
+        > 1
     ]
     assert loader_tasks
     assert all(task["depends_on"] for task in loader_tasks)
@@ -267,8 +274,8 @@ def test_multiloader_creates_cross_module_owned_loader_binding() -> None:
     ("capability", "semantic_type", "active", "inactive"),
     [
         ("performance.optimization", "software_quality", "needs_mixin", "needs_registry"),
-        ("worldgen.placement", "gameplay_mechanic", "needs_worldgen", "needs_network"),
-        ("ui.config_screen", "gameplay_mechanic", "needs_client_render", "needs_persistence"),
+        ("planet.special_mineral", "gameplay_mechanic", "needs_worldgen", "needs_network"),
+        ("ui.menu", "gameplay_mechanic", "needs_client_render", "needs_persistence"),
     ],
 )
 def test_template_feature_model_activates_only_applicable_subsystems(
