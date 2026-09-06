@@ -3,12 +3,10 @@
 from .evidence_request_guard import install_evidence_request_guard
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
-from .semantic_batching_contract import install_semantic_batching_contract
 from .source_set_boundary_installation import install as install_source_set_boundary
 
 initialize_runtime()
 install_evidence_request_guard()
-install_semantic_batching_contract()
 from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
@@ -31,7 +29,6 @@ from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import AssetRequest, CompleteProposal, ProductionModule
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .external_mcp import ExternalMCPRegistry
-from .game_design import GameDesignPlanner
 from .importer import (
     ExistingProjectImportError,
     ExistingProjectReport,
@@ -87,7 +84,6 @@ __all__ = [
     "ExistingProjectImportError",
     "ExistingProjectReport",
     "ExternalMCPRegistry",
-    "GameDesignPlanner",
     "HeuristicPlanner",
     "MinecraftModPipeline",
     "ModAISession",
