@@ -26,33 +26,21 @@ EXPECTED_REGRESSION_IDS = frozenset(
 
 REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-001": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
-    "REG-002": RegressionExecutionRoute(
-        "tests/test_plan_collect_all_linker.py::test_plan_linker_collects_all_first_pass_defects"
-    ),
+    "REG-002": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-003": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
-    "REG-004": RegressionExecutionRoute(
-        "tests/test_planir_mutation_authority_contract.py::test_worker_writes_are_rejected_when_not_in_persisted_scope"
-    ),
+    "REG-004": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
     "REG-005": RegressionExecutionRoute("tests/test_agent_capability_manifest_degradation.py"),
     "REG-006": RegressionExecutionRoute("tests/test_task_artifact_contract.py"),
-    "REG-007": RegressionExecutionRoute(
-        "tests/test_planir_mutation_authority_contract.py::test_worker_does_not_create_new_artifact_when_creation_is_disallowed"
-    ),
-    "REG-008": RegressionExecutionRoute(
-        "tests/test_plan_collect_all_linker.py::test_plan_linker_collects_all_first_pass_defects"
-    ),
+    "REG-007": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
+    "REG-008": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-009": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
     "REG-010": RegressionExecutionRoute("tests/test_nonblocking_lossless_planner_contract.py"),
     "REG-011": RegressionExecutionRoute("tests/test_progress_loop_liveness_regression.py"),
     "REG-012": RegressionExecutionRoute(
         "tests/test_source_set_boundary_contract.py::test_common_source_cannot_import_project_client_source"
     ),
-    "REG-013": RegressionExecutionRoute(
-        "tests/test_validation_execution_contract.py::test_resource_gate_parses_real_namespace_resources"
-    ),
-    "REG-014": RegressionExecutionRoute(
-        "tests/test_validation_execution_contract.py::test_server_smoke_gate_is_real_execution"
-    ),
+    "REG-013": RegressionExecutionRoute("tests/test_validation_execution_contract.py"),
+    "REG-014": RegressionExecutionRoute("tests/test_validation_execution_contract.py"),
     "REG-015": RegressionExecutionRoute("tests/test_runtime_json_gap_regression.py"),
     "REG-016": RegressionExecutionRoute("tests/test_structured_output_backend_json_recovery.py"),
     "REG-017": RegressionExecutionRoute(
