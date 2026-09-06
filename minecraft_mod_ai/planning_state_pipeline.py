@@ -12,6 +12,7 @@ from copy import deepcopy
 from typing import Any, TypeVar
 
 from .planning_detail_applicability import (
+    apply_host_detail_section_applicability,
     ensure_host_detail_section_applicability,
     required_sections_by_requirement,
 )
@@ -22,6 +23,10 @@ from .planning_state_resolution import compile_researched_requirements
 from .root_cause_trace import traced_callable
 
 _T = TypeVar("_T")
+DetailSectionApplicabilityResolver = Callable[
+    [tuple[str, ...]],
+    Mapping[str, Mapping[str, str]],
+]
 
 
 def _transition(operation: str, callback: Callable[[], _T]) -> _T:
@@ -37,6 +42,17 @@ def _requirements_exist(state: Mapping[str, Any]) -> bool:
     return any(
         isinstance(item, Mapping) and item.get("decision_type") == "requirement"
         for item in decisions if isinstance(decisions, list)
+    )
+
+
+def _requirement_ids(state: Mapping[str, Any]) -> tuple[str, ...]:
+    decisions = state.get("decisions")
+    if not isinstance(decisions, list):
+        return ()
+    return tuple(
+        str(item.get("requirement_id") or "")
+        for item in decisions
+        if isinstance(item, Mapping) and item.get("decision_type") == "requirement"
     )
 
 
@@ -119,8 +135,15 @@ def prepare_planning_state(
     trace_metadata: Mapping[str, Any] | None = None,
     existing_state: Mapping[str, Any] | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve prompt meaning, reference scope, implementation evidence, and plan detail."""
+    """Resolve prompt meaning, reference scope, implementation evidence, and plan detail.
+
+    The optional applicability resolver is a trusted host boundary. It receives only
+    opaque requirement IDs, never prompt text, requirement prose, model output, or
+    evidence. Any omitted requirement/facet therefore remains unknown and keeps the
+    full fail-safe worksheet branch.
+    """
 
     state = _transition(
         "bootstrap_or_restore",
@@ -163,10 +186,23 @@ def prepare_planning_state(
                 + _block_summary(state, stage="requirement_selection")
             )
 
-    state = _transition(
-        "normalize_detail_section_applicability",
-        lambda: ensure_host_detail_section_applicability(state),
-    )
+    if detail_section_applicability_resolver is None:
+        state = _transition(
+            "normalize_detail_section_applicability",
+            lambda: ensure_host_detail_section_applicability(state),
+        )
+    else:
+        applicability_by_requirement = _transition(
+            "resolve_detail_section_applicability",
+            lambda: detail_section_applicability_resolver(_requirement_ids(state)),
+        )
+        state = _transition(
+            "apply_detail_section_applicability",
+            lambda: apply_host_detail_section_applicability(
+                state,
+                applicability_by_requirement,
+            ),
+        )
     if checkpoint is not None:
         checkpoint(deepcopy(state))
 
@@ -214,4 +250,4 @@ def prepare_planning_state(
     return state
 
 
-__all__ = ["prepare_planning_state"]
+__all__ = ["DetailSectionApplicabilityResolver", "prepare_planning_state"]
