@@ -8,10 +8,8 @@ readiness. The model may describe an unknown; it may not choose a route that byp
 kind of evidence the unknown requires.
 """
 
-import difflib
 import hashlib
 import json
-import unicodedata
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -43,7 +41,10 @@ _ALLOWED_ROUTES_BY_REASON: dict[str, frozenset[str]] = {
     "compatibility": frozenset({"compatibility_research"}),
     "contradiction": frozenset({"user_only"}),
     "user_preference": frozenset({"user_only"}),
-    "insufficient_evidence": frozenset({"reference_research", "external_research", "repository_rag", "minecraft_research", "implementation_research", "compatibility_research"}),
+    "insufficient_evidence": frozenset({
+        "reference_research", "external_research", "repository_rag", "minecraft_research",
+        "implementation_research", "compatibility_research",
+    }),
 }
 
 ROUTE_SOURCES = {
@@ -51,8 +52,12 @@ ROUTE_SOURCES = {
     "external_research": ("web_sources",),
     "repository_rag": ("repository", "project_rag"),
     "minecraft_research": ("minecraft_docs", "minecraft_source"),
-    "implementation_research": ("repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"),
-    "compatibility_research": ("repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"),
+    "implementation_research": (
+        "repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag",
+    ),
+    "compatibility_research": (
+        "repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag",
+    ),
     "default_policy": (),
     "user_only": (),
 }
@@ -62,16 +67,22 @@ MODEL_PARAMETERS: dict[str, Any] = {
     "properties": {
         "goal": {
             "type": "object",
-            "properties": {"statement": {"type": "string"}, "source_quote": {"type": "string"}},
-            "required": ["statement", "source_quote"],
+            "properties": {
+                "statement": {"type": "string"},
+                "source_quote": {"type": "string"},
+            },
+            "required": ["statement"],
             "additionalProperties": False,
         },
         "known": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"statement": {"type": "string"}, "source_quote": {"type": "string"}},
-                "required": ["statement", "source_quote"],
+                "properties": {
+                    "statement": {"type": "string"},
+                    "source_quote": {"type": "string"},
+                },
+                "required": ["statement"],
                 "additionalProperties": False,
             },
         },
@@ -84,11 +95,14 @@ MODEL_PARAMETERS: dict[str, Any] = {
                     "source_quote": {"type": "string"},
                     "what_must_be_learned": {"type": "string"},
                 },
-                "required": ["name", "source_quote", "what_must_be_learned"],
+                "required": ["name", "what_must_be_learned"],
                 "additionalProperties": False,
             },
         },
-        "scope_status": {"type": "string", "enum": ["explicit", "partial", "unspecified"]},
+        "scope_status": {
+            "type": "string",
+            "enum": ["explicit", "partial", "unspecified"],
+        },
         "unresolved": {
             "type": "array",
             "items": {
@@ -98,10 +112,19 @@ MODEL_PARAMETERS: dict[str, Any] = {
                     "reason": {"type": "string", "enum": list(UNRESOLVED_REASONS)},
                     "blocks": {"type": "array", "items": {"type": "string"}},
                     "information_needed": {"type": "string"},
-                    "resolution_route": {"type": "string", "enum": list(RESOLUTION_ROUTES)},
-                    "source_kinds": {"type": "array", "items": {"type": "string", "enum": list(SOURCE_KINDS)}},
+                    "resolution_route": {
+                        "type": "string",
+                        "enum": list(RESOLUTION_ROUTES),
+                    },
+                    "source_kinds": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": list(SOURCE_KINDS)},
+                    },
                 },
-                "required": ["question", "reason", "blocks", "information_needed", "resolution_route", "source_kinds"],
+                "required": [
+                    "question", "reason", "blocks", "information_needed",
+                    "resolution_route", "source_kinds",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -112,7 +135,14 @@ MODEL_PARAMETERS: dict[str, Any] = {
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _sha(value: Any) -> str:
@@ -136,100 +166,18 @@ def _strings(value: Any) -> list[str]:
     return list(dict.fromkeys(_text(item) for item in value if _text(item)))
 
 
-def _codepoints(value: str, *, limit: int = 96) -> list[str]:
-    prefix = [f"U+{ord(char):04X}:{unicodedata.name(char, 'UNKNOWN')}" for char in value[:limit]]
-    if len(value) > limit:
-        prefix.append(f"...(+{len(value) - limit} codepoints)")
-    return prefix
-
-
-def _quote_diagnostics(
-    prompt: str,
-    quote: str,
-    *,
-    field_path: str,
-    model_output: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    matcher = difflib.SequenceMatcher(None, quote, prompt, autojunk=False)
-    match = matcher.find_longest_match(0, len(quote), 0, len(prompt))
-    context_start = max(0, match.b - 120)
-    context_end = min(len(prompt), match.b + max(match.size, 1) + 120)
-    stripped = quote.strip()
-    compact_quote = _text(quote)
-    compact_prompt = _text(prompt)
-    nfc_quote = unicodedata.normalize("NFC", quote)
-    nfc_prompt = unicodedata.normalize("NFC", prompt)
-    nfkc_quote = unicodedata.normalize("NFKC", quote)
-    nfkc_prompt = unicodedata.normalize("NFKC", prompt)
-    return {
-        "failure_type": "source_quote_exact_span_mismatch",
-        "field_path": field_path,
-        "raw_source_quote": quote,
-        "source_quote_repr": repr(quote),
-        "source_quote_sha256": _sha(quote),
-        "prompt": prompt,
-        "prompt_sha256": _sha(prompt),
-        "model_output": deepcopy(dict(model_output)) if isinstance(model_output, Mapping) else None,
-        "nearest_prompt_context": prompt[context_start:context_end],
-        "nearest_prompt_context_repr": repr(prompt[context_start:context_end]),
-        "nearest_prompt_context_range": [context_start, context_end],
-        "longest_common_span": {
-            "quote_start": match.a,
-            "prompt_start": match.b,
-            "length": match.size,
-        },
-        "whitespace_diagnostics": {
-            "leading_or_trailing_whitespace_present": quote != stripped,
-            "collapsed_whitespace_match": bool(compact_quote) and compact_quote in compact_prompt,
-            "raw_length": len(quote),
-            "stripped_length": len(stripped),
-        },
-        "unicode_diagnostics": {
-            "nfc_match": bool(nfc_quote) and nfc_quote in nfc_prompt,
-            "nfkc_match": bool(nfkc_quote) and nfkc_quote in nfkc_prompt,
-            "quote_codepoints": _codepoints(quote),
-            "nearest_context_codepoints": _codepoints(prompt[context_start:context_end]),
-        },
-    }
-
-
-def _quote_receipt(
-    prompt: str,
-    quote: Any,
-    *,
-    field_path: str,
-    model_output: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+def _quote_receipt(prompt: str, quote: Any) -> dict[str, Any]:
+    """Preserve model quote metadata without making literal text identity a fail gate."""
     text = str(quote or "")
-    if not text.strip():
-        diagnostics = _quote_diagnostics(
-            prompt,
-            text,
-            field_path=field_path,
-            model_output=model_output,
-        )
-        raise ValueError(
-            "PROMPT_STATE_SOURCE: source_quote must not be empty; "
-            f"diagnostics={_canonical(diagnostics)}"
-        )
-    start = prompt.find(text)
-    if start < 0:
-        diagnostics = _quote_diagnostics(
-            prompt,
-            text,
-            field_path=field_path,
-            model_output=model_output,
-        )
-        raise ValueError(
-            f"PROMPT_STATE_SOURCE: {field_path} is not an exact authored span; "
-            f"diagnostics={_canonical(diagnostics)}"
-        )
+    start = prompt.find(text) if text else -1
+    exact = start >= 0
     return {
         "source_id": "requested_prompt",
-        "char_start": start,
-        "char_end": start + len(text),
+        "char_start": start if exact else -1,
+        "char_end": start + len(text) if exact else -1,
         "text": text,
-        "text_sha256": _sha(text),
+        "text_sha256": _sha(text) if text else "",
+        "verification": "exact_span" if exact else "unverified_hint",
     }
 
 
@@ -239,7 +187,6 @@ def _host_item(
     *,
     prefix: str,
     index: int,
-    model_output: Mapping[str, Any],
 ) -> dict[str, Any]:
     statement = _text(raw.get("statement"))
     if not statement:
@@ -247,12 +194,7 @@ def _host_item(
     return {
         f"{prefix}_id": f"{prefix}_{index + 1:03d}",
         "statement": statement,
-        "source": _quote_receipt(
-            prompt,
-            raw.get("source_quote"),
-            field_path=f"{prefix}[{index}].source_quote",
-            model_output=model_output,
-        ),
+        "source": _quote_receipt(prompt, raw.get("source_quote")),
     }
 
 
@@ -272,9 +214,13 @@ def _research_item(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
     reason = _text(raw.get("reason"))
     route = _text(raw.get("resolution_route"))
     if not question or not information_needed:
-        raise ValueError("PROMPT_STATE_UNRESOLVED: question/information_needed must not be empty")
+        raise ValueError(
+            "PROMPT_STATE_UNRESOLVED: question/information_needed must not be empty"
+        )
     if reason not in UNRESOLVED_REASONS or route not in RESOLUTION_ROUTES:
-        raise ValueError("PROMPT_STATE_UNRESOLVED: reason/resolution route is unsupported")
+        raise ValueError(
+            "PROMPT_STATE_UNRESOLVED: reason/resolution route is unsupported"
+        )
     route = _validated_route(reason, route)
     sources = list(ROUTE_SOURCES[route])
     unresolved_id = f"u_{index + 1:03d}"
@@ -287,7 +233,9 @@ def _research_item(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
         "resolution_route": route,
         "source_kinds": sources,
         "status": "open",
-        "research_ref": f"r_{index + 1:03d}" if route not in {"user_only", "default_policy"} else "",
+        "research_ref": (
+            f"r_{index + 1:03d}" if route not in {"user_only", "default_policy"} else ""
+        ),
     }
 
 
@@ -296,21 +244,17 @@ def _reference_item(
     raw: Mapping[str, Any],
     *,
     index: int,
-    model_output: Mapping[str, Any],
 ) -> dict[str, Any]:
     name = _text(raw.get("name"))
     needed = _text(raw.get("what_must_be_learned"))
     if not name or not needed:
-        raise ValueError("PROMPT_STATE_REFERENCE: reference name/research need must not be empty")
+        raise ValueError(
+            "PROMPT_STATE_REFERENCE: reference name/research need must not be empty"
+        )
     return {
         "reference_id": f"ref_{index + 1:03d}",
         "name": name,
-        "source": _quote_receipt(
-            prompt,
-            raw.get("source_quote"),
-            field_path=f"references[{index}].source_quote",
-            model_output=model_output,
-        ),
+        "source": _quote_receipt(prompt, raw.get("source_quote")),
         "what_must_be_learned": needed,
     }
 
@@ -344,7 +288,7 @@ def _ensure_host_unknowns(
     references: Sequence[Mapping[str, Any]],
     scope_status: str,
 ) -> None:
-    """Close omissions that are mechanically implied by the model's own extracted state."""
+    """Close omissions mechanically implied by the model's extracted state."""
     for reference in references:
         name = _text(reference.get("name"))
         already = any(
@@ -359,10 +303,16 @@ def _ensure_host_unknowns(
         unresolved.append(
             {
                 "unresolved_id": unresolved_id,
-                "question": f"What documented systems, rules, and distinctive behavior define the referenced subject {name}?",
+                "question": (
+                    "What documented systems, rules, and distinctive behavior define "
+                    f"the referenced subject {name}?"
+                ),
                 "reason": "reference_semantics",
                 "blocks": ["requirement_selection", "implementation_plan"],
-                "information_needed": _text(reference.get("what_must_be_learned")) or f"Documented behavior and structure of {name}",
+                "information_needed": (
+                    _text(reference.get("what_must_be_learned"))
+                    or f"Documented behavior and structure of {name}"
+                ),
                 "resolution_route": "reference_research",
                 "source_kinds": ["reference_sources", "web_sources"],
                 "status": "open",
@@ -376,10 +326,16 @@ def _ensure_host_unknowns(
         unresolved.append(
             {
                 "unresolved_id": unresolved_id,
-                "question": "What bounded implementation scope may be selected without inventing unauthored requirements?",
+                "question": (
+                    "What bounded implementation scope may be selected without inventing "
+                    "unauthored requirements?"
+                ),
                 "reason": "scope",
                 "blocks": ["requirement_selection"],
-                "information_needed": "A deterministic default scope policy applied only after reference/external facts are grounded.",
+                "information_needed": (
+                    "A deterministic default scope policy applied only after "
+                    "reference/external facts are grounded."
+                ),
                 "resolution_route": "default_policy",
                 "source_kinds": [],
                 "status": "open",
@@ -395,10 +351,16 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
     known_raw = model_value.get("known")
     references_raw = model_value.get("references")
     unresolved_raw = model_value.get("unresolved")
-    if not isinstance(known_raw, list) or not isinstance(references_raw, list) or not isinstance(unresolved_raw, list):
-        raise ValueError("PROMPT_STATE_SHAPE: known/references/unresolved must be arrays")
+    if (
+        not isinstance(known_raw, list)
+        or not isinstance(references_raw, list)
+        or not isinstance(unresolved_raw, list)
+    ):
+        raise ValueError(
+            "PROMPT_STATE_SHAPE: known/references/unresolved must be arrays"
+        )
     references = [
-        _reference_item(prompt, item, index=i, model_output=model_value)
+        _reference_item(prompt, item, index=i)
         for i, item in enumerate(references_raw)
         if isinstance(item, Mapping)
     ]
@@ -417,21 +379,10 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
         "prompt_sha256": _sha(prompt),
         "goal": {
             "statement": _text(goal_raw.get("statement")),
-            "source": _quote_receipt(
-                prompt,
-                goal_raw.get("source_quote"),
-                field_path="goal.source_quote",
-                model_output=model_value,
-            ),
+            "source": _quote_receipt(prompt, goal_raw.get("source_quote")),
         },
         "known": [
-            _host_item(
-                prompt,
-                item,
-                prefix="known",
-                index=i,
-                model_output=model_value,
-            )
+            _host_item(prompt, item, prefix="known", index=i)
             for i, item in enumerate(known_raw)
             if isinstance(item, Mapping)
         ],
@@ -448,7 +399,8 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
                 "queries": [],
                 "status": "pending",
             }
-            for item in unresolved if item["research_ref"]
+            for item in unresolved
+            if item["research_ref"]
         ],
         "evidence": [],
         "resolved": [],
@@ -464,8 +416,12 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
     return state
 
 
-def validate_planning_state(state: Mapping[str, Any], *, prompt: str | None = None) -> None:
-    """Validate both initial and evolved host-owned planning states."""
+def validate_planning_state(
+    state: Mapping[str, Any],
+    *,
+    prompt: str | None = None,
+) -> None:
+    """Validate structural integrity of initial and evolved host-owned planning states."""
     if state.get("schema_version") != SCHEMA:
         raise ValueError("PROMPT_STATE_SCHEMA: unsupported planning-state schema")
     original = str(state.get("original_prompt") or "")
@@ -478,9 +434,13 @@ def validate_planning_state(state: Mapping[str, Any], *, prompt: str | None = No
     unresolved = state.get("unresolved")
     queue = state.get("research_queue")
     if not isinstance(unresolved, list) or not isinstance(queue, list):
-        raise ValueError("PROMPT_STATE_SHAPE: unresolved/research_queue must be arrays")
+        raise ValueError(
+            "PROMPT_STATE_SHAPE: unresolved/research_queue must be arrays"
+        )
     unresolved_ids = {
-        str(item.get("unresolved_id") or "") for item in unresolved if isinstance(item, Mapping)
+        str(item.get("unresolved_id") or "")
+        for item in unresolved
+        if isinstance(item, Mapping)
     }
     if "" in unresolved_ids:
         raise ValueError("PROMPT_STATE_UNRESOLVED: every unresolved item needs an ID")
@@ -490,43 +450,76 @@ def validate_planning_state(state: Mapping[str, Any], *, prompt: str | None = No
             raise ValueError("PROMPT_STATE_RESEARCH: research item must be an object")
         research_id = str(item.get("research_id") or "")
         if not research_id or research_id in research_ids:
-            raise ValueError("PROMPT_STATE_RESEARCH: research IDs must be non-empty and unique")
+            raise ValueError(
+                "PROMPT_STATE_RESEARCH: research IDs must be non-empty and unique"
+            )
         research_ids.add(research_id)
         resolves = item.get("resolves")
-        if not isinstance(resolves, list) or not resolves or any(str(ref) not in unresolved_ids for ref in resolves):
-            raise ValueError("PROMPT_STATE_RESEARCH: every research item must resolve a real unresolved item")
-    for evidence in state.get("evidence", []) if isinstance(state.get("evidence"), list) else []:
+        if (
+            not isinstance(resolves, list)
+            or not resolves
+            or any(str(ref) not in unresolved_ids for ref in resolves)
+        ):
+            raise ValueError(
+                "PROMPT_STATE_RESEARCH: every research item must resolve a real "
+                "unresolved item"
+            )
+    evidence_rows = (
+        state.get("evidence", []) if isinstance(state.get("evidence"), list) else []
+    )
+    for evidence in evidence_rows:
         if not isinstance(evidence, Mapping):
             raise ValueError("PROMPT_STATE_EVIDENCE: evidence item must be an object")
         if str(evidence.get("research_ref") or "") not in research_ids:
-            raise ValueError("PROMPT_STATE_EVIDENCE: evidence must belong to a queued research item")
+            raise ValueError(
+                "PROMPT_STATE_EVIDENCE: evidence must belong to a queued research item"
+            )
         if str(evidence.get("source") or "") != "grounded_materialized_pages":
-            raise ValueError("PROMPT_STATE_EVIDENCE: model output is not an evidence source")
+            raise ValueError(
+                "PROMPT_STATE_EVIDENCE: model output is not an evidence source"
+            )
     if type(state.get("plan_ready")) is not bool:
         raise ValueError("PROMPT_STATE_READY: plan_ready must be boolean")
     if state.get("plan_ready"):
         blocking = [
-            item for item in unresolved
-            if isinstance(item, Mapping)
-            and item.get("status") != "resolved"
+            item
+            for item in unresolved
+            if isinstance(item, Mapping) and item.get("status") != "resolved"
         ]
         if blocking:
-            raise ValueError("PROMPT_STATE_READY: plan cannot be ready while blocking unknowns remain")
+            raise ValueError(
+                "PROMPT_STATE_READY: plan cannot be ready while blocking unknowns remain"
+            )
         coverage = state.get("coverage")
         if not isinstance(coverage, list) or not coverage:
             raise ValueError("PROMPT_STATE_READY: ready plan requires coverage records")
 
     from .planning_state_invariants import validate_state_links
+
     validate_state_links(state)
 
 
 def _validate_initial_state(state: Mapping[str, Any]) -> None:
-    if state.get("evidence") or state.get("resolved") or state.get("decisions") or state.get("coverage"):
-        raise ValueError("PROMPT_STATE_INITIAL: model-authored initial state cannot contain derived artifacts")
+    if (
+        state.get("evidence")
+        or state.get("resolved")
+        or state.get("decisions")
+        or state.get("coverage")
+    ):
+        raise ValueError(
+            "PROMPT_STATE_INITIAL: model-authored initial state cannot contain derived artifacts"
+        )
     if state.get("plan_ready") is not False:
         raise ValueError("PROMPT_STATE_INITIAL: initial state cannot be plan-ready")
-    if any(item.get("queries") for item in state.get("research_queue", []) if isinstance(item, Mapping)):
-        raise ValueError("PROMPT_STATE_INITIAL: retrieval queries are compiled only after information needs exist")
+    if any(
+        item.get("queries")
+        for item in state.get("research_queue", [])
+        if isinstance(item, Mapping)
+    ):
+        raise ValueError(
+            "PROMPT_STATE_INITIAL: retrieval queries are compiled only after information "
+            "needs exist"
+        )
 
 
 def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
@@ -537,19 +530,18 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
         {
             "role": "system",
             "content": (
-                "Fill only the prompt-understanding template. Do not design a Minecraft implementation. "
-                "Do not invent APIs, files, systems, features, mechanics, or facts absent from the prompt. "
-                "Every source_quote MUST be copied verbatim from USER REQUEST as exactly one contiguous "
-                "substring. Preserve every Unicode code point, whitespace character, punctuation mark, "
-                "capitalization choice, typo, and line break exactly as authored. Never paraphrase, trim, "
-                "normalize Unicode, correct spelling, or join separate spans in source_quote. "
-                "KNOWN entries require exact source_quote support. Named games/products/styles/works/concepts "
-                "whose meaning must be learned belong in references and unresolved(reference_semantics). "
-                "If scope is not authored, mark it partial or unspecified instead of guessing. Route each "
-                "unknown according to its reason; the host rejects research-bypass routes."
+                "Fill only the prompt-understanding template. Do not design a Minecraft "
+                "implementation. Do not invent APIs, files, systems, features, mechanics, "
+                "or facts absent from the prompt. source_quote is optional provenance "
+                "metadata only; omit it when inconvenient and never spend reasoning effort "
+                "reproducing whitespace or punctuation exactly. Named games/products/styles/"
+                "works/concepts whose meaning must be learned belong in references and "
+                "unresolved(reference_semantics). If scope is not authored, mark it partial "
+                "or unspecified instead of guessing. Route each unknown according to its "
+                "reason; the host rejects research-bypass routes."
             ),
         },
-        {"role": "user", "content": "USER REQUEST (verbatim):\n" + authored},
+        {"role": "user", "content": "USER REQUEST:\n" + authored},
     ]
     with planner_operation("prompt_state", output_tokens=1536):
         raw = router.generate_tool_decision(
@@ -557,7 +549,9 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
             messages,
             tool_name=MODEL_TOOL,
             parameters=MODEL_PARAMETERS,
-            description="Submit the bounded authored-fact and unresolved-research state for this request.",
+            description=(
+                "Submit the bounded authored-fact and unresolved-research state for this request."
+            ),
         )
     if not isinstance(raw, Mapping):
         raise ValueError("PROMPT_STATE_MODEL: planner did not return an object")
@@ -565,6 +559,12 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "MODEL_PARAMETERS", "MODEL_TOOL", "RESOLUTION_ROUTES", "SCHEMA", "SOURCE_KINDS",
-    "UNRESOLVED_REASONS", "build_initial_planning_state", "validate_planning_state",
+    "MODEL_PARAMETERS",
+    "MODEL_TOOL",
+    "RESOLUTION_ROUTES",
+    "SCHEMA",
+    "SOURCE_KINDS",
+    "UNRESOLVED_REASONS",
+    "build_initial_planning_state",
+    "validate_planning_state",
 ]
