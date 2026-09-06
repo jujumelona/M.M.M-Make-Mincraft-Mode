@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from minecraft_mod_ai import catalog_first_grounded_rag as catalog_rag
 from minecraft_mod_ai import pre_design_grounded_rag as rag
 
 
@@ -76,10 +77,9 @@ def test_predesign_code_rag_uses_lexical_hot_path(monkeypatch):
     ]
 
 
-def test_github_fallback_uses_bounded_parallel_slots(monkeypatch):
+def test_empty_catalog_github_fallback_uses_bounded_query_slots(monkeypatch):
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     monkeypatch.setattr(rag, "_MAX_QUERY_WORKERS", 2)
-    monkeypatch.setattr(rag, "_MAX_GITHUB_FALLBACK_WORKERS", 2)
     barrier = threading.Barrier(2, timeout=2.0)
     state_lock = threading.Lock()
     active = 0
@@ -106,7 +106,10 @@ def test_github_fallback_uses_bounded_parallel_slots(monkeypatch):
     monkeypatch.setattr(
         rag,
         "_search_modrinth",
-        lambda query: ([], {"provider": "modrinth", "status": "available", "result_count": 0}),
+        lambda query: (
+            [],
+            {"provider": "modrinth", "status": "available", "result_count": 0},
+        ),
     )
     monkeypatch.setattr(rag, "_search_github", github)
     monkeypatch.setattr(
@@ -125,11 +128,23 @@ def test_github_fallback_uses_bounded_parallel_slots(monkeypatch):
         "domains": [
             {
                 "domain_id": "request",
+                "providers": ["curseforge", "modrinth"],
                 "queries": ["query one", "query two"],
             }
         ]
     }
-    bundle = rag._forced_rag_bundle(object(), brief)
+    bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
 
     assert max_active == 2
-    assert bundle["github_fallback_workers"] == 2
+    rows = bundle["domains"][0]["queries"]
+    assert len(rows) == 2
+    assert all(
+        row["external_rag"]["providers"]["github"]["policy"]
+        == "catalog_empty_fallback"
+        for row in rows
+    )
+    assert all(
+        row["external_rag"]["provider_policy"]["github_broad_search"]
+        == "fallback_only_after_empty_catalog"
+        for row in rows
+    )
