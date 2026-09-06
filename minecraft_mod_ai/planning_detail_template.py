@@ -3,9 +3,9 @@ from __future__ import annotations
 """One evidence-bound engineering worksheet shared by planning and coding.
 
 The worksheet deliberately keeps a compact, stable wire shape for small models while
-making the meaning of every slot explicit.  The model fills exactly ten sections, each as
+making the meaning of every slot explicit. The model fills exactly ten sections, each as
 one grounded specification plus evidence references; host code owns the section list and
-rejects omissions, placeholders, and invented evidence IDs.
+rejects omissions, placeholders, duplicated section answers, and invented evidence IDs.
 """
 
 from collections.abc import Mapping
@@ -140,6 +140,7 @@ WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
     "Read all supplied evidence before filling any section and cite only allowed evidence refs.",
     "Fill all ten sections. Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
+    "Write a distinct section-specific specification for every section; copying one generic answer across multiple sections is invalid.",
     "For an inapplicable concern, state the concrete reason it is inapplicable and cite evidence that supports that conclusion.",
     "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, APIs, constants or bindings are not facts unless evidence proves them.",
     "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of adjectives such as robust, proper, appropriate or handle correctly.",
@@ -147,6 +148,8 @@ WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Treat compile/static checks as necessary but insufficient: verification must also prove the user-visible runtime behavior and relevant failure paths.",
     "Before submission, cross-check that state, algorithm, integration, persistence/network branches and verification describe one internally consistent design.",
 )
+
+_MIN_SPECIFICATION_CHARS = 24
 
 
 def _section_description(key: str) -> str:
@@ -158,7 +161,10 @@ def worksheet_prompt() -> str:
     """Return the canonical small-model instructions for filling the worksheet."""
 
     rows = ["ENGINEERING WORKSHEET — mandatory completion protocol:"]
-    rows.extend(f"{index}. {rule}" for index, rule in enumerate(WORKSHEET_INSTRUCTIONS, start=1))
+    rows.extend(
+        f"{index}. {rule}"
+        for index, rule in enumerate(WORKSHEET_INSTRUCTIONS, start=1)
+    )
     rows.append("Section checklists:")
     for key in DETAIL_FIELDS:
         rows.append(f"- {key}: " + "; ".join(DETAIL_SLOT_GUIDANCE[key]))
@@ -170,7 +176,7 @@ WORKSHEET_SCHEMA = {
     "description": (
         "Complete evidence-bound engineering worksheet. Every section is mandatory; "
         "each specification must explicitly address that section's checklist rather than "
-        "summarizing the requirement in one vague sentence."
+        "summarizing the requirement in one vague sentence. Section answers must be distinct."
     ),
     "properties": {
         key: {
@@ -179,10 +185,10 @@ WORKSHEET_SCHEMA = {
             "properties": {
                 "specification": {
                     "type": "string",
-                    "minLength": 24,
+                    "minLength": _MIN_SPECIFICATION_CHARS,
                     "description": (
                         _section_description(key)
-                        + " Write a self-contained implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder."
+                        + " Write a self-contained, section-specific implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
                     ),
                 },
                 "evidence_refs": {
@@ -218,13 +224,30 @@ _PLACEHOLDERS = {
 
 def validate_worksheet(value: Any, allowed_refs: set[str]) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != set(DETAIL_FIELDS):
-        raise ValueError("DETAILED_PLAN_WORKSHEET: every engineering section must be filled")
+        raise ValueError(
+            "DETAILED_PLAN_WORKSHEET: every engineering section must be filled"
+        )
+
+    seen_specifications: dict[str, str] = {}
     for key, row in value.items():
         if not isinstance(row, Mapping):
             raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} is not an object")
         specification = " ".join(str(row.get("specification") or "").split()).strip()
-        if not specification or specification.casefold() in _PLACEHOLDERS:
-            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification")
+        normalized_specification = specification.casefold()
+        if (
+            len(specification) < _MIN_SPECIFICATION_CHARS
+            or normalized_specification in _PLACEHOLDERS
+        ):
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification"
+            )
+        duplicate_of = seen_specifications.get(normalized_specification)
+        if duplicate_of is not None:
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET: {key} duplicates {duplicate_of}; every section requires a section-specific specification"
+            )
+        seen_specifications[normalized_specification] = key
+
         refs = row.get("evidence_refs")
         if (
             not isinstance(refs, list)
@@ -232,7 +255,9 @@ def validate_worksheet(value: Any, allowed_refs: set[str]) -> dict[str, Any]:
             or len(set(str(ref) for ref in refs)) != len(refs)
             or any(ref not in allowed_refs for ref in refs)
         ):
-            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} lacks grounded evidence")
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET: {key} lacks grounded evidence"
+            )
     return deepcopy(dict(value))
 
 
