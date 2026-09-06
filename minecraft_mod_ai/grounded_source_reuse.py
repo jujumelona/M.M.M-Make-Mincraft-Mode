@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .platform_catalog import PlatformAdapter, adapter_for_target
+from .platform_catalog import TargetContract, adapter_for_target
 from .research_reuse_candidates import planning_state_repository_cards
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
 from .source_transplant import (
@@ -220,7 +220,7 @@ def _frozen_graph(design: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
     return payload, plan_sha256
 
 
-def _adapter(design: Mapping[str, Any]) -> PlatformAdapter:
+def _adapter(design: Mapping[str, Any]) -> TargetContract:
     selection = design.get("_platform_selection")
     target = selection.get("target") if isinstance(selection, Mapping) else None
     if not isinstance(target, Mapping):
@@ -261,7 +261,7 @@ def _candidate_overlap(
     return len(wanted & available)
 
 
-def _target_context(adapter: PlatformAdapter) -> dict[str, Any]:
+def _target_context(adapter: TargetContract) -> dict[str, Any]:
     return {
         "minecraft_version": adapter.minecraft_version,
         "loader": adapter.loader,
