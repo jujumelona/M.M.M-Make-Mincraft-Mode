@@ -247,6 +247,12 @@ def collect_planning_state_research(
         if unresolved.get("status") == "open" and unresolved.get("resolution_route") == "default_policy":
             _apply_scope_policy(value, unresolved)
 
+    # A caller resuming a blocked state retries only unresolved retrievals; completed
+    # research and its receipts remain intact.
+    for research in value.get("research_queue", []):
+        if research.get("status") == "blocked":
+            research["status"] = "pending"
+
     _compile_pending_queries(router, value)
     brief, reference_domain_ids = _research_brief(prompt, value)
     if not brief.get("domains"):
@@ -342,6 +348,8 @@ def collect_planning_state_research(
                     }
                 )
 
+    resolved_ids = {uid for uid, row in unresolved_by_id.items() if row.get("status") == "resolved"}
+    value["blockers"] = [row for row in value["blockers"] if row.get("unresolved_id") not in resolved_ids]
     return _rehash(value)
 
 

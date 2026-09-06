@@ -67,11 +67,14 @@ def mapping_value(target: Mapping[str, Any]) -> str:
     """
 
     raw = target.get("mappings")
-    if isinstance(raw, Mapping):
-        return _text(raw.get("version"))
+    values = []
     if raw is not None:
-        return _text(raw)
-    return _text(target.get("mappings_version") or target.get("yarn_mappings"))
+        values.append(_text(raw.get("version")) if isinstance(raw, Mapping) else _text(raw))
+    values.extend(_text(target[key]) for key in ("mappings_version", "yarn_mappings") if key in target)
+    if len(set(values)) > 1:
+        raise TargetContractError("TARGET_MAPPINGS_ALIAS: mapping aliases disagree")
+    return values[0] if values else ""
+
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,131 @@ def target_coordinates_from_mapping(target: Mapping[str, Any]) -> TargetCoordina
     )
 
 
+_BASE_REQUIRED_TARGET_FIELDS = (
+    "minecraft_version",
+    "loader",
+    "java_version",
+    "fabric_loader",
+    "fabric_api",
+    "fabric_loom",
+    "gradle",
+    "gradle_sha256",
+    "data_pack_version",
+    "resource_pack_version",
+    "resource_pack_format",
+    "release_metadata_url",
+)
+_LEGACY_MAPPING_FIELDS = ("mappings_kind", "mappings_version")
+
+
+def _is_unresolved(value: Any) -> bool:
+    return not _text(value) or _text(value).casefold() == "unresolved"
+
+
+def required_target_fields(coordinates: Mapping[str, Any]) -> tuple[str, ...]:
+    version = coordinates.get("minecraft_version")
+    if _is_unresolved(version):
+        return _BASE_REQUIRED_TARGET_FIELDS
+    try:
+        mapping_required = mappings_applicable(version)
+    except TargetContractError as exc:
+        raise TargetContractError(str(exc)) from exc
+    return _BASE_REQUIRED_TARGET_FIELDS + (_LEGACY_MAPPING_FIELDS if mapping_required else ())
+
+
+def validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
+    required_fields = required_target_fields(coordinates)
+    missing = [field for field in required_fields if _is_unresolved(coordinates.get(field))]
+    if missing:
+        raise TargetContractError(
+            "TARGET_GROUNDING_INCOMPLETE: executable provider target is missing "
+            + ", ".join(missing)
+        )
+
+    try:
+        canonical = target_coordinates_from_mapping(coordinates)
+    except TargetContractError as exc:
+        raise TargetContractError(str(exc)) from exc
+
+    minimum = canonical.minimum_java_major
+    java = _text(coordinates.get("java_version"))
+    if minimum is not None and (not java.isdigit() or int(java) < minimum):
+        raise TargetContractError(f"Minecraft {canonical.minecraft_version} requires Java {minimum}+; got {java}.")
+
+    mappings_receipt: dict[str, str] | None = None
+    if canonical.mappings_applicable:
+        mappings_kind = _text(coordinates.get("mappings_kind")).casefold()
+        mappings_version = _text(coordinates.get("mappings_version"))
+        if mappings_kind not in {"mojang", "yarn"}:
+            raise TargetContractError(
+                f"TARGET_MAPPINGS_KIND: unsupported mappings kind {mappings_kind!r}."
+            )
+        if canonical.mappings != mappings_version:
+            raise TargetContractError(
+                "TARGET_MAPPINGS_ALIAS: canonical mapping coordinate disagrees with mappings_version."
+            )
+        if mappings_kind == "mojang" and mappings_version != "mojang":
+            raise TargetContractError("Mojang mappings must use canonical mappings_version='mojang'.")
+        mappings_receipt = {"kind": mappings_kind, "version": canonical.mappings}
+
+    gradle_sha = _text(coordinates.get("gradle_sha256")).casefold()
+    if not re.fullmatch(r"[0-9a-f]{64}", gradle_sha):
+        raise TargetContractError(
+            "TARGET_GRADLE_RECEIPT: target Gradle SHA-256 is missing or invalid."
+        )
+
+    data_pack = _text(coordinates.get("data_pack_version"))
+    resource_pack = _text(coordinates.get("resource_pack_version"))
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", data_pack):
+        raise TargetContractError(
+            f"TARGET_DATA_PACK_VERSION: invalid data pack version {data_pack!r}."
+        )
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", resource_pack):
+        raise TargetContractError(
+            f"TARGET_RESOURCE_PACK_VERSION: invalid resource pack version {resource_pack!r}."
+        )
+    resource_format = coordinates.get("resource_pack_format")
+    if type(resource_format) is not int or resource_format <= 0:
+        raise TargetContractError(
+            "TARGET_RESOURCE_PACK_FORMAT: provider-derived format must be a positive integer."
+        )
+    if resource_format != int(resource_pack.split(".", 1)[0]):
+        raise TargetContractError(
+            "TARGET_RESOURCE_PACK_FORMAT: format major disagrees with exact resource pack version."
+        )
+    release_url = _text(coordinates.get("release_metadata_url"))
+    if not release_url.startswith(
+        (
+            "https://www.minecraft.net/",
+            "https://feedback.minecraft.net/",
+            "https://piston-meta.mojang.com/",
+            "https://launcher.mojang.com/",
+        )
+    ):
+        raise TargetContractError(
+            "TARGET_PACK_PROVENANCE: pack metadata is not grounded in an official Minecraft/Mojang metadata URL."
+        )
+
+    result = dict(coordinates)
+    if mappings_receipt is None:
+        for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings", "mappings"):
+            result.pop(field, None)
+    else:
+        result["mappings"] = mappings_receipt
+    result["naming_regime"] = {
+        "kind": canonical.naming_regime,
+        "mappings_applicable": canonical.mappings_applicable,
+        "minecraft_version": canonical.minecraft_version,
+    }
+    result["pack_versions"] = {
+        "data": data_pack,
+        "resource": resource_pack,
+        "resource_major": resource_format,
+    }
+    result["target_schema_version"] = "3"
+    return result
+
+
 @dataclass(frozen=True)
 class TargetContract:
     adapter_id: str
@@ -185,81 +313,10 @@ class TargetContract:
         return mappings_applicable(self.minecraft_version)
 
     def validate(self) -> None:
-        validate_target_coordinates(self.minecraft_version, self.loader, self.mappings_version)
-        required = {
-            "adapter_id": self.adapter_id,
-            "edition": self.edition,
-            "loader": self.loader,
-            "minecraft_version": self.minecraft_version,
-            "java_version": self.java_version,
-            "fabric_loader": self.fabric_loader,
-            "fabric_api": self.fabric_api,
-            "fabric_loom": self.fabric_loom,
-            "gradle": self.gradle,
-            "gradle_sha256": self.gradle_sha256,
-            "data_pack_version": self.data_pack_version,
-            "resource_pack_version": self.resource_pack_version,
-            "release_metadata_url": self.release_metadata_url,
-            "source_api_family": self.source_api_family,
-        }
-        if self.mappings_applicable:
-            required.update(
-                {
-                    "yarn_mappings": self.yarn_mappings,
-                    "mappings_kind": self.mappings_kind,
-                    "mappings_version": self.mappings_version,
-                }
-            )
-        missing = sorted(key for key, value in required.items() if not str(value).strip())
-        if missing:
-            raise ValueError(
-                "Executable platform provider returned partial target metadata: "
-                f"{missing}."
-            )
-        if self.mappings_applicable:
-            if self.mappings_kind not in {"mojang", "yarn"}:
-                raise ValueError(f"Unsupported mappings kind: {self.mappings_kind!r}.")
-            if self.mappings_kind == "mojang" and self.mappings_version != "mojang":
-                raise ValueError("Mojang mappings must use the canonical mappings_version='mojang'.")
-            if self.yarn_mappings != self.mappings_version:
-                raise ValueError(
-                    "Legacy yarn_mappings compatibility coordinate disagrees with mappings_version."
-                )
-        elif any((self.yarn_mappings, self.mappings_kind, self.mappings_version)):
-            raise ValueError(
-                "Minecraft 26.1+ native/unobfuscated targets must not expose legacy mapping coordinates."
-            )
-        minimum_java = minimum_java_major(self.minecraft_version)
-        if minimum_java is not None:
-            if not str(self.java_version).isdigit() or int(self.java_version) < minimum_java:
-                raise ValueError(
-                    f"Minecraft {self.minecraft_version} requires Java {minimum_java}+; "
-                    f"got {self.java_version}."
-                )
-        if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256):
-            raise ValueError("Executable platform provider returned an invalid Gradle SHA-256.")
-        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.data_pack_version):
-            raise ValueError("Executable platform provider returned an invalid data pack version.")
-        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.resource_pack_version):
-            raise ValueError("Executable platform provider returned an invalid resource pack version.")
-        expected_major = int(self.resource_pack_version.split(".", 1)[0])
-        if type(self.resource_pack_format) is not int or self.resource_pack_format <= 0:
-            raise ValueError("Resource pack format must be a positive provider-derived integer.")
-        if self.resource_pack_format != expected_major:
-            raise ValueError(
-                "Resource pack format major disagrees with the exact provider resource-pack version."
-            )
-        if not self.release_metadata_url.startswith(
-            (
-                "https://www.minecraft.net/",
-                "https://feedback.minecraft.net/",
-                "https://piston-meta.mojang.com/",
-                "https://launcher.mojang.com/",
-            )
-        ):
-            raise ValueError(
-                "Pack metadata must be grounded in an official Minecraft/Mojang metadata URL."
-            )
+        validate_complete_target(asdict(self))
+        for field in ("adapter_id", "edition", "source_api_family"):
+            if _is_unresolved(getattr(self, field)):
+                raise TargetContractError(f"TARGET_PROVIDER: missing {field}")
 
     def public_dict(self) -> dict[str, Any]:
         self.validate()
@@ -314,6 +371,8 @@ def target_contract_from_mapping(value: Mapping[str, Any]) -> TargetContract:
 
 __all__ = [
     "TargetContract",
+    "validate_complete_target",
+    "required_target_fields",
     "target_contract_from_mapping",
     "TargetContractError",
     "TargetCoordinates",

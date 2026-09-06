@@ -42,6 +42,8 @@ _COMPACT_TASK_FIELDS = (
     "task_id",
     "task_sha256",
     "semantic_outcome",
+    "engineering_worksheet",
+    "research_reuse_candidates",
     "requirement_refs",
     "gap_refs",
     "owned_anchors",

@@ -187,6 +187,7 @@ def build_request_catalog_from_planning_state(prompt: str, state: Mapping[str, A
                 "search_queries": _implementation_queries(state, requirement_id),
                 "reuse_candidates": deepcopy(detail.get("reuse_candidates") or []),
                 "detailed_plan_ref": str(detail.get("decision_id") or ""),
+                "engineering_worksheet": deepcopy(detail.get("engineering_worksheet")),
             }
         )
 

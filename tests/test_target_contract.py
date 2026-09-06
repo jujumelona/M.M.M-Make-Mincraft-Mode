@@ -54,3 +54,29 @@ def test_provider_receipt_mapping_object_uses_same_contract() -> None:
     )
     assert target.mappings == "1.21.4+build.8"
     assert target.mappings_applicable is True
+
+
+@pytest.mark.parametrize("version,mapping,java", [("1.21.4", "mojang", "21"), ("26.2", "", "25")])
+def test_complete_provider_contract_round_trip(version, mapping, java):
+    from minecraft_mod_ai.platform_catalog import PlatformAdapter
+    from minecraft_mod_ai.target_contract import TargetContract, target_contract_from_mapping
+
+    target = TargetContract(
+        adapter_id="fixture", edition="java", loader="fabric", minecraft_version=version,
+        java_version=java, yarn_mappings=mapping, mappings_kind="mojang" if mapping else "",
+        mappings_version=mapping, fabric_loader="test-loader", fabric_api="test-api",
+        fabric_loom="test-loom", gradle="test-gradle", gradle_sha256="a" * 64,
+        data_pack_version="1", resource_pack_version="1", resource_pack_format=1,
+        release_metadata_url="https://www.minecraft.net/test", source_api_family="test-family",
+        deterministic_module_kinds=frozenset(),
+    )
+    assert PlatformAdapter is TargetContract
+    assert target_contract_from_mapping(target.public_dict()) == target
+    receipt = target.public_dict()
+    receipt["source_api_family"] = ""
+    with pytest.raises(ValueError, match="source_api_family"):
+        target_contract_from_mapping(receipt)
+    receipt = target.public_dict()
+    receipt["pack_versions"]["resource_major"] = 99
+    with pytest.raises(TargetContractError, match="contradictory"):
+        target_contract_from_mapping(receipt)

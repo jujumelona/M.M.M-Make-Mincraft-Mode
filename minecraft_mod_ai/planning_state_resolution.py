@@ -100,7 +100,6 @@ def compile_researched_requirements(router: Any, prompt: str, state: Mapping[str
         item for item in state.get("unresolved", [])
         if isinstance(item, Mapping)
         and item.get("status") == "open"
-        and item.get("resolution_route") != "user_only"
     ]
     if open_blocking:
         raise ValueError(

@@ -241,7 +241,9 @@ def _fallback_capability(statement: str) -> str:
     ]
     if explicit:
         return str(explicit[0]).casefold()
-    return "custom.semantic_" + _sha(statement)[7:23]
+    raise EvidencePlanError(
+        "UNRESOLVED_SEMANTICS: a grounded planning state is required for: " + statement
+    )
 
 
 def _is_public_acceptance(value: Any) -> bool:
@@ -282,6 +284,14 @@ def build_request_catalog(
     del router
     if not isinstance(prompt, str) or not prompt.strip():
         raise EvidencePlanError("Evidence-first planning requires a non-empty request.")
+    state = game_design.get("_planning_state")
+    if isinstance(state, Mapping):
+        from .planning_state_handoff import build_request_catalog_from_planning_state
+        catalog = build_request_catalog_from_planning_state(prompt, state)
+        stored = game_design.get("_evidence_request_catalog")
+        if isinstance(stored, Mapping) and stored != catalog:
+            raise EvidencePlanError("PLANNING_STATE_AUTHORITY: catalog differs from its planning state")
+        return catalog
     existing = game_design.get("_evidence_request_catalog")
     if isinstance(existing, Mapping):
         catalog = dict(existing)
@@ -416,6 +426,8 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError(
                 f"Pre-target request source receipt is stale for {requirement_id}."
             )
+        if str(requirement.get("capability") or "").removeprefix("capability:").startswith("custom.semantic_"):
+            raise EvidencePlanError("UNRESOLVED_SEMANTICS: synthetic semantics are not resolved requirements.")
         if (
             bool(requirement.get("mandatory", True))
             and requirement.get("semantic_status", "RESOLVED") == "UNRESOLVED"
@@ -1320,6 +1332,8 @@ def _compile_tasks(
             task: dict[str, Any] = {
                 "task_id": task_id,
                 "semantic_outcome": step.outcome,
+                "engineering_worksheet": gap.get("engineering_worksheet"),
+                "research_reuse_candidates": gap.get("research_reuse_candidates", []),
                 "gap_refs": [gap["gap_id"]],
                 "requirement_refs": [requirement_ref],
                 "target_cell": dict(target.get("coordinates") or {}),
@@ -1465,6 +1479,8 @@ def _gap_record(
         "semantic_type": str(requirement.get("semantic_type") or "gameplay_mechanic"),
         "unlock_policy": dict(requirement.get("unlock_policy") or {}),
         "depends_on_requirements": list(_strings(requirement.get("depends_on"))),
+        "engineering_worksheet": requirement.get("engineering_worksheet"),
+        "research_reuse_candidates": requirement.get("reuse_candidates", []),
         "gap_sha256": "",
     }
     gap["gap_sha256"] = _hash_without(gap, "gap_sha256")

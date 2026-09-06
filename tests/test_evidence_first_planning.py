@@ -175,20 +175,10 @@ def test_inventory_symbol_without_exact_semantic_alias_does_not_retain(tmp_path)
     design = _design("weather_compass")
     design["_existing_project_inventory"] = inspect_project_inventory(tmp_path).to_dict()
 
-    plan = compile_evidence_first_plan("Keep the weather compass.", design)
-
-    assert "capability:weather_compass" in plan["verified_provides"]
-    missing = {
-        provided
-        for gap in plan["gap_catalog"]
-        for provided in gap["missing_provides"]
-    }
-    assert missing.isdisjoint(plan["verified_provides"])
-    assert len(plan["gap_catalog"]) == 1
-    assert plan["tasks"]
-    binding = plan["acceptance_release_bindings"][0]
-    assert binding["status"] == "planned_gap"
-    assert binding["component_refs"] == []
+    # A source filename proves neither the requested behavior nor its semantics.
+    # Unknown behavior must return to grounded planning, never a synthetic capability.
+    with pytest.raises(EvidencePlanError, match="UNRESOLVED_SEMANTICS"):
+        compile_evidence_first_plan("Keep the weather compass.", design)
 
 
 def test_task_graph_rejects_missing_provider_edge_even_with_valid_hashes() -> None:

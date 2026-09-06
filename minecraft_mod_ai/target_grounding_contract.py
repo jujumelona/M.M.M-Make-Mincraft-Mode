@@ -15,131 +15,27 @@ from typing import Any
 from . import evidence_first_planning as _planning
 from .target_contract import (
     TargetContractError,
-    mappings_applicable,
-    target_coordinates_from_mapping,
+    required_target_fields,
+    validate_complete_target,
 )
 
 _INSTALLED = False
-_BASE_REQUIRED_TARGET_FIELDS = (
-    "minecraft_version",
-    "loader",
-    "java_version",
-    "fabric_loader",
-    "fabric_api",
-    "fabric_loom",
-    "gradle",
-    "gradle_sha256",
-    "data_pack_version",
-    "resource_pack_version",
-    "resource_pack_format",
-    "release_metadata_url",
-)
-_LEGACY_MAPPING_FIELDS = ("mappings_kind", "mappings_version")
-
-
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _is_unresolved(value: Any) -> bool:
-    return not _text(value) or _text(value).casefold() == "unresolved"
-
-
 def _required_target_fields(coordinates: Mapping[str, Any]) -> tuple[str, ...]:
-    version = coordinates.get("minecraft_version")
-    if _is_unresolved(version):
-        return _BASE_REQUIRED_TARGET_FIELDS
     try:
-        mapping_required = mappings_applicable(version)
+        return required_target_fields(coordinates)
     except TargetContractError as exc:
         raise _planning.EvidencePlanError(str(exc)) from exc
-    return _BASE_REQUIRED_TARGET_FIELDS + (_LEGACY_MAPPING_FIELDS if mapping_required else ())
 
 
 def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
-    required_fields = _required_target_fields(coordinates)
-    missing = [field for field in required_fields if _is_unresolved(coordinates.get(field))]
-    if missing:
-        raise _planning.EvidencePlanError(
-            "TARGET_GROUNDING_INCOMPLETE: executable provider target is missing "
-            + ", ".join(missing)
-        )
-
     try:
-        canonical = target_coordinates_from_mapping(coordinates)
+        return validate_complete_target(coordinates)
     except TargetContractError as exc:
         raise _planning.EvidencePlanError(str(exc)) from exc
-
-    mappings_receipt: dict[str, str] | None = None
-    if canonical.mappings_applicable:
-        mappings_kind = _text(coordinates.get("mappings_kind")).casefold()
-        mappings_version = _text(coordinates.get("mappings_version"))
-        if mappings_kind not in {"mojang", "yarn"}:
-            raise _planning.EvidencePlanError(
-                f"TARGET_MAPPINGS_KIND: unsupported mappings kind {mappings_kind!r}."
-            )
-        if canonical.mappings != mappings_version:
-            raise _planning.EvidencePlanError(
-                "TARGET_MAPPINGS_ALIAS: canonical mapping coordinate disagrees with mappings_version."
-            )
-        mappings_receipt = {"kind": mappings_kind, "version": canonical.mappings}
-
-    gradle_sha = _text(coordinates.get("gradle_sha256")).casefold()
-    if not re.fullmatch(r"[0-9a-f]{64}", gradle_sha):
-        raise _planning.EvidencePlanError(
-            "TARGET_GRADLE_RECEIPT: target Gradle SHA-256 is missing or invalid."
-        )
-
-    data_pack = _text(coordinates.get("data_pack_version"))
-    resource_pack = _text(coordinates.get("resource_pack_version"))
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", data_pack):
-        raise _planning.EvidencePlanError(
-            f"TARGET_DATA_PACK_VERSION: invalid data pack version {data_pack!r}."
-        )
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", resource_pack):
-        raise _planning.EvidencePlanError(
-            f"TARGET_RESOURCE_PACK_VERSION: invalid resource pack version {resource_pack!r}."
-        )
-    resource_format = coordinates.get("resource_pack_format")
-    if type(resource_format) is not int or resource_format <= 0:
-        raise _planning.EvidencePlanError(
-            "TARGET_RESOURCE_PACK_FORMAT: provider-derived format must be a positive integer."
-        )
-    if resource_format != int(resource_pack.split(".", 1)[0]):
-        raise _planning.EvidencePlanError(
-            "TARGET_RESOURCE_PACK_FORMAT: format major disagrees with exact resource pack version."
-        )
-    release_url = _text(coordinates.get("release_metadata_url"))
-    if not release_url.startswith(
-        (
-            "https://www.minecraft.net/",
-            "https://feedback.minecraft.net/",
-            "https://piston-meta.mojang.com/",
-            "https://launcher.mojang.com/",
-        )
-    ):
-        raise _planning.EvidencePlanError(
-            "TARGET_PACK_PROVENANCE: pack metadata is not grounded in an official Minecraft/Mojang metadata URL."
-        )
-
-    result = dict(coordinates)
-    if mappings_receipt is None:
-        for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings", "mappings"):
-            result.pop(field, None)
-    else:
-        result["mappings"] = mappings_receipt
-    result["naming_regime"] = {
-        "kind": canonical.naming_regime,
-        "mappings_applicable": canonical.mappings_applicable,
-        "minecraft_version": canonical.minecraft_version,
-    }
-    result["pack_versions"] = {
-        "data": data_pack,
-        "resource": resource_pack,
-        "resource_major": resource_format,
-    }
-    result["target_schema_version"] = "3"
-    return result
 
 
 def _logical_module_id(raw_path: str, item: Mapping[str, Any]) -> str:

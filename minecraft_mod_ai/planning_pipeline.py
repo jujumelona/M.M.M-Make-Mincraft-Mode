@@ -8,8 +8,9 @@ catalog/proposal lowering -> target binding. Raw prompt text is never compiled d
 into implementation/search tasks.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from copy import deepcopy
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -58,20 +59,34 @@ class PlanningPipeline:
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
+        self.planning_state: dict[str, Any] | None = None
 
     def prepare(
         self,
         prompt: str,
         *,
         media_paths: Sequence[str | Path] = (),
+        existing_state: Mapping[str, Any] | None = None,
+        checkpoint: Callable[[dict[str, Any]], None] | None = None,
     ) -> PlanningArtifacts:
         if not str(prompt).strip():
             raise PlanningStageError(PlanningStage.REQUEST, "prompt is empty")
 
         from .planning_state_pipeline import prepare_planning_state
 
+        if existing_state is None and self.planning_state is not None:
+            if self.planning_state.get("original_prompt") == prompt:
+                existing_state = self.planning_state
+
+        def save_state(value: dict[str, Any]) -> None:
+            self.planning_state = deepcopy(value)
+            if checkpoint is not None:
+                checkpoint(deepcopy(value))
+
         try:
-            planning_state = prepare_planning_state(self.router, prompt)
+            planning_state = prepare_planning_state(
+                self.router, prompt, existing_state=existing_state, checkpoint=save_state
+            )
         except Exception as exc:
             raise PlanningStageError(
                 PlanningStage.RESEARCH,

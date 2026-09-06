@@ -12,12 +12,14 @@ from copy import deepcopy
 from typing import Any
 
 from .planner_operation import planner_operation
+from .planning_detail_template import WORKSHEET_SCHEMA, validate_worksheet
 from .planning_state_contract import validate_planning_state
 
 _TOOL = "submit_detailed_implementation_plan"
 _PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "engineering_worksheet": WORKSHEET_SCHEMA,
         "implementation_capabilities": {
             "type": "array",
             "minItems": 1,
@@ -85,6 +87,7 @@ _PARAMETERS: dict[str, Any] = {
         },
     },
     "required": [
+        "engineering_worksheet",
         "implementation_capabilities",
         "implementation_obligations",
         "artifact_obligations",
@@ -192,12 +195,15 @@ def compile_detailed_implementation_plans(
                     "obligation must cite one or more supplied evidence refs. Artifact entries must describe "
                     "a concrete artifact purpose supported by evidence. Reuse mode must reflect what the cited "
                     "source actually supports. Verification checks must prove the user-visible requirement or "
-                    "an evidence-backed implementation invariant."
+                    "an evidence-backed implementation invariant. Fill every engineering_worksheet section. "
+                    "An inapplicable section must explain why using cited evidence; never silently omit it. "
+                    "New algorithms and proposed identifiers are design decisions, not retrieved facts. "
+                    "Keep unverified target-specific bindings explicitly separate from source examples."
                 ),
             },
             {"role": "user", "content": str(context)},
         ]
-        with planner_operation("detailed_implementation_plan", output_tokens=2048):
+        with planner_operation("detailed_implementation_plan", output_tokens=4096):
             raw = router.generate_tool_decision(
                 "planner",
                 messages,
@@ -208,6 +214,7 @@ def compile_detailed_implementation_plans(
         if not isinstance(raw, Mapping):
             raise ValueError("DETAILED_PLAN_MODEL: planner returned a non-object")
 
+        worksheet = validate_worksheet(raw.get("engineering_worksheet"), allowed)
         capabilities: list[dict[str, Any]] = []
         for item in raw.get("implementation_capabilities", []):
             if not isinstance(item, Mapping) or not _text(item.get("capability")):
@@ -255,6 +262,8 @@ def compile_detailed_implementation_plans(
             ref = _text(item.get("evidence_ref"))
             mode = _text(item.get("mode"))
             reason = _text(item.get("reason"))
+            if mode not in {"reuse", "adapt", "reference_only", "new_required"} or not reason:
+                raise ValueError("DETAILED_PLAN_REUSE: invalid reuse verdict or missing rationale")
             _validate_refs([ref], allowed, field="reuse")
             reuse.append({"evidence_ref": ref, "mode": mode, "reason": reason})
 
@@ -278,6 +287,7 @@ def compile_detailed_implementation_plans(
                 "decision_id": f"detail_{len(detailed) + 1:03d}",
                 "decision_type": "detailed_implementation_plan",
                 "requirement_ref": requirement_ref,
+                "engineering_worksheet": worksheet,
                 "implementation_capabilities": capabilities,
                 "implementation_obligations": obligations,
                 "artifact_obligations": artifacts,
@@ -303,7 +313,6 @@ def compile_detailed_implementation_plans(
         for item in value.get("unresolved", [])
         if isinstance(item, Mapping)
         and item.get("status") != "resolved"
-        and item.get("resolution_route") != "user_only"
     ]
     value["plan_ready"] = not blocking and len(coverage) == len(requirements)
     if not value["plan_ready"]:

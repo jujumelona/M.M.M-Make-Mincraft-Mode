@@ -39,9 +39,20 @@ _ALLOWED_ROUTES_BY_REASON: dict[str, frozenset[str]] = {
     "minecraft_api": frozenset({"minecraft_research"}),
     "implementation_method": frozenset({"implementation_research"}),
     "compatibility": frozenset({"compatibility_research"}),
-    "contradiction": frozenset({"external_research", "repository_rag", "minecraft_research", "default_policy"}),
+    "contradiction": frozenset({"user_only"}),
     "user_preference": frozenset({"user_only"}),
     "insufficient_evidence": frozenset({"reference_research", "external_research", "repository_rag", "minecraft_research", "implementation_research", "compatibility_research"}),
+}
+
+ROUTE_SOURCES = {
+    "reference_research": ("reference_sources", "web_sources"),
+    "external_research": ("web_sources",),
+    "repository_rag": ("repository", "project_rag"),
+    "minecraft_research": ("minecraft_docs", "minecraft_source"),
+    "implementation_research": ("repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"),
+    "compatibility_research": ("repository", "existing_mods", "minecraft_docs", "minecraft_source", "project_rag"),
+    "default_policy": (),
+    "user_only": (),
 }
 
 MODEL_PARAMETERS: dict[str, Any] = {
@@ -170,7 +181,7 @@ def _research_item(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
     if reason not in UNRESOLVED_REASONS or route not in RESOLUTION_ROUTES:
         raise ValueError("PROMPT_STATE_UNRESOLVED: reason/resolution route is unsupported")
     route = _validated_route(reason, route)
-    sources = [item for item in _strings(raw.get("source_kinds")) if item in SOURCE_KINDS]
+    sources = list(ROUTE_SOURCES[route])
     unresolved_id = f"u_{index + 1:03d}"
     return {
         "unresolved_id": unresolved_id,
@@ -181,7 +192,7 @@ def _research_item(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
         "resolution_route": route,
         "source_kinds": sources,
         "status": "open",
-        "research_ref": f"r_{index + 1:03d}" if route != "user_only" else "",
+        "research_ref": f"r_{index + 1:03d}" if route not in {"user_only", "default_policy"} else "",
     }
 
 
@@ -377,13 +388,15 @@ def validate_planning_state(state: Mapping[str, Any], *, prompt: str | None = No
             item for item in unresolved
             if isinstance(item, Mapping)
             and item.get("status") != "resolved"
-            and item.get("resolution_route") != "user_only"
         ]
         if blocking:
             raise ValueError("PROMPT_STATE_READY: plan cannot be ready while blocking unknowns remain")
         coverage = state.get("coverage")
         if not isinstance(coverage, list) or not coverage:
             raise ValueError("PROMPT_STATE_READY: ready plan requires coverage records")
+
+    from .planning_state_invariants import validate_state_links
+    validate_state_links(state)
 
 
 def _validate_initial_state(state: Mapping[str, Any]) -> None:

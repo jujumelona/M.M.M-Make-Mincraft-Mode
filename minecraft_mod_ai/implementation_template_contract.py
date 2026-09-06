@@ -221,6 +221,8 @@ def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
         "target_constraints": _target_constraints(task),
         "targets": targets,
         "implementation_steps": _implementation_steps(task, targets),
+        "engineering_worksheet": task.get("engineering_worksheet"),
+        "research_reuse_candidates": task.get("research_reuse_candidates", []),
         "dataflow": {
             "consumes": list(_strings(task.get("consumes"))),
             "provides": list(_strings(task.get("provides"))),
