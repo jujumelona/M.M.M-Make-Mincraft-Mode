@@ -71,6 +71,8 @@ def test_coder_contract_is_complete_host_owned_v2() -> None:
         "minecraft_version": "1.21.1",
         "loader": "fabric",
         "mappings": "yarn",
+        "mappings_applicable": True,
+        "naming_regime": "mapped_obfuscated",
         "java_version": "21",
         "policy": "Use only the immutable host-selected target and compatible evidence.",
     }
@@ -89,15 +91,27 @@ def test_coder_contract_is_complete_host_owned_v2() -> None:
     _validate_contract(contract)
 
 
+def test_native_target_keeps_blank_mappings_in_coder_contract() -> None:
+    task = _task()
+    task["target_cell"] = {
+        "minecraft_version": "26.2",
+        "loader": "fabric",
+        "mappings": "",
+        "mappings_applicable": False,
+        "java_version": "25",
+    }
+    contract = build_implementation_template(task)
+    assert contract["target_constraints"]["mappings"] == ""
+    assert contract["target_constraints"]["mappings_applicable"] is False
+    assert contract["target_constraints"]["naming_regime"] == "native_unobfuscated"
+
+
 def test_coder_steps_are_deterministic_and_bind_to_exact_targets() -> None:
     first = build_implementation_template(_task())
     second = build_implementation_template(copy.deepcopy(_task()))
-
     assert first == second
     assert first["contract_sha256"] == second["contract_sha256"]
-    assert [step["sequence"] for step in first["implementation_steps"]] == list(
-        range(len(first["implementation_steps"]))
-    )
+    assert [step["sequence"] for step in first["implementation_steps"]] == list(range(len(first["implementation_steps"])))
     target_refs = [target["locator"] for target in first["targets"]]
     assert all(step["target_refs"] == target_refs for step in first["implementation_steps"])
     assert all(step["consumes"] == ["ship_ready"] for step in first["implementation_steps"])
@@ -107,28 +121,17 @@ def test_coder_steps_are_deterministic_and_bind_to_exact_targets() -> None:
 def test_verification_plan_carries_host_gates_and_observable_acceptance() -> None:
     contract = build_implementation_template(_task())
     gates = [item["gate"] for item in contract["verification_plan"]]
-
-    assert gates == [
-        "source_static_validation",
-        "target_compile",
-        "gametest",
-        "observable_acceptance",
-    ]
+    assert gates == ["source_static_validation", "target_compile", "gametest", "observable_acceptance"]
     observable = contract["verification_plan"][-1]
     assert observable["executor"] == "host_acceptance_runner"
-    assert observable["public_acceptance"] == [
-        "The player can launch a completed spacecraft."
-    ]
-    assert observable["runtime_acceptance"] == [
-        "Launch changes authoritative runtime state."
-    ]
+    assert observable["public_acceptance"] == ["The player can launch a completed spacecraft."]
+    assert observable["runtime_acceptance"] == ["Launch changes authoritative runtime state."]
 
 
 def test_contract_rejects_target_or_hash_tampering() -> None:
     contract = build_implementation_template(_task())
     tampered = copy.deepcopy(contract)
     tampered["targets"][0]["path"] = "src/main/java/evil/Outside.java"
-
     with pytest.raises(ValueError, match="hash mismatch"):
         _validate_contract(tampered)
 
@@ -136,6 +139,15 @@ def test_contract_rejects_target_or_hash_tampering() -> None:
 def test_contract_requires_exact_owned_target() -> None:
     task = _task()
     task["owned_anchors"] = []
-
     with pytest.raises(ValueError, match="no owned target anchor"):
+        build_implementation_template(task)
+
+
+def test_semantic_only_task_is_rejected_instead_of_becoming_code_step() -> None:
+    task = _task()
+    task["implementation_capabilities"] = []
+    task["implementation_obligations"] = []
+    task["artifact_obligations"] = []
+    task["design_resolution_obligations"] = []
+    with pytest.raises(ValueError, match="semantic-only"):
         build_implementation_template(task)
