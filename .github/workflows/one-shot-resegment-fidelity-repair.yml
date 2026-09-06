@@ -1,0 +1,133 @@
+name: One-shot resegment fidelity repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-resegment-fidelity-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Add bounded diagnostic retry for compound resegmentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/request_requirements.py')
+          text = path.read_text(encoding='utf-8')
+
+          marker = '_MAX_RESEGMENT_GROUPS = 8\n'
+          if '_MAX_RESEGMENT_ATTEMPTS = 2' not in text:
+              if marker not in text:
+                  raise SystemExit('resegment group marker not found')
+              text = text.replace(marker, marker + '_MAX_RESEGMENT_ATTEMPTS = 2\n', 1)
+
+          start = text.index('def _resegment_messages(')
+          end = text.index('\ndef _ground_parent_span(', start)
+          new_messages = '''def _resegment_messages(\n    items: Sequence[tuple[str, Mapping[str, Any], Mapping[str, Any]]],\n    diagnostics: Mapping[str, str] | None = None,\n) -> list[dict[str, str]]:\n    from . import semantic_requirement_authority as _semantic\n\n    diagnostics = diagnostics or {}\n    system = (\n        "Re-segment each host-owned compound semantic group independently. Every returned leaf "\n        "must represent exactly one independently observable behavior explicitly present inside "\n        "that group's parent source span. Preserve exact parent source coverage without overlap. "\n        "A source_anchor may include adjacent connective, context, or catch-all text solely to "\n        "preserve provenance; semantic_statement and Given/When/Then must still describe exactly "\n        "one executable behavior. Attach such non-executable text to one adjacent source_anchor "\n        "instead of inventing a behavior for it. Do not merge groups, add capabilities, choose "\n        "capability IDs, add prerequisites, or invent gameplay. On a repair turn, use the supplied "\n        "host validation error only to repair decomposition or source coverage."\n    )\n    payload = {\n        "compound_groups": [\n            {\n                "group_id": group_id,\n                "source_clause_index": int(clause["clause_index"]),\n                "parent_source_anchor": str(leaf.get("source_anchor") or ""),\n                "parent_semantic_statement": str(leaf.get("semantic_statement") or ""),\n                "parent_given": str(leaf.get("given") or ""),\n                "parent_when": str(leaf.get("when") or ""),\n                "parent_then": str(leaf.get("then") or ""),\n                "authored_clause_text": str(clause["text"]),\n                "previous_validation_error": diagnostics.get(group_id, ""),\n            }\n            for group_id, leaf, clause in items\n        ]\n    }\n    return [\n        {"role": "system", "content": system},\n        {"role": "user", "content": _semantic._canonical(payload)},\n    ]\n\n'''
+          text = text[:start] + new_messages + text[end + 1:]
+
+          start = text.index('def resegment_compound_leaves(')
+          end = text.index('\ndef resegment_compound_leaf(', start)
+          new_function = '''def resegment_compound_leaves(\n    router: Any,\n    compounds: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],\n) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:\n    """Re-segment compound leaves with one bounded diagnostic-guided repair turn.\n\n    Successful groups are retained. Only groups that violate schema, source fidelity, or\n    atomicity are retried, and the host returns the exact validation failure to the model.\n    After that single repair turn the path fails closed; the host never patches missing\n    semantics or language-specific connective text itself.\n    """\n    if not compounds:\n        return [], [], 0\n\n    from . import semantic_leaf_pipeline as _pipeline\n\n    atomic: list[dict[str, Any]] = []\n    non_executable: list[dict[str, Any]] = []\n    model_calls = 0\n\n    for chunk_start in range(0, len(compounds), _MAX_RESEGMENT_GROUPS):\n        chunk = compounds[chunk_start : chunk_start + _MAX_RESEGMENT_GROUPS]\n        items = [\n            (f"compound_{chunk_start + index}", leaf, clause)\n            for index, (leaf, clause) in enumerate(chunk)\n        ]\n        pending = list(items)\n        feedback: dict[str, str] = {}\n        resolved: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}\n\n        for attempt_index in range(_MAX_RESEGMENT_ATTEMPTS):\n            if not pending:\n                break\n            group_ids = [group_id for group_id, _, _ in pending]\n            max_clause_index = max(\n                int(clause["clause_index"]) for _, _, clause in pending\n            )\n            payload = _pipeline._call_model(\n                router,\n                operation="resegment_compound_requirements",\n                output_tokens=min(4096, 384 + 384 * len(pending)),\n                messages=_resegment_messages(pending, feedback),\n                parameters=_resegment_schema(group_ids, max_clause_index),\n                description=(\n                    "Re-segment bounded compound semantic groups into source-grounded atomic "\n                    "leaves without capability or planning authority."\n                ),\n            )\n            model_calls += 1\n\n            try:\n                if not isinstance(payload, Mapping) or not isinstance(\n                    payload.get("groups"), list\n                ):\n                    raise ValueError(\n                        "compound re-segmentation returned an invalid root object"\n                    )\n                by_id: dict[str, Mapping[str, Any]] = {}\n                for raw_group in payload["groups"]:\n                    if not isinstance(raw_group, Mapping):\n                        raise ValueError(\n                            "compound re-segmentation group must be an object"\n                        )\n                    group_id = str(raw_group.get("group_id") or "")\n                    if group_id not in group_ids or group_id in by_id:\n                        raise ValueError(\n                            f"unknown or repeated compound group id: {group_id!r}"\n                        )\n                    by_id[group_id] = raw_group\n                if set(by_id) != set(group_ids):\n                    raise ValueError(\n                        "compound re-segmentation omitted a host-owned group"\n                    )\n            except (ValueError, TypeError) as exc:\n                if attempt_index + 1 >= _MAX_RESEGMENT_ATTEMPTS:\n                    raise\n                message = f"{type(exc).__name__}: {exc}"\n                feedback = {group_id: message for group_id in group_ids}\n                continue\n\n            next_pending: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []\n            next_feedback: dict[str, str] = {}\n            for group_id, parent_leaf, clause in pending:\n                try:\n                    group_atomic, group_non_executable = _normalize_resegmented_group(\n                        by_id[group_id].get("leaves"), parent_leaf, clause\n                    )\n                except (ValueError, TypeError) as exc:\n                    next_pending.append((group_id, parent_leaf, clause))\n                    next_feedback[group_id] = f"{type(exc).__name__}: {exc}"\n                    continue\n                resolved[group_id] = (group_atomic, group_non_executable)\n\n            pending = next_pending\n            feedback = next_feedback\n\n        if pending:\n            from . import semantic_requirement_authority as _semantic\n\n            raise ValueError(\n                "compound re-segmentation rejected after one diagnostic-guided repair: "\n                + _semantic._canonical(feedback)\n            )\n\n        for group_id, _, _ in items:\n            group_atomic, group_non_executable = resolved[group_id]\n            atomic.extend(group_atomic)\n            non_executable.extend(group_non_executable)\n\n    return atomic, non_executable, model_calls\n\n'''
+          text = text[:start] + new_function + text[end + 1:]
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify reproduced source-gap recovery and fail-closed bound
+        run: |
+          python - <<'PY'
+          import json
+          from minecraft_mod_ai.request_requirements import resegment_compound_leaf
+
+          clause_text = '자원파밍 돈모으기 거래 등으로'
+          clause = {
+              'clause_index': 0,
+              'char_start': 0,
+              'char_end': len(clause_text),
+              'text': clause_text,
+          }
+          parent = {
+              'source_clause_index': 0,
+              'source_anchor': clause_text,
+              'semantic_statement': 'The player can gather resources, earn money, and trade.',
+              'given': 'The player is in the game.',
+              'when': 'The player acts.',
+              'then': 'The requested economy actions occur.',
+              'semantic_type': 'gameplay_mechanic',
+          }
+
+          def leaf(anchor, statement):
+              return {
+                  'source_clause_index': 0,
+                  'source_anchor': anchor,
+                  'semantic_statement': statement,
+                  'given': 'The player is in the game.',
+                  'when': statement,
+                  'then': statement,
+                  'semantic_type': 'gameplay_mechanic',
+              }
+
+          class RepairingRouter:
+              def __init__(self):
+                  self.calls = 0
+                  self.saw_gap = False
+              def generate_tool_decision(self, role, messages, **kwargs):
+                  self.calls += 1
+                  body = json.loads(messages[-1]['content'])
+                  group = body['compound_groups'][0]
+                  if self.calls == 2:
+                      self.saw_gap = 'REQ_SOURCE_PARTITION_GAP' in group['previous_validation_error']
+                  last_anchor = '거래' if self.calls == 1 else '거래 등으로'
+                  return {'groups': [{'group_id': group['group_id'], 'leaves': [
+                      leaf('자원파밍', 'The player can gather resources.'),
+                      leaf('돈모으기', 'The player can earn money.'),
+                      leaf(last_anchor, 'The player can trade.'),
+                  ]}]}
+
+          router = RepairingRouter()
+          atomic, ignored = resegment_compound_leaf(router, parent, clause)
+          assert router.calls == 2
+          assert router.saw_gap
+          assert [item['source_anchor'] for item in atomic] == ['자원파밍', '돈모으기', '거래 등으로']
+          assert ignored == []
+
+          class BrokenRouter(RepairingRouter):
+              def generate_tool_decision(self, role, messages, **kwargs):
+                  self.calls += 1
+                  body = json.loads(messages[-1]['content'])
+                  group = body['compound_groups'][0]
+                  return {'groups': [{'group_id': group['group_id'], 'leaves': [
+                      leaf('자원파밍', 'The player can gather resources.'),
+                      leaf('돈모으기', 'The player can earn money.'),
+                      leaf('거래', 'The player can trade.'),
+                  ]}]}
+
+          broken = BrokenRouter()
+          try:
+              resegment_compound_leaf(broken, parent, clause)
+          except ValueError as exc:
+              assert 'diagnostic-guided repair' in str(exc)
+          else:
+              raise AssertionError('broken re-segmentation must fail closed')
+          assert broken.calls == 2
+          PY
+      - name: Commit verified production repair directly to main
+        run: |
+          rm .github/workflows/one-shot-resegment-fidelity-repair.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/request_requirements.py .github/workflows/one-shot-resegment-fidelity-repair.yml
+          git commit -m 'fix: repair compound source gaps in bounded retry'
+          git push origin HEAD:main
