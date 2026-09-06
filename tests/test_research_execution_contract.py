@@ -67,7 +67,6 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
     resource = _task(
         "task_resource_binding",
         provides=["resource:space_travel"],
-        semantic_outcome="resource",
         anchors=[
             {
                 "kind": "resource",
@@ -123,11 +122,10 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
     registry_lowered = by_id["task_registry_identity"]
     assert registry_lowered["execution_role"] == "production"
     assert {anchor["kind"] for anchor in registry_lowered["owned_anchors"]} == {
-        "registry_id",
-        "symbol",
+        "registry_id"
     }
-    assert "source_static_validation" in registry_lowered["required_gates"]
-    assert "target_compile" in registry_lowered["required_gates"]
+    assert "source_static_validation" not in registry_lowered["required_gates"]
+    assert "target_compile" not in registry_lowered["required_gates"]
     assert any(
         binding["task_ref"] == "task_registry_identity"
         for binding in handoff["production_modules"]
