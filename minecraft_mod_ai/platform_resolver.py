@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .module_identity import logical_module_id
 from .platform_catalog import (
     adapter_for_target,
     adapters_for_version,
@@ -65,6 +66,31 @@ def _payload_sha(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _planner_project_topology(
+    module_ids: Sequence[Any],
+    *,
+    loaders: Sequence[Any] = (),
+    source_sets: Sequence[Any] = (),
+    gradle_project_paths: Sequence[Any] = (),
+) -> dict[str, list[str]]:
+    raw_ids = list(_strings(module_ids))
+    logical_ids = [logical_module_id(item) for item in raw_ids]
+    if len(logical_ids) != len(set(logical_ids)):
+        raise SpecValidationError(
+            "Project module topology collapses to duplicate logical module identities."
+        )
+    explicit_gradle_paths = list(_strings(gradle_project_paths))
+    inferred_gradle_paths = [
+        item for item in raw_ids if item == ":" or item.startswith(":")
+    ]
+    return {
+        "module_ids": logical_ids,
+        "gradle_project_paths": explicit_gradle_paths or inferred_gradle_paths,
+        "loaders": list(_strings(loaders)),
+        "source_sets": list(_strings(source_sets)),
+    }
+
+
 @dataclass(frozen=True)
 class PlatformSelection:
     adapter: TargetContract
@@ -107,7 +133,9 @@ def compile_target_decision(
     Target coordinates are never reconstructed field-by-field here.  A supplied target
     must deserialize through TargetContract and is then re-emitted with public_dict().
     Project topology and optimizer rejection metadata are decision-layer concerns and are
-    derived here once so evidence planners only consume this receipt.
+    derived here once so evidence planners only consume this receipt. Gradle project paths
+    are preserved separately while planner-facing module IDs use the canonical logical
+    module identity shared with task ownership.
     """
 
     raw = _mapping(selection_payload)
@@ -144,28 +172,33 @@ def compile_target_decision(
             and not _strings(item.get("source_sets"))
         )
     ]
-    project_topology = {
-        "module_ids": [
-            str(item.get("module_id") or "")
-            for item in topology_modules
-            if str(item.get("module_id") or "")
-        ],
-        "loaders": list(_strings(inventory_target.get("loaders"))),
-        "source_sets": sorted(
+    raw_module_ids = [
+        str(item.get("module_id") or "")
+        for item in topology_modules
+        if str(item.get("module_id") or "")
+    ]
+    project_topology = _planner_project_topology(
+        raw_module_ids,
+        loaders=_strings(inventory_target.get("loaders")),
+        source_sets=sorted(
             {
                 str(source_set)
                 for item in topology_modules
                 for source_set in _strings(item.get("source_sets"))
             }
         ),
-    }
+        gradle_project_paths=raw_module_ids,
+    )
     supplied_topology = _mapping(raw.get("project_topology"))
     if supplied_topology:
-        project_topology = {
-            "module_ids": list(_strings(supplied_topology.get("module_ids"))),
-            "loaders": list(_strings(supplied_topology.get("loaders"))),
-            "source_sets": list(_strings(supplied_topology.get("source_sets"))),
-        }
+        project_topology = _planner_project_topology(
+            _strings(supplied_topology.get("module_ids")),
+            loaders=_strings(supplied_topology.get("loaders")),
+            source_sets=_strings(supplied_topology.get("source_sets")),
+            gradle_project_paths=_strings(
+                supplied_topology.get("gradle_project_paths")
+            ),
+        )
 
     rejected: list[dict[str, Any]] = []
     candidates = optimizer.get("candidates")
