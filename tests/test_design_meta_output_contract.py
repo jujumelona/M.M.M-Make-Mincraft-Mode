@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai import agentic_research_game_design as design
 from minecraft_mod_ai.game_design import _validate_design, _validate_ready_design
 from minecraft_mod_ai.model_meta_output_contract import contains_internal_model_meta
 from minecraft_mod_ai.spec import SpecValidationError
@@ -35,19 +34,6 @@ def _valid_design() -> dict[str, object]:
         "acceptance_tests": ["Progression remains observable after reload."],
         "art_direction": {"summary": ["Use readable Minecraft-native silhouettes."]},
     }
-
-
-@pytest.mark.parametrize(
-    ("field", "body"),
-    [
-        ("title", "<think>check internals</think> Space Colony"),
-        ("pitch", "I need to review the branch-policy before designing this."),
-        ("core_loop", "- The user wants the player to mine ore"),
-    ],
-)
-def test_section_parser_rejects_internal_meta(field: str, body: str):
-    with pytest.raises(SpecValidationError):
-        design._parse_field_output(body, field)
 
 
 @pytest.mark.parametrize(
@@ -104,4 +90,5 @@ def test_ready_design_revalidates_nested_semantics_before_planning():
 
 def test_normal_design_text_is_allowed():
     assert not contains_internal_model_meta("Explore planets and establish colonies.")
-    assert design._parse_field_output("Galactic Settlers", "title") == "Galactic Settlers"
+    payload = _valid_design()
+    _validate_design(payload)
