@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-_OWNER = "target_profile_semantics.py"
+_OWNER = "target_contract.py"
 _FORBIDDEN_POLICY_MARKERS = (
     "_NATIVE_NAME_MIN_VERSION",
     "def _uses_native_names",
@@ -24,6 +24,6 @@ def test_target_version_policy_is_not_duplicated_across_production_modules() -> 
                 violations.append(f"{path.name}: {marker}")
 
     assert not violations, (
-        "Minecraft target-version policy must route through target_profile_semantics; "
+        "Minecraft target-version policy must route through target_contract; "
         + "; ".join(violations)
     )
