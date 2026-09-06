@@ -71,12 +71,15 @@ def test_bounded_semantic_catalog_preserves_every_authored_leaf() -> None:
     )
     router = _router(capabilities, anchors)
     catalog = build_bounded_requirement_catalog(prompt, router=router)
+    audit = catalog["semantic_audit"]
 
     assert {item["capability"] for item in catalog["requirements"]} == set(capabilities)
     assert all(len(item["provides"]) == 1 for item in catalog["requirements"])
-    assert catalog["semantic_audit"]["semantic_model_calls_total_observed"] == 5
-    assert catalog["semantic_audit"]["semantic_repair_turns_used"] == 0
-    assert router.calls == 5
+    assert audit["semantic_batch_size"] == 4
+    assert audit["semantic_batch_count"] == 2
+    assert audit["semantic_model_calls_total_observed"] == audit["semantic_batch_count"]
+    assert audit["semantic_repair_turns_used"] == 0
+    assert router.calls == audit["semantic_batch_count"]
 
 
 def test_frozen_catalog_compiles_a_task_chain_for_every_root() -> None:
