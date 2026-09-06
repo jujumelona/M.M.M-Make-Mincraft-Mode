@@ -28,6 +28,20 @@ def _strict_public_acceptance(value: Any) -> bool:
     return True
 
 
+def _canonical_public_acceptance(values: Any) -> list[str]:
+    """Normalize already-authoritative acceptance without reviving retired inference."""
+
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text or not _strict_public_acceptance(text) or text in result:
+            continue
+        result.append(text)
+    return result
+
+
 def _install_planner_public_acceptance_guard() -> None:
     """Make evidence planning use the same strict public boundary as production.
 
@@ -83,13 +97,7 @@ def _migrate_verified_evidence_public_acceptance(
         requirement = dict(raw)
         current_raw = requirement.get("acceptance")
         current = list(current_raw) if isinstance(current_raw, list) else []
-        canonical = list(
-            _evidence._requirement_acceptance(
-                str(requirement.get("capability") or ""),
-                current,
-            )
-        )
-        canonical = [value for value in canonical if _strict_public_acceptance(value)]
+        canonical = _canonical_public_acceptance(current)
         if not canonical:
             canonical = [
                 "Verify the observable player-facing behavior for the approved requirement."
