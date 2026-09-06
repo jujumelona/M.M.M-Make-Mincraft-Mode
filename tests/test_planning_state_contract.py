@@ -5,6 +5,7 @@ import pytest
 from minecraft_mod_ai.planning_authority import build_authoritative_request_catalog
 from minecraft_mod_ai.planning_state_contract import build_initial_planning_state
 from minecraft_mod_ai.planning_state_research import _compile_queries, _research_brief
+from minecraft_mod_ai.reference_source_research import _wikipedia_languages
 
 
 class _Router:
@@ -98,6 +99,11 @@ def test_reference_query_compiler_is_explicitly_target_neutral() -> None:
     assert queries == ["메이플스토리 gameplay systems"]
     system = router.calls[0][1][0]["content"]
     assert "never turn it into a '<name> Minecraft mod' query" in system
+
+
+def test_reference_wikipedia_search_uses_authored_language_before_english() -> None:
+    assert _wikipedia_languages("메이플스토리 gameplay systems") == ("ko", "en")
+    assert _wikipedia_languages("MapleStory gameplay systems") == ("en",)
 
 
 def test_reference_and_implementation_research_use_different_validated_routes() -> None:
