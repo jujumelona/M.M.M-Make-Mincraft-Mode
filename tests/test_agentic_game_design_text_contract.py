@@ -18,20 +18,6 @@ class _NoModelRouter:
         pytest.fail("Deterministic game design must not call generate_tool_decision")
 
 
-class _GameDesignModule:
-    @staticmethod
-    def _validate_design(value):
-        assert isinstance(value["title"], str)
-        assert isinstance(value["pitch"], str)
-        assert isinstance(value["core_loop"], list)
-        assert isinstance(value["progression"], list)
-        assert isinstance(value["combat"], dict)
-        assert isinstance(value["mod_context"], dict)
-        assert isinstance(value["modules"], list)
-        assert isinstance(value["assets"], list)
-        assert isinstance(value["acceptance_tests"], list)
-
-
 def _ledger():
     return (
         {
@@ -67,7 +53,6 @@ def test_game_design_is_host_projected_with_zero_model_calls(monkeypatch):
     router = _NoModelRouter()
 
     result = generate_sectioned_game_design(
-        _GameDesignModule,
         router,
         "거래하고 식민지화하는 우주 모드",
         research={"claims": ["must not rewrite authored design"]},
@@ -105,7 +90,6 @@ def test_missing_optional_semantic_detail_uses_host_default_without_retry(monkey
     router = _NoModelRouter()
 
     result = generate_sectioned_game_design(
-        _GameDesignModule,
         router,
         "행성을 탐사한다",
         research={},
