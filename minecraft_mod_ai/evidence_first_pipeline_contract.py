@@ -4,9 +4,9 @@ from __future__ import annotations
 
 This module deliberately does not implement another planner, target resolver, branch
 classifier, or checkpoint store. Those responsibilities stay with their existing
-host-owned components. It validates immutable semantic PlanIR, lowers it through the
-canonical handoff, then applies the typed execution contract before model-fill templates
-are created. Execution receipts are enriched with bounded ProjectIndex impact evidence.
+host-owned components. It consumes the single canonical execution-receipt bundle before
+model-fill templates are created. Execution observations are enriched with bounded
+ProjectIndex impact evidence.
 """
 
 import hashlib
@@ -19,11 +19,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .evidence_execution_contract import execution_handoff, execution_plan
+from .evidence_execution_contract import execution_plan
 from .evidence_first_execution import impacted_task_ids_for_paths, refresh_project_index
-from .evidence_first_handoff import build_evidence_first_handoff
 from .evidence_first_planning import validate_evidence_first_plan
-from .plan_collect_all_linker import validate_plan_collect_all
+from .evidence_task_receipt_contract import build_execution_receipt_bundle
 from .project_index import ProjectIndex
 
 _INSTALLED = False
@@ -48,97 +47,28 @@ def _batches_from_handoff(
     *,
     batch_type: type,
 ) -> tuple[Any, ...]:
-    """Lower one validated semantic plan through canonical + typed execution handoff."""
+    """Lower one validated semantic plan from the canonical execution receipt bundle."""
 
-    validate_evidence_first_plan(plan)
-    canonical_handoff = build_evidence_first_handoff(plan)
-    plan_sha256 = str(plan.get("plan_sha256") or "")
-    if str(canonical_handoff.get("source_plan_sha256") or "") != plan_sha256:
-        raise ValueError("Evidence handoff is not bound to the exact source plan hash.")
-
-    lowered_plan = execution_plan(plan)
-    handoff = execution_handoff(plan, canonical_handoff, lowered_plan)
-    validate_plan_collect_all(lowered_plan, handoff)
-
-    tasks = {
-        str(item.get("task_id") or ""): dict(item)
-        for item in lowered_plan.get("tasks", ())
-        if isinstance(item, Mapping) and str(item.get("task_id") or "")
-    }
-    requirements = {
-        str(item.get("requirement_id") or ""): dict(item)
-        for item in _mapping(plan.get("request_catalog")).get("requirements", ())
-        if isinstance(item, Mapping) and str(item.get("requirement_id") or "")
-    }
-
-    work_graph = _mapping(canonical_handoff.get("work_graph"))
-    task_refs = _strings(work_graph.get("task_refs"))
-    if set(task_refs) != set(tasks) or len(task_refs) != len(tasks):
-        raise ValueError("Evidence handoff task set drifted from the typed execution plan.")
-
-    dependencies: dict[str, list[str]] = {task_ref: [] for task_ref in task_refs}
-    seen_edges: set[tuple[str, str]] = set()
-    for raw_edge in work_graph.get("edges", ()):
-        edge = _mapping(raw_edge)
-        source = str(edge.get("from_task_ref") or "")
-        target = str(edge.get("to_task_ref") or "")
-        pair = (source, target)
-        if (
-            not source
-            or not target
-            or source == target
-            or source not in dependencies
-            or target not in dependencies
-        ):
-            raise ValueError(f"Evidence handoff contains invalid WorkGraph edge {pair!r}.")
-        if pair in seen_edges:
-            raise ValueError(f"Evidence handoff contains duplicate WorkGraph edge {pair!r}.")
-        seen_edges.add(pair)
-        dependencies[target].append(source)
-
-    production_by_task: dict[str, list[dict[str, Any]]] = {}
-    for item in handoff.get("production_modules", ()):
-        if not isinstance(item, Mapping):
-            raise ValueError("Evidence production binding must be an object.")
-        task_ref = str(item.get("task_ref") or "")
-        if task_ref not in tasks:
-            raise ValueError(
-                f"Evidence production binding references unknown task {task_ref!r}."
-            )
-        production_by_task.setdefault(task_ref, []).append(dict(item))
-
-    assets_by_task: dict[str, list[dict[str, Any]]] = {}
-    for item in handoff.get("asset_requests", ()):
-        if not isinstance(item, Mapping):
-            raise ValueError("Evidence asset binding must be an object.")
-        task_ref = str(item.get("task_ref") or "")
-        if task_ref not in tasks:
-            raise ValueError(f"Evidence asset binding references unknown task {task_ref!r}.")
-        assets_by_task.setdefault(task_ref, []).append(dict(item))
+    bundle = build_execution_receipt_bundle(plan)
+    plan_sha256 = str(bundle.get("plan_sha256") or "")
+    task_refs = _strings(bundle.get("task_refs"))
+    dependencies = _mapping(bundle.get("dependencies"))
+    receipts = _mapping(bundle.get("receipts"))
+    if not plan_sha256 or not task_refs or tuple(receipts) != task_refs:
+        raise ValueError("Evidence execution receipt bundle is incomplete or out of order.")
 
     batches: list[Any] = []
-    canonical_handoff_sha256 = str(canonical_handoff.get("handoff_sha256") or "")
-    execution_overlay_sha256 = str(handoff.get("execution_overlay_sha256") or "")
     for task_ref in task_refs:
-        task = dict(tasks[task_ref])
-        task["handoff_sha256"] = canonical_handoff_sha256
-        task["execution_overlay_sha256"] = execution_overlay_sha256
-        task["production_bindings"] = production_by_task.get(task_ref, [])
-        task["asset_bindings"] = assets_by_task.get(task_ref, [])
-        task["request_context"] = {
-            "prompt_sha256": _mapping(plan.get("request_catalog")).get("prompt_sha256"),
-            "requirements": [
-                requirements[reference]
-                for reference in _strings(task.get("requirement_refs"))
-                if reference in requirements
-            ],
-            "derived_requirements": list(task.get("derived_requirements") or ()),
-        }
+        raw_receipt = receipts.get(task_ref)
+        if not isinstance(raw_receipt, Mapping):
+            raise ValueError(f"Evidence execution receipt is missing task {task_ref!r}.")
+        task = dict(raw_receipt)
+        dependency_refs = _strings(dependencies.get(task_ref))
         batches.append(
             batch_type(
                 batch_id=task_ref,
                 scope=str(task.get("semantic_outcome") or ""),
-                depends_on_batches=tuple(dict.fromkeys(dependencies.get(task_ref, ()))),
+                depends_on_batches=dependency_refs,
                 deliverables=_strings(task.get("provides")),
                 exports=(task_ref,),
                 task_contract=task,
