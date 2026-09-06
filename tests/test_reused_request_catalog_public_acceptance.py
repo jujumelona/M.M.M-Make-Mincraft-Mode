@@ -4,6 +4,7 @@ import pytest
 
 from minecraft_mod_ai import evidence_first_planning as evidence
 from minecraft_mod_ai import production_contract as production
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.production_boundary_contract import install_production_boundary_contract
 from tests.planning_authority_fixtures import request_catalog
 
@@ -16,25 +17,7 @@ INTERNAL_ACCEPTANCE = (
 
 
 def _target() -> dict[str, object]:
-    return {
-        "target": {
-            "minecraft_version": "26.1.2",
-            "loader": "fabric",
-            "java_version": "25",
-            "fabric_loader": "0.18.4",
-            "fabric_api": "0.140.2+26.1",
-            "fabric_loom": "1.14.10",
-            "gradle": "9.2.1",
-            "gradle_sha256": "a" * 64,
-            "data_pack_version": "101.1",
-            "resource_pack_version": "84.0",
-            "resource_pack_format": 84,
-            "release_metadata_url": (
-                "https://piston-meta.mojang.com/v1/packages/deadbeef/26.1.2.json"
-            ),
-            "source_api_family": "fabric_live_ai",
-        }
-    }
+    return {"target": adapter_for_target("1.21.1", "fabric").public_dict()}
 
 
 def _task_modules(plan: dict) -> list[dict[str, object]]:
