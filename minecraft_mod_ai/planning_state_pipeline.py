@@ -3,8 +3,8 @@ from __future__ import annotations
 """Single prompt-first planning state machine.
 
 No requirement catalog, implementation plan, or retrieval query exists before the
-preceding state is available. This is the production ordering contract used by the
-planner entry point.
+preceding state is available. Every blocked stage is surfaced before a downstream stage
+can overwrite its root cause with a secondary invariant failure.
 """
 
 from collections.abc import Callable, Mapping
@@ -21,8 +21,6 @@ _T = TypeVar("_T")
 
 
 def _transition(operation: str, callback: Callable[[], _T]) -> _T:
-    """Run every state-machine edge through the shared root-cause trace boundary."""
-
     return traced_callable(
         callback,
         stage="planning_state",
@@ -38,7 +36,22 @@ def _requirements_exist(state: Mapping[str, Any]) -> bool:
     )
 
 
-def _requirement_block_summary(state: Mapping[str, Any]) -> str:
+def _stage_unknowns(state: Mapping[str, Any], stage: str) -> list[Mapping[str, Any]]:
+    rows = state.get("unresolved")
+    if not isinstance(rows, list):
+        return []
+    return [
+        item
+        for item in rows
+        if isinstance(item, Mapping)
+        and item.get("status") != "resolved"
+        and isinstance(item.get("blocks"), list)
+        and stage in item.get("blocks", [])
+    ]
+
+
+def _block_summary(state: Mapping[str, Any], *, stage: str) -> str:
+    stage_unknowns = _stage_unknowns(state, stage)
     unresolved = [
         (
             str(item.get("unresolved_id") or "?"),
@@ -46,23 +59,53 @@ def _requirement_block_summary(state: Mapping[str, Any]) -> str:
             str(item.get("resolution_route") or "unknown"),
             str(item.get("status") or "unknown"),
         )
-        for item in state.get("unresolved", [])
-        if isinstance(item, Mapping) and item.get("status") != "resolved"
+        for item in stage_unknowns
     ]
+    relevant_research_refs = {
+        str(item.get("research_ref") or "") for item in stage_unknowns
+    }
     research = [
         (
             str(item.get("research_id") or "?"),
             str(item.get("status") or "unknown"),
+            str(item.get("requirement_ref") or ""),
         )
         for item in state.get("research_queue", [])
-        if isinstance(item, Mapping) and item.get("status") != "complete"
+        if isinstance(item, Mapping)
+        and item.get("status") != "complete"
+        and (
+            not relevant_research_refs
+            or str(item.get("research_id") or "") in relevant_research_refs
+        )
     ]
     blockers = [
         str(item.get("statement") or item.get("stage") or item.get("blocker_id") or "unknown")
         for item in state.get("blockers", [])
         if isinstance(item, Mapping)
+        and (
+            not stage_unknowns
+            or not item.get("unresolved_id")
+            or str(item.get("unresolved_id") or "")
+            in {str(row.get("unresolved_id") or "") for row in stage_unknowns}
+        )
     ]
-    return f"unresolved={unresolved}; research={research}; blockers={blockers}"
+    diagnostics = [
+        (
+            str(item.get("research_ref") or "?"),
+            dict(item.get("diagnostics") or {}),
+        )
+        for item in state.get("evidence", [])
+        if isinstance(item, Mapping)
+        and item.get("sufficient") is not True
+        and (
+            not relevant_research_refs
+            or str(item.get("research_ref") or "") in relevant_research_refs
+        )
+    ]
+    return (
+        f"stage={stage}; unresolved={unresolved}; research={research}; "
+        f"blockers={blockers}; diagnostics={diagnostics}"
+    )
 
 
 def prepare_planning_state(
@@ -90,10 +133,6 @@ def prepare_planning_state(
         checkpoint(deepcopy(state))
 
     if not _requirements_exist(state):
-        # Some valid blocked states (for example user_only ambiguity) deliberately have
-        # no research queue. Sending those through research-brief normalization would
-        # replace the real requirement blocker with an unrelated empty-domain error.
-        # Only invoke retrieval when the host state actually contains research work.
         if state.get("research_queue"):
             state = _transition(
                 "collect_prompt_research",
@@ -114,19 +153,12 @@ def prepare_planning_state(
         if checkpoint is not None:
             checkpoint(deepcopy(state))
 
-        # Requirement compilation is deliberately fail-closed: unresolved semantic or
-        # reference knowledge is represented as a blocked state instead of an exception.
-        # Do not mistake that valid blocked state for a code-ready one and descend into
-        # implementation research/detailed planning, where the real cause would be
-        # overwritten by the secondary "no researched requirements" invariant.
         if not _requirements_exist(state):
             raise ValueError(
                 "PLANNING_REQUIREMENT_SELECTION_BLOCKED: "
-                + _requirement_block_summary(state)
+                + _block_summary(state, stage="requirement_selection")
             )
 
-    # Pass 2 searches actual reusable implementations, source/API behavior and support
-    # artifacts for each requirement. Prompt vocabulary is no longer the sole query source.
     state = _transition(
         "collect_implementation_research",
         lambda: collect_planning_state_research(
@@ -136,12 +168,18 @@ def prepare_planning_state(
             trace_metadata=trace_metadata,
         ),
     )
-
     if checkpoint is not None:
         checkpoint(deepcopy(state))
 
-    # The final template is code-facing but evidence-bound. Semantic-only tasks are not
-    # considered ready and therefore never reach the coder.
+    # Do not descend into detailed planning while implementation evidence is blocked.
+    # That would replace provider/source diagnostics with a secondary DETAILED_PLAN_*
+    # invariant and recreate the original failure pattern one stage later.
+    if _stage_unknowns(state, "implementation_plan"):
+        raise ValueError(
+            "PLANNING_IMPLEMENTATION_RESEARCH_BLOCKED: "
+            + _block_summary(state, stage="implementation_plan")
+        )
+
     state = _transition(
         "compile_detailed_implementation_plans",
         lambda: compile_detailed_implementation_plans(router, prompt, state),
