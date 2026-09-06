@@ -3,12 +3,14 @@
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_set_boundary_installation import install as install_source_set_boundary
+from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 initialize_runtime()
 from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
+install_versioned_reference_context()
 
 from .api import (
     ChatReply,
