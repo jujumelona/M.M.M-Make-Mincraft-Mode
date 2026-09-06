@@ -153,7 +153,7 @@ def test_knowledge_plan_reuses_active_catalog_instead_of_router_none_rebuild(mon
     assert plan["authored_request_catalog"] is not catalog
     assert len(plan["authored_requirements"]) == 5
     assert plan["policy"]["catalog_rebuild_after_freeze"] is False
-    assert plan["policy"]["authored_requirement_routing_owner"] == "approved_requirement_graph"
+    assert plan["policy"]["authored_requirement_routing_owner"] == "planning_authority"
     assert {route["capability"] for route in plan["authored_capability_routes"]} == {
         "mob.spawning",
         "boss.entity",
