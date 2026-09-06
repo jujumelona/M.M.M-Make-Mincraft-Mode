@@ -14,7 +14,8 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 _TIMEOUT = 12.0
@@ -23,6 +24,9 @@ _WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 _GITHUB_API = "https://api.github.com"
 _MAX_WIKI_PAGES = 3
 _MAX_GITHUB_REPOS = 2
+_MAX_REFERENCE_WORKERS = 4
+
+_ReferenceProvider = Callable[[str], tuple[list[dict[str, Any]], dict[str, Any]]]
 
 
 def _sha(text: str) -> str:
@@ -188,34 +192,67 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
     }
 
 
+def _retrieve_provider(
+    query: str,
+    provider: str,
+    function: _ReferenceProvider,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str] | None]:
+    try:
+        found, receipt = function(query)
+        return found, receipt, None
+    except Exception as exc:
+        return (
+            [],
+            {
+                "provider": provider,
+                "status": "error",
+                "result_count": 0,
+            },
+            {"provider": provider, "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+
 def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, Any]:
     """Return the same claim-bearing grounded shape used by research document materialization."""
+    query_list = [_text(raw) for raw in queries]
+    query_list = [query for query in query_list if query]
+    provider_functions: tuple[tuple[str, _ReferenceProvider], ...] = (
+        ("wikipedia", _wikipedia_sources),
+        ("github_reference", _github_reference_sources),
+    )
+    jobs = [
+        (query_index, query, provider, function)
+        for query_index, query in enumerate(query_list)
+        for provider, function in provider_functions
+    ]
+
+    if jobs:
+        workers = min(_MAX_REFERENCE_WORKERS, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="reference-source") as pool:
+            futures = [
+                pool.submit(_retrieve_provider, query, provider, function)
+                for _, query, provider, function in jobs
+            ]
+            results = [future.result() for future in futures]
+    else:
+        results = []
+
+    grouped_records: list[list[dict[str, Any]]] = [[] for _ in query_list]
+    grouped_providers: list[dict[str, Any]] = [{} for _ in query_list]
+    grouped_errors: list[list[dict[str, str]]] = [[] for _ in query_list]
+    for job, result in zip(jobs, results, strict=True):
+        query_index, _, provider, _ = job
+        found, receipt, error = result
+        grouped_records[query_index].extend(found)
+        grouped_providers[query_index][provider] = receipt
+        if error is not None:
+            grouped_errors[query_index].append(error)
+
     rows: list[dict[str, Any]] = []
-    for raw in queries:
-        query = _text(raw)
-        if not query:
-            continue
-        records: list[dict[str, Any]] = []
-        providers: dict[str, Any] = {}
-        errors: list[dict[str, str]] = []
-        for provider, function in (
-            ("wikipedia", _wikipedia_sources),
-            ("github_reference", _github_reference_sources),
-        ):
-            try:
-                found, receipt = function(query)
-                records.extend(found)
-                providers[provider] = receipt
-            except Exception as exc:
-                providers[provider] = {
-                    "provider": provider,
-                    "status": "error",
-                    "result_count": 0,
-                }
-                errors.append({"provider": provider, "error": f"{type(exc).__name__}: {exc}"})
+    for query_index, query in enumerate(query_list):
         unique: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for record in records:
+        for record in grouped_records[query_index]:
             key = str(record.get("content_sha256") or record.get("source_id") or "")
             if key and key not in seen:
                 seen.add(key)
@@ -226,8 +263,8 @@ def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, An
                 "query_sha256": _sha(query),
                 "evidence_records": unique,
                 "content_record_count": len(unique),
-                "provider_receipts": providers,
-                "retrieval_errors": errors,
+                "provider_receipts": grouped_providers[query_index],
+                "retrieval_errors": grouped_errors[query_index],
             }
         )
     return {
