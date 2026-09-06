@@ -3,9 +3,9 @@ from __future__ import annotations
 """Canonical task-state SSOT for prompt understanding and grounded planning.
 
 The model performs exactly one bounded semantic extraction at the request boundary. It
-may report authored facts, named references, scope status, and genuine unknowns. Host
-code owns IDs, reason->route policy, allowed sources, query compilation, evidence,
-state transitions, decisions, coverage, blockers, and readiness.
+may report authored facts, named references, scope status, and only genuine prompt-level
+ambiguities. Host code owns IDs, blocker semantics, reason->route policy, allowed sources,
+query compilation, evidence, state transitions, decisions, coverage, and readiness.
 """
 
 import hashlib
@@ -31,15 +31,23 @@ UNRESOLVED_REASONS = (
     "user_preference",
     "insufficient_evidence",
 )
+
+# The request-boundary model may describe only unknowns that genuinely belong to the
+# authored request. Implementation/API/repository/compatibility unknowns are created by
+# host stages after concrete requirements exist; allowing them here lets a small model
+# turn ordinary design freedom into a false pre-requirement blocker.
 _MODEL_UNRESOLVED_REASONS = (
     "external_fact",
-    "repository_fact",
-    "minecraft_api",
-    "implementation_method",
-    "compatibility",
     "contradiction",
     "user_preference",
 )
+
+_MODEL_BLOCKS_BY_REASON: dict[str, tuple[str, ...]] = {
+    "external_fact": ("requirement_selection",),
+    "contradiction": ("requirement_selection",),
+    "user_preference": ("requirement_selection",),
+}
+
 RESOLUTION_ROUTES = (
     "reference_research",
     "external_research",
@@ -155,10 +163,9 @@ MODEL_PARAMETERS: dict[str, Any] = {
                         "type": "string",
                         "enum": list(_MODEL_UNRESOLVED_REASONS),
                     },
-                    "blocks": {"type": "array", "items": {"type": "string"}},
                     "information_needed": {"type": "string"},
                 },
-                "required": ["question", "reason", "blocks", "information_needed"],
+                "required": ["question", "reason", "information_needed"],
                 "additionalProperties": False,
             },
         },
@@ -201,17 +208,19 @@ def _strings(value: Any) -> list[str]:
 
 
 def _source_receipt(prompt: str, quote: Any) -> dict[str, Any]:
-    """Store an optional prompt provenance hint; literal formatting is never a fail gate."""
-    text = str(quote or "")
-    start = prompt.find(text) if text else -1
-    exact = start >= 0
+    """Return a stable prompt provenance receipt even when model quote formatting drifts."""
+    hinted = str(quote or "")
+    start = prompt.find(hinted) if hinted else -1
+    exact = start >= 0 and bool(hinted)
+    text = hinted if exact else prompt
+    start = start if exact else 0
     return {
         "source_id": "requested_prompt",
-        "char_start": start if exact else -1,
-        "char_end": start + len(text) if exact else -1,
+        "char_start": start,
+        "char_end": start + len(text),
         "text": text,
-        "text_sha256": _sha(text) if text else "",
-        "verification": "exact_span" if exact else "prompt_authored_hint",
+        "text_sha256": _sha(text),
+        "verification": "exact_span" if exact else "full_prompt_fallback",
     }
 
 
@@ -280,7 +289,7 @@ def _model_unknown(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
         unresolved_id=f"u_{index + 1:03d}",
         question=question,
         reason=reason,
-        blocks=_strings(raw.get("blocks")),
+        blocks=_MODEL_BLOCKS_BY_REASON[reason],
         information_needed=information_needed,
         research_id=f"r_{index + 1:03d}" if route in _RESEARCH_ROUTES else "",
     )
@@ -575,17 +584,20 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
             "role": "system",
             "content": (
                 "Fill the canonical prompt-understanding template only. Preserve the user's "
-                "goal. known contains only facts explicitly authored by the user. references "
-                "contains named games, mods, products, styles, works, or external concepts that "
-                "must be understood; do not duplicate them as reference_semantics unknowns, "
-                "because the host creates those. Set scope_status from the request; do not create "
-                "scope unknowns, because the host creates those. For every other genuine unknown, "
-                "provide question, semantic reason, information_needed, and what it blocks. Do not "
-                "choose routes, sources, IDs, queries, APIs, files, architecture, mechanics, or "
-                "implementation details. Do not use model memory as evidence. Contradictions and "
-                "user preferences remain unknown rather than invented answers. source_quote is "
-                "optional metadata and need not preserve literal whitespace. There is no target "
-                "number of rows: represent the request faithfully without count-driven splitting."
+                "goal. known contains only facts and requested behavior explicitly authored by "
+                "the user. references contains named games, mods, products, styles, works, or "
+                "external concepts that must be understood; the host creates reference research. "
+                "Set scope_status from the request; the host owns scope policy. unresolved is only "
+                "for a prompt-level fact, contradiction, or user preference whose answer is "
+                "actually required to understand the authored request. Missing prices, counts, "
+                "balance values, mechanics, algorithms, Minecraft APIs, repository details, "
+                "compatibility methods, files, classes, architecture, or other design freedom are "
+                "NOT prompt unknowns: later host-owned design and implementation stages resolve "
+                "them. Never state what an unknown blocks and never choose routes, sources, IDs, "
+                "queries, APIs, files, architecture, mechanics, or implementation details. Do not "
+                "use model memory as evidence. source_quote is optional provenance metadata. There "
+                "is no target number of rows: represent the authored request faithfully without "
+                "count-driven splitting."
             ),
         },
         {"role": "user", "content": "USER REQUEST:\n" + authored},
@@ -597,7 +609,7 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
             tool_name=MODEL_TOOL,
             parameters=MODEL_PARAMETERS,
             description=(
-                "Submit authored facts, references, scope status, and semantic unknowns only."
+                "Submit authored facts, references, scope status, and prompt-level ambiguities only."
             ),
         )
     if not isinstance(raw, Mapping):
