@@ -45,8 +45,9 @@ _METHOD = re.compile(
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:+/-]{1,127}|[가-힣]{2,}")
 
 _REFERENCE_LOCK = RLock()
-_RESOLUTION_CACHE: dict[tuple[str, str, str], "_ResolvedReference | None"] = {}
+_RESOLUTION_CACHE: dict[tuple[str, str, str], "_ResolvedReference"] = {}
 _BRANCH_CACHE: dict[str, tuple[str, ...]] = {}
+_EXCERPT_CACHE: dict[tuple[str, ...], tuple["ReferenceExcerpt", ...]] = {}
 _MAX_CACHE_ENTRIES = 64
 
 
@@ -111,8 +112,8 @@ _BUILTIN_REFERENCE_FAMILIES: tuple[ReferenceFamily, ...] = (
     ReferenceFamily(
         repository="FabricMC/fabric",
         capabilities=(
-            "fabric api events registry networking packets lifecycle worldgen rendering "
-            "resources datagen commands blocks items entities"
+            "fabric api events registry networking packets lifecycle worldgen world generation rendering "
+            "resources datagen data commands blocks items entities server client"
         ).split(),
         priority=100,
         ref_strategy="exact_version",
@@ -163,39 +164,37 @@ def _bounded_cache_put(cache: dict[Any, Any], key: Any, value: Any) -> None:
 def _branches(client: Any, repository: str) -> tuple[str, ...]:
     with _REFERENCE_LOCK:
         cached = _BRANCH_CACHE.get(repository)
-    if cached is not None:
-        return cached
+        if cached is not None:
+            return cached
 
-    names: list[str] = []
-    max_pages = _env_int("MMM_REFERENCE_BRANCH_PAGES", 6, 1, 20)
-    for page in range(1, max_pages + 1):
-        try:
-            payload = _github_json(
-                client,
-                f"https://api.github.com/repos/{repository}/branches",
-                params={"per_page": "100", "page": str(page)},
-            )
-        except SourceTransplantError:
-            break
+    pages = _env_int("MMM_REFERENCE_BRANCH_PAGES", 6, 1, 20)
+    values: list[str] = []
+    for page in range(1, pages + 1):
+        payload = _github_json(
+            client,
+            f"https://api.github.com/repos/{repository}/branches",
+            params={"per_page": "100", "page": str(page)},
+        )
         if not isinstance(payload, list):
             break
-        for item in payload:
-            if not isinstance(item, Mapping):
-                continue
-            name = str(item.get("name") or "").strip()
-            if name:
-                names.append(name)
+        page_values = [
+            str(item.get("name") or "").strip()
+            for item in payload
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        ]
+        values.extend(page_values)
         if len(payload) < 100:
             break
-    result = tuple(dict.fromkeys(names))
-    with _REFERENCE_LOCK:
-        _bounded_cache_put(_BRANCH_CACHE, repository, result)
+    result = tuple(dict.fromkeys(values))
+    if result:
+        with _REFERENCE_LOCK:
+            _bounded_cache_put(_BRANCH_CACHE, repository, result)
     return result
 
 
-def _version_boundary_match(value: str, version: str) -> bool:
-    pattern = re.compile(rf"(?<!\d){re.escape(version)}(?!\d)")
-    return bool(pattern.search(value))
+def _version_boundary_match(name: str, version: str) -> bool:
+    pattern = rf"(?<![0-9A-Za-z]){re.escape(version)}(?![0-9A-Za-z])"
+    return bool(re.search(pattern, name))
 
 
 def _candidate_refs(
@@ -378,29 +377,21 @@ def _resolve_family(
     finally:
         client.close()
 
-    with _REFERENCE_LOCK:
-        _bounded_cache_put(_RESOLUTION_CACHE, key, resolved)
+    if resolved is not None:
+        with _REFERENCE_LOCK:
+            _bounded_cache_put(_RESOLUTION_CACHE, key, resolved)
     return resolved
 
 
 def _path_score(path: str, query_tokens: set[str], family_tokens: set[str]) -> float:
-    folded = path.casefold()
-    tokens = set(_TOKEN_RE.findall(folded))
-    requested = query_tokens & tokens
-    family = family_tokens & tokens
-    source_bonus = max(
-        (0.12 for marker in _SOURCE_MARKERS if marker in f"/{folded}"),
-        default=0.0,
-    )
-    test_penalty = 0.22 if any(marker in f"/{folded}/" for marker in ("/test/", "/gametest/")) else 0.0
-    generated_penalty = 0.18 if "/generated/" in f"/{folded}/" else 0.0
-    return (
-        0.60 * (len(requested) / max(1, len(query_tokens)))
-        + 0.18 * (len(family) / max(1, len(family_tokens)))
-        + source_bonus
-        - test_penalty
-        - generated_penalty
-    )
+    path_tokens = _tokens(path.replace("/", " ").replace("_", " "))
+    if not path_tokens:
+        return 0.0
+    direct = len(query_tokens & path_tokens) / max(1, len(query_tokens))
+    family = len(family_tokens & path_tokens) / max(1, len(family_tokens))
+    main_bonus = 0.12 if any(marker in f"/{path.casefold()}" for marker in _SOURCE_MARKERS) else 0.0
+    test_penalty = 0.18 if "/test/" in f"/{path.casefold()}/" else 0.0
+    return direct + 0.35 * family + main_bonus - test_penalty
 
 
 def _source_paths(
@@ -510,17 +501,25 @@ class VersionedReferenceCatalog:
             )
 
     def pool(self, *, query: str, capability: str = "") -> tuple[_ResolvedReference, ...]:
+        scored_families = [
+            (family.matches_capability(query, capability), family)
+            for family in reference_families()
+        ]
         ranked_families = sorted(
-            reference_families(),
-            key=lambda family: (
-                -family.matches_capability(query, capability),
-                -family.priority,
-                family.repository,
+            (
+                (score, family)
+                for score, family in scored_families
+                if score > 0.0 or family.repository == "FabricMC/fabric"
+            ),
+            key=lambda item: (
+                -item[0],
+                -item[1].priority,
+                item[1].repository,
             ),
         )
         limit = _env_int("MMM_REFERENCE_FAMILY_LIMIT", 3, 1, len(ranked_families))
         result: list[_ResolvedReference] = []
-        for family in ranked_families[:limit]:
+        for _score, family in ranked_families[:limit]:
             resolved = _resolve_family(family, adapter=self.adapter)
             if resolved is not None:
                 result.append(resolved)
@@ -539,6 +538,20 @@ class VersionedReferenceCatalog:
             return ()
         max_examples = max(1, min(6, int(max_examples)))
         byte_budget = max(2048, min(64 * 1024, int(byte_budget)))
+        cache_key = (
+            self.adapter.minecraft_version,
+            self.adapter.loader,
+            self.adapter.yarn_mappings,
+            normalized.casefold(),
+            str(capability).casefold(),
+            str(max_examples),
+            str(byte_budget),
+        )
+        with _REFERENCE_LOCK:
+            cached = _EXCERPT_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         family_pool = self.pool(query=normalized, capability=capability)
         if not family_pool:
             return ()
@@ -555,11 +568,18 @@ class VersionedReferenceCatalog:
             )
             for resolved in family_pool:
                 family_score = resolved.family.matches_capability(normalized, capability)
-                for path in _source_paths(
+                paths = _source_paths(
                     resolved,
                     query=normalized,
                     capability=capability,
-                ):
+                )
+                fetch_limit = _env_int(
+                    "MMM_REFERENCE_FETCH_FILES_PER_FAMILY",
+                    6,
+                    2,
+                    24,
+                )
+                for path in paths[:fetch_limit]:
                     blob_sha = str(resolved.blobs.get(path) or "")
                     if not blob_sha:
                         continue
@@ -648,7 +668,11 @@ class VersionedReferenceCatalog:
                 used += size
                 if len(selected) >= max_examples:
                     break
-        return tuple(selected)
+        result = tuple(selected)
+        if result:
+            with _REFERENCE_LOCK:
+                _bounded_cache_put(_EXCERPT_CACHE, cache_key, result)
+        return result
 
 
 __all__ = [
