@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
@@ -9,51 +10,36 @@ from minecraft_mod_ai.semantic_batching_contract import build_bounded_requiremen
 
 
 class _SemanticRouter:
-    def __init__(self, outputs: list[dict[str, Any]]) -> None:
-        self.outputs = list(outputs)
+    def __init__(self, capabilities_by_anchor: dict[str, str]) -> None:
+        self.capabilities_by_anchor = dict(capabilities_by_anchor)
+        self.calls = 0
 
-    def generate_tool_decision(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        if not self.outputs:
-            raise AssertionError("unexpected semantic model call")
-        return self.outputs.pop(0)
-
-
-def _segmentation(index: int, anchor: str) -> dict[str, Any]:
-    return {
-        "leaves": [
-            {
-                "source_clause_index": index,
-                "source_anchor": anchor,
-                "semantic_statement": anchor,
-                "given": "the authored precondition holds",
-                "when": "the authored action occurs",
-                "then": "the authored outcome is observed",
-                "semantic_type": "gameplay_mechanic",
-            }
-        ]
-    }
-
-
-def _classification(capability: str) -> dict[str, Any]:
-    return {
-        "classifications": [
-            {
-                "leaf_index": 0,
-                "capability_id": capability,
-            }
-        ]
-    }
+    def generate_tool_decision(self, role, messages, **kwargs):  # noqa: ANN001, ANN003
+        assert role == "planner"
+        assert kwargs["tool_name"] == "compile_semantic_requirements"
+        self.calls += 1
+        payload = json.loads(messages[-1]["content"])
+        requirements = []
+        for clause in payload["host_owned_clauses"]:
+            anchor = str(clause["text"]).strip().rstrip(".")
+            capability = self.capabilities_by_anchor[anchor]
+            requirements.append(
+                {
+                    "source_clause_index": int(clause["source_clause_index"]),
+                    "capability_id": capability,
+                    "source_anchor": anchor,
+                    "semantic_statement": anchor,
+                    "given": "the authored precondition holds",
+                    "when": "the authored action occurs",
+                    "then": "the authored outcome is observed",
+                    "semantic_type": "gameplay_mechanic",
+                }
+            )
+        return {"requirements": requirements}
 
 
-def _two_stage_outputs(
-    capabilities: tuple[str, ...],
-    anchors: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    outputs: list[dict[str, Any]] = []
-    for index, (capability, anchor) in enumerate(zip(capabilities, anchors, strict=True)):
-        outputs.append(_segmentation(index, anchor))
-        outputs.append(_classification(capability))
-    return outputs
+def _router(capabilities: tuple[str, ...], anchors: tuple[str, ...]) -> _SemanticRouter:
+    return _SemanticRouter(dict(zip(anchors, capabilities, strict=True)))
 
 
 def test_unknown_capability_keeps_host_custom_template_identity() -> None:
@@ -84,11 +70,14 @@ def test_bounded_semantic_catalog_preserves_every_authored_leaf() -> None:
         "Add progression levels",
         "Add item upgrades",
     )
-    router = _SemanticRouter(_two_stage_outputs(capabilities, anchors))
+    router = _router(capabilities, anchors)
     catalog = build_bounded_requirement_catalog(prompt, router=router)
+
     assert {item["capability"] for item in catalog["requirements"]} == set(capabilities)
     assert all(len(item["provides"]) == 1 for item in catalog["requirements"])
-    assert catalog["semantic_audit"]["semantic_model_calls_total_observed"] == 10
+    assert catalog["semantic_audit"]["semantic_model_calls_total_observed"] == 5
+    assert catalog["semantic_audit"]["semantic_repair_turns_used"] == 0
+    assert router.calls == 5
 
 
 def test_frozen_catalog_compiles_a_task_chain_for_every_root() -> None:
@@ -97,7 +86,7 @@ def test_frozen_catalog_compiles_a_task_chain_for_every_root() -> None:
     anchors = ("Spawn hostile mobs", "Add a boss entity", "Add equipment")
     catalog = build_bounded_requirement_catalog(
         prompt,
-        router=_SemanticRouter(_two_stage_outputs(capabilities, anchors)),
+        router=_router(capabilities, anchors),
     )
     plan = compile_evidence_first_plan(
         prompt,
