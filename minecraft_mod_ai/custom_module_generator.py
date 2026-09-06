@@ -15,6 +15,7 @@ from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .coder_execution_contract import project_task_for_coder
 from .complete_spec import ProductionModule
 from .host_grounding import build_coder_grounding, custom_module_path_protected
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_kind
@@ -296,9 +297,9 @@ def _verify_reuse_application(
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     """Project one immutable semantic work item into the coder request.
 
-    Evidence-first planning already owns global proposal state. Generation receives the
-    task-local contract (CodePlan-style per-edit authority) rather than replaying the
-    complete module/proposal configuration into every model turn.
+    Evidence-first planning already owns global proposal state. Generation receives only
+    the host-projected coder execution contract rather than replaying the complete
+    semantic task/proposal configuration into every model turn.
     """
 
     config = module.config if isinstance(module.config, dict) else {}
@@ -307,9 +308,7 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
         return {
             "module_id": module.module_id,
             "kind": module.kind,
-            "evidence_task": dict(evidence_task),
-            "depends_on": list(module.depends_on),
-            "required_gates": list(module.required_gates),
+            "evidence_task": project_task_for_coder(evidence_task),
         }
     return {
         "module_id": module.module_id,
