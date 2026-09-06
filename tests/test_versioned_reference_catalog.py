@@ -10,7 +10,7 @@ from minecraft_mod_ai.versioned_reference_catalog import (
 def test_builtin_reference_catalog_has_distinct_capability_families() -> None:
     families = reference_families()
     repositories = {item.repository for item in families}
-    assert "FabricMC/fabric" in repositories
+    assert "FabricMC/fabric-api" in repositories
     assert "shedaniel/RoughlyEnoughItems" in repositories
     assert "TerraformersMC/ModMenu" in repositories
     assert len(repositories) == len(families)
