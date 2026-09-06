@@ -249,7 +249,8 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
     assert {"dependency", "source_code", "minecraft_api", "local_project"}.issubset(
         domain["evidence_kinds"]
     )
-    assert domain["providers"][:3] == ["curseforge", "modrinth", "github"]
+    assert domain["providers"][:2] == ["curseforge", "modrinth"]
+    assert "github" not in domain["providers"]
     assert {"official_docs", "project_rag"}.issubset(domain["providers"])
 
 
