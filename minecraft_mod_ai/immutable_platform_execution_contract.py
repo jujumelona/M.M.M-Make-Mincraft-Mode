@@ -99,7 +99,8 @@ def _validate_receipt_digest(value: Any) -> None:
 
 
 def _adapter_from_receipt(value: Any):
-    from .platform_catalog import PlatformAdapter
+    from dataclasses import asdict
+    from .target_contract import target_contract_from_mapping
 
     if not _full_receipt_present(value):
         raise SpecValidationError(
@@ -120,33 +121,9 @@ def _adapter_from_receipt(value: Any):
     if not re.fullmatch(r"[0-9a-f]{64}", sha):
         raise SpecValidationError("Execution platform receipt Gradle SHA-256 is invalid.")
 
-    adapter = PlatformAdapter(
-        adapter_id=str(_receipt_value(value, "adapter_id")),
-        edition=str(_receipt_value(value, "edition")),
-        loader=str(_receipt_value(value, "loader")),
-        minecraft_version=str(_receipt_value(value, "minecraft_version")),
-        java_version=str(_receipt_value(value, "java_version")),
-        yarn_mappings=str(_receipt_value(value, "yarn_mappings")),
-        mappings_kind=str(_receipt_value(value, "mappings_kind")),
-        mappings_version=str(_receipt_value(value, "mappings_version")),
-        fabric_loader=str(_receipt_value(value, "fabric_loader")),
-        fabric_api=str(_receipt_value(value, "fabric_api")),
-        fabric_loom=str(_receipt_value(value, "fabric_loom")),
-        gradle=gradle,
-        gradle_sha256=sha,
-        data_pack_version=str(_receipt_value(value, "data_pack_version")),
-        resource_pack_version=str(_receipt_value(value, "resource_pack_version")),
-        resource_pack_format=int(_receipt_value(value, "resource_pack_format")),
-        release_metadata_url=str(_receipt_value(value, "release_metadata_url")),
-        source_api_family=str(_receipt_value(value, "source_api_family")),
-        deterministic_module_kinds=frozenset(
-            str(item)
-            for item in (_receipt_value(value, "deterministic_module_kinds", ()) or ())
-            if str(item).strip()
-        ),
-    )
-    adapter.validate()
-    return adapter
+    raw = dict(value) if isinstance(value, dict) else asdict(value)
+    return target_contract_from_mapping(raw)
+
 
 
 def install() -> None:

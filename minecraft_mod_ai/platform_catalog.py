@@ -8,9 +8,8 @@ Candidate discovery is deliberately bounded: platform selection must never crawl
 an entire historical Minecraft catalogue and fail one version at a time.
 """
 
-import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -22,140 +21,9 @@ from .platform_live_discovery import (
     latest_stable_versions,
 )
 from .target_contract import (
-    mappings_applicable as target_mappings_applicable,
-    minimum_java_major,
+    TargetContract as PlatformAdapter,
     uses_native_names,
 )
-
-
-@dataclass(frozen=True)
-class PlatformAdapter:
-    adapter_id: str
-    edition: str
-    loader: str
-    minecraft_version: str
-    java_version: str
-    # Backward-compatible coordinate consumed by existing generators. It is empty for
-    # Minecraft 26.1+ native/unobfuscated targets where mappings are inapplicable.
-    yarn_mappings: str
-    mappings_kind: str
-    mappings_version: str
-    fabric_loader: str
-    fabric_api: str
-    fabric_loom: str
-    gradle: str
-    gradle_sha256: str
-    data_pack_version: str
-    resource_pack_version: str
-    resource_pack_format: int
-    release_metadata_url: str
-    source_api_family: str
-    deterministic_module_kinds: frozenset[str]
-
-    @property
-    def mappings_applicable(self) -> bool:
-        return target_mappings_applicable(self.minecraft_version)
-
-    def validate(self) -> None:
-        required = {
-            "adapter_id": self.adapter_id,
-            "edition": self.edition,
-            "loader": self.loader,
-            "minecraft_version": self.minecraft_version,
-            "java_version": self.java_version,
-            "fabric_loader": self.fabric_loader,
-            "fabric_api": self.fabric_api,
-            "fabric_loom": self.fabric_loom,
-            "gradle": self.gradle,
-            "gradle_sha256": self.gradle_sha256,
-            "data_pack_version": self.data_pack_version,
-            "resource_pack_version": self.resource_pack_version,
-            "release_metadata_url": self.release_metadata_url,
-            "source_api_family": self.source_api_family,
-        }
-        if self.mappings_applicable:
-            required.update(
-                {
-                    "yarn_mappings": self.yarn_mappings,
-                    "mappings_kind": self.mappings_kind,
-                    "mappings_version": self.mappings_version,
-                }
-            )
-        missing = sorted(key for key, value in required.items() if not str(value).strip())
-        if missing:
-            raise ValueError(
-                "Executable platform provider returned partial target metadata: "
-                f"{missing}."
-            )
-        if self.mappings_applicable:
-            if self.mappings_kind not in {"mojang", "yarn"}:
-                raise ValueError(f"Unsupported mappings kind: {self.mappings_kind!r}.")
-            if self.mappings_kind == "mojang" and self.mappings_version != "mojang":
-                raise ValueError("Mojang mappings must use the canonical mappings_version='mojang'.")
-            if self.yarn_mappings != self.mappings_version:
-                raise ValueError(
-                    "Legacy yarn_mappings compatibility coordinate disagrees with mappings_version."
-                )
-        elif any((self.yarn_mappings, self.mappings_kind, self.mappings_version)):
-            raise ValueError(
-                "Minecraft 26.1+ native/unobfuscated targets must not expose legacy mapping coordinates."
-            )
-        minimum_java = minimum_java_major(self.minecraft_version)
-        if minimum_java is not None:
-            if not str(self.java_version).isdigit() or int(self.java_version) < minimum_java:
-                raise ValueError(
-                    f"Minecraft {self.minecraft_version} requires Java {minimum_java}+; "
-                    f"got {self.java_version}."
-                )
-        if not re.fullmatch(r"[0-9a-f]{64}", self.gradle_sha256):
-            raise ValueError("Executable platform provider returned an invalid Gradle SHA-256.")
-        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.data_pack_version):
-            raise ValueError("Executable platform provider returned an invalid data pack version.")
-        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", self.resource_pack_version):
-            raise ValueError("Executable platform provider returned an invalid resource pack version.")
-        expected_major = int(self.resource_pack_version.split(".", 1)[0])
-        if type(self.resource_pack_format) is not int or self.resource_pack_format <= 0:
-            raise ValueError("Resource pack format must be a positive provider-derived integer.")
-        if self.resource_pack_format != expected_major:
-            raise ValueError(
-                "Resource pack format major disagrees with the exact provider resource-pack version."
-            )
-        if not self.release_metadata_url.startswith(
-            (
-                "https://www.minecraft.net/",
-                "https://feedback.minecraft.net/",
-                "https://piston-meta.mojang.com/",
-                "https://launcher.mojang.com/",
-            )
-        ):
-            raise ValueError(
-                "Pack metadata must be grounded in an official Minecraft/Mojang metadata URL."
-            )
-
-    def public_dict(self) -> dict[str, Any]:
-        self.validate()
-        value = asdict(self)
-        value["deterministic_module_kinds"] = sorted(self.deterministic_module_kinds)
-        if self.mappings_applicable:
-            value["mappings"] = {
-                "kind": self.mappings_kind,
-                "version": self.mappings_version,
-            }
-        else:
-            value.pop("yarn_mappings", None)
-            value.pop("mappings_kind", None)
-            value.pop("mappings_version", None)
-        value["naming_regime"] = {
-            "kind": "mapped_obfuscated" if self.mappings_applicable else "native_unobfuscated",
-            "mappings_applicable": self.mappings_applicable,
-            "minecraft_version": self.minecraft_version,
-        }
-        value["pack_versions"] = {
-            "data": self.data_pack_version,
-            "resource": self.resource_pack_version,
-            "resource_major": self.resource_pack_format,
-        }
-        return value
 
 
 @dataclass(frozen=True)
