@@ -51,7 +51,6 @@ def _query_context(state: Mapping[str, Any], research: Mapping[str, Any]) -> dic
 
 
 def _bounded_query(value: str) -> str:
-    """Normalize a host-authored retrieval query without changing its semantics."""
     return " ".join(str(value or "").split()).strip()[:420]
 
 
@@ -69,15 +68,10 @@ def _compile_queries(
     candidates: list[str] = []
 
     if source_kinds & _REFERENCE_SOURCE_KINDS and reference_names:
-        # Preserve authored names exactly. Reference research asks about the referenced
-        # subject itself, never an invented "<name> Minecraft mod" surrogate.
         for name in reference_names:
             candidates.append(f"{name} {needed or objective}")
             candidates.append(f"{name} documented systems behavior rules")
     else:
-        # Implementation research is already attached to one concrete requirement. Use
-        # that host-owned need directly; provider policy decides whether this goes to mod
-        # catalogs, official sources, project RAG, or repository fallback.
         if objective:
             candidates.append(objective)
         if needed and needed != objective:
@@ -93,9 +87,7 @@ def _compile_queries(
 
     queries = list(
         dict.fromkeys(
-            query
-            for candidate in candidates
-            if (query := _bounded_query(candidate))
+            query for candidate in candidates if (query := _bounded_query(candidate))
         )
     )
     if not queries:
@@ -104,21 +96,22 @@ def _compile_queries(
 
 
 def _providers_for(source_kinds: Sequence[str]) -> list[str]:
-    """Return provider roles in authority order, not network-completion order."""
+    """Return explicit discovery/evidence providers; GitHub fallback is policy-owned."""
     kinds = set(source_kinds)
     if kinds & _REFERENCE_SOURCE_KINDS:
         return ["wikipedia"]
 
     providers: list[str] = []
     if kinds & {"repository", "existing_mods"}:
-        # Actual Minecraft mod catalogs discover candidates. GitHub is source validation
-        # or an empty-catalog fallback, never the first ecosystem discovery source.
-        providers.extend(["curseforge", "modrinth", "github"])
+        # Real mod discovery belongs to Minecraft catalogs. The catalog policy follows an
+        # exact catalog source URL to GitHub or falls back to broad GitHub only after an
+        # empty catalog result; GitHub is not a peer catalog provider here.
+        providers.extend(["curseforge", "modrinth"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
-        providers.extend(["official_docs", "project_rag", "github"])
+        providers.extend(["official_docs", "project_rag"])
     if "project_rag" in kinds:
         providers.append("project_rag")
-    return list(dict.fromkeys(providers)) or ["project_rag", "official_docs", "github"]
+    return list(dict.fromkeys(providers)) or ["project_rag", "official_docs"]
 
 
 def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
@@ -136,7 +129,6 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
 
 
 def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
-    """Persist deterministic HOST queries in SSOT before retrieval starts."""
     for research in state.get("research_queue", []):
         if not isinstance(research, dict) or str(research.get("status") or "") != "pending":
             continue
@@ -344,6 +336,12 @@ def collect_planning_state_research(
                 "evidence_refs": refs,
                 "sufficient": sufficient,
                 "source": "grounded_materialized_pages",
+                "diagnostics": {
+                    "source_body_count": int(note.get("source_body_count") or 0),
+                    "evidence_card_count": int(note.get("host_grounded_evidence_card_count") or 0),
+                    "evidence_extraction_status": _text(note.get("evidence_extraction_status")),
+                    "research_failures": deepcopy(note.get("research_failures") or []),
+                },
             }
         )
         for unresolved_id in research.get("resolves", []):
@@ -361,16 +359,25 @@ def collect_planning_state_research(
                     }
                 )
             else:
+                reason = _text(note.get("evidence_extraction_status")) or "insufficient_grounded_evidence"
                 value["blockers"].append(
                     {
                         "blocker_id": f"b_{len(value['blockers']) + 1:03d}",
                         "unresolved_id": unresolved["unresolved_id"],
-                        "statement": "Grounded research did not produce sufficient cited evidence for this required decision.",
+                        "statement": (
+                            "Grounded research blocked: "
+                            f"{reason}; source_bodies={int(note.get('source_body_count') or 0)}; "
+                            f"evidence_cards={int(note.get('host_grounded_evidence_card_count') or 0)}."
+                        ),
                     }
                 )
 
-    resolved_ids = {uid for uid, row in unresolved_by_id.items() if row.get("status") == "resolved"}
-    value["blockers"] = [row for row in value["blockers"] if row.get("unresolved_id") not in resolved_ids]
+    resolved_ids = {
+        uid for uid, row in unresolved_by_id.items() if row.get("status") == "resolved"
+    }
+    value["blockers"] = [
+        row for row in value["blockers"] if row.get("unresolved_id") not in resolved_ids
+    ]
     return _rehash(value)
 
 
