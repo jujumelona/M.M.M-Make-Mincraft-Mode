@@ -21,7 +21,7 @@ from .platform_live_discovery import (
     discover_fabric_target,
     latest_stable_versions,
 )
-from .target_profile_semantics import (
+from .target_contract import (
     mappings_applicable as target_mappings_applicable,
     minimum_java_major,
     uses_native_names,
