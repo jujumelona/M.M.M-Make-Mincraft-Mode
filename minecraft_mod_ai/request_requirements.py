@@ -95,6 +95,7 @@ _ACTION_FAMILIES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 _PARALLEL_JOIN = re.compile(r"(?:,|/|\band\b|\bor\b|\bthen\b|및|그리고|하거나|또는|하고|하며)", re.IGNORECASE)
+_CAPABILITY_IDENTIFIER = re.compile(r"\b[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\b", re.IGNORECASE)
 _RESEGMENT_FIELDS = frozenset(
     {
         "source_clause_index",
@@ -133,9 +134,16 @@ def is_pure_catch_all(statement: str, anchor: str = "") -> bool:
 
 
 def detected_action_families(text: str) -> tuple[str, ...]:
-    """Return generic behavior families present in text without choosing capabilities."""
+    """Return generic behavior families present in prose without treating IDs as prose.
+
+    Capability identifiers are metadata, not authored actions. Scanning an identifier such
+    as ``spacecraft.weapon_upgrade`` with substring regexes otherwise produces a false
+    ``create`` hit from ``spacecraft`` plus ``upgrade`` from the suffix and needlessly
+    triggers a semantic re-segmentation turn.
+    """
+    prose = _CAPABILITY_IDENTIFIER.sub(" ", str(text or ""))
     return tuple(
-        name for name, pattern in _ACTION_FAMILIES if pattern.search(str(text or ""))
+        name for name, pattern in _ACTION_FAMILIES if pattern.search(prose)
     )
 
 
