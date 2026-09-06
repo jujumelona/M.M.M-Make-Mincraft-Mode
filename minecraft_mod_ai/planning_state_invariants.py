@@ -183,9 +183,23 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
                     "PROMPT_STATE_DECISION: duplicate or missing implementation detail"
                 )
             details[requirement_id] = row
-            from .planning_detail_template import validate_worksheet
+            from .planning_detail_template import normalize_required_sections, validate_worksheet
 
-            validate_worksheet(row.get("engineering_worksheet"), sufficient_refs)
+            raw_required_sections = row.get("required_detail_sections")
+            if raw_required_sections is not None and not isinstance(raw_required_sections, list):
+                raise ValueError(
+                    "PROMPT_STATE_DECISION: required_detail_sections must be a host-authored array"
+                )
+            required_sections = normalize_required_sections(raw_required_sections)
+            if raw_required_sections is not None and list(required_sections) != raw_required_sections:
+                raise ValueError(
+                    "PROMPT_STATE_DECISION: required_detail_sections must use canonical order"
+                )
+            validate_worksheet(
+                row.get("engineering_worksheet"),
+                sufficient_refs,
+                required_sections,
+            )
             for field in ("implementation_capabilities", "implementation_obligations"):
                 obligations = row.get(field)
                 if not isinstance(obligations, list) or not obligations:
