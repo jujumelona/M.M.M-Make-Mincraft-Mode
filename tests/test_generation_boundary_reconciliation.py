@@ -18,7 +18,7 @@ def _adapter() -> PlatformAdapter:
         edition="java",
         loader="fabric",
         minecraft_version="27.0",
-        java_version="21",
+        java_version="25",
         yarn_mappings="",
         mappings_kind="",
         mappings_version="",
