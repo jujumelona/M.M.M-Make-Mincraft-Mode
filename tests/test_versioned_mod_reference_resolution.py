@@ -55,13 +55,13 @@ def test_catalog_keeps_baseline_and_task_donor_selection_separate() -> None:
     excluded = frozenset(family.repository for family in baseline)
     donors = task_families(
         "fabric",
-        "산업 자동화 기계 에너지 레시피 처리",
+        "GUI 화면 설정 위젯 렌더링",
         exclude=excluded,
         limit=3,
     )
     assert donors
     assert all(family.repository not in excluded for family in donors)
-    assert any("automation" in family.capabilities for family in donors)
+    assert any("gui" in family.capabilities for family in donors)
 
 
 def test_ref_listing_is_bounded_paginated_deduplicated_and_cached() -> None:
