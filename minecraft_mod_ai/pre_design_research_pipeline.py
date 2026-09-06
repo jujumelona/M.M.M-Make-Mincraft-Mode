@@ -3,8 +3,8 @@ from __future__ import annotations
 """Canonical host-owned pre-design research pipeline.
 
 Retrieval, source materialization, grounding validation, termination, and sufficiency
-remain host-owned.  The model is never an evidence authority and this module does not
-reach into deleted private helpers from the game-design compiler.
+remain host-owned. The model is never an evidence authority. Minecraft ecosystem
+discovery uses the same catalog-first provider policy as planning-state research.
 """
 
 import hashlib
@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .agent_capability_context import target_neutral_research_scope
+from .catalog_first_grounded_rag import forced_rag_bundle
 from .central_research import normalize_research_brief
 from .external_procedural_skill_contract import attach_procedural_skillbank
 from .minecraft_knowledge_contract import (
@@ -159,11 +160,11 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                 ],
                 "queries": queries,
                 "providers": [
-                    "modrinth",
                     "curseforge",
-                    "github",
+                    "modrinth",
                     "official_docs",
                     "project_rag",
+                    "github",
                 ],
                 "depends_on": [],
             }
@@ -547,7 +548,7 @@ def collect_design_research(
     )
 
     try:
-        grounded_bundle = project_rag._forced_rag_bundle(router, research_brief)
+        grounded_bundle = forced_rag_bundle(project_rag, router, research_brief)
     except Exception as exc:
         diagnostic = _exception_payload(exc)
         _emit_research_diagnostic(
@@ -623,9 +624,11 @@ def collect_design_research(
         "method": {
             "requirement_authority": "host_active_requirement_ledger",
             "provider_order": [
-                "modrinth",
                 "curseforge_if_configured",
-                "github_fallback",
+                "modrinth",
+                "official_docs",
+                "project_rag",
+                "github_exact_source_or_empty_catalog_fallback",
             ],
             "provider_failure_semantics": "isolated_per_provider_and_query",
             "zero_source_semantics": "retain_authored_requirement_and_skip_model",
