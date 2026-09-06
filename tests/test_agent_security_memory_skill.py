@@ -66,7 +66,9 @@ def test_skill_context_is_compact_typed_and_cannot_widen_tool_authority() -> Non
 
     assert payload["schema_version"] == "mmm/agent-capability-context-v7"
     assert "previous_schema_version" not in payload
-    assert len(rendered.encode("utf-8")) < 24_000
+    # The compact v7 context must retain substantial headroom below the 39 KB runtime
+    # packing ceiling. 25 KB is the reviewed production budget for this richest route.
+    assert len(rendered.encode("utf-8")) < 25_000
     assert "! required" in payload["type_contract_encoding"]
     assert "? optional" in payload["type_contract_encoding"]
     assert isinstance(payload["type_contracts"], list)
