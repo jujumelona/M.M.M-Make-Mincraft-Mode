@@ -108,11 +108,27 @@ def _task() -> dict:
     }
 
 
+def _delimited_fill(page_id: str, hole: dict) -> str:
+    hole_id = hole["hole_id"]
+    return (
+        f"BEGIN PAGE {page_id}\n"
+        f"BEGIN {hole_id}\n"
+        f"Decision: Implement {hole['subject']}\n"
+        "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
+        "Bindings: none\nReferences: none\n"
+        "Verification: Check the declared observable result.\nUncertainties: none\n"
+        f"END {hole_id}\n"
+        f"END PAGE {page_id}"
+    )
+
+
 class _HoleRouter:
     def __init__(self, *, omit_once: bool = False) -> None:
         self.calls = 0
         self.omit_once = omit_once
         self.enable_tools: list[object] = []
+        self.requested_hole_ids: list[list[str]] = []
+        self.omitted_hole_id = ""
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "planner"
@@ -120,15 +136,35 @@ class _HoleRouter:
         self.enable_tools.append(kwargs.get("enable_tools"))
         self.calls += 1
         packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-        holes = packet["modules"][0]["implementation_template"]["holes"]
-        if self.omit_once and self.calls == 1:
-            holes = holes[:-1]
+
+        if isinstance(packet.get("modules"), list):
+            module = packet["modules"][0]
+            holes = list(module["implementation_template"]["holes"])
+            self.requested_hole_ids.append([hole["hole_id"] for hole in holes])
+            returned = list(holes)
+            if self.omit_once and self.calls == 1 and returned:
+                self.omitted_hole_id = returned[-1]["hole_id"]
+                returned = returned[:-1]
+            return "\n".join(
+                f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
+                "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
+                "Bindings: none\nReferences: none\n"
+                "Verification: Check the declared observable result.\nUncertainties: none"
+                for index, hole in enumerate(returned, 1)
+            )
+
+        pages = list(packet["pages"])
+        requested = [hole["hole_id"] for page in pages for hole in page["holes"]]
+        self.requested_hole_ids.append(requested)
+        omit_id = ""
+        if self.omit_once and self.calls == 1 and requested:
+            omit_id = requested[-1]
+            self.omitted_hole_id = omit_id
         return "\n".join(
-            f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
-            "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
-            "Bindings: none\nReferences: none\n"
-            "Verification: Check the declared observable result.\nUncertainties: none"
-            for index, hole in enumerate(holes, 1)
+            _delimited_fill(page["page_id"], hole)
+            for page in pages
+            for hole in page["holes"]
+            if hole["hole_id"] != omit_id
         )
 
 
@@ -314,8 +350,13 @@ def test_hole_filler_repairs_only_missing_holes() -> None:
     template = page["modules"][0]["config"]["implementation_template"]
     fills = page["modules"][0]["config"]["model_fill"]["hole_fills"]
 
-    assert router.calls == 2
-    assert router.enable_tools == [False, False]
+    assert router.calls >= 2
+    assert router.enable_tools == [False] * router.calls
+    assert router.omitted_hole_id
+    assert any(
+        request == [router.omitted_hole_id]
+        for request in router.requested_hole_ids[1:]
+    )
     assert {item["hole_id"] for item in fills} == set(
         template["completion_policy"]["required_hole_ids"]
     )
@@ -341,7 +382,9 @@ def test_canonical_evidence_batch_invokes_bounded_hole_filler() -> None:
         evidence_mode=True,
     )
 
-    assert router.calls == 1
+    assert router.calls >= 1
+    assert all(0 < len(request) <= 12 for request in router.requested_hole_ids)
+    assert router.enable_tools == [False] * router.calls
     assert not assets
     assert tests
     assert len(modules) == 1
