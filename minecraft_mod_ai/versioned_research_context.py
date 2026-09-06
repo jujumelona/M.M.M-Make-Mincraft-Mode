@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """ResearchCodeContext extension that adds exact-version external exemplars."""
 
+import os
+
 from typing import Any
 
 from .research_code_context import (
@@ -25,6 +27,13 @@ class VersionedResearchCodeContext(ResearchCodeContext):
             loader=self.loader,
             mappings=self.mappings,
         )
+        raw_budget = os.environ.get("MMM_CODE_EXTERNAL_REFERENCE_QUERIES", "12").strip()
+        try:
+            configured_budget = int(raw_budget)
+        except ValueError:
+            configured_budget = 12
+        self._versioned_reference_query_budget = max(2, min(32, configured_budget))
+        self._versioned_reference_queries: set[str] = set()
 
     def _retrieve_repo_examples(
         self,
@@ -36,6 +45,20 @@ class VersionedResearchCodeContext(ResearchCodeContext):
         # than replace the current-project call graph, RAG and quality-aware retrieval.
         local = super()._retrieve_repo_examples(query, plan_step=plan_step)
         capability = plan_step.capability if plan_step is not None else ""
+        query_key = _sha(
+            {
+                "query": " ".join(query.split()).casefold(),
+                "capability": capability.casefold(),
+            }
+        )
+        if (
+            query_key not in self._versioned_reference_queries
+            and len(self._versioned_reference_queries)
+            >= self._versioned_reference_query_budget
+        ):
+            return local
+        self._versioned_reference_queries.add(query_key)
+
         external_budget = min(12 * 1024, max(3072, self.byte_budget // 2))
         try:
             excerpts = self._versioned_reference_catalog.retrieve(
