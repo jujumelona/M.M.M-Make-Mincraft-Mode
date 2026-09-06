@@ -9,7 +9,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .planner_operation import planner_operation
+
 _PROTOCOL = "mmm/small-model-predesign-evidence-v3"
+_RESEARCH_OUTPUT_TOKENS = 3072
+_MAX_FACTS_PER_BATCH = 24
 _STOP = {
     "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with",
     "minecraft", "fabric", "mod", "mods", "mode", "requested", "user",
@@ -83,13 +87,15 @@ def _batch_messages(
         {
             "role": "system",
             "content": (
-                "Read only the tagged SOURCES. Extract every directly useful implementation "
-                "fact supported by an exact source span. Output one line per fact exactly as "
+                "Read only the tagged SOURCES. Extract the strongest directly useful "
+                "implementation facts supported by exact source spans. Return at most "
+                f"{_MAX_FACTS_PER_BATCH} facts. Output one line per fact exactly as "
                 "EVIDENCE<TAB>PAGE_REF<TAB>EXACT_QUOTE<TAB>IMPLEMENTATION_INSIGHT. "
                 "PAGE_REF must name the source containing EXACT_QUOTE, and EXACT_QUOTE must "
-                "be copied from that source rather than paraphrased. If no useful supported "
-                "fact exists output only NONE. No JSON, Markdown, code fences, analysis, "
-                "headings, sufficiency flags, search queries, or extra prose."
+                "be copied from that source rather than paraphrased. Prefer distinct facts "
+                "that materially affect implementation over repeated background detail. If no "
+                "useful supported fact exists output only NONE. No JSON, Markdown, code fences, "
+                "analysis, headings, sufficiency flags, search queries, or extra prose."
             ),
         },
         {
@@ -104,12 +110,17 @@ def _batch_messages(
     ]
 
 
-def _planner_output_reserve(router: Any) -> int:
+def _research_output_reserve(router: Any) -> int:
+    """Match capacity packing to the request-local decode budget used for extraction."""
+
     try:
         config = router.registry.role(router.profile, "planner")
-        return max(0, int(getattr(config, "max_new_tokens", 0) or 0))
+        configured = max(0, int(getattr(config, "max_new_tokens", 0) or 0))
     except Exception:
-        return 0
+        configured = 0
+    if configured > 0:
+        return min(configured, _RESEARCH_OUTPUT_TOKENS)
+    return _RESEARCH_OUTPUT_TOKENS
 
 
 def _live_accounting(router: Any, messages: Sequence[Mapping[str, Any]]) -> Any | None:
@@ -210,7 +221,7 @@ def _capacity_batches(
     if not ordered:
         return [], []
     diagnostics: list[str] = []
-    reserve = _planner_output_reserve(router)
+    reserve = _research_output_reserve(router)
     try:
         probe = _live_accounting(router, _batch_messages(domain, ordered[:1]))
     except Exception as exc:
@@ -245,9 +256,6 @@ def _capacity_batches(
             batches.append(remaining)
             break
 
-        # Exact accounting is monotonic for this append-only source envelope. Find the
-        # largest fitting prefix with logarithmic probes instead of rebuilding/tokenizing
-        # every growing prefix (1, 2, 3 ... N pages).
         low = start + 1
         high = len(expanded)
         best = start
@@ -303,14 +311,18 @@ def _extract_batch(
         return [], ["empty_host_batch"], 0
     messages = _batch_messages(domain, pages)
     try:
-        raw = router.generate_text(
-            "planner",
-            messages,
-            response_format="text",
-            response_schema=None,
-            tool_stage="research",
-            enable_tools=False,
-        )
+        with planner_operation(
+            "predesign_evidence_extract",
+            output_tokens=_RESEARCH_OUTPUT_TOKENS,
+        ):
+            raw = router.generate_text(
+                "planner",
+                messages,
+                response_format="text",
+                response_schema=None,
+                tool_stage="research",
+                enable_tools=False,
+            )
     except Exception as exc:
         return [], [f"model_read_failure:{type(exc).__name__}:{exc}"], 1
 
@@ -515,10 +527,12 @@ def research_document_domain(
             ),
             "model_json": False,
             "model_corrective_queries": False,
-            "capacity_boundary": "live_adapter_input_tokens+configured_output<=live_context",
+            "capacity_boundary": "live_adapter_input_tokens+request_output<=live_context",
             "page_local_uncertainty_blocks_design": False,
             "missing_external_evidence_blocks_design": False,
             "zero_source_body_model_calls": 0,
+            "request_output_tokens": _RESEARCH_OUTPUT_TOKENS,
+            "max_facts_per_batch": _MAX_FACTS_PER_BATCH,
         },
         "checkpoint": {
             "schema_version": "mmm/research-domain-checkpoint-v9",
