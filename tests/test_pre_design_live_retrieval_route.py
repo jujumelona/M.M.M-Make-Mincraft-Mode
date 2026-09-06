@@ -25,7 +25,7 @@ def test_pre_design_preserves_every_approved_query_without_cap(monkeypatch) -> N
         "domains": [
             {
                 "domain_id": "request",
-                "providers": ["official_docs", "project_rag", "runtime"],
+                "providers": ["official_docs", "project_rag", "runtime", "github"],
                 "queries": [prompt],
             }
         ]
@@ -37,7 +37,8 @@ def test_pre_design_preserves_every_approved_query_without_cap(monkeypatch) -> N
     assert domain["queries"] == planned_queries
     assert len(domain["queries"]) == 30
     assert prompt not in domain["queries"]
-    assert "github" in domain["providers"]
+    assert "github" not in domain["providers"]
+    assert "curseforge" in domain["providers"]
     assert "modrinth" in domain["providers"]
 
 
