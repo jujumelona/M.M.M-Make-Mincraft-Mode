@@ -110,7 +110,9 @@ def _deterministic_research() -> dict[str, object]:
             "domains": [
                 {
                     "domain_id": "request",
-                    "queries": [{"query": "feature", "sources": [{"source_id": "fixture"}]}],
+                    "queries": [
+                        {"query": "feature", "sources": [{"source_id": "fixture"}]}
+                    ],
                 }
             ],
         },
@@ -131,24 +133,27 @@ def test_sectioned_game_design_uses_host_owned_field_compiler() -> None:
         "연구를 먼저 하고 모드를 설계해줘",
         research=research,
     )
-    assert len(router.calls) == len(agentic._SECTION_SPECS) == 4
+    assert (
+        len(router.calls)
+        == sum(len(fields) for _, fields, _ in agentic._SECTION_SPECS)
+        == 10
+    )
     assert all(call["role"] == "planner" for call in router.calls)
     assert all(call["response_format"] == "text" for call in router.calls)
     assert all(call["response_schema"] is None for call in router.calls)
     assert all(call["tool_stage"] == "game_design" for call in router.calls)
     assert all(call["enable_tools"] is False for call in router.calls)
-    for (section_id, fields, _properties), call in zip(
-        agentic._SECTION_SPECS,
-        router.calls,
-        strict=True,
-    ):
+    expected = [
+        (section_id, field)
+        for section_id, fields, _ in agentic._SECTION_SPECS
+        for field in fields
+    ]
+    for (section_id, field), call in zip(expected, router.calls, strict=True):
         system = str(call["messages"][0]["content"])
         user = str(call["messages"][1]["content"])
-        assert "Write design content as Markdown, not JSON" in system
-        assert "single coherent response" in system
+        assert "exactly one field" in system
         assert f"\n\nSECTION\n{section_id}\n" in user
-        for field in fields:
-            assert f"## {field}" in user
+        assert f"\n\nFIELD\n{field}\n" in user
     assert result["title"] == "연구 기반 모드"
     assert result["core_loop"]
     assert result["acceptance_tests"]
@@ -184,7 +189,11 @@ def test_research_domain_legacy_facade_is_host_owned() -> None:
     result = agentic._research_domain_with_agent(
         NeverModel(),
         prompt="기능을 조사해서 설계해줘",
-        domain={"domain_id": "request", "objective": "요청 조사", "queries": ["minecraft mod feature"]},
+        domain={
+            "domain_id": "request",
+            "objective": "요청 조사",
+            "queries": ["minecraft mod feature"],
+        },
         deterministic=_deterministic_research(),
         trace_metadata=None,
     )
@@ -266,6 +275,10 @@ def test_domain_slice_bounds_forced_receipt_without_materializing_document() -> 
 
 
 def test_runtime_binding_uses_native_research_first_owner() -> None:
-    assert getattr(game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False)
+    assert getattr(
+        game_design.GameDesignPlanner.plan, "_mmm_host_owned_template", False
+    )
     assert not hasattr(game_design._generate_game_design_once, "__wrapped__")
-    assert not hasattr(game_design.GameDesignPlanner._plan_sharded_request, "__wrapped__")
+    assert not hasattr(
+        game_design.GameDesignPlanner._plan_sharded_request, "__wrapped__"
+    )

@@ -6,7 +6,11 @@ import minecraft_mod_ai.root_cause_trace as trace
 
 
 def _records(path):
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def test_root_cause_trace_is_durable_and_preserves_first_failure(tmp_path, monkeypatch):
@@ -85,9 +89,14 @@ def test_trace_serialization_failure_uses_emergency_record(tmp_path, monkeypatch
     calls = {"count": 0}
 
     def fail_once(*args, **kwargs):
-        calls["count"] += 1
-        if calls["count"] == 1:
-            raise TypeError("synthetic serializer failure")
+        if (
+            args
+            and isinstance(args[0], dict)
+            and args[0].get("event") == "production_failure"
+        ):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TypeError("synthetic serializer failure")
         return real_dumps(*args, **kwargs)
 
     monkeypatch.setattr(trace.json, "dumps", fail_once)

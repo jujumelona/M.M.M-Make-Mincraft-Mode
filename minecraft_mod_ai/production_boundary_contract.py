@@ -61,148 +61,26 @@ def _install_planner_public_acceptance_guard() -> None:
         if not original(value):
             return False
         normalize = getattr(_evidence, "_normalize_public_acceptance", None)
-        candidate = normalize(value) if callable(normalize) else str(value or "").strip()
+        candidate = (
+            normalize(value) if callable(normalize) else str(value or "").strip()
+        )
         return _strict_public_acceptance(candidate)
 
     is_public_acceptance._mmm_production_public_acceptance_guard = True
     _evidence._is_public_acceptance = is_public_acceptance
 
 
-def _migrate_verified_evidence_public_acceptance(
+def _validated_evidence_plan(
     evidence_plan: Mapping[str, Any] | None,
     *,
     requested_prompt: str,
 ) -> Mapping[str, Any] | None:
-    """Migrate legacy public acceptance only after verifying the original plan."""
-    if not isinstance(evidence_plan, Mapping):
-        return evidence_plan
+    """Validate the frozen contract without rewriting authored acceptance or task IDs."""
+    if isinstance(evidence_plan, Mapping):
+        from .evidence_first_planning import validate_evidence_first_plan
 
-    from . import evidence_first_planning as _evidence
-
-    _evidence.validate_evidence_first_plan(evidence_plan, prompt=requested_prompt)
-    request = evidence_plan.get("request_catalog")
-    if not isinstance(request, Mapping):
-        return evidence_plan
-    raw_requirements = request.get("requirements")
-    if not isinstance(raw_requirements, list):
-        return evidence_plan
-
-    canonical_by_ref: dict[str, list[str]] = {}
-    migrated_requirements: list[Any] = []
-    request_changed = False
-    for raw in raw_requirements:
-        if not isinstance(raw, Mapping):
-            migrated_requirements.append(raw)
-            continue
-        requirement = dict(raw)
-        current_raw = requirement.get("acceptance")
-        current = list(current_raw) if isinstance(current_raw, list) else []
-        canonical = _canonical_public_acceptance(current)
-        if not canonical:
-            canonical = [
-                "Verify the observable player-facing behavior for the approved requirement."
-            ]
-        requirement_ref = str(requirement.get("requirement_id") or "")
-        if requirement_ref:
-            canonical_by_ref[requirement_ref] = canonical
-        if canonical != current:
-            requirement["acceptance"] = canonical
-            request_changed = True
-        migrated_requirements.append(requirement)
-
-    migrated_request: Mapping[str, Any] = request
-    migrated_gaps: Any = evidence_plan.get("gap_catalog")
-    migrated_tasks: Any = evidence_plan.get("tasks")
-    if request_changed:
-        request_copy = dict(request)
-        request_copy["requirements"] = migrated_requirements
-        request_copy["catalog_sha256"] = ""
-        request_copy["catalog_sha256"] = _evidence._hash_without(
-            request_copy,
-            "catalog_sha256",
-        )
-        migrated_request = request_copy
-
-        raw_gaps = evidence_plan.get("gap_catalog")
-        if not isinstance(raw_gaps, list):
-            raise _evidence.EvidencePlanError("Gap catalog must be a list.")
-        gap_values: list[Any] = []
-        for raw in raw_gaps:
-            if not isinstance(raw, Mapping):
-                gap_values.append(raw)
-                continue
-            gap = dict(raw)
-            requirement_ref = str(gap.get("requirement_ref") or "")
-            canonical = canonical_by_ref.get(requirement_ref)
-            if canonical is not None:
-                gap["acceptance"] = list(canonical)
-                gap["gap_sha256"] = ""
-                gap["gap_sha256"] = _evidence._hash_without(gap, "gap_sha256")
-            gap_values.append(gap)
-        migrated_gaps = gap_values
-
-        rebuilt_tasks = _evidence._compile_tasks(
-            migrated_gaps,
-            evidence_plan.get("reuse_decisions") or (),
-            evidence_plan.get("target_decision") or {},
-            evidence_plan.get("branch_predicates") or {},
-            evidence_plan.get("ownership_context") or {},
-        )
-        order = _evidence._topological(rebuilt_tasks)
-        tasks_by_id = {str(task["task_id"]): task for task in rebuilt_tasks}
-        migrated_tasks = [tasks_by_id[task_id] for task_id in order]
-
-    raw_bindings = evidence_plan.get("acceptance_release_bindings")
-    migrated_bindings: Any = raw_bindings
-    bindings_changed = False
-    if isinstance(raw_bindings, list):
-        binding_values: list[Any] = []
-        for raw in raw_bindings:
-            if not isinstance(raw, Mapping):
-                binding_values.append(raw)
-                continue
-            binding = dict(raw)
-            requirement_ref = str(binding.get("requirement_ref") or "")
-            canonical = canonical_by_ref.get(requirement_ref)
-            current_raw = binding.get("acceptance")
-            current = list(current_raw) if isinstance(current_raw, list) else []
-            if canonical is not None and canonical != current:
-                binding["acceptance"] = list(canonical)
-                bindings_changed = True
-            binding_values.append(binding)
-        if bindings_changed:
-            migrated_bindings = binding_values
-
-    if not request_changed and not bindings_changed:
-        return evidence_plan
-
-    migrated_plan = dict(evidence_plan)
-    if request_changed:
-        migrated_plan["request_catalog"] = migrated_request
-        migrated_plan["gap_catalog"] = migrated_gaps
-        migrated_plan["tasks"] = migrated_tasks
-    if bindings_changed:
-        migrated_plan["acceptance_release_bindings"] = migrated_bindings
-    boundary = migrated_plan.get("acceptance_boundary")
-    if request_changed and isinstance(boundary, Mapping):
-        boundary_copy = dict(boundary)
-        boundary_copy["public_acceptance"] = [
-            {
-                "requirement_ref": requirement.get("requirement_id"),
-                "capability": requirement.get("capability"),
-                "acceptance": list(requirement.get("acceptance") or ()),
-            }
-            for requirement in migrated_requirements
-            if isinstance(requirement, Mapping)
-        ]
-        migrated_plan["acceptance_boundary"] = boundary_copy
-    migrated_plan["plan_sha256"] = ""
-    migrated_plan["plan_sha256"] = _evidence._hash_without(
-        migrated_plan,
-        "plan_sha256",
-    )
-    _evidence.validate_evidence_first_plan(migrated_plan, prompt=requested_prompt)
-    return migrated_plan
+        validate_evidence_first_plan(evidence_plan, prompt=requested_prompt)
+    return evidence_plan
 
 
 def _filter_evidence_input_acceptance(
@@ -232,7 +110,9 @@ def _filter_evidence_input_acceptance(
     )
 
 
-def _approved_requirements(evidence_plan: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
+def _approved_requirements(
+    evidence_plan: Mapping[str, Any] | None,
+) -> dict[str, Mapping[str, Any]]:
     if not isinstance(evidence_plan, Mapping):
         return {}
     request = evidence_plan.get("request_catalog")
@@ -248,7 +128,11 @@ def _approved_requirements(evidence_plan: Mapping[str, Any] | None) -> dict[str,
 
 def _approved_acceptance(requirement: Mapping[str, Any]) -> str:
     values = requirement.get("acceptance")
-    acceptance = [str(value).strip() for value in values if str(value).strip()] if isinstance(values, list) else []
+    acceptance = (
+        [str(value).strip() for value in values if str(value).strip()]
+        if isinstance(values, list)
+        else []
+    )
     if len(acceptance) != 1:
         raise _production.ProductionContractError(
             f"approved requirement {requirement.get('requirement_id')} must expose exactly one canonical public acceptance contract"
@@ -263,7 +147,9 @@ def _approved_acceptance(requirement: Mapping[str, Any]) -> str:
     return statement
 
 
-def _requirement_context(evidence_plan: Mapping[str, Any], requirement_id: str) -> tuple[str, set[str], set[str]]:
+def _requirement_context(
+    evidence_plan: Mapping[str, Any], requirement_id: str
+) -> tuple[str, set[str], set[str]]:
     approved = _approved_requirements(evidence_plan).get(requirement_id, {})
     span = approved.get("source_span") if isinstance(approved, Mapping) else {}
     text = " ".join(
@@ -272,7 +158,10 @@ def _requirement_context(evidence_plan: Mapping[str, Any], requirement_id: str) 
             approved.get("capability") if isinstance(approved, Mapping) else "",
             approved.get("semantic_statement") if isinstance(approved, Mapping) else "",
             span.get("text") if isinstance(span, Mapping) else "",
-            " ".join(approved.get("acceptance", [])) if isinstance(approved, Mapping) and isinstance(approved.get("acceptance"), list) else "",
+            " ".join(approved.get("acceptance", []))
+            if isinstance(approved, Mapping)
+            and isinstance(approved.get("acceptance"), list)
+            else "",
         )
     )
     predicates: set[str] = set()
@@ -283,7 +172,9 @@ def _requirement_context(evidence_plan: Mapping[str, Any], requirement_id: str) 
             if not isinstance(task, Mapping):
                 continue
             refs = task.get("requirement_refs")
-            if not isinstance(refs, list) or requirement_id not in {str(value) for value in refs}:
+            if not isinstance(refs, list) or requirement_id not in {
+                str(value) for value in refs
+            }:
                 continue
             values = task.get("conditional_predicates")
             if isinstance(values, list):
@@ -303,19 +194,25 @@ def _conditional_dimensions(
     requirement_id: str,
     active_ids: set[str],
 ) -> list[str]:
-    text, predicates, artifact_kinds = _requirement_context(evidence_plan, requirement_id)
+    text, predicates, artifact_kinds = _requirement_context(
+        evidence_plan, requirement_id
+    )
     selected: list[str] = []
     for dimension_id in _production._CONDITIONAL_ORDER:
         if dimension_id not in active_ids:
             continue
         triggered = _production._text_triggers_dimension(text, dimension_id)
         if dimension_id == "visual_3d":
-            triggered = triggered or "needs_client_render" in predicates or bool(
-                artifact_kinds
-                & {
-                    "client_visual_or_ui_resource",
-                    "data_or_client_resource",
-                }
+            triggered = (
+                triggered
+                or "needs_client_render" in predicates
+                or bool(
+                    artifact_kinds
+                    & {
+                        "client_visual_or_ui_resource",
+                        "data_or_client_resource",
+                    }
+                )
             )
         elif dimension_id == "state_save_migration":
             triggered = triggered or "needs_persistence" in predicates
@@ -343,7 +240,9 @@ def _rewrite_compilation(
         )
 
     catalog = [dict(item) for item in contract.get("acceptance_catalog", [])]
-    approved_statements = {req_id: _approved_acceptance(req) for req_id, req in approved.items()}
+    approved_statements = {
+        req_id: _approved_acceptance(req) for req_id, req in approved.items()
+    }
     approved_statement_set = set(approved_statements.values())
 
     removed_refs: set[str] = set()
@@ -359,7 +258,10 @@ def _rewrite_compilation(
                     f"production acceptance invented an unknown requirement identity: {req_id}"
                 )
             item["statement"] = approved_statements[req_id]
-        elif origin == "input" and str(item.get("statement") or "") in approved_statement_set:
+        elif (
+            origin == "input"
+            and str(item.get("statement") or "") in approved_statement_set
+        ):
             removed_refs.add(ref)
             continue
         if item.get("visibility") == "public":
@@ -451,6 +353,7 @@ def install_production_boundary_contract() -> None:
 
     original = _production.compile_production_contract
     if not getattr(original, "_mmm_authority_acceptance_projection", False):
+
         @wraps(original)
         def compile_contract(
             requested_prompt: str,
@@ -461,7 +364,7 @@ def install_production_boundary_contract() -> None:
             acceptance_tests=(),
             evidence_plan: Mapping[str, Any] | None = None,
         ):
-            effective_plan = _migrate_verified_evidence_public_acceptance(
+            effective_plan = _validated_evidence_plan(
                 evidence_plan,
                 requested_prompt=requested_prompt,
             )
@@ -484,6 +387,7 @@ def install_production_boundary_contract() -> None:
                 assets=assets,
                 evidence_plan=effective_plan,
             )
+
         compile_contract._mmm_authority_acceptance_projection = True
         _production.compile_production_contract = compile_contract
     _INSTALLED = True

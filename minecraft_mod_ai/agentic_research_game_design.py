@@ -1,187 +1,72 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .external_procedural_skill_contract import _sanitize_procedure, compact_skillbank
 from .planner_stage_trace import PlannerStageTrace
-from .model_meta_output_contract import assert_design_field_clean
 from .spec import SpecValidationError
 
-_RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "research_note": {
-            "type": "object",
-            "properties": {
-                "domain_id": {"type": "string"},
-                "claims": {"type": "array", "items": {}},
-                "gaps": {"type": "array", "items": {}},
-                "next_queries": {"type": "array", "items": {}},
-                "sufficient": {"type": "boolean"},
-                "procedures": {"type": "array", "items": {}},
-            },
-            "additionalProperties": True,
-        }
-    },
-    "additionalProperties": True,
-}
 
 # One host-owned contract defines model instructions, Markdown parsing, host structure,
 # and validation. Runtime installers must not mutate this schema or replace its parser.
-_SECTION_SPECS: tuple[tuple[str, tuple[str, ...], dict[str, Any]], ...] = (
-    (
-        "identity_and_loop",
-        ("title", "pitch", "core_loop"),
-        {
-            "title": {"type": "string", "minLength": 1},
-            "pitch": {"type": "string", "minLength": 1},
-            "core_loop": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        },
-    ),
-    (
-        "systems_and_progression",
-        ("progression", "combat", "mod_context"),
-        {
-            "progression": {"type": "array", "items": {"type": "string", "minLength": 1}},
-            "combat": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string", "minLength": 1}}},
-            "mod_context": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string", "minLength": 1}}},
-        },
-    ),
-    (
-        "modules_and_assets",
-        ("modules", "assets"),
-        {
-            "modules": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "plugin_id": {"type": "string", "minLength": 1},
-                        "status": {"type": "string", "minLength": 1},
-                        "reason": {"type": "string", "minLength": 1},
-                        "requirement_refs": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 1},
-                            "uniqueItems": True,
-                        },
-                        "implementation_obligations": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": {"type": "string", "minLength": 1},
-                            "uniqueItems": True,
-                        },
-                    },
-                    "required": [
-                        "plugin_id",
-                        "status",
-                        "reason",
-                        "requirement_refs",
-                        "implementation_obligations",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
-            "assets": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "minLength": 1},
-                        "kind": {"type": "string", "minLength": 1},
-                        "brief": {"type": "string", "minLength": 1},
-                    },
-                    "required": ["id", "kind", "brief"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ),
-    (
-        "quality_and_art",
-        ("acceptance_tests", "art_direction"),
-        {
-            "acceptance_tests": {"type": "array", "items": {"type": "string", "minLength": 1}},
-            "art_direction": {"type": "object"},
-        },
-    ),
+
+
+from .design_markdown import (
+    _LIST_FIELDS as _LIST_FIELDS,
+    _MAP_FIELDS as _MAP_FIELDS,
+    _NONE_VALUES as _NONE_VALUES,
+    _section_field_body as _section_field_body,
+    _strip_accidental_field_wrapper as _strip_accidental_field_wrapper,
+    _parse_field_output as _parse_field_output,
+    _normalize_heading as _normalize_heading,
+    _parse_markdown_section as _parse_markdown_section,
+    _plain_text as _plain_text,
+    _strip_list_marker as _strip_list_marker,
+    _markdown_list as _markdown_list,
+    _markdown_map as _markdown_map,
+    _split_csv as _split_csv,
+    _split_obligations as _split_obligations,
+    _record_key_value as _record_key_value,
+    _pipe_parts as _pipe_parts,
+    _is_markdown_table_separator as _is_markdown_table_separator,
+    _finalize_module_record as _finalize_module_record,
+    _module_rows as _module_rows,
+    _finalize_asset_record as _finalize_asset_record,
+    _asset_rows as _asset_rows,
 )
-
-_LIST_FIELDS = frozenset({"core_loop", "progression", "acceptance_tests"})
-_MAP_FIELDS = frozenset({"combat", "mod_context", "art_direction"})
-_NONE_VALUES = frozenset({"none", "n/a", "없음"})
-_REQUIREMENT_ID_RE = re.compile(r"\breq_[A-Za-z0-9_]+\b")
-
-
-def _referenced_requirement_ids(value: Any) -> set[str]:
-    refs: set[str] = set()
-    if isinstance(value, str):
-        refs.update(_REQUIREMENT_ID_RE.findall(value))
-    elif isinstance(value, Mapping):
-        for key, child in value.items():
-            refs.update(_referenced_requirement_ids(str(key)))
-            refs.update(_referenced_requirement_ids(child))
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for child in value:
-            refs.update(_referenced_requirement_ids(child))
-    return refs
-
-
-def _assert_known_requirement_ids(
-    field: str,
-    value: Any,
-    approved_requirement_ids: set[str],
-) -> None:
-    if not approved_requirement_ids:
-        return
-    unknown = sorted(_referenced_requirement_ids(value) - approved_requirement_ids)
-    if unknown:
-        raise SpecValidationError(
-            f"{field} cites unknown requirement ids: " + ", ".join(unknown)
-        )
-
-_PRODUCTION_DEPTH = (
-    "PRODUCTION DEPTH: finish the game/mod design before implementation search. "
-    "Decompose every requested mechanic into the smallest meaningful subsystems that can "
-    "be independently implemented, tested, and searched for reuse. Split different player "
-    "verbs, resources, state transitions, purchase/assembly steps, upgrade gates, travel "
-    "phases, encounters, combat outcomes, world interactions, persistence-visible state, "
-    "networking/client surfaces, and integration rules when they can fail independently. "
-    "Do not collapse an epic such as planet interaction, ship construction, trading, or "
-    "progression into one generic subsystem. Use as many concrete subsystems as the authored "
-    "design genuinely needs; never add unrelated features. Use supplied research evidence "
-    "for Minecraft/Fabric facts and unresolved assumptions, but donor/reuse selection happens "
-    "only after this design is frozen. Do not invent target-specific APIs, storage locations, "
-    "client/server authority, or implementation facts that are not supported by the supplied "
-    "research; describe behavior and authority requirements instead."
+from .design_requirement_contract import (
+    _REQUIREMENT_ID_RE as _REQUIREMENT_ID_RE,
+    _referenced_requirement_ids as _referenced_requirement_ids,
+    _assert_known_requirement_ids as _assert_known_requirement_ids,
+    _active_requirement_ledger as _active_requirement_ledger,
+    _render_requirement_ledger as _render_requirement_ledger,
+    _nonempty_text_list as _nonempty_text_list,
+    _validate_section_types as _validate_section_types,
+    _validate_requirement_coverage as _validate_requirement_coverage,
 )
-
-_MODULE_PRODUCTION_DEPTH = (
-    "MODULE LEAF INDEX: every implementation-bearing core-loop/progression/combat/mod-context "
-    "behavior must have a concrete modules row. Preserve only exact host-approved requirement "
-    "IDs in requirement_refs; never infer, synthesize, rename, or extend requirement IDs."
+from .design_research_context import (
+    _RESEARCH_NOTE_SCHEMA as _RESEARCH_NOTE_SCHEMA,
+    _json_sha256 as _json_sha256,
+    _domain_source_value as _domain_source_value,
+    _has_grounding_content as _has_grounding_content,
+    _domain_evidence_slice as _domain_evidence_slice,
+    _allowed_research_refs as _allowed_research_refs,
+    _claim_refs as _claim_refs,
+    _validate_sufficient_research as _validate_sufficient_research,
+    _research_domain_with_agent as _research_domain_with_agent,
+    _research_messages as _research_messages,
+    _render_design_research as _render_design_research,
+    _compact_research_for_design as _compact_research_for_design,
+    _research_receipt as _research_receipt,
+    _candidate_research_note as _candidate_research_note,
+    _parse_research_note as _parse_research_note,
+    _extract_json_object as _extract_json_object,
+    _error as _error,
 )
-
-_MODULE_FORMAT = (
-    "For ## modules, prefer one Markdown record per module instead of a fragile fixed-width "
-    "table. Use: ### <plugin_id>, then '- status: <value>', '- reason: <text>', "
-    "'- requirement_refs: <comma-separated exact approved IDs>', and "
-    "'- implementation_obligations:' followed by one or more nested bullets. "
-    "A legacy one-line pipe record is also accepted as "
-    "plugin_id | status | reason | requirement_refs | implementation_obligations, and the "
-    "reason may itself contain pipe characters. requirement_refs must preserve exact approved "
-    "requirement IDs (or literal 'none' only when no approved requirements exist). Never hide "
-    "requirement_refs or implementation_obligations inside reason."
-)
-
-_ASSET_FORMAT = (
-    "For ## assets, prefer one Markdown record per asset: ### <id>, then '- kind: <kind>' and "
-    "'- brief: <description>'. A legacy id | kind | brief line is also accepted; brief may "
-    "contain pipe characters."
+from .design_section_schema import (
+    _SECTION_SPECS as _SECTION_SPECS,
 )
 
 
@@ -189,213 +74,6 @@ def supports_agentic_research_router(router: Any) -> bool:
     from .model_router import ModelRouter
 
     return isinstance(router, ModelRouter)
-
-
-def _json_sha256(value: Any) -> str:
-    """Stable host-only digest; never a model planning format."""
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _active_requirement_ledger(prompt: str) -> tuple[dict[str, Any], ...]:
-    """Read the already-frozen authored request authority without rebuilding scope."""
-    from . import evidence_request_guard as request_guard
-
-    active = request_guard._ACTIVE_REQUEST_CATALOG.get()
-    if active is None or active[0] != prompt:
-        return ()
-    catalog = active[1]
-    raw_requirements = catalog.get("requirements", [])
-    if not isinstance(raw_requirements, list):
-        return ()
-    ledger: list[dict[str, Any]] = []
-    for raw in raw_requirements:
-        if not isinstance(raw, Mapping):
-            continue
-        requirement_id = str(raw.get("requirement_id") or "").strip()
-        if not requirement_id:
-            continue
-        span = raw.get("source_span")
-        span_text = str(span.get("text") or "").strip() if isinstance(span, Mapping) else ""
-        behavior = raw.get("observable_behavior")
-        acceptance = raw.get("acceptance")
-        ledger.append(
-            {
-                "requirement_id": requirement_id,
-                "capability": str(raw.get("capability") or "").strip(),
-                "authored_text": span_text or str(raw.get("statement") or "").strip(),
-                "semantic_statement": str(raw.get("semantic_statement") or "").strip(),
-                "observable_behavior": dict(behavior) if isinstance(behavior, Mapping) else {},
-                "acceptance": [str(item).strip() for item in acceptance if str(item).strip()]
-                if isinstance(acceptance, list)
-                else [],
-            }
-        )
-    return tuple(ledger)
-
-
-def _render_requirement_ledger(ledger: Sequence[Mapping[str, Any]]) -> str:
-    if not ledger:
-        return "No approved requirement ledger is active."
-    lines = ["APPROVED REQUIREMENTS (HOST AUTHORITY; preserve IDs exactly)"]
-    for item in ledger:
-        requirement_id = " ".join(str(item.get("requirement_id") or "").split())
-        lines.append(f"- requirement_id: {requirement_id}")
-        capability = " ".join(str(item.get("capability") or "").split())
-        if capability:
-            lines.append(f"  capability: {capability}")
-        authored = " ".join(str(item.get("authored_text") or "").split())
-        if authored:
-            lines.append(f"  authored_text: {authored}")
-        semantic = " ".join(str(item.get("semantic_statement") or "").split())
-        if semantic:
-            lines.append(f"  semantic_statement: {semantic}")
-        acceptance = item.get("acceptance")
-        if isinstance(acceptance, list):
-            rendered = "; ".join(" ".join(str(value).split()) for value in acceptance if str(value).strip())
-            if rendered:
-                lines.append(f"  acceptance: {rendered}")
-    return "\n".join(lines)
-
-
-def _domain_source_value(domain_id: str, value: Any) -> Any:
-    if not isinstance(value, Mapping):
-        return value
-    domains = value.get("domains")
-    if not isinstance(domains, list):
-        return dict(value)
-    selected = next(
-        (item for item in domains if isinstance(item, Mapping) and item.get("domain_id") == domain_id),
-        None,
-    )
-    receipt = {key: item for key, item in value.items() if key != "domains"}
-    if isinstance(selected, Mapping):
-        receipt.update(dict(selected))
-    return receipt
-
-
-def _has_grounding_content(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        status = str(value.get("status", "")).strip().casefold()
-        if status in {"unavailable", "deferred", "deferred_until_target_freeze", "disabled", "skipped"}:
-            return False
-        for key in ("hits", "sources", "evidence", "records", "page_observations"):
-            child = value.get(key)
-            if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)) and bool(child):
-                return True
-        try:
-            if int(value.get("project_source_count", 0) or 0) > 0:
-                return True
-        except (TypeError, ValueError, OverflowError):
-            pass
-        return any(_has_grounding_content(child) for child in value.values())
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(_has_grounding_content(child) for child in value)
-    return False
-
-
-def _domain_evidence_slice(domain_id: str, deterministic: Mapping[str, Any]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for source, raw_value in deterministic.items():
-        source_name = str(source)
-        value = _domain_source_value(domain_id, raw_value)
-        receipt = _research_receipt(value)
-        if isinstance(receipt, Mapping):
-            receipt = dict(receipt)
-            if _has_grounding_content(value):
-                receipt["evidence_ref"] = source_name
-        result[source_name] = receipt
-    return result
-
-
-def _allowed_research_refs(evidence: Mapping[str, Any]) -> frozenset[str]:
-    return frozenset(
-        str(value.get("evidence_ref", "")).strip()
-        for value in evidence.values()
-        if isinstance(value, Mapping) and str(value.get("evidence_ref", "")).strip()
-    )
-
-
-def _claim_refs(note: Mapping[str, Any]) -> frozenset[str]:
-    refs: set[str] = set()
-    claims = note.get("claims", [])
-    if not isinstance(claims, list):
-        return frozenset()
-    for claim in claims:
-        if not isinstance(claim, Mapping):
-            continue
-        raw_refs = claim.get("evidence_refs", [])
-        if isinstance(raw_refs, list):
-            refs.update(str(ref).strip() for ref in raw_refs if str(ref).strip())
-    return frozenset(refs)
-
-
-def _validate_sufficient_research(note: Mapping[str, Any], *, allowed_refs: frozenset[str]) -> None:
-    if not note.get("sufficient"):
-        return
-    claims = note.get("claims", [])
-    if not isinstance(claims, list) or not claims:
-        if (
-            note.get("research_mode") == "advisory_predesign"
-            and note.get("research_evidence_status")
-            in {"no_relevant_external_evidence", "partial", "supported"}
-        ):
-            return
-        raise SpecValidationError("research_note.sufficient=true requires at least one grounded claim")
-    if not allowed_refs:
-        raise SpecValidationError(
-            "research_note.sufficient=true is forbidden because the host has issued no grounding evidence_ref for this domain"
-        )
-    for index, claim in enumerate(claims):
-        if not isinstance(claim, Mapping):
-            raise SpecValidationError(f"research_note.claims[{index}] must be a grounded claim object")
-        raw_refs = claim.get("evidence_refs", [])
-        refs = {str(ref).strip() for ref in raw_refs if str(ref).strip()} if isinstance(raw_refs, list) else set()
-        if not refs:
-            raise SpecValidationError(f"research_note.claims[{index}] has no host-issued evidence_ref")
-        unknown = sorted(refs - allowed_refs)
-        if unknown:
-            raise SpecValidationError(
-                f"research_note.claims[{index}] cites unverified evidence_refs {unknown}; allowed host refs are {sorted(allowed_refs)}"
-            )
-
-
-def _research_domain_with_agent(
-    router: Any,
-    *,
-    prompt: str,
-    domain: Mapping[str, Any],
-    deterministic: Mapping[str, Any],
-    trace_metadata: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    """Compatibility facade: host receipts only, never model-authored research JSON."""
-    del router, prompt, trace_metadata
-    domain_id = str(domain.get("domain_id", "")).strip() or "unknown"
-    evidence = _domain_evidence_slice(domain_id, deterministic)
-    return {
-        "domain_id": domain_id,
-        "claims": [],
-        "gaps": [],
-        "next_queries": [],
-        "procedures": [],
-        "sufficient": True,
-        "fixed_point": False,
-        "research_mode": "advisory_predesign",
-        "research_evidence_status": (
-            "host_receipts_available" if _allowed_research_refs(evidence) else "no_relevant_external_evidence"
-        ),
-        "quality_contract": {
-            "model_role": "none_for_receipt_sufficiency",
-            "host_role": "scope+retrieval+evidence_refs+sufficiency+serialization",
-            "model_json": False,
-        },
-    }
 
 
 def generate_sectioned_game_design(
@@ -427,24 +105,6 @@ def generate_sectioned_game_design(
     return _validate_requirement_coverage(merged, _active_requirement_ledger(prompt))
 
 
-def _section_field_body(raw: Any, field: str, fields: Sequence[str]) -> str:
-    expected = {_normalize_heading(value): value for value in fields}
-    bodies: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in str(raw or "").splitlines():
-        match = re.match(r"^\s*##\s+(.+?)\s*$", line)
-        if match:
-            current = expected.get(_normalize_heading(match.group(1)))
-            if current is not None:
-                bodies.setdefault(current, [])
-            continue
-        if current is not None:
-            bodies[current].append(line)
-    if field not in bodies:
-        raise SpecValidationError(f"Planner prose omitted required Markdown heading: {field}")
-    return "\n".join(bodies[field]).strip()
-
-
 def _generate_section(
     router: Any,
     *,
@@ -456,12 +116,10 @@ def _generate_section(
     media_paths: Sequence[str | Path],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Generate one coherent section in one model turn, then host-compile each field.
+    """Compile independently validated fields; never replace failed content with defaults."""
+    from .planner_field_worker import generate_field
+    from .research_requirement_evidence import evidence_catalog, requirement_score
 
-    Related fields share one model context, cutting normal design generation from ten
-    model turns to four without dropping any field. The host still owns every key,
-    parser, type check, requirement binding, and per-field fallback.
-    """
     del host_properties
     trace = PlannerStageTrace(
         stage=f"game_design_{section_id}",
@@ -470,735 +128,133 @@ def _generate_section(
         metadata=dict(trace_metadata or {}),
     )
     ledger = _active_requirement_ledger(prompt)
-    requirement_ids = tuple(item["requirement_id"] for item in ledger)
-    raw = router.generate_text(
-        "planner",
-        _section_messages(
-            prompt=prompt,
-            section_id=section_id,
-            fields=fields,
-            research=research,
-        ),
-        media_paths=media_paths,
-        response_format="text",
-        response_schema=None,
-        tool_stage="game_design",
-        enable_tools=False,
-    )
+    evidence = evidence_catalog(research, {}, {})
     section: dict[str, Any] = {}
-    fallback_fields: dict[str, str] = {}
+    failures: list[str] = []
+    asset_decisions: dict[str, str] = {}
     for field in fields:
-        try:
-            body = _section_field_body(raw, field, fields)
-            value = _parse_field_output(body, field)
-            if field == "modules":
-                value = _ensure_module_coverage(value, ledger)
-            _validate_section_types(
-                {field: value},
-                (field,),
-                requirement_ids=requirement_ids,
+        # Identity/overall progression remain coherent; implementation content has one owner.
+        scoped = field in {
+            "modules",
+            "assets",
+            "combat",
+            "mod_context",
+            "acceptance_tests",
+        }
+        scopes = [(item,) for item in ledger] if scoped and ledger else [ledger]
+        values: list[Any] = []
+        for scope in scopes:
+            requirement = scope[0] if scoped and len(scope) == 1 else None
+            ref = str(requirement["requirement_id"]) if requirement else ""
+            ranked = sorted(
+                (
+                    (max((requirement_score(item, r) for r in scope), default=0), item)
+                    for item in evidence
+                ),
+                key=lambda pair: (-pair[0], pair[1]["evidence_ref"]),
             )
-        except (KeyError, SpecValidationError, ValueError, TypeError) as exc:
-            fallback_fields[field] = f"{type(exc).__name__}: {exc}"
-            value = _host_field_fallback(field, prompt=prompt, ledger=ledger)
-            if field == "modules":
-                value = _ensure_module_coverage(value, ledger)
-            _validate_section_types(
-                {field: value},
-                (field,),
-                requirement_ids=requirement_ids,
+            context = {
+                "domain_notes": [item for score, item in ranked if score > 0][:12]
+            }
+            messages = _field_messages(
+                prompt=prompt,
+                section_id=section_id,
+                field=field,
+                research=context,
+                ledger=scope,
+                host_module=bool(ref and field == "modules"),
             )
-        section[field] = value
 
-    trace.record_attempt(
-        raw_output=str(raw or ""),
-        validation_error=(
-            "host field fallback applied: " + ", ".join(sorted(fallback_fields))
-            if fallback_fields
-            else None
-        ),
-        candidate=section,
-        accepted=section,
-        context={
-            "section_id": section_id,
-            "format": "host_owned_section_compiler",
-            "model_turns": 1,
-            "fallback_fields": fallback_fields,
-        },
-    )
+            def parse(raw: str) -> Any:
+                body = raw.strip()
+                if re.search(r"^\s*(?:#\s+)?##\s+", body, re.MULTILINE):
+                    body = _section_field_body(body, field, fields)
+                if not body.strip():
+                    raise SpecValidationError(f"{field} content is missing")
+                if field == "modules" and requirement:
+                    obligations = _parse_field_output(body, "core_loop")
+                    if not obligations or any(
+                        item.strip().casefold() in _NONE_VALUES for item in obligations
+                    ):
+                        raise SpecValidationError(
+                            "modules requires concrete implementation obligations, not none"
+                        )
+                    if _referenced_requirement_ids(obligations):
+                        raise SpecValidationError(
+                            "Return behavior only; the host owns requirement IDs"
+                        )
+                    value = [
+                        {
+                            "plugin_id": "design_" + ref,
+                            "status": "custom_required",
+                            "capability": requirement.get("capability", ""),
+                            "reason": requirement.get("semantic_statement")
+                            or requirement.get("authored_text"),
+                            "requirement_refs": [ref],
+                            "implementation_obligations": obligations,
+                        }
+                    ]
+                elif (
+                    field == "assets"
+                    and requirement
+                    and body.casefold().startswith("none:")
+                ):
+                    reason = body.split(":", 1)[1].strip()
+                    if not reason:
+                        raise SpecValidationError("Explain why existing assets suffice")
+                    asset_decisions[ref] = reason
+                    value = []
+                else:
+                    value = _parse_field_output(body, field)
+                    if field == "assets" and requirement:
+                        if not value:
+                            raise SpecValidationError(
+                                "Empty assets require 'none: <reason existing assets suffice>'"
+                            )
+                        for row in value:
+                            row["id"] = ref + "_" + row["id"]
+                        asset_decisions[ref] = "dedicated_assets_specified"
+                _validate_section_types(
+                    {field: value},
+                    (field,),
+                    requirement_ids=[item["requirement_id"] for item in scope],
+                )
+                return value
+
+            try:
+                values.append(
+                    generate_field(
+                        router,
+                        messages=messages,
+                        parse=parse,
+                        trace=trace,
+                        field=field,
+                        requirement_ref=ref,
+                        media_paths=media_paths if not section and not values else (),
+                    )
+                )
+            except SpecValidationError as exc:
+                failures.append(str(exc))
+        if not values:
+            continue
+        if isinstance(values[0], list):
+            section[field] = [item for value in values for item in value]
+        elif isinstance(values[0], dict):
+            merged: dict[str, list[str]] = {}
+            for value in values:
+                for key, entries in value.items():
+                    merged.setdefault(key, []).extend(entries)
+            section[field] = merged
+        else:
+            section[field] = values[0]
+    if failures:
+        raise SpecValidationError(
+            "Design fields remain unresolved: " + "; ".join(failures)
+        )
+    if asset_decisions:
+        section["_asset_design_decisions"] = asset_decisions
     trace.record_success(section)
     return section
-
-def _strip_accidental_field_wrapper(raw: Any, field: str) -> str:
-    body = str(raw or "").strip()
-    if body.startswith("```") and body.endswith("```"):
-        lines = body.splitlines()
-        if lines and lines[0].lstrip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        body = "\n".join(lines).strip()
-    lines = body.splitlines()
-    if lines:
-        heading = re.match(r"^\s*##\s+(.+?)\s*$", lines[0])
-        if heading and _normalize_heading(heading.group(1)) == _normalize_heading(field):
-            body = "\n".join(lines[1:]).strip()
-    return body
-
-
-def _parse_field_output(raw: Any, field: str) -> Any:
-    body = _strip_accidental_field_wrapper(raw, field)
-    if field in {"title", "pitch"}:
-        value = _plain_text(body)
-        if not value:
-            raise SpecValidationError(f"Planner left {field} empty")
-        try:
-            assert_design_field_clean(field, value)
-        except ValueError as exc:
-            raise SpecValidationError(str(exc)) from exc
-        return value
-    if field in _LIST_FIELDS:
-        values = _markdown_list(body)
-        if not values:
-            raise SpecValidationError(f"Planner left {field} empty")
-        if field == "core_loop":
-            try:
-                assert_design_field_clean(field, values)
-            except ValueError as exc:
-                raise SpecValidationError(str(exc)) from exc
-        return values
-    if field in _MAP_FIELDS:
-        return _markdown_map(body)
-    if field == "modules":
-        return _module_rows(body)
-    if field == "assets":
-        return _asset_rows(body)
-    raise SpecValidationError(f"Unsupported host design field: {field}")
-
-
-def _fallback_requirement_text(item: Mapping[str, Any]) -> str:
-    for key in ("semantic_statement", "authored_text"):
-        value = " ".join(str(item.get(key) or "").split()).strip()
-        if value:
-            return value
-    acceptance = item.get("acceptance")
-    if isinstance(acceptance, list):
-        value = " ".join(str(entry).strip() for entry in acceptance if str(entry).strip())
-        if value:
-            return value
-    return str(item.get("requirement_id") or "requested mechanic").strip()
-
-
-def _fallback_list(prompt: str, ledger: Sequence[Mapping[str, Any]], *, acceptance: bool = False) -> list[str]:
-    values: list[str] = []
-    for item in ledger:
-        if acceptance:
-            raw = item.get("acceptance")
-            if isinstance(raw, list):
-                values.extend(" ".join(str(entry).split()) for entry in raw if str(entry).strip())
-                continue
-        value = _fallback_requirement_text(item)
-        if value:
-            values.append(value)
-    values = list(dict.fromkeys(value for value in values if value))
-    if values:
-        return values
-    fallback = " ".join(str(prompt or "").split()).strip()
-    return [fallback or "Implement and verify the approved Minecraft mod request."]
-
-
-def _fallback_module(item: Mapping[str, Any], index: int) -> dict[str, Any]:
-    requirement_id = str(item.get("requirement_id") or "").strip()
-    capability = _normalize_heading(str(item.get("capability") or "")) or f"requirement_{index + 1}"
-    acceptance = item.get("acceptance")
-    obligations = (
-        [" ".join(str(entry).split()) for entry in acceptance if str(entry).strip()]
-        if isinstance(acceptance, list)
-        else []
-    )
-    if not obligations:
-        obligations = [_fallback_requirement_text(item)]
-    return {
-        "plugin_id": f"design_{capability}_{index + 1}",
-        "status": "custom_required",
-        "reason": _fallback_requirement_text(item),
-        "requirement_refs": [requirement_id] if requirement_id else [],
-        "implementation_obligations": list(dict.fromkeys(obligations)),
-    }
-
-
-def _host_field_fallback(
-    field: str,
-    *,
-    prompt: str,
-    ledger: Sequence[Mapping[str, Any]],
-) -> Any:
-    if field == "title":
-        capabilities = [
-            str(item.get("capability") or "").replace("_", " ").strip()
-            for item in ledger
-            if str(item.get("capability") or "").strip()
-        ]
-        if capabilities:
-            return " + ".join(capabilities[:3]).title() + " Minecraft Mod"
-        return (" ".join(prompt.split())[:120] or "Minecraft Mod Design")
-    if field == "pitch":
-        return " ".join(prompt.split()) or "Implement the approved Minecraft mod request."
-    if field in {"core_loop", "progression"}:
-        return _fallback_list(prompt, ledger)
-    if field == "acceptance_tests":
-        return _fallback_list(prompt, ledger, acceptance=True)
-    if field in {"combat", "mod_context", "art_direction"}:
-        return {}
-    if field == "modules":
-        return [_fallback_module(item, index) for index, item in enumerate(ledger)]
-    if field == "assets":
-        return []
-    raise SpecValidationError(f"No host fallback exists for design field {field}")
-
-
-def _ensure_module_coverage(
-    modules: Any,
-    ledger: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    result = [dict(item) for item in modules if isinstance(item, Mapping)] if isinstance(modules, list) else []
-    required = {
-        str(item.get("requirement_id") or "").strip(): (index, item)
-        for index, item in enumerate(ledger)
-        if str(item.get("requirement_id") or "").strip()
-    }
-    covered: set[str] = set()
-    for module in result:
-        refs = module.get("requirement_refs")
-        if isinstance(refs, list):
-            covered.update(str(ref).strip() for ref in refs if str(ref).strip())
-    for requirement_id, (index, item) in required.items():
-        if requirement_id not in covered:
-            result.append(_fallback_module(item, index))
-    return result
-
-
-def _normalize_heading(value: str) -> str:
-    value = value.strip().strip("`").casefold()
-    return re.sub(r"[^a-z0-9]+", "_", value).strip("_")
-
-
-def _parse_markdown_section(raw: str, fields: Sequence[str]) -> dict[str, Any]:
-    expected = {_normalize_heading(field): field for field in fields}
-    bodies: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in str(raw or "").splitlines():
-        match = re.match(r"^\s*##\s+(.+?)\s*$", line)
-        if match:
-            current = expected.get(_normalize_heading(match.group(1)))
-            if current is not None:
-                bodies.setdefault(current, [])
-            continue
-        if current is not None:
-            bodies[current].append(line)
-    missing = [field for field in fields if field not in bodies]
-    if missing:
-        raise SpecValidationError("Planner prose omitted required Markdown heading(s): " + ", ".join(missing))
-    section: dict[str, Any] = {}
-    for field in fields:
-        body = "\n".join(bodies[field]).strip()
-        if field in {"title", "pitch"}:
-            value = _plain_text(body)
-            if not value:
-                raise SpecValidationError(f"Planner prose left ## {field} empty")
-            section[field] = value
-        elif field in _LIST_FIELDS:
-            values = _markdown_list(body)
-            if not values:
-                raise SpecValidationError(f"Planner prose left ## {field} empty")
-            section[field] = values
-        elif field in _MAP_FIELDS:
-            section[field] = _markdown_map(body)
-        elif field == "modules":
-            section[field] = _module_rows(body)
-        elif field == "assets":
-            section[field] = _asset_rows(body)
-        else:
-            raise SpecValidationError(f"Unsupported host design field: {field}")
-    return section
-
-
-def _plain_text(body: str) -> str:
-    lines = [_strip_list_marker(line) for line in body.splitlines()]
-    return " ".join(line for line in lines if line).strip()
-
-
-def _strip_list_marker(line: str) -> str:
-    value = line.strip()
-    if not value:
-        return ""
-    return re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", value).strip()
-
-
-def _markdown_list(body: str) -> list[str]:
-    values: list[str] = []
-    for line in body.splitlines():
-        if line.lstrip().startswith("### "):
-            continue
-        value = _strip_list_marker(line)
-        if value:
-            values.append(value)
-    return values
-
-
-def _markdown_map(body: str) -> dict[str, list[str]]:
-    normalized = " ".join(_strip_list_marker(line) for line in body.splitlines() if _strip_list_marker(line)).strip().casefold()
-    if normalized in _NONE_VALUES:
-        return {}
-    result: dict[str, list[str]] = {}
-    current = "summary"
-    for line in body.splitlines():
-        heading = re.match(r"^\s*###\s+(.+?)\s*$", line)
-        if heading:
-            current = _normalize_heading(heading.group(1)) or "summary"
-            result.setdefault(current, [])
-            continue
-        value = _strip_list_marker(line)
-        if value:
-            result.setdefault(current, []).append(value)
-    return {key: values for key, values in result.items() if values}
-
-
-def _split_csv(value: str) -> list[str]:
-    text = value.strip().strip("[](){}")
-    if text.casefold() in _NONE_VALUES:
-        return []
-    return list(
-        dict.fromkeys(
-            item.strip().strip("`'\"")
-            for item in re.split(r"\s*[,;，；]\s*", text)
-            if item.strip().strip("`'\"")
-        )
-    )
-
-
-def _split_obligations(value: str) -> list[str]:
-    text = value.strip().strip("[]")
-    if text.casefold() in _NONE_VALUES:
-        return []
-    separators = r"\s*(?:;|；|<br\s*/?>)\s*"
-    parts = [item.strip().strip("`'\"") for item in re.split(separators, text, flags=re.IGNORECASE)]
-    return list(dict.fromkeys(item for item in parts if item))
-
-
-def _record_key_value(value: str) -> tuple[str, str] | None:
-    match = re.match(r"^([A-Za-z_][A-Za-z0-9_ -]*)\s*:\s*(.*)$", value.strip())
-    if not match:
-        return None
-    key = _normalize_heading(match.group(1))
-    return key, match.group(2).strip()
-
-
-def _pipe_parts(value: str) -> list[str]:
-    text = value.strip()
-    if text.startswith("|"):
-        text = text[1:]
-    if text.endswith("|"):
-        text = text[:-1]
-    return [part.strip() for part in text.split("|")]
-
-
-def _is_markdown_table_separator(parts: Sequence[str]) -> bool:
-    return bool(parts) and all(re.fullmatch(r":?-{3,}:?", part.replace(" ", "")) for part in parts if part)
-
-
-def _finalize_module_record(record: Mapping[str, Any], *, source: str) -> dict[str, Any]:
-    plugin_id = str(record.get("plugin_id") or "").strip()
-    status = str(record.get("status") or "").strip()
-    reason = str(record.get("reason") or "").strip()
-    raw_refs = record.get("requirement_refs")
-    refs = list(raw_refs) if isinstance(raw_refs, list) else _split_csv(str(raw_refs or ""))
-    raw_obligations = record.get("implementation_obligations")
-    obligations = (
-        [str(item).strip() for item in raw_obligations if str(item).strip()]
-        if isinstance(raw_obligations, list)
-        else _split_obligations(str(raw_obligations or ""))
-    )
-    obligations = list(dict.fromkeys(obligations))
-    if not plugin_id or not status or not reason or not obligations:
-        raise SpecValidationError(
-            "Each ## modules record requires plugin_id, status, reason, requirement_refs, "
-            f"and concrete implementation_obligations; malformed record: {source}"
-        )
-    return {
-        "plugin_id": plugin_id,
-        "status": status,
-        "reason": reason,
-        "requirement_refs": refs,
-        "implementation_obligations": obligations,
-    }
-
-
-def _module_rows(body: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    active_list_key: str | None = None
-
-    def flush() -> None:
-        nonlocal current, active_list_key
-        if current is not None:
-            rows.append(_finalize_module_record(current, source=str(current)))
-        current = None
-        active_list_key = None
-
-    for raw_line in body.splitlines():
-        heading = re.match(r"^\s*###\s+(.+?)\s*$", raw_line)
-        if heading:
-            flush()
-            heading_value = heading.group(1).strip().strip("`")
-            heading_value = re.sub(r"^(?:module|plugin_id)\s*:\s*", "", heading_value, flags=re.IGNORECASE)
-            if heading_value.casefold() in _NONE_VALUES:
-                continue
-            current = {"plugin_id": heading_value}
-            continue
-
-        value = _strip_list_marker(raw_line)
-        if not value:
-            continue
-        if value.casefold() in _NONE_VALUES and current is None:
-            continue
-
-        parts = _pipe_parts(value)
-        if "|" in value:
-            normalized_header = [_normalize_heading(part) for part in parts]
-            if normalized_header[:2] == ["plugin_id", "status"] or _is_markdown_table_separator(parts):
-                continue
-            if len(parts) >= 5 and all(parts[:2]) and parts[-2] and parts[-1]:
-                flush()
-                rows.append(
-                    _finalize_module_record(
-                        {
-                            "plugin_id": parts[0],
-                            "status": parts[1],
-                            "reason": " | ".join(parts[2:-2]).strip(),
-                            "requirement_refs": _split_csv(parts[-2]),
-                            "implementation_obligations": _split_obligations(parts[-1]),
-                        },
-                        source=value,
-                    )
-                )
-                continue
-
-        key_value = _record_key_value(value)
-        if key_value is not None:
-            key, item_value = key_value
-            if key == "plugin_id":
-                if current is not None and current.get("plugin_id"):
-                    flush()
-                current = {"plugin_id": item_value}
-                continue
-            if current is None:
-                current = {}
-            if key in {"status", "reason"}:
-                current[key] = item_value
-                active_list_key = None
-                continue
-            if key == "requirement_refs":
-                current[key] = _split_csv(item_value)
-                active_list_key = "requirement_refs" if not item_value else None
-                continue
-            if key == "implementation_obligations":
-                current[key] = _split_obligations(item_value)
-                active_list_key = "implementation_obligations" if not item_value else None
-                continue
-
-        if current is not None and active_list_key == "implementation_obligations":
-            current.setdefault("implementation_obligations", []).append(value)
-            continue
-        if current is not None and active_list_key == "requirement_refs":
-            current.setdefault("requirement_refs", []).extend(_split_csv(value))
-            continue
-        if current is not None and current.get("reason"):
-            current["reason"] = f"{current['reason']} {value}".strip()
-            continue
-        raise SpecValidationError(
-            "Could not parse a ## modules record. Use labeled Markdown records or the supported legacy pipe record."
-        )
-
-    flush()
-    return rows
-
-
-def _finalize_asset_record(record: Mapping[str, Any], *, source: str) -> dict[str, str]:
-    asset_id = str(record.get("id") or "").strip()
-    kind = str(record.get("kind") or "").strip()
-    brief = str(record.get("brief") or "").strip()
-    if not asset_id or not kind or not brief:
-        raise SpecValidationError(
-            f"Each ## assets record requires id, kind, and brief; malformed record: {source}"
-        )
-    return {"id": asset_id, "kind": kind, "brief": brief}
-
-
-def _asset_rows(body: str) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-
-    def flush() -> None:
-        nonlocal current
-        if current is not None:
-            rows.append(_finalize_asset_record(current, source=str(current)))
-        current = None
-
-    for raw_line in body.splitlines():
-        heading = re.match(r"^\s*###\s+(.+?)\s*$", raw_line)
-        if heading:
-            flush()
-            heading_value = heading.group(1).strip().strip("`")
-            heading_value = re.sub(r"^(?:asset|id)\s*:\s*", "", heading_value, flags=re.IGNORECASE)
-            if heading_value.casefold() in _NONE_VALUES:
-                continue
-            current = {"id": heading_value}
-            continue
-
-        value = _strip_list_marker(raw_line)
-        if not value:
-            continue
-        if value.casefold() in _NONE_VALUES and current is None:
-            continue
-        parts = _pipe_parts(value)
-        if "|" in value:
-            normalized_header = [_normalize_heading(part) for part in parts]
-            if normalized_header[:2] == ["id", "kind"] or _is_markdown_table_separator(parts):
-                continue
-            if len(parts) >= 3 and all(parts[:2]):
-                flush()
-                rows.append(
-                    _finalize_asset_record(
-                        {"id": parts[0], "kind": parts[1], "brief": " | ".join(parts[2:]).strip()},
-                        source=value,
-                    )
-                )
-                continue
-
-        key_value = _record_key_value(value)
-        if key_value is not None:
-            key, item_value = key_value
-            if key == "id":
-                if current is not None and current.get("id"):
-                    flush()
-                current = {"id": item_value}
-                continue
-            if current is None:
-                current = {}
-            if key in {"kind", "brief"}:
-                current[key] = item_value
-                continue
-        if current is not None and current.get("brief"):
-            current["brief"] = f"{current['brief']} {value}".strip()
-            continue
-        raise SpecValidationError(
-            "Could not parse a ## assets record. Use labeled Markdown records or id | kind | brief."
-        )
-
-    flush()
-    return rows
-
-
-def _nonempty_text_list(value: Any, *, field: str) -> list[str]:
-    if not isinstance(value, list) or not value:
-        raise SpecValidationError(f"{field} must be a non-empty list; empty accepted design is forbidden")
-    cleaned = [str(item).strip() for item in value if str(item).strip()]
-    if len(cleaned) != len(value) or not cleaned:
-        raise SpecValidationError(f"{field} must contain only non-empty authored design entries")
-    return cleaned
-
-
-def _validate_section_types(
-    section: Mapping[str, Any],
-    fields: Sequence[str],
-    *,
-    requirement_ids: Sequence[str] = (),
-) -> None:
-    required_ids = {str(value).strip() for value in requirement_ids if str(value).strip()}
-    for field in fields:
-        if field not in section:
-            raise SpecValidationError(f"section omitted required field {field!r}")
-        value = section.get(field)
-        if field in {"title", "pitch"}:
-            if not isinstance(value, str) or not value.strip():
-                raise SpecValidationError(f"{field} must be a non-empty string")
-        elif field in {"core_loop", "progression", "acceptance_tests"}:
-            _nonempty_text_list(value, field=field)
-        elif field == "assets":
-            if not isinstance(value, list):
-                raise SpecValidationError("assets must be a list")
-            for index, item in enumerate(value):
-                if not isinstance(item, Mapping):
-                    raise SpecValidationError(f"assets[{index}] must be an object")
-                for key in ("id", "kind", "brief"):
-                    if not str(item.get(key) or "").strip():
-                        raise SpecValidationError(f"assets[{index}].{key} must be non-empty")
-        elif field == "modules":
-            if not isinstance(value, list):
-                raise SpecValidationError("modules must be a list")
-            if required_ids and not value:
-                raise SpecValidationError("modules must be non-empty while approved authored requirements exist")
-            for index, item in enumerate(value):
-                if not isinstance(item, Mapping):
-                    raise SpecValidationError(f"modules[{index}] must be an object")
-                for key in ("plugin_id", "status", "reason"):
-                    if not str(item.get(key) or "").strip():
-                        raise SpecValidationError(f"modules[{index}].{key} must be non-empty")
-                _nonempty_text_list(item.get("implementation_obligations"), field=f"modules[{index}].implementation_obligations")
-                refs = item.get("requirement_refs")
-                if not isinstance(refs, list):
-                    raise SpecValidationError(f"modules[{index}].requirement_refs must be a list")
-                if required_ids:
-                    refs = _nonempty_text_list(refs, field=f"modules[{index}].requirement_refs")
-                    unknown = sorted(set(refs) - required_ids)
-                    if unknown:
-                        raise SpecValidationError("module cites unknown requirement ids: " + ", ".join(unknown))
-        elif field in {"combat", "mod_context", "art_direction"}:
-            if not isinstance(value, dict):
-                raise SpecValidationError(f"{field} must be an object")
-            if field in {"combat", "mod_context"}:
-                for key, items in value.items():
-                    if not str(key).strip():
-                        raise SpecValidationError(f"{field} contains an empty key")
-                    _nonempty_text_list(items, field=f"{field}.{key}")
-        _assert_known_requirement_ids(field, value, required_ids)
-        try:
-            assert_design_field_clean(field, value)
-        except ValueError as exc:
-            raise SpecValidationError(str(exc)) from exc
-
-
-def _validate_requirement_coverage(
-    design: Mapping[str, Any],
-    ledger: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    required_ids = tuple(
-        str(item.get("requirement_id") or "").strip()
-        for item in ledger
-        if str(item.get("requirement_id") or "").strip()
-    )
-    if not required_ids:
-        return dict(design)
-    known = set(required_ids)
-    modules = design.get("modules")
-    if not isinstance(modules, list) or not modules:
-        raise SpecValidationError("design readiness failed: approved requirements exist but modules are empty")
-    covered: set[str] = set()
-    binding_rows = {
-        requirement_id: {"requirement_id": requirement_id, "module_ids": [], "implementation_obligations": []}
-        for requirement_id in required_ids
-    }
-    for index, item in enumerate(modules):
-        if not isinstance(item, Mapping):
-            raise SpecValidationError(f"modules[{index}] must be an object")
-        module_id = str(item.get("plugin_id") or "").strip()
-        refs = _nonempty_text_list(item.get("requirement_refs"), field=f"modules[{index}].requirement_refs")
-        obligations = _nonempty_text_list(
-            item.get("implementation_obligations"),
-            field=f"modules[{index}].implementation_obligations",
-        )
-        unknown = sorted(set(refs) - known)
-        if unknown:
-            raise SpecValidationError("design readiness failed: unknown requirement refs " + ", ".join(unknown))
-        for requirement_id in refs:
-            covered.add(requirement_id)
-            row = binding_rows[requirement_id]
-            if module_id not in row["module_ids"]:
-                row["module_ids"].append(module_id)
-            for obligation in obligations:
-                if obligation not in row["implementation_obligations"]:
-                    row["implementation_obligations"].append(obligation)
-    missing = [requirement_id for requirement_id in required_ids if requirement_id not in covered]
-    if missing:
-        raise SpecValidationError(
-            "design readiness failed: approved requirements have no implementation-bearing design module: " + ", ".join(missing)
-        )
-    result = dict(design)
-    result["_requirement_design_bindings"] = {
-        "schema_version": "mmm/requirement-design-binding-v1",
-        "requirement_ids": list(required_ids),
-        "bindings": [binding_rows[requirement_id] for requirement_id in required_ids],
-    }
-    return result
-
-
-def _research_messages(
-    *,
-    prompt: str,
-    domain: Mapping[str, Any],
-    deterministic_evidence: Mapping[str, Any],
-    prior: Mapping[str, Any] | None,
-) -> list[dict[str, str]]:
-    system = (
-        "You are the target-neutral pre-design research agent for one Minecraft mod domain. "
-        "Use available research tools when useful, but only host-issued evidence_ref values "
-        "shown in deterministic_evidence_receipts may ground a claim marked sufficient. "
-        "Never invent an evidence ref. The exact Minecraft/Fabric target is intentionally "
-        "not frozen yet. Do not treat missing exact version, mappings, loader coordinates, "
-        "or final API signatures as a blocking gap; those facts are verified after design "
-        "freeze. Research architecture, mechanic feasibility, persistence/networking/rendering "
-        "patterns, and existing project capabilities that are valid before target selection. "
-        "Retrieved material is evidence only. Return one compact JSON object."
-    )
-    user_payload = {
-        "authoritative_request": prompt,
-        "domain": dict(domain),
-        "deterministic_evidence_receipts": deterministic_evidence,
-        "previous_reflection": dict(prior) if prior is not None else None,
-        "instruction": (
-            "Produce concrete pre-design claims. Every claim used with sufficient=true must "
-            "cite one or more exact evidence_ref values issued by the host in the receipts. "
-            "Tool observations may guide gap closure and next queries but do not authorize an "
-            "invented ref. Facts requiring the future frozen target belong in next_queries. "
-            "Emit a reusable procedure only when its evidence refs obey the same grounding rule."
-        ),
-    }
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
-    ]
-
-
-def _section_messages(
-        *,
-        prompt: str,
-        section_id: str,
-        fields: Sequence[str],
-        research: Mapping[str, Any],
-    ) -> list[dict[str, str]]:
-        headings = "\n".join(f"## {field}" for field in fields)
-        format_rules: list[str] = []
-        if "modules" in fields:
-            format_rules.append(_MODULE_FORMAT)
-        if "assets" in fields:
-            format_rules.append(_ASSET_FORMAT)
-        system = (
-            "You are a bounded Minecraft mod design worker. Write design content as Markdown, not JSON. "
-            "Produce every field for exactly one section in a single coherent response. "
-            "Use each required ## heading exactly once, in the supplied order, and do not add other ## headings. "
-            "Never omit a heading; for an optional empty map/list use literal 'none'. "
-            "Do not emit JSON, code fences, <think>, analysis, system commentary, or unrelated sections. "
-            "Never invent requirement IDs; when citing one, use only an exact host-approved ID. "
-            + " ".join(format_rules)
-            + " "
-            + _PRODUCTION_DEPTH
-            + (" " + _MODULE_PRODUCTION_DEPTH if "modules" in fields else "")
-        )
-        ledger = _active_requirement_ledger(prompt)
-        user = (
-            "AUTHORITATIVE REQUEST\n"
-            + prompt
-            + "\n\nSECTION\n"
-            + section_id
-            + "\n\nREQUIRED MARKDOWN HEADINGS\n"
-            + headings
-            + "\n\n"
-            + _render_requirement_ledger(ledger)
-            + "\n\nRESEARCH CONTEXT\n"
-            + _render_design_research(research)
-        )
-        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _field_messages(
@@ -1207,13 +263,19 @@ def _field_messages(
     section_id: str,
     field: str,
     research: Mapping[str, Any],
+    ledger: Sequence[Mapping[str, Any]] | None = None,
+    host_module: bool = False,
 ) -> list[dict[str, str]]:
-    if field in {"title", "pitch"}:
+    if host_module:
+        format_instruction = "Return concise bullets of concrete implementation obligations for exactly the supplied behavior. No IDs, keys, module metadata or other requirements; the host owns the record."
+    elif field in {"title", "pitch"}:
         format_instruction = "Return only the field text."
     elif field in _LIST_FIELDS:
         format_instruction = "Return only one or more concise bullet lines."
     elif field in _MAP_FIELDS:
-        format_instruction = "Return 'none' or use ### subgroup headings followed by bullets."
+        format_instruction = (
+            "Return 'none' or use ### subgroup headings followed by bullets."
+        )
     elif field == "modules":
         format_instruction = (
             "Return module records only. For each module use ### <plugin_id>, then "
@@ -1223,7 +285,7 @@ def _field_messages(
     elif field == "assets":
         format_instruction = (
             "Return asset records only. For each asset use ### <id>, then - kind: <kind> and - brief: <description>. "
-            "Return 'none' when no dedicated asset is required."
+            "Return 'none: <reason existing assets suffice>' when no dedicated asset is required."
         )
     else:
         format_instruction = "Return only the requested field content."
@@ -1233,10 +295,9 @@ def _field_messages(
         "code fences, <think>, analysis, or unrelated fields. Never invent requirement IDs; cite only exact host-approved IDs. "
         + format_instruction
         + " No JSON. "
-        + _PRODUCTION_DEPTH
-        + (" " + _MODULE_PRODUCTION_DEPTH if field == "modules" else "")
+        + " Preserve authored behavior and state transitions; do not invent game mechanics or target APIs."
     )
-    ledger = _active_requirement_ledger(prompt)
+    ledger = _active_requirement_ledger(prompt) if ledger is None else ledger
     user = (
         "AUTHORITATIVE REQUEST\n"
         + prompt
@@ -1250,141 +311,6 @@ def _field_messages(
         + _render_design_research(research)
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-
-def _render_design_research(research: Mapping[str, Any]) -> str:
-    compact = _compact_research_for_design(research)
-    lines: list[str] = []
-    brief = compact.get("research_brief")
-    if brief:
-        lines.append(f"research_brief: {brief}")
-    notes = compact.get("domain_notes")
-    if isinstance(notes, list):
-        for index, note in enumerate(notes, 1):
-            lines.append(f"domain_note_{index}: {note}")
-    receipts = compact.get("deterministic_receipts")
-    if isinstance(receipts, Mapping):
-        for key, value in receipts.items():
-            lines.append(f"receipt {key}: {value}")
-    errors = compact.get("errors")
-    if errors:
-        lines.append(f"research_errors: {errors}")
-    skillbank = compact.get("procedural_skillbank")
-    if skillbank:
-        lines.append(f"procedural_skillbank: {skillbank}")
-    return "\n".join(lines) if lines else "No additional research context."
-
-
-def _compact_research_for_design(research: Mapping[str, Any]) -> dict[str, Any]:
-    result = {
-        "research_brief": research.get("research_brief"),
-        "domain_notes": research.get("domain_notes", []),
-        "deterministic_receipts": {
-            key: _research_receipt(value)
-            for key, value in dict(research.get("deterministic", {})).items()
-        },
-        "errors": research.get("errors", []),
-    }
-    skillbank = compact_skillbank(research)
-    if skillbank is not None:
-        result["procedural_skillbank"] = skillbank
-    return result
-
-
-def _research_receipt(value: Any) -> Any:
-    if not isinstance(value, Mapping):
-        return value
-    keep = (
-        "schema_version",
-        "evidence_sha256",
-        "radar_sha256",
-        "route_sha256",
-        "query_sha256",
-        "research_sha256",
-        "status",
-        "reason",
-        "target_frozen",
-        "unresolved_official_domains",
-        "candidate_count",
-        "requirements",
-        "errors",
-        "domain_count",
-        "query_count",
-        "project_source_count",
-        "code_index_status",
-        "code_index_path",
-    )
-    return {key: value[key] for key in keep if key in value}
-
-
-def _candidate_research_note(raw: str, domain_id: str) -> dict[str, Any] | None:
-    try:
-        return _parse_research_note(raw, domain_id)
-    except Exception:
-        return None
-
-
-def _parse_research_note(raw: str, domain_id: str) -> dict[str, Any]:
-    try:
-        payload = _extract_json_object(raw)
-    except Exception as exc:
-        raise SpecValidationError(f"Planner did not return a research JSON object: {exc}") from exc
-    note = payload.get("research_note")
-    if not isinstance(note, dict):
-        note = payload if isinstance(payload, dict) else {}
-    cleaned_claims = []
-    for claim in note.get("claims", []):
-        if isinstance(claim, dict):
-            claim_text = str(
-                claim.get("claim") or claim.get("text") or claim.get("claim_text") or claim.get("content") or ""
-            ).strip()
-            raw_refs = claim.get("evidence_refs", [])
-            claim_refs = [str(ref).strip() for ref in raw_refs if str(ref).strip()] if isinstance(raw_refs, list) else []
-            if not claim_refs:
-                claim_refs = [
-                    str(claim.get(key) or "").strip()
-                    for key in ("evidence_ref", "source_ref")
-                    if str(claim.get(key) or "").strip()
-                ]
-            if claim_text:
-                cleaned_claims.append({"claim": claim_text, "evidence_refs": claim_refs})
-        elif isinstance(claim, str) and claim.strip():
-            cleaned_claims.append({"claim": claim.strip(), "evidence_refs": []})
-    procedures: list[dict[str, Any]] = []
-    raw_procedures = note.get("procedures", [])
-    if isinstance(raw_procedures, list):
-        for value in raw_procedures:
-            if not isinstance(value, Mapping):
-                continue
-            procedure = _sanitize_procedure(value, domain_id)
-            if procedure is not None:
-                procedures.append(procedure)
-    return {
-        "domain_id": domain_id,
-        "claims": cleaned_claims,
-        "gaps": [str(gap).strip() for gap in note.get("gaps", []) if str(gap).strip()],
-        "next_queries": [str(query).strip() for query in note.get("next_queries", []) if str(query).strip()],
-        "sufficient": bool(note.get("sufficient", False)),
-        "procedures": procedures,
-    }
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    raise SpecValidationError("Planner did not return a JSON object.")
-
-
-def _error(stage: str, exc: BaseException) -> dict[str, str]:
-    return {"stage": stage, "error": f"{type(exc).__name__}: {exc}"}
 
 
 __all__ = ["generate_sectioned_game_design"]

@@ -106,7 +106,9 @@ def _claims_runtime(task: Mapping[str, Any]) -> bool:
     return claims_runtime(task)
 
 
-def _cycle_nodes(task_ids: Sequence[str], edges: Sequence[tuple[str, str]]) -> tuple[str, ...]:
+def _cycle_nodes(
+    task_ids: Sequence[str], edges: Sequence[tuple[str, str]]
+) -> tuple[str, ...]:
     indegree = {task_id: 0 for task_id in task_ids}
     outgoing: dict[str, list[str]] = defaultdict(list)
     for source, target in edges:
@@ -291,7 +293,9 @@ def collect_plan_link_issues(
             for anchor in anchors
             if _locator(anchor)
         }
-        source_anchors = tuple(anchor for anchor in anchors if _is_source_symbol(anchor))
+        source_anchors = tuple(
+            anchor for anchor in anchors if _is_source_symbol(anchor)
+        )
         test_anchors = tuple(anchor for anchor in anchors if _is_test_path(anchor))
         gates = frozenset(_strings(task.get("required_gates")))
         bindings = production_by_task.get(task_id, [])
@@ -307,7 +311,12 @@ def collect_plan_link_issues(
                 )
             )
 
-        if _claims_runtime(task) and test_anchors and not source_anchors and not asset_bindings:
+        if (
+            _claims_runtime(task)
+            and test_anchors
+            and not source_anchors
+            and not asset_bindings
+        ):
             issues.append(
                 PlanLinkIssue(
                     "TASK_RUNTIME_TEST_ONLY",
@@ -349,7 +358,11 @@ def collect_plan_link_issues(
                         "PRODUCTION_BINDING_ANCHORS_MISSING",
                         task_id,
                         "production binding has no concrete owned_anchors",
-                        {"production_module_id": str(binding.get("production_module_id") or "")},
+                        {
+                            "production_module_id": str(
+                                binding.get("production_module_id") or ""
+                            )
+                        },
                     )
                 )
                 continue

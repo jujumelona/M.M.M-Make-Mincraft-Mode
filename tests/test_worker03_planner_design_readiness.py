@@ -14,7 +14,9 @@ class _TextRouter:
         self.responses = list(responses)
         self.calls: list[dict[str, object]] = []
 
-    def generate_text(self, role: str, messages: list[dict[str, str]], **kwargs: object) -> str:
+    def generate_text(
+        self, role: str, messages: list[dict[str, str]], **kwargs: object
+    ) -> str:
         self.calls.append({"role": role, "messages": messages, "kwargs": kwargs})
         if not self.responses:
             raise AssertionError("unexpected extra planner call")
@@ -43,14 +45,18 @@ def _catalog(prompt: str, *requirement_ids: str) -> dict[str, object]:
 
 
 def test_runtime_uses_canonical_design_owner_without_readiness_wrappers() -> None:
-    assert not getattr(design._generate_section, "__mmm_requirement_design_context__", False)
-    assert not getattr(design._section_messages, "__mmm_requirement_design_messages__", False)
+    assert not getattr(
+        design._generate_section, "__mmm_requirement_design_context__", False
+    )
+    assert not getattr(
+        design._field_messages, "__mmm_requirement_design_messages__", False
+    )
     assert not getattr(
         design.generate_sectioned_game_design,
         "__mmm_requirement_design_coverage__",
         False,
     )
-    assert not hasattr(design._section_messages, "__wrapped__")
+    assert not hasattr(design._field_messages, "__wrapped__")
     assert getattr(evidence._semantic_spans, "__mmm_crlf_lossless__", False)
 
 
@@ -59,11 +65,8 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     requirement_id = "req_crystal_portal"
     router = _TextRouter(
         [
-            """## modules
-- crystal_portal | custom | 수정 수집과 포탈 진행을 구현한다. | req_crystal_portal | 수정 조각 수집 상태를 저장한다; 포탈 해금 조건을 구현한다
-## assets
-- none
-"""
+            "- 수정 조각 수집 상태를 저장한다\n- 포탈 해금 조건을 구현한다",
+            "none: 기존 블록과 화면 리소스를 사용한다",
         ]
     )
     token = request_guard._ACTIVE_REQUEST_CATALOG.set(
@@ -82,7 +85,7 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
 
-    assert len(router.calls) == 1
+    assert len(router.calls) == 2
     call = router.calls[0]
     kwargs = call["kwargs"]
     assert kwargs["response_format"] == "text"
@@ -91,11 +94,8 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     rendered = "\n".join(str(message["content"]) for message in call["messages"])
     assert "APPROVED REQUIREMENTS" in rendered
     assert requirement_id in rendered
-    assert "requirement_refs" in rendered
-    assert (
-        "plugin_id | status | reason | requirement_refs | implementation_obligations"
-        in rendered
-    )
+    assert "the host owns the record" in rendered
+    assert section["_asset_design_decisions"][requirement_id]
     assert section["modules"][0]["requirement_refs"] == [requirement_id]
     assert section["modules"][0]["implementation_obligations"] == [
         "수정 조각 수집 상태를 저장한다",
@@ -103,34 +103,29 @@ def test_requirement_module_section_is_text_native_and_generated_once() -> None:
     ]
 
 
-def test_missing_requirement_module_gets_host_coverage_without_model_repair_loop() -> None:
+def test_missing_requirement_module_is_retried_and_never_synthesized() -> None:
     prompt = "플레이어가 수정 조각을 모으고 포탈을 연다."
     requirement_id = "req_crystal_portal"
-    router = _TextRouter(["""## modules
-- none
-## assets
-- none
-"""])
+    router = _TextRouter(["- none", "- none", "none: 기존 리소스를 사용한다"])
     token = request_guard._ACTIVE_REQUEST_CATALOG.set(
         (prompt, _catalog(prompt, requirement_id))
     )
     try:
-        section = design._generate_section(
-            router,
-            prompt=prompt,
-            section_id="modules_and_assets",
-            fields=("modules", "assets"),
-            research={},
-            media_paths=(),
-            trace_metadata={"test": "worker03-empty"},
-        )
+        with pytest.raises(
+            SpecValidationError, match="concrete implementation obligations"
+        ):
+            design._generate_section(
+                router,
+                prompt=prompt,
+                section_id="modules_and_assets",
+                fields=("modules", "assets"),
+                research={},
+                media_paths=(),
+                trace_metadata=None,
+            )
     finally:
         request_guard._ACTIVE_REQUEST_CATALOG.reset(token)
-
-    assert len(router.calls) == 1
-    assert section["modules"]
-    assert section["modules"][0]["requirement_refs"] == [requirement_id]
-    assert section["modules"][0]["implementation_obligations"]
+    assert len(router.calls) == 3
 
 
 def test_required_design_fields_fail_closed_without_host_synthesis() -> None:
@@ -147,7 +142,9 @@ def test_required_design_fields_fail_closed_without_host_synthesis() -> None:
         )
 
 
-def test_every_approved_requirement_needs_an_implementation_bearing_design_module() -> None:
+def test_every_approved_requirement_needs_an_implementation_bearing_design_module() -> (
+    None
+):
     ledger = (
         {"requirement_id": "req_collect"},
         {"requirement_id": "req_portal"},

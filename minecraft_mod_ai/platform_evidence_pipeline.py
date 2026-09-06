@@ -229,7 +229,11 @@ def _bounded_trace_value(value: Any, *, depth: int = 0) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return value if len(value) <= _TRACE_STRING_LIMIT else value[:_TRACE_STRING_LIMIT] + "…"
+        return (
+            value
+            if len(value) <= _TRACE_STRING_LIMIT
+            else value[:_TRACE_STRING_LIMIT] + "…"
+        )
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
@@ -237,7 +241,10 @@ def _bounded_trace_value(value: Any, *, depth: int = 0) -> Any:
                 result["<truncated>"] = len(value) - _TRACE_COLLECTION_LIMIT
                 break
             normalized_key = str(key)
-            if any(secret in normalized_key.casefold() for secret in ("token", "secret", "password", "authorization", "cookie")):
+            if any(
+                secret in normalized_key.casefold()
+                for secret in ("token", "secret", "password", "authorization", "cookie")
+            ):
                 result[normalized_key] = "<redacted>"
             else:
                 result[normalized_key] = _bounded_trace_value(item, depth=depth + 1)
@@ -295,7 +302,10 @@ def _emit_platform_trace(
     if details:
         payload["details"] = _bounded_trace_value(details)
     print(
-        _TRACE_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        _TRACE_PREFIX
+        + json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ),
         flush=True,
     )
 
@@ -312,7 +322,9 @@ def _exception_chain(exc: BaseException) -> list[dict[str, str]]:
                 "message": str(current)[:_TRACE_STRING_LIMIT],
             }
         )
-        next_exc = current.__cause__ if current.__cause__ is not None else current.__context__
+        next_exc = (
+            current.__cause__ if current.__cause__ is not None else current.__context__
+        )
         current = next_exc
     return chain
 
@@ -358,7 +370,9 @@ def capability_queries(
                     value = _clean(item)
                 elif isinstance(item, Mapping):
                     value = _clean(
-                        str(item.get("name") or item.get("id") or item.get("kind") or "")
+                        str(
+                            item.get("name") or item.get("id") or item.get("kind") or ""
+                        )
                     )
                 else:
                     value = ""
@@ -369,8 +383,16 @@ def capability_queries(
             for item in modules:
                 if not isinstance(item, Mapping):
                     continue
+                identity = str(item.get("plugin_id") or "")
+                # Host design IDs are correlation keys, never discovery queries.
                 value = _clean(
-                    str(item.get("plugin_id") or item.get("kind") or item.get("name") or "")
+                    str(
+                        item.get("capability")
+                        or (identity if not identity.startswith("design_") else "")
+                        or item.get("reason")
+                        or item.get("kind")
+                        or item.get("name")
+                    )
                 )
                 if value:
                     labels.append(value)
@@ -422,7 +444,9 @@ def optimize_platform_evidence(
 ) -> PlatformOptimization:
     queries = capability_queries(prompt, design=design, module_kinds=module_kinds)
     client = discovery_client or EcosystemDiscoveryClient()
-    discovery_mode = __import__("os").environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
+    discovery_mode = (
+        __import__("os").environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
+    )
     _emit_platform_trace(
         "optimizer_start",
         gate="configuration",
@@ -448,7 +472,9 @@ def optimize_platform_evidence(
         "loader_gate",
         gate="executable_provider",
         passed=bool(loaders),
-        reason="resolved executable loader set" if loaders else "no executable platform provider is registered",
+        reason="resolved executable loader set"
+        if loaders
+        else "no executable platform provider is registered",
         details={"loaders": loaders},
     )
     if not loaders:
@@ -467,11 +493,15 @@ def optimize_platform_evidence(
             "stable_version_gate",
             gate="official_game_versions",
             passed=bool(stable_versions),
-            reason="stable versions discovered" if stable_versions else "no stable release returned",
+            reason="stable versions discovered"
+            if stable_versions
+            else "no stable release returned",
             details={"stable_versions": stable_versions},
         )
         if not stable_versions:
-            raise SpecValidationError("Official game-version discovery returned no stable release.")
+            raise SpecValidationError(
+                "Official game-version discovery returned no stable release."
+            )
         frontier = tuple((loader, stable_versions[0]) for loader in loaders)
         shallow_by_query = {query: () for query in queries}
         shallow_count = 0
@@ -499,7 +529,9 @@ def optimize_platform_evidence(
         "frontier_resolved",
         gate="provider_resolution",
         passed=bool(adapters),
-        reason="provider receipts resolved" if adapters else "all provider resolutions failed",
+        reason="provider receipts resolved"
+        if adapters
+        else "all provider resolutions failed",
         details={
             "resolved_targets": [
                 {
@@ -513,9 +545,13 @@ def optimize_platform_evidence(
         },
     )
     if not adapters:
-        detail = "; ".join(resolution_errors) or "no frontier target produced a provider receipt"
+        detail = (
+            "; ".join(resolution_errors)
+            or "no frontier target produced a provider receipt"
+        )
         raise SpecValidationError(
-            "No executable platform target survived provider resolution. Diagnostics: " + detail
+            "No executable platform target survived provider resolution. Diagnostics: "
+            + detail
         )
 
     evidence: list[TargetEvidence] = []
@@ -573,7 +609,8 @@ def optimize_platform_evidence(
             details={"failures": failures},
         )
         raise SpecValidationError(
-            "Platform evidence failed closed for every resolved target. Diagnostics: " + detail
+            "Platform evidence failed closed for every resolved target. Diagnostics: "
+            + detail
         )
 
     ranked = tuple(
@@ -606,8 +643,9 @@ def optimize_platform_evidence(
         candidates=ranked,
         capability_queries=queries,
         discovery_mode=(
-            "provider-receipt-only" if discovery_mode == "off" else
-            "exhaustive-neutral-reuse_frontier_single-resolution_receipt-native-deep"
+            "provider-receipt-only"
+            if discovery_mode == "off"
+            else "exhaustive-neutral-reuse_frontier_single-resolution_receipt-native-deep"
         ),
     )
 
@@ -648,14 +686,17 @@ def _search_modrinth_exhaustive(
                 "discovery_page",
                 gate="modrinth_search_response",
                 passed=valid_page,
-                reason="valid Modrinth search page" if valid_page else "invalid Modrinth search response",
+                reason="valid Modrinth search page"
+                if valid_page
+                else "invalid Modrinth search response",
                 details={
                     "query": query,
                     "variant": variant,
                     "page_index": page_index,
                     "offset": offset,
                     "response_type": type(raw).__name__,
-                    "has_hits_list": isinstance(raw, Mapping) and isinstance(raw.get("hits"), list),
+                    "has_hits_list": isinstance(raw, Mapping)
+                    and isinstance(raw.get("hits"), list),
                 },
             )
             if not valid_page:
@@ -732,7 +773,9 @@ def _reuse_frontier(
     stable_versions: Sequence[str],
 ) -> tuple[tuple[str, str], ...]:
     if not stable_versions:
-        raise SpecValidationError("Official stable Minecraft version catalogue is empty.")
+        raise SpecValidationError(
+            "Official stable Minecraft version catalogue is empty."
+        )
     frontier: list[tuple[str, str]] = []
     for loader in loaders:
         best = -1
@@ -931,7 +974,8 @@ def _build_target_evidence(
                         role="source_reuse",
                         gate=inspection.failed_gate or "project_inspection",
                         passed=False,
-                        reason=inspection.failure_reason or "project inspection rejected",
+                        reason=inspection.failure_reason
+                        or "project inspection rejected",
                         details={
                             "query": query,
                             "license_id": inspection.license_id,
@@ -959,7 +1003,10 @@ def _build_target_evidence(
                         gate="dependency_closure",
                         passed=False,
                         reason=str(exc),
-                        details={"query": query, "exception_chain": _exception_chain(exc)},
+                        details={
+                            "query": query,
+                            "exception_chain": _exception_chain(exc),
+                        },
                     )
                     # Reuse evidence is optional. A bad third-party candidate must not
                     # invalidate a platform that can still implement this capability
@@ -972,7 +1019,9 @@ def _build_target_evidence(
                 dependency_edges += verified.dependency_edges
                 maintenance += 1
                 adoption = max(adoption, candidate.downloads)
-                freshness = max(freshness, verified.freshness, _timestamp(candidate.modified))
+                freshness = max(
+                    freshness, verified.freshness, _timestamp(candidate.modified)
+                )
                 _emit_platform_trace(
                     "reuse_candidate_accepted",
                     adapter=adapter,
@@ -1008,14 +1057,14 @@ def _build_target_evidence(
 
     residual = sum(mode == "custom" for _query, mode in modes)
     research_quality = _research_quality(research_payload)
-    evidence_quality = (
-        len(verified_by_query) / len(queries) if queries else 1.0
-    )
+    evidence_quality = len(verified_by_query) / len(queries) if queries else 1.0
     return TargetEvidence(
         adapter=adapter,
         requested_capabilities=tuple(queries),
         covered_capabilities=tuple(covered),
-        exact_projects=tuple(sorted({value.project_id for value in verified_by_query.values()})),
+        exact_projects=tuple(
+            sorted({value.project_id for value in verified_by_query.values()})
+        ),
         exact_versions=exact_versions,
         verified_hash_files=hash_files,
         dependency_edges=dependency_edges,
@@ -1029,7 +1078,9 @@ def _build_target_evidence(
         dependency_complexity=dependency_edges + len(dependency_projects),
         discovery_errors=tuple(discovery_errors),
         composition_modes=tuple(modes),
-        deep_research=dict(research_payload) if isinstance(research_payload, Mapping) else None,
+        deep_research=dict(research_payload)
+        if isinstance(research_payload, Mapping)
+        else None,
         shallow_candidate_count=shallow_candidate_count,
         dependency_projects=tuple(sorted(dependency_projects)),
         dependency_closure_complete=True,
@@ -1109,7 +1160,9 @@ def _inspect_project_receipt_native_detailed(
         role=role,
         gate="provider_metadata_shape",
         passed=provider_shape_ok,
-        reason="project and version responses have expected shapes" if provider_shape_ok else "invalid project/version response shape",
+        reason="project and version responses have expected shapes"
+        if provider_shape_ok
+        else "invalid project/version response shape",
         details={
             "project_response_type": type(project).__name__,
             "versions_response_type": type(versions).__name__,
@@ -1188,7 +1241,8 @@ def _inspect_project_receipt_native_detailed(
     for value in normalized:
         files = value.get("files") if isinstance(value.get("files"), list) else []
         primary_files = [
-            file for file in files
+            file
+            for file in files
             if isinstance(file, Mapping) and file.get("primary") is True
         ]
         _emit_platform_trace(
@@ -1259,7 +1313,8 @@ def _inspect_project_receipt_native_detailed(
         value
         for value in exact_target_candidates
         if not any(
-            reason in {
+            reason
+            in {
                 "exactly_one_primary_file_is_required",
                 "primary_file_requires_safe_origin_size_and_sha512",
             }
@@ -1303,7 +1358,9 @@ def _inspect_project_receipt_native_detailed(
             failure_reason = "exact-target versions failed primary artifact/origin/size/SHA-512 requirements"
         else:
             failed_gate = "version_metadata"
-            failure_reason = "exact-target artifact exists but another version metadata gate failed"
+            failure_reason = (
+                "exact-target artifact exists but another version metadata gate failed"
+            )
         _emit_platform_trace(
             "project_inspection_rejected",
             adapter=adapter,
@@ -1327,7 +1384,9 @@ def _inspect_project_receipt_native_detailed(
         )
 
     if not license_passed:
-        failed_gate = "source_reuse_license" if role == "source_reuse" else "dependency_license"
+        failed_gate = (
+            "source_reuse_license" if role == "source_reuse" else "dependency_license"
+        )
         _emit_platform_trace(
             "project_inspection_rejected",
             adapter=adapter,
@@ -1550,9 +1609,7 @@ def _required_dependency_closure(
         project_id = str(value).strip()
         if not project_id:
             continue
-        initial_path = tuple(
-            part for part in (root_project_id, project_id) if part
-        )
+        initial_path = tuple(part for part in (root_project_id, project_id) if part)
         if not any(existing_id == project_id for existing_id, _path in pending):
             pending.append((project_id, initial_path))
 
@@ -1654,7 +1711,10 @@ def _research_quality(payload: Mapping[str, Any] | None) -> float:
             continue
         fusion = domain.get("fusion")
         critic = fusion.get("critic") if isinstance(fusion, Mapping) else None
-        if isinstance(critic, Mapping) and float(critic.get("mean_coverage", 0.0) or 0.0) > 0:
+        if (
+            isinstance(critic, Mapping)
+            and float(critic.get("mean_coverage", 0.0) or 0.0) > 0
+        ):
             resolved += 1
     return resolved / len(domains)
 

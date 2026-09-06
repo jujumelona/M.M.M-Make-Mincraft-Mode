@@ -21,6 +21,9 @@ _EVIDENCE_KEYS = frozenset(
         "claim",
         "statement",
         "summary",
+        "text",
+        "content",
+        "body",
         "status",
         "version",
         "minecraft_version",
@@ -69,7 +72,9 @@ def _strings(value: Any) -> tuple[str, ...]:
         values = value
     else:
         return ()
-    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+    return tuple(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
 
 
 def _receipt_summary(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -80,29 +85,55 @@ def _receipt_summary(value: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(raw, (str, int, float, bool)) or raw is None:
             summary[str(key)] = raw
         elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-            scalars = [item for item in raw if isinstance(item, (str, int, float, bool))]
+            scalars = [
+                item for item in raw if isinstance(item, (str, int, float, bool))
+            ]
             if scalars:
                 summary[str(key)] = scalars
     return summary
 
 
-def _collect_receipts(value: Any, *, path: str, output: list[dict[str, Any]]) -> None:
+def _collect_receipts(
+    value: Any,
+    *,
+    path: str,
+    output: list[dict[str, Any]],
+    source: Mapping[str, Any] | None = None,
+) -> None:
     if isinstance(value, Mapping):
+        provenance = dict(source or {})
+        for key in ("url", "uri", "repository", "commit_sha", "source_id"):
+            if isinstance(value.get(key), str) and value[key]:
+                provenance[key] = value[key]
         summary = _receipt_summary(value)
-        if summary:
+        location = str(provenance.get("url") or provenance.get("uri") or "")
+        external = location.startswith(("https://", "http://")) or bool(
+            provenance.get("repository") and provenance.get("commit_sha")
+        )
+        content = any(
+            isinstance(value.get(key), str) and value[key].strip()
+            for key in ("claim", "statement", "summary", "text", "content", "body")
+        )
+        if summary and external and content:
+            summary = {**provenance, **summary}
             identity = {"path": path, "summary": summary}
             output.append(
                 {
                     "evidence_ref": "evidence:" + _sha(identity)[7:23],
                     "path": path,
                     "summary": summary,
+                    "provenance_kind": "external_source",
                 }
             )
         for key, child in value.items():
-            _collect_receipts(child, path=f"{path}.{key}", output=output)
+            _collect_receipts(
+                child, path=f"{path}.{key}", output=output, source=provenance
+            )
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, child in enumerate(value):
-            _collect_receipts(child, path=f"{path}[{index}]", output=output)
+            _collect_receipts(
+                child, path=f"{path}[{index}]", output=output, source=source
+            )
 
 
 def evidence_catalog(
@@ -217,9 +248,7 @@ def requirement_evidence_window(
         ),
     )
     return tuple(
-        by_ref[ref]
-        for ref in ordered[:_MAX_EVIDENCE_PER_REQUIREMENT]
-        if ref in by_ref
+        by_ref[ref] for ref in ordered[:_MAX_EVIDENCE_PER_REQUIREMENT] if ref in by_ref
     )
 
 

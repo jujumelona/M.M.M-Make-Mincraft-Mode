@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .root_cause_trace import current_trace_id
+
 _TRACE_LOCK = threading.RLock()
 _TRACE_SCHEMA = "mmm/planner-stage-trace-v1"
 
@@ -83,12 +85,11 @@ class PlannerStageTrace:
         self.stage = stage
         self.prompt = prompt
         self.prompt_sha256 = _sha256_text(prompt)
-        self.run_id = (
-            f"{self.prompt_sha256[:16]}-"
-            f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        )
+        self.run_id = current_trace_id()
         self.root = _default_root()
-        self.directory = self.root / stage / self.run_id
+        self.directory = (
+            self.root / self.run_id / stage / f"{time.time_ns()}-{uuid.uuid4().hex[:8]}"
+        )
         self._attempt_index = 0
         request_payload = {
             "event": "planner_stage_start",
@@ -141,8 +142,12 @@ class PlannerStageTrace:
                 "raw_output_sha256": _sha256_text(raw_output),
                 "raw_output_chars": len(raw_output),
                 "validation_error": validation_error,
-                "candidate": _json_safe(dict(candidate)) if candidate is not None else None,
-                "accepted": _json_safe(dict(accepted)) if accepted is not None else None,
+                "candidate": _json_safe(dict(candidate))
+                if candidate is not None
+                else None,
+                "accepted": _json_safe(dict(accepted))
+                if accepted is not None
+                else None,
                 "context": dict(context or {}),
                 "trace_directory": str(self.directory),
                 "attempt_path": str(self.directory / f"attempt-{index:06d}.json"),
@@ -154,7 +159,9 @@ class PlannerStageTrace:
                 self.directory / f"attempt-{index:06d}.json",
                 payload,
             )
-            with (self.directory / "attempts.jsonl").open("a", encoding="utf-8") as stream:
+            with (self.directory / "attempts.jsonl").open(
+                "a", encoding="utf-8"
+            ) as stream:
                 stream.write(
                     json.dumps(
                         payload,

@@ -207,21 +207,29 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
                 "type": type(current).__name__,
                 "message": message,
                 "frames": [
-                    {"file": frame.filename, "line": frame.lineno, "function": frame.name}
+                    {
+                        "file": frame.filename,
+                        "line": frame.lineno,
+                        "function": frame.name,
+                    }
                     for frame in frames
                 ],
             }
         )
-        current = current.__cause__ if current.__cause__ is not None else current.__context__
+        current = (
+            current.__cause__ if current.__cause__ is not None else current.__context__
+        )
     return chain
 
 
 def _semantic_outcome(value: Any) -> str:
     if not isinstance(value, Mapping):
         return "PASS"
-    status = str(
-        value.get("status") or value.get("state") or value.get("outcome") or ""
-    ).strip().upper()
+    status = (
+        str(value.get("status") or value.get("state") or value.get("outcome") or "")
+        .strip()
+        .upper()
+    )
     if status in _FAILURE_STATUSES:
         return "FAIL"
     if status in _SKIP_STATUSES:
@@ -285,7 +293,9 @@ def _emergency_trace(
         "trace_id": trace_id,
         "event": "trace_emergency_fallback",
         "original_event": str(event),
-        "original_exception_type": type(original_exc).__name__ if original_exc is not None else "",
+        "original_exception_type": type(original_exc).__name__
+        if original_exc is not None
+        else "",
         "logger_exception_type": type(logger_exc).__name__,
     }
     try:
@@ -350,6 +360,15 @@ def emit_root_cause(
             payload["reason"] = bounded_safe(reason)
         if details:
             payload["details"] = bounded_safe(details)
+            from .planner_trace_artifacts import save_trace_artifact
+
+            try:
+                payload["details_artifact"] = save_trace_artifact(
+                    details,
+                    durable_trace_path().parent / "artifacts",
+                )
+            except Exception as artifact_error:
+                payload["details_artifact_error"] = type(artifact_error).__name__
         if exc is not None:
             payload["exception_chain"] = exception_chain(exc)
 

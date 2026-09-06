@@ -28,7 +28,7 @@ def _ledger():
     )
 
 
-def test_unknown_requirement_id_in_progression_falls_back_field_locally(monkeypatch):
+def test_unknown_requirement_id_in_progression_fails_closed(monkeypatch):
     monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
     monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
     monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: _ledger())
@@ -41,19 +41,16 @@ def test_unknown_requirement_id_in_progression_falls_back_field_locally(monkeypa
 ### authority
 - Mutable economy state is server-authoritative.
 """
-    section = design._generate_section(
-        _Router(output),
-        prompt="space trading",
-        section_id="systems_and_progression",
-        fields=("progression", "combat", "mod_context"),
-        research={},
-        media_paths=(),
-        trace_metadata=None,
-    )
-
-    assert section["progression"] == ["Trade resources for spaceship upgrades."]
-    assert section["combat"] == {"encounters": ["Combat remains independent of trading."]}
-    assert section["mod_context"] == {"authority": ["Mutable economy state is server-authoritative."]}
+    with pytest.raises(SpecValidationError, match="unknown requirement ids"):
+        design._generate_section(
+            _Router(output),
+            prompt="space trading",
+            section_id="systems_and_progression",
+            fields=("progression", "combat", "mod_context"),
+            research={},
+            media_paths=(),
+            trace_metadata=None,
+        )
 
 
 def test_unknown_requirement_id_is_rejected_in_nested_map():
@@ -67,7 +64,11 @@ def test_unknown_requirement_id_is_rejected_in_nested_map():
 
 def test_exact_approved_requirement_id_is_accepted():
     design._validate_section_types(
-        {"progression": ["Use `req_space_mode_trading_b1d7cc479a` for the trade loop."]},
+        {
+            "progression": [
+                "Use `req_space_mode_trading_b1d7cc479a` for the trade loop."
+            ]
+        },
         ("progression",),
         requirement_ids=("req_space_mode_trading_b1d7cc479a",),
     )
@@ -75,10 +76,10 @@ def test_exact_approved_requirement_id_is_accepted():
 
 def test_non_module_stage_prompt_does_not_receive_modules_section_contract(monkeypatch):
     monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: _ledger())
-    messages = design._section_messages(
+    messages = design._field_messages(
         prompt="space trading",
         section_id="systems_and_progression",
-        fields=("progression", "combat", "mod_context"),
+        field="progression",
         research={},
     )
     system = messages[0]["content"]
@@ -90,12 +91,13 @@ def test_non_module_stage_prompt_does_not_receive_modules_section_contract(monke
 
 def test_modules_stage_receives_leaf_index_contract(monkeypatch):
     monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: _ledger())
-    messages = design._section_messages(
+    messages = design._field_messages(
         prompt="space trading",
         section_id="modules_and_assets",
-        fields=("modules", "assets"),
+        field="modules",
+        host_module=True,
         research={},
     )
     system = messages[0]["content"]
-    assert "MODULE LEAF INDEX" in system
-    assert "requirement_refs" in system
+    assert "the host owns the record" in system
+    assert "No IDs" in system

@@ -66,34 +66,37 @@ Orbital Frontier
 
 
 def test_game_design_drafting_is_text_not_json_schema():
-    router = _Router(_outputs())
-    design = generate_sectioned_game_design(
+    router = _Router(
+        [
+            design._section_field_body(raw, field, fields)
+            for raw, (_, fields, _) in zip(
+                _outputs(), design._SECTION_SPECS, strict=True
+            )
+            for field in fields
+        ]
+    )
+    result = generate_sectioned_game_design(
         _GameDesignModule,
         router,
         "우주 탐사 모드를 만들어줘",
         research={},
     )
 
-    assert design["title"] == "Orbital Frontier"
-    assert design["progression"] == ["궤도 진입", "달 기지", "심우주 탐사"]
-    assert design["assets"][0]["id"] == "orbital_console"
-    assert len(router.calls) == 4
+    assert result["title"] == "Orbital Frontier"
+    assert result["progression"] == ["궤도 진입", "달 기지", "심우주 탐사"]
+    assert result["assets"][0]["id"] == "orbital_console"
+    assert len(router.calls) == 10
     for call in router.calls:
         assert call["response_format"] == "text"
         assert call["response_schema"] is None
         system = call["messages"][0]["content"]
-        assert "not JSON" in system
+        assert "No JSON" in system
 
 
-def test_missing_heading_uses_host_fallback_without_model_repair_loop():
-    router = _Router([
-        """## title
-Orbital Frontier
-## pitch
-행성을 탐사한다.
-"""
-    ])
-
+def test_missing_heading_repairs_only_missing_field():
+    router = _Router(
+        ["Orbital Frontier", "행성을 탐사한다.", "", "- 탐사하고 귀환한다"]
+    )
     section = design._generate_section(
         router,
         prompt="우주 탐사 모드를 만들어줘",
@@ -103,7 +106,11 @@ Orbital Frontier
         media_paths=(),
         trace_metadata=None,
     )
-
     assert section["title"] == "Orbital Frontier"
-    assert section["core_loop"] == ["우주 탐사 모드를 만들어줘"]
-    assert len(router.calls) == 1
+    assert section["core_loop"] == ["탐사하고 귀환한다"]
+    assert len(router.calls) == 4
+    assert "content is missing" in router.calls[-1]["messages"][-1]["content"]
+    assert [
+        call["messages"][1]["content"].split("FIELD\n")[1].split("\n")[0]
+        for call in router.calls
+    ] == ["title", "pitch", "core_loop", "core_loop"]

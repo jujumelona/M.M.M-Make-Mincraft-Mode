@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from minecraft_mod_ai.spec import SpecValidationError
+
 from minecraft_mod_ai import agentic_research_game_design as design
 
 
@@ -17,23 +20,18 @@ class _DirtySystemsRouter:
 """
 
 
-def test_dirty_nested_fields_fall_back_without_discarding_clean_neighbors(monkeypatch):
+def test_dirty_nested_fields_cannot_be_replaced_by_fake_success(monkeypatch):
     monkeypatch.setenv("MMM_PLANNER_TRACE", "0")
     monkeypatch.setenv("MMM_PLANNER_TRACE_CONSOLE", "0")
 
     prompt = "Add persistent seasonal progression."
-    section = design._generate_section(
-        _DirtySystemsRouter(),
-        prompt=prompt,
-        section_id="systems_and_progression",
-        fields=("progression", "combat", "mod_context"),
-        research={},
-        media_paths=(),
-        trace_metadata=None,
-    )
-
-    assert section["progression"] == [prompt]
-    assert section["combat"] == {}
-    assert section["mod_context"] == {
-        "persistence": ["Save and restore progression state."]
-    }
+    with pytest.raises(SpecValidationError, match="remain unresolved"):
+        design._generate_section(
+            _DirtySystemsRouter(),
+            prompt=prompt,
+            section_id="systems_and_progression",
+            fields=("progression", "combat", "mod_context"),
+            research={},
+            media_paths=(),
+            trace_metadata=None,
+        )

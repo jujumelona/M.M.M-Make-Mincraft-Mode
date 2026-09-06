@@ -16,12 +16,16 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .evidence_first_planning import validate_evidence_first_plan
+from .planner_stage_trace import PlannerStageTrace
+from .research_facet_response import decode_facet_response
+from .structured_output import StructuredOutputValidationError
 from .research_requirement_evidence import (
     evidence_catalog,
     facet_relevant_refs,
     requirement_evidence_window,
 )
 from .research_requirement_plan_slice import (
+    facet_owner,
     host_facet_baseline,
     render_task_slice,
     requirement_task_slice,
@@ -64,7 +68,9 @@ def _strings(value: Any) -> tuple[str, ...]:
         values = value
     else:
         return ()
-    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+    return tuple(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
 
 
 def _require_text(value: Any, *, field: str) -> str:
@@ -86,6 +92,38 @@ def _facet_evidence(
         for item in evidence_window
         if str(item.get("evidence_ref") or "") in allowed
     )
+
+
+def _retained_components(plan: Mapping[str, Any], parent: str) -> tuple[str, ...]:
+    # The caller validates the entire plan first; only its verified retain decision
+    # can satisfy a requirement without generating implementation tasks.
+    for decision in plan.get("reuse_decisions", ()):
+        if (
+            isinstance(decision, Mapping)
+            and decision.get("requirement_ref") == parent
+            and decision.get("action") == "retain"
+        ):
+            return _strings(decision.get("component_refs"))
+    return ()
+
+
+def _baseline_for_requirement(
+    plan: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+    tasks: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    baseline = host_facet_baseline(requirement, tasks)
+    parent = str(requirement.get("requirement_id") or "")
+    retained = _retained_components(plan, parent)
+    if retained:
+        for facet, item in baseline.items():
+            if item["disposition"] == "missing":
+                item["disposition"] = "already_covered"
+                item["statement"] = (
+                    f"Verified retained components own {facet} for {parent}."
+                )
+                item["rationale"] = "Frozen retain receipt: " + ", ".join(retained)
+    return baseline
 
 
 def _validated_augmentation(
@@ -165,6 +203,13 @@ def _model_facet_augmentation(
     )
     events: list[dict[str, Any]] = []
     calls = 0
+    trace = PlannerStageTrace(
+        stage="research_facet_augmentation",
+        prompt=_canonical(slot),
+        metadata={"requirement_id": parent, "facet": facet},
+    )
+    previous_raw = ""
+    previous_error = ""
     for attempt in (1, 2):
         raw: Any = ""
         calls += 1
@@ -174,28 +219,27 @@ def _model_facet_augmentation(
                 {"role": "user", "content": _canonical(slot)},
             ]
             if attempt == 2:
+                messages.append({"role": "assistant", "content": previous_raw})
                 messages.append(
                     {
                         "role": "system",
                         "content": (
-                            "The previous response was rejected. Return only one object "
-                            "matching the response schema exactly; do not add prose."
+                            f"Repair only this facet. Validation error: {previous_error}. "
+                            "Preserve valid fields. Return one object matching the response schema."
                         ),
                     }
                 )
-            raw = router.generate_text(
-                "planner",
-                messages,
-                response_format="json",
-                response_schema=FACET_AUGMENTATION_RESPONSE_SCHEMA,
-                enable_tools=False,
-            )
-            if isinstance(raw, Mapping):
-                decoded: Any = dict(raw)
-            else:
-                decoded = json.loads(str(raw))
-            if not isinstance(decoded, Mapping):
-                raise ResearchRequirementError("facet augmentation response is not an object")
+            try:
+                raw = router.generate_text(
+                    "planner",
+                    messages,
+                    response_format="json",
+                    response_schema=FACET_AUGMENTATION_RESPONSE_SCHEMA,
+                    enable_tools=False,
+                )
+            except StructuredOutputValidationError as exc:
+                raw = exc.output
+            decoded = decode_facet_response(raw)
             validated = _validated_augmentation(
                 parent=parent,
                 facet=facet,
@@ -213,8 +257,22 @@ def _model_facet_augmentation(
                     "decision": validated["decision"],
                 }
             )
+            trace.record_attempt(
+                raw_output=str(raw),
+                validation_error=None,
+                accepted=validated,
+                context={"attempt": attempt, "requirement_ref": parent, "facet": facet},
+            )
+            trace.record_success(validated)
             return validated, calls, events
         except Exception as exc:  # model/structured-output failures are optional here
+            raw = getattr(exc, "output", raw)
+            previous_raw, previous_error = str(raw), str(exc)
+            trace.record_attempt(
+                raw_output=str(raw),
+                validation_error=f"{type(exc).__name__}: {exc}",
+                context={"attempt": attempt, "requirement_ref": parent, "facet": facet},
+            )
             snippet = str(raw or "").strip().replace("\n", " ")[:1000]
             terminal = attempt == 2
             event = {
@@ -299,6 +357,8 @@ def _merge_model_with_baseline(
                     _strings(candidate.get("evidence_refs"))
                 )
 
+        if selected["disposition"] == "missing":
+            unresolved.append(f"{parent}:{facet}:missing_host_owner")
         decision_record = {
             "derived_requirement_id": "derived_"
             + _sha(
@@ -348,6 +408,26 @@ def derive_research_requirements(
     if not isinstance(requirements, list) or not requirements:
         raise ResearchRequirementError("evidence plan has no authored requirements")
 
+    # Check every host requirement before spending a single augmentation model turn.
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping):
+            raise ResearchRequirementError("authored requirement is not an object")
+        parent = _require_text(
+            requirement.get("requirement_id"), field="parent_requirement_ref"
+        )
+        baseline = _baseline_for_requirement(
+            evidence_plan, requirement, requirement_task_slice(evidence_plan, parent)
+        )
+        missing = [
+            facet
+            for facet, item in baseline.items()
+            if item["disposition"] == "missing"
+        ]
+        if missing:
+            raise ResearchRequirementError(
+                f"Host plan {parent!r} has missing implementation facets: {missing}"
+            )
+
     try:
         planning_context = build_host_planning_context(router, game_design)
     except Exception as exc:
@@ -370,14 +450,20 @@ def derive_research_requirements(
             field="parent_requirement_ref",
         )
         tasks = requirement_task_slice(evidence_plan, parent)
-        baseline = host_facet_baseline(requirement, tasks)
+        baseline = _baseline_for_requirement(evidence_plan, requirement, tasks)
         relevant_refs = facet_relevant_refs(evidence, requirement, baseline)
         window = requirement_evidence_window(evidence, relevant_refs)
         rendered_tasks = render_task_slice(tasks)
         augmentations: dict[str, Mapping[str, Any]] = {}
 
         for facet in FACETS:
-            refs = tuple(dict.fromkeys(str(ref) for ref in relevant_refs.get(facet, ()) if str(ref)))
+            if _retained_components(evidence_plan, parent):
+                continue
+            refs = tuple(
+                dict.fromkeys(
+                    str(ref) for ref in relevant_refs.get(facet, ()) if str(ref)
+                )
+            )
             if not refs:
                 continue
             facet_catalog = _facet_evidence(window, refs)
@@ -389,7 +475,11 @@ def derive_research_requirements(
                 requirement=requirement,
                 facet=facet,
                 baseline=baseline[facet],
-                task_slice=rendered_tasks,
+                task_slice=[
+                    task
+                    for task in rendered_tasks
+                    if task["task_id"] == facet_owner(tasks, facet)
+                ],
                 evidence_catalog=facet_catalog,
                 allowed_evidence_refs=refs,
             )
@@ -410,6 +500,14 @@ def derive_research_requirements(
             baseline=baseline,
             augmentations=augmentations,
         )
+        for item in merged:
+            if item["disposition"] == "derived":
+                owner = facet_owner(tasks, str(item["facet"]))
+                if not owner:
+                    requirement_unresolved.append(
+                        f"{parent}:{item['facet']}:missing_execution_owner"
+                    )
+                item["owner_task_ref"] = owner
         decisions.extend(merged)
         unresolved.extend(requirement_unresolved)
 
@@ -456,11 +554,7 @@ def derive_research_requirements(
         "ledger_sha256": "",
     }
     ledger["ledger_sha256"] = _sha(
-        {
-            key: value
-            for key, value in ledger.items()
-            if key != "ledger_sha256"
-        }
+        {key: value for key, value in ledger.items() if key != "ledger_sha256"}
     )
     return ledger
 

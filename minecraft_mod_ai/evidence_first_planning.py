@@ -107,13 +107,7 @@ def _strings(value: Any) -> tuple[str, ...]:
         values = value
     else:
         return ()
-    return tuple(
-        dict.fromkeys(
-            text
-            for item in values
-            if (text := str(item).strip())
-        )
-    )
+    return tuple(dict.fromkeys(text for item in values if (text := str(item).strip())))
 
 
 def _canonical_capability(value: Any) -> str:
@@ -242,7 +236,8 @@ def _fallback_capability(statement: str) -> str:
     explicit = [
         node.capability_id
         for node in resolution.nodes
-        if node.origin == "explicit" and not node.capability_id.startswith("unresolved:")
+        if node.origin == "explicit"
+        and not node.capability_id.startswith("unresolved:")
     ]
     if explicit:
         return str(explicit[0]).casefold()
@@ -306,7 +301,9 @@ def build_request_catalog(
         profile = profile_for_capability(capability)
         acceptance = [
             item for item in acceptance_source if _word_overlap(item, statement)
-        ] or [f"Verify the observable player-facing behavior for capability {capability}."]
+        ] or [
+            f"Verify the observable player-facing behavior for capability {capability}."
+        ]
         span = _source_span(prompt, statement)
         requirements.append(
             {
@@ -387,11 +384,12 @@ def build_request_catalog(
 def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> None:
     if catalog.get("catalog_sha256") != _hash_without(catalog, "catalog_sha256"):
         raise EvidencePlanError("Pre-target request catalog hash mismatch.")
-    if (
-        catalog.get("prompt_sha256") != _sha(prompt)
-        or catalog.get("prompt_char_length") != len(prompt)
-    ):
-        raise EvidencePlanError("Pre-target request catalog is stale for the supplied prompt.")
+    if catalog.get("prompt_sha256") != _sha(prompt) or catalog.get(
+        "prompt_char_length"
+    ) != len(prompt):
+        raise EvidencePlanError(
+            "Pre-target request catalog is stale for the supplied prompt."
+        )
     requirements = catalog.get("requirements")
     if not isinstance(requirements, list) or not requirements:
         raise EvidencePlanError("Pre-target request catalog has no requirements.")
@@ -401,7 +399,9 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError("Pre-target request requirement must be an object.")
         requirement_id = str(requirement.get("requirement_id") or "")
         if not _ID_RE.fullmatch(requirement_id) or requirement_id in ids:
-            raise EvidencePlanError("Pre-target requirement IDs are invalid or duplicated.")
+            raise EvidencePlanError(
+                "Pre-target requirement IDs are invalid or duplicated."
+            )
         ids.add(requirement_id)
         span = _mapping(requirement.get("source_span"))
         start, end = span.get("char_start"), span.get("char_end")
@@ -416,15 +416,18 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError(
                 f"Pre-target request source receipt is stale for {requirement_id}."
             )
-        if bool(requirement.get("mandatory", True)) and requirement.get(
-            "semantic_status", "RESOLVED"
-        ) == "UNRESOLVED":
+        if (
+            bool(requirement.get("mandatory", True))
+            and requirement.get("semantic_status", "RESOLVED") == "UNRESOLVED"
+        ):
             raise EvidencePlanError("Mandatory request text is unresolved.")
         if not _strings(requirement.get("provides")):
             raise EvidencePlanError("Mandatory request requirement has no capability.")
     for requirement in requirements:
         if any(dep not in ids for dep in _strings(requirement.get("depends_on"))):
-            raise EvidencePlanError("Request dependency references an unknown requirement.")
+            raise EvidencePlanError(
+                "Request dependency references an unknown requirement."
+            )
 
 
 def _normalize_sha(value: Any) -> str:
@@ -480,7 +483,9 @@ def normalize_component_catalog(
         identifier = str(item.get("component_id") or "").strip()
         if not identifier:
             identifier = _stable_id(
-                "component", locator or "receipt", {"index": index, "provides": provides}
+                "component",
+                locator or "receipt",
+                {"index": index, "provides": provides},
             )
         if not _COMPONENT_ID_RE.fullmatch(identifier):
             identifier = _stable_id(
@@ -491,16 +496,18 @@ def normalize_component_catalog(
         seen.add(identifier)
         raw_provenance = item.get("provenance")
         provenance = _mapping(raw_provenance)
-        origin = str(
-            provenance.get("origin")
-            or (raw_provenance if isinstance(raw_provenance, str) else "")
-            or item.get("origin")
-            or "unknown"
-        ).strip().casefold()
+        origin = (
+            str(
+                provenance.get("origin")
+                or (raw_provenance if isinstance(raw_provenance, str) else "")
+                or item.get("origin")
+                or "unknown"
+            )
+            .strip()
+            .casefold()
+        )
         content_sha256 = _normalize_sha(
-            item.get("content_sha256")
-            or item.get("sha256")
-            or item.get("content_hash")
+            item.get("content_sha256") or item.get("sha256") or item.get("content_hash")
         )
         bound_to_project = bool(
             inventory_attested
@@ -559,7 +566,9 @@ def normalize_component_catalog(
             "verification_status": (
                 "verified"
                 if verified
-                else "external_candidate" if external_complete else "unverified"
+                else "external_candidate"
+                if external_complete
+                else "unverified"
             ),
             "evidence_complete": evidence_complete,
             "bound_to_project": bound_to_project,
@@ -575,7 +584,9 @@ def _reuse_payload(game_design: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(direct, Mapping):
         return dict(direct)
     selection = game_design.get("_platform_selection")
-    if isinstance(selection, Mapping) and isinstance(selection.get("reuse_plan"), Mapping):
+    if isinstance(selection, Mapping) and isinstance(
+        selection.get("reuse_plan"), Mapping
+    ):
         return dict(selection["reuse_plan"])
     return {}
 
@@ -596,7 +607,9 @@ def _target_decision(
     policy = (
         "preserve"
         if raw.get("preserved_existing_target")
-        else "migrate" if raw.get("migration_requested") else "new"
+        else "migrate"
+        if raw.get("migration_requested")
+        else "new"
     )
     optimizer = _mapping(raw.get("optimizer"))
     inventory = _mapping(
@@ -665,8 +678,7 @@ def _target_decision(
     resolved = bool(
         str(target.get("minecraft_version") or "").strip().casefold()
         not in {"", "unresolved"}
-        and str(target.get("loader") or "").strip().casefold()
-        not in {"", "unresolved"}
+        and str(target.get("loader") or "").strip().casefold() not in {"", "unresolved"}
     )
     result: dict[str, Any] = {
         "policy": policy,
@@ -729,7 +741,9 @@ def _validated_external_reuse(
         )
     if mode not in {"source_transplant", "adapt"}:
         return False
-    if _canonical_capability(donor.get("capability")) != _canonical_capability(capability):
+    if _canonical_capability(donor.get("capability")) != _canonical_capability(
+        capability
+    ):
         return False
     from .source_transplant import SourceTransplantError, validated_reuse_donor
 
@@ -885,7 +899,9 @@ def _required_gates(
     step: TemplateStep | None = None,
 ) -> tuple[str, ...]:
     profile = profile_for_capability(capability, semantic_type=semantic_type)
-    features = set(step.branch_features if step is not None else profile.branch_features)
+    features = set(
+        step.branch_features if step is not None else profile.branch_features
+    )
     gates = ["source_static_validation", "target_compile"]
     if FEATURE_DATAGEN in features:
         gates.append("generated_resource_validation")
@@ -917,7 +933,9 @@ def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
         game_design.get("_existing_project_inventory")
         or game_design.get("_existing_snapshot")
     )
-    modules = inventory.get("modules") if isinstance(inventory.get("modules"), list) else []
+    modules = (
+        inventory.get("modules") if isinstance(inventory.get("modules"), list) else []
+    )
     topology_modules = [
         item
         for item in modules
@@ -959,7 +977,9 @@ def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
         {},
     )
     test = next((item for item in roots if item.get("test")), {})
-    metadata = inventory.get("metadata") if isinstance(inventory.get("metadata"), list) else []
+    metadata = (
+        inventory.get("metadata") if isinstance(inventory.get("metadata"), list) else []
+    )
     mod_id = str(game_design.get("mod_id") or "").strip()
     if not mod_id:
         mod_id = next(
@@ -1057,7 +1077,9 @@ def _anchors(
             "source_set": (
                 "test"
                 if kind == "test"
-                else "resources" if kind == "resource" else ownership["source_set"]
+                else "resources"
+                if kind == "resource"
+                else ownership["source_set"]
             ),
         }
         for kind in step.anchor_kinds
@@ -1068,20 +1090,26 @@ def _requirement_done(requirement_ref: str) -> str:
     return f"requirement_done:{requirement_ref}"
 
 
-def _requirement_ready(requirement_ref: str) -> str:
-    return f"requirement_ready:{requirement_ref}"
-
-
 def _rewrite_root(
     steps: Sequence[TemplateStep],
     *,
-    root: str,
+    prerequisites: Sequence[str],
 ) -> tuple[TemplateStep, ...]:
     return tuple(
         TemplateStep(
             name=step.name,
             outcome=step.outcome,
-            consumes=tuple(root if item == ROOT_PROVIDE else item for item in step.consumes),
+            consumes=tuple(
+                dict.fromkeys(
+                    value
+                    for item in step.consumes
+                    for value in (
+                        (ROOT_PROVIDE, *prerequisites)
+                        if item == ROOT_PROVIDE
+                        else (item,)
+                    )
+                )
+            ),
             provides=step.provides,
             anchor_kinds=step.anchor_kinds,
             branch_features=step.branch_features,
@@ -1239,19 +1267,10 @@ def _compile_tasks(
             dict.fromkeys(_strings(gap.get("depends_on_requirements")))
         )
         if dependency_refs:
-            ready = _requirement_ready(requirement_ref)
-            gate = TemplateStep(
-                name="prerequisite_gate",
-                outcome=(
-                    f"Require every host-approved prerequisite requirement before "
-                    f"activating implementation of {capability}"
-                ),
-                consumes=tuple(_requirement_done(dep) for dep in dependency_refs),
-                provides=(ready,),
-                anchor_kinds=("test",),
-                branch_features=(),
+            steps = _rewrite_root(
+                steps,
+                prerequisites=tuple(_requirement_done(dep) for dep in dependency_refs),
             )
-            steps = (gate, *_rewrite_root(steps, root=ready))
 
         if _active(branches, "needs_loader_leaf"):
             steps = _loader_leaf_steps(capability, steps)
@@ -1263,7 +1282,9 @@ def _compile_tasks(
                 for item in step.provides
             )
             if required_provide in provides:
-                provides = tuple(dict.fromkeys((*provides, _requirement_done(requirement_ref))))
+                provides = tuple(
+                    dict.fromkeys((*provides, _requirement_done(requirement_ref)))
+                )
             rewritten.append(
                 TemplateStep(
                     name=step.name,
@@ -1373,7 +1394,10 @@ def _compile_tasks(
             operation="compile_tasks",
             gate="requirement_to_codeplan",
             result="PASS",
-            details={"tasks": bound, "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA},
+            details={
+                "tasks": bound,
+                "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA,
+            },
         )
     return bound
 
@@ -1438,9 +1462,7 @@ def _gap_record(
         "design_resolution_obligations": list(
             requirement.get("design_resolution_obligations") or ()
         ),
-        "semantic_type": str(
-            requirement.get("semantic_type") or "gameplay_mechanic"
-        ),
+        "semantic_type": str(requirement.get("semantic_type") or "gameplay_mechanic"),
         "unlock_policy": dict(requirement.get("unlock_policy") or {}),
         "depends_on_requirements": list(_strings(requirement.get("depends_on"))),
         "gap_sha256": "",
@@ -1480,9 +1502,9 @@ def _component_refs_by_capability(
             decision.get("action") == "retain"
             and decision.get("evidence_status") == "verified"
         ):
-            result.setdefault(
-                _canonical_capability(decision["capability"]), []
-            ).extend(str(item) for item in decision.get("component_refs", ()))
+            result.setdefault(_canonical_capability(decision["capability"]), []).extend(
+                str(item) for item in decision.get("component_refs", ())
+            )
     return {
         capability: list(dict.fromkeys(refs)) for capability, refs in result.items()
     }
@@ -1540,8 +1562,7 @@ def compile_evidence_first_plan(
     verified.update(
         _canonical_capability(item["capability"])
         for item in decisions
-        if item.get("action") == "retain"
-        and item.get("evidence_status") == "verified"
+        if item.get("action") == "retain" and item.get("evidence_status") == "verified"
     )
 
     gaps = [
@@ -1559,9 +1580,7 @@ def compile_evidence_first_plan(
             (item for item in topology_ids if "common" in item.casefold()),
             topology_ids[0],
         )
-    if target_topology.get("source_sets") and not ownership.get(
-        "topology_source_sets"
-    ):
+    if target_topology.get("source_sets") and not ownership.get("topology_source_sets"):
         ownership["topology_source_sets"] = list(
             _strings(target_topology.get("source_sets"))
         )
@@ -1704,9 +1723,7 @@ def _validate_reuse_decisions(
         "source_mode",
         "decision_sha256",
     }
-    requirement_by_id = {
-        str(item["requirement_id"]): item for item in requirements
-    }
+    requirement_by_id = {str(item["requirement_id"]): item for item in requirements}
     component_by_id = {str(item["component_id"]): item for item in components}
     seen_ids: set[str] = set()
     seen_requirements: set[str] = set()
@@ -1725,8 +1742,12 @@ def _validate_reuse_decisions(
         ):
             raise EvidencePlanError("Reuse decision requirement binding is invalid.")
         capability = str(decision.get("capability") or "")
-        if capability != str(requirement_by_id[requirement_ref].get("capability") or ""):
-            raise EvidencePlanError("Reuse decision capability changed from its requirement.")
+        if capability != str(
+            requirement_by_id[requirement_ref].get("capability") or ""
+        ):
+            raise EvidencePlanError(
+                "Reuse decision capability changed from its requirement."
+            )
         component_refs = _strings(decision.get("component_refs"))
         source_refs = _strings(decision.get("source_refs"))
         if any(ref not in component_by_id for ref in component_refs):
@@ -1780,7 +1801,9 @@ def _validate_reuse_decisions(
         seen_requirements.add(requirement_ref)
         output.append(decision)
     if seen_requirements != set(requirement_by_id):
-        raise EvidencePlanError("Every requirement requires exactly one reuse decision.")
+        raise EvidencePlanError(
+            "Every requirement requires exactly one reuse decision."
+        )
     return tuple(output)
 
 
@@ -1808,7 +1831,9 @@ def validate_evidence_first_plan(
     if len(requirement_ids) != len(requirements) or any(
         not _ID_RE.fullmatch(item) for item in requirement_ids
     ):
-        raise EvidencePlanError("Request requirement identifiers are invalid or duplicated.")
+        raise EvidencePlanError(
+            "Request requirement identifiers are invalid or duplicated."
+        )
 
     components = _validate_components(plan.get("component_catalog"))
     target = _mapping(plan.get("target_decision"))
@@ -1821,7 +1846,9 @@ def validate_evidence_first_plan(
         in {"", "unresolved"}
         or str(coordinates.get("loader") or "").casefold() in {"", "unresolved"}
     ):
-        raise EvidencePlanError("Semantic task graph requires a resolved target hard gate.")
+        raise EvidencePlanError(
+            "Semantic task graph requires a resolved target hard gate."
+        )
 
     decisions = _validate_reuse_decisions(
         plan.get("reuse_decisions"), requirements, components, target
@@ -1830,8 +1857,7 @@ def validate_evidence_first_plan(
     verified.update(
         _canonical_capability(item["capability"])
         for item in decisions
-        if item.get("action") == "retain"
-        and item.get("evidence_status") == "verified"
+        if item.get("action") == "retain" and item.get("evidence_status") == "verified"
     )
     if plan.get("verified_provides") != sorted(verified):
         raise EvidencePlanError("Verified provides do not match attested components.")
@@ -1899,7 +1925,9 @@ def validate_evidence_first_plan(
     if not isinstance(tasks, list):
         raise EvidencePlanError("Semantic task graph must be a list.")
     if _canonical(tasks) != _canonical(expected_tasks):
-        raise EvidencePlanError("Semantic tasks are not the deterministic template DAG.")
+        raise EvidencePlanError(
+            "Semantic tasks are not the deterministic template DAG."
+        )
     _topological(tasks)
 
     providers: dict[str, list[str]] = {}
@@ -1962,7 +1990,9 @@ def validate_evidence_first_plan(
         if task.get("template_id") != profile.template_id:
             raise EvidencePlanError(f"Task {task_id} template identity changed.")
     if covered_gaps != gap_ids:
-        raise EvidencePlanError(f"Unbound implementation gaps: {sorted(gap_ids - covered_gaps)}")
+        raise EvidencePlanError(
+            f"Unbound implementation gaps: {sorted(gap_ids - covered_gaps)}"
+        )
 
     component_refs = _component_refs_by_capability(components, decisions)
     task_refs_by_requirement: dict[str, list[str]] = {}

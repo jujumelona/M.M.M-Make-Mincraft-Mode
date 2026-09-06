@@ -17,13 +17,17 @@ from typing import Any
 from .evidence_first_planning import validate_evidence_first_plan
 from .task_execution_classification import claims_runtime, is_source_symbol, is_test_anchor
 
-_PRODUCTION_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
+_PRODUCTION_KINDS = frozenset(
+    {"symbol", "registry_id", "build_config", "loader_module"}
+)
 _RESOURCE_KINDS = frozenset({"resource"})
 _SOURCE_COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _sha(value: Any) -> str:
@@ -38,7 +42,9 @@ def _strings(value: Any) -> tuple[str, ...]:
         values = value
     else:
         return ()
-    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+    return tuple(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -72,7 +78,9 @@ def _source_anchor(task_id: str, ownership: Mapping[str, Any]) -> dict[str, Any]
     namespace_path = namespace.replace(".", "/")
     extension = str(ownership.get("extension") or "java").lstrip(".")
     class_name = _class_name(task_id)
-    locator = f"{source_root}/{namespace_path}/mmmplan/{class_name}.{extension}#{class_name}"
+    locator = (
+        f"{source_root}/{namespace_path}/mmmplan/{class_name}.{extension}#{class_name}"
+    )
     return {
         "kind": "symbol",
         "locator": locator,
@@ -83,7 +91,9 @@ def _source_anchor(task_id: str, ownership: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
-def _derived_for_task(plan: Mapping[str, Any], task: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _derived_for_task(
+    plan: Mapping[str, Any], task: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     ledger = _mapping(plan.get("derived_requirement_ledger"))
     refs = set(_strings(task.get("requirement_refs")))
     if not refs:
@@ -96,11 +106,18 @@ def _derived_for_task(plan: Mapping[str, Any], task: Mapping[str, Any]) -> list[
             continue
         if str(raw.get("disposition") or "") != "derived":
             continue
+        owner = str(raw.get("owner_task_ref") or "")
+        if not owner:
+            raise ValueError("Derived obligation has no explicit execution owner")
+        if owner != str(task.get("task_id") or ""):
+            continue
         result.append(dict(raw))
     return result
 
 
-def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dict[str, Any]:
+def _execution_task(
+    plan: Mapping[str, Any], raw_task: Mapping[str, Any]
+) -> dict[str, Any]:
     task = json.loads(_canonical(raw_task))
     task_id = str(task.get("task_id") or "")
     ownership = _mapping(plan.get("ownership_context"))
@@ -163,7 +180,9 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     implementation_obligations: list[str] = []
     for item in derived:
         acceptance.extend(_strings(item.get("acceptance")))
-        implementation_obligations.extend(_strings(item.get("implementation_obligations")))
+        implementation_obligations.extend(
+            _strings(item.get("implementation_obligations"))
+        )
     task["acceptance"] = list(dict.fromkeys(acceptance))
     task["implementation_obligations"] = list(dict.fromkeys(implementation_obligations))
 
@@ -180,25 +199,54 @@ def execution_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     raw_tasks = plan.get("tasks")
     if not isinstance(raw_tasks, list):
         raise ValueError("evidence plan tasks must be a list")
+    _validate_derived_owners(plan, raw_tasks)
     result["tasks"] = [
-        _execution_task(plan, item)
-        for item in raw_tasks
-        if isinstance(item, Mapping)
+        _execution_task(plan, item) for item in raw_tasks if isinstance(item, Mapping)
     ]
     result["semantic_plan_sha256"] = str(plan.get("plan_sha256") or "")
     result["execution_overlay_sha256"] = _sha(result["tasks"])
     return result
 
 
+def _validate_derived_owners(plan: Mapping[str, Any], tasks: Sequence[Any]) -> None:
+    by_id = {
+        str(task.get("task_id") or ""): task
+        for task in tasks
+        if isinstance(task, Mapping)
+    }
+    for decision in _mapping(plan.get("derived_requirement_ledger")).get(
+        "facet_decisions", ()
+    ):
+        if (
+            not isinstance(decision, Mapping)
+            or decision.get("disposition") != "derived"
+        ):
+            continue
+        owner = str(decision.get("owner_task_ref") or "")
+        task = by_id.get(owner)
+        if task is None:
+            raise ValueError(
+                f"Derived obligation has no valid execution owner: {owner!r}"
+            )
+        parent = str(decision.get("parent_requirement_ref") or "")
+        if parent not in _strings(task.get("requirement_refs")):
+            raise ValueError(
+                f"Derived obligation owner {owner!r} does not own requirement {parent!r}"
+            )
+
+
 def _binding_id(task_ref: str, anchor: Mapping[str, Any]) -> str:
-    return "execution-production-" + _sha(
-        {
-            "task_ref": task_ref,
-            "module_id": anchor.get("module_id"),
-            "source_set": anchor.get("source_set"),
-            "locator": anchor.get("locator"),
-        }
-    )[7:27]
+    return (
+        "execution-production-"
+        + _sha(
+            {
+                "task_ref": task_ref,
+                "module_id": anchor.get("module_id"),
+                "source_set": anchor.get("source_set"),
+                "locator": anchor.get("locator"),
+            }
+        )[7:27]
+    )
 
 
 def execution_handoff(
@@ -232,7 +280,9 @@ def execution_handoff(
             continue
         task_ref = str(task.get("task_id") or "")
         refs = _strings(task.get("requirement_refs"))
-        actions = {str(decisions[ref].get("action") or "") for ref in refs if ref in decisions}
+        actions = {
+            str(decisions[ref].get("action") or "") for ref in refs if ref in decisions
+        }
         action = next(iter(actions)) if len(actions) == 1 else "fresh"
         reuse_refs = list(_strings(task.get("reuse_refs")))
         for anchor in _anchors(task):
@@ -261,7 +311,9 @@ def execution_handoff(
             )
             bound.add(key)
     result["production_modules"] = modules
-    result["canonical_handoff_sha256"] = str(canonical_handoff.get("handoff_sha256") or "")
+    result["canonical_handoff_sha256"] = str(
+        canonical_handoff.get("handoff_sha256") or ""
+    )
     result["execution_overlay_sha256"] = _sha(
         {
             "semantic_plan_sha256": semantic_plan.get("plan_sha256"),

@@ -22,7 +22,9 @@ def _strings(value: Any) -> tuple[str, ...]:
         values = value
     else:
         return ()
-    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+    return tuple(
+        dict.fromkeys(str(item).strip() for item in values if str(item).strip())
+    )
 
 
 def requirement_task_slice(
@@ -41,7 +43,9 @@ def requirement_task_slice(
 
 def _task_anchor_kinds(task: Mapping[str, Any]) -> set[str]:
     anchors = task.get("owned_anchors")
-    if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
+    if not isinstance(anchors, Sequence) or isinstance(
+        anchors, (str, bytes, bytearray)
+    ):
         return set()
     return {
         str(item.get("kind") or "").casefold()
@@ -81,7 +85,9 @@ def _facet_is_structurally_covered(task: Mapping[str, Any], facet: str) -> bool:
     kinds = _task_anchor_kinds(task)
     structural = _structural_tokens(task)
     acceptance = _acceptance_tokens(task)
-    owns_source = "symbol" in kinds or "build_config" in kinds or "loader_module" in kinds
+    owns_source = (
+        "symbol" in kinds or "build_config" in kinds or "loader_module" in kinds
+    )
     owns_test = "test" in kinds
 
     if facet == "state_lifecycle":
@@ -194,16 +200,20 @@ def _facet_is_structurally_covered(task: Mapping[str, Any], facet: str) -> bool:
         )
 
     if facet == "verification_testing":
-        return owns_test or bool(_strings(task.get("acceptance"))) or _has_any(
-            structural,
-            {
-                "test",
-                "verify",
-                "verification",
-                "validation",
-                "regression",
-                "gametest",
-            },
+        return (
+            owns_test
+            or bool(_strings(task.get("acceptance")))
+            or _has_any(
+                structural,
+                {
+                    "test",
+                    "verify",
+                    "verification",
+                    "validation",
+                    "regression",
+                    "gametest",
+                },
+            )
         )
 
     return False
@@ -212,11 +222,36 @@ def _facet_is_structurally_covered(task: Mapping[str, Any], facet: str) -> bool:
 def _facet_tasks(
     tasks: Sequence[Mapping[str, Any]], facet: str
 ) -> tuple[Mapping[str, Any], ...]:
-    return tuple(
-        task
-        for task in tasks
-        if _facet_is_structurally_covered(task, facet)
-    )
+    return tuple(task for task in tasks if _facet_is_structurally_covered(task, facet))
+
+
+def facet_owner(tasks: Sequence[Mapping[str, Any]], facet: str) -> str:
+    """Choose a concrete existing owner, never broadcast an obligation to a requirement."""
+    candidates = list(_facet_tasks(tasks, facet))
+    if facet != "verification_testing":
+        candidates = [
+            task for task in candidates if _task_anchor_kinds(task) - {"test"}
+        ]
+    return str(candidates[-1].get("task_id") or "") if candidates else ""
+
+
+def required_facets(requirement: Mapping[str, Any]) -> frozenset[str]:
+    """Applicability comes from the host capability contract, independently of task coverage."""
+    capabilities = _strings(requirement.get("implementation_capabilities"))
+    required: set[str] = set()
+    prefixes = {
+        "persistence.": "persistence_reload",
+        "network.": "server_network_authority",
+        "resources.": "registration_data_resources",
+        "registry.": "registration_data_resources",
+        "worldgen.": "registration_data_resources",
+        "gametest.": "verification_testing",
+    }
+    for capability in capabilities:
+        for prefix, facet in prefixes.items():
+            if capability.startswith(prefix):
+                required.add(facet)
+    return frozenset(required)
 
 
 def host_facet_baseline(
@@ -224,17 +259,18 @@ def host_facet_baseline(
     tasks: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     parent = str(requirement.get("requirement_id") or "")
+    applicable = required_facets(requirement)
     result: dict[str, dict[str, Any]] = {}
     for facet in FACETS:
         matched = _facet_tasks(tasks, facet)
         if not matched:
             result[facet] = {
                 "facet": facet,
-                "disposition": "not_applicable",
+                "disposition": "missing" if facet in applicable else "not_applicable",
                 "statement": "",
                 "rationale": (
-                    "The frozen requirement-bound PlanIR task slice contains "
-                    f"no executable structural obligation for facet {facet}."
+                    f"Host capability contract {'requires' if facet in applicable else 'does not require'} "
+                    f"facet {facet}; no owning implementation task is present."
                 ),
                 "evidence_refs": [],
                 "acceptance": [],
@@ -249,18 +285,16 @@ def host_facet_baseline(
         ]
         acceptance = list(
             dict.fromkeys(
-                check
-                for task in matched
-                for check in _strings(task.get("acceptance"))
+                check for task in matched for check in _strings(task.get("acceptance"))
             )
-        )[:8]
+        )
         obligations = list(
             dict.fromkeys(
                 str(task.get("semantic_outcome") or "").strip()
                 for task in matched
                 if str(task.get("semantic_outcome") or "").strip()
             )
-        )[:8]
+        )
         result[facet] = {
             "facet": facet,
             "disposition": "already_covered",
@@ -288,7 +322,7 @@ def render_task_slice(
                 "consumes": list(_strings(task.get("consumes"))),
                 "provides": list(_strings(task.get("provides"))),
                 "required_gates": list(_strings(task.get("required_gates"))),
-                "acceptance": list(_strings(task.get("acceptance")))[:6],
+                "acceptance": list(_strings(task.get("acceptance"))),
                 "anchor_kinds": sorted(_task_anchor_kinds(task)),
             }
         )

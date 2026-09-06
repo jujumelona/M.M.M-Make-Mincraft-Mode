@@ -113,7 +113,10 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
 
     runtime_lowered = by_id["task_runtime_scenario"]
     assert runtime_lowered["execution_role"] == "production_with_verification"
-    assert {anchor["kind"] for anchor in runtime_lowered["owned_anchors"]} == {"symbol", "test"}
+    assert {anchor["kind"] for anchor in runtime_lowered["owned_anchors"]} == {
+        "symbol",
+        "test",
+    }
     assert any(
         binding["task_ref"] == "task_runtime_scenario"
         for binding in handoff["production_modules"]
@@ -121,7 +124,9 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
 
     registry_lowered = by_id["task_registry_identity"]
     assert registry_lowered["execution_role"] == "production"
-    assert {anchor["kind"] for anchor in registry_lowered["owned_anchors"]} == {"registry_id"}
+    assert {anchor["kind"] for anchor in registry_lowered["owned_anchors"]} == {
+        "registry_id"
+    }
     assert "source_static_validation" not in registry_lowered["required_gates"]
     assert "target_compile" not in registry_lowered["required_gates"]
     assert any(
@@ -145,37 +150,20 @@ class _FacetRouter:
 
     def generate_text(self, _role, messages, **_kwargs):
         self.calls += 1
-        payload = json.loads(messages[-1]["content"])
-        host_owned = payload["host_owned"]
-        facet = host_owned["facet"]
-        evidence_ref = host_owned["evidence_catalog"][0]["evidence_ref"]
-        if self.unresolved and facet == "persistence_reload":
-            return json.dumps(
-                {
-                    "decision": "insufficient_evidence",
-                    "rationale": "persistence evidence exposes an unresolved reload obligation",
-                    "evidence_refs": [evidence_ref],
-                    "acceptance": [],
-                    "implementation_obligations": [],
-                }
-            )
-        if facet == "verification_testing":
-            return json.dumps(
-                {
-                    "decision": "add_obligation",
-                    "rationale": "runtime evidence exposes an observable transition",
-                    "evidence_refs": [evidence_ref],
-                    "acceptance": ["the transition passes an external runtime check"],
-                    "implementation_obligations": ["add a GameTest covering the transition"],
-                }
-            )
+        payload = json.loads(messages[1]["content"])["host_owned"]
+        evidence_ref = payload["evidence_catalog"][0]["evidence_ref"]
+        decision = "insufficient_evidence" if self.unresolved else "add_obligation"
         return json.dumps(
             {
-                "decision": "no_addition",
-                "rationale": "the immutable host baseline already closes this facet",
+                "decision": decision,
+                "rationale": "The supplied source adds a requirement-specific check.",
                 "evidence_refs": [evidence_ref],
-                "acceptance": [],
-                "implementation_obligations": [],
+                "acceptance": []
+                if self.unresolved
+                else ["The requested transition passes an external check."],
+                "implementation_obligations": []
+                if self.unresolved
+                else ["Add a GameTest covering the transition."],
             }
         )
 
@@ -187,6 +175,15 @@ class _NoCallRouter:
 
 def _derivation_plan() -> dict[str, object]:
     return {
+        "tasks": [
+            {
+                "task_id": "task_demo",
+                "requirement_refs": ["req_demo"],
+                "owned_anchors": [{"kind": "symbol"}, {"kind": "test"}],
+                "semantic_outcome": "Persist and reload travel state",
+                "acceptance": ["Travel is observable"],
+            }
+        ],
         "request_catalog": {
             "prompt_sha256": "sha256:prompt",
             "requirements": [
@@ -196,27 +193,16 @@ def _derivation_plan() -> dict[str, object]:
                     "capability": "capability:space_travel",
                 }
             ],
-        }
+        },
     }
 
 
-def _game_design() -> dict[str, object]:
-    return {
-        "_platform_selection": {
-            "target": {
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
-                "java_version": "21",
-            },
-            "source": "test_host_target",
-            "preserved_existing_target": False,
-            "migration_requested": False,
-        }
-    }
-
-
-def test_research_derivation_requires_traceable_evidence_and_bounded_facet_turns(monkeypatch):
-    monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
+def test_research_derivation_requires_traceable_evidence_and_one_facet_turn(
+    monkeypatch, synthetic_platform_lock
+):
+    monkeypatch.setattr(
+        derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
+    )
     router = _FacetRouter()
     ledger = derivation.derive_research_requirements(
         router,
@@ -224,15 +210,21 @@ def test_research_derivation_requires_traceable_evidence_and_bounded_facet_turns
         evidence_plan=_derivation_plan(),
         research_brief={
             "source_id": "research:runtime",
+            "url": "https://example.org/test-fixture/runtime",
             "requirement_ref": "req_demo",
             "claim": "verification evidence: runtime transition is externally observable",
         },
         technical_evidence={},
-        game_design=_game_design(),
+        game_design={
+            "_platform_selection": {
+                "source": "platform_resolver",
+                "target": synthetic_platform_lock.to_dict(),
+            }
+        },
     )
     decisions = ledger["facet_decisions"]
-    assert router.calls == ledger["model_call_policy"]["actual_calls_including_retries"]
-    assert router.calls >= 1
+    assert router.calls == 1
+    assert ledger["model_call_policy"]["actual_calls_including_retries"] == 1
     assert len(decisions) == len(derivation.FACETS)
     derived = [item for item in decisions if item["disposition"] == "derived"]
     assert len(derived) == 1
@@ -244,8 +236,12 @@ def test_research_derivation_requires_traceable_evidence_and_bounded_facet_turns
     assert derived[0]["implementation_obligations"]
 
 
-def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(monkeypatch):
-    monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
+def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(
+    monkeypatch, synthetic_platform_lock
+):
+    monkeypatch.setattr(
+        derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
+    )
     ledger = derivation.derive_research_requirements(
         _NoCallRouter(),
         prompt="travel to another world",
@@ -255,17 +251,25 @@ def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(monkeyp
             "claim": "general platform metadata is available",
         },
         technical_evidence={},
-        game_design=_game_design(),
+        game_design={
+            "_platform_selection": {
+                "source": "platform_resolver",
+                "target": synthetic_platform_lock.to_dict(),
+            }
+        },
     )
     assert ledger["model_call_policy"]["actual_calls_including_retries"] == 0
     assert all(
-        item["disposition"] != "unresolved"
-        for item in ledger["facet_decisions"]
+        item["disposition"] != "unresolved" for item in ledger["facet_decisions"]
     )
 
 
-def test_research_derivation_fails_closed_on_relevant_unresolved_facet(monkeypatch):
-    monkeypatch.setattr(derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None)
+def test_research_derivation_fails_closed_on_relevant_unresolved_facet(
+    monkeypatch, synthetic_platform_lock
+):
+    monkeypatch.setattr(
+        derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
+    )
     with pytest.raises(derivation.ResearchRequirementError, match="underspecified"):
         derivation.derive_research_requirements(
             _FacetRouter(unresolved=True),
@@ -273,9 +277,15 @@ def test_research_derivation_fails_closed_on_relevant_unresolved_facet(monkeypat
             evidence_plan=_derivation_plan(),
             research_brief={
                 "source_id": "research:persistence",
+                "url": "https://example.org/test-fixture/persistence",
                 "requirement_ref": "req_demo",
                 "claim": "persistence reload evidence for travel state is incomplete",
             },
             technical_evidence={},
-            game_design=_game_design(),
+            game_design={
+                "_platform_selection": {
+                    "source": "platform_resolver",
+                    "target": synthetic_platform_lock.to_dict(),
+                }
+            },
         )

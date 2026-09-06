@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import uuid
 
 from . import central_research, production_contract
 from .complete_spec import (
@@ -18,6 +19,8 @@ from .model_router import ModelRouter
 from .planner_hole_filling import fill_evidence_page
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
+from .planner_trace_artifacts import repository_revision
+from .root_cause_trace import emit_root_cause, trace_scope
 from .research_derived_requirements import (
     attach_derived_requirement_ledger,
     derive_research_requirements,
@@ -55,19 +58,27 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        session_factory = getattr(self.router, "generation_session", None)
-        if not callable(session_factory):
-            return self._plan_in_session(
-                prompt,
-                media_paths=media_paths,
-                existing_input_sha256=existing_input_sha256,
+        from contextlib import nullcontext
+
+        with trace_scope("complete_planning", trace_id=uuid.uuid4().hex):
+            emit_root_cause(
+                "planner_run_start",
+                stage="planning",
+                result="START",
+                details=repository_revision(),
             )
-        with session_factory("planner"):
-            return self._plan_in_session(
-                prompt,
-                media_paths=media_paths,
-                existing_input_sha256=existing_input_sha256,
+            session_factory = getattr(self.router, "generation_session", None)
+            session = (
+                session_factory("planner")
+                if callable(session_factory)
+                else nullcontext()
             )
+            with session:
+                return self._plan_in_session(
+                    prompt,
+                    media_paths=media_paths,
+                    existing_input_sha256=existing_input_sha256,
+                )
 
     def _plan_in_session(
         self,
@@ -95,6 +106,10 @@ class CompleteGameDesignPlanner:
                 cause=exc,
             ) from exc
 
+        # Deterministic binding errors must not spend any optional research turns.
+        # Revalidate after augmentation because it can add execution obligations.
+        _evidence_host_batches(evidence_plan)
+
         try:
             derived_ledger = derive_research_requirements(
                 self.router,
@@ -104,7 +119,9 @@ class CompleteGameDesignPlanner:
                 technical_evidence=artifacts.technical_evidence,
                 game_design=internal_design,
             )
-            evidence_plan = attach_derived_requirement_ledger(evidence_plan, derived_ledger)
+            evidence_plan = attach_derived_requirement_ledger(
+                evidence_plan, derived_ledger
+            )
         except Exception as exc:
             raise PlanningStageError(
                 PlanningStage.EVIDENCE,
@@ -257,7 +274,10 @@ class CompleteGameDesignPlanner:
                 if not isinstance(raw, dict):
                     continue
                 asset = _asset(raw)
-                if asset.asset_id in known_asset_ids or asset.target_path in known_asset_paths:
+                if (
+                    asset.asset_id in known_asset_ids
+                    or asset.target_path in known_asset_paths
+                ):
                     continue
                 assets.append(asset)
                 known_asset_ids.add(asset.asset_id)
@@ -280,7 +300,9 @@ class CompleteGameDesignPlanner:
         return tuple(modules), tuple(assets), tuple(tests)
 
 
-def _host_batches(prompt: str, game_design: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
+def _host_batches(
+    prompt: str, game_design: Mapping[str, Any]
+) -> tuple[_ProductionBatch, ...]:
     """Compatibility helper for stored callers without evidence PlanIR."""
     raw_modules = game_design.get("modules")
     exports: list[str] = []
@@ -338,7 +360,9 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
             _ProductionBatch(
                 batch_id=str(raw["batch_id"]),
                 scope=str(raw["scope"]),
-                depends_on_batches=tuple(str(item) for item in raw["depends_on_batches"]),
+                depends_on_batches=tuple(
+                    str(item) for item in raw["depends_on_batches"]
+                ),
                 deliverables=tuple(str(item) for item in raw["deliverables"]),
                 exports=tuple(str(item) for item in raw["exports"]),
                 task_contract=task,
@@ -391,7 +415,9 @@ def _retrieve_implementation_evidence(
                 "bound platform evidence is unavailable",
             )
         return payload
-    brief = research_brief or central_research.normalize_research_brief(prompt, game_design)
+    brief = research_brief or central_research.normalize_research_brief(
+        prompt, game_design
+    )
     value = central_research.retrieve_domain_evidence(brief)
     if not isinstance(value, Mapping):
         raise PlanningStageError(
@@ -444,9 +470,7 @@ def _unique_strings(value: Any) -> list[str]:
         return []
     return list(
         dict.fromkeys(
-            item.strip()
-            for item in value
-            if isinstance(item, str) and item.strip()
+            item.strip() for item in value if isinstance(item, str) and item.strip()
         )
     )
 
