@@ -3,7 +3,7 @@ from __future__ import annotations
 from minecraft_mod_ai import reuse_build_verifier as verifier
 
 
-def test_build_toolchain_target_matrix_uses_executable_provider(
+def test_build_toolchain_rejects_unattested_synthetic_target_matrix(
     monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setattr(verifier, "_java_major_version", lambda: "21")
@@ -29,4 +29,7 @@ def test_build_toolchain_target_matrix_uses_executable_provider(
     assert receipt.minecraft_version == "1.21.1"
     assert receipt.gradle_version == "8.10.2"
     assert receipt.java_version == "21"
-    assert receipt.target_matrix_verified is True
+    assert receipt.wrapper_verified is False
+    assert receipt.distribution_verified is False
+    assert receipt.target_matrix_verified is False
+    assert receipt.is_attested is False
