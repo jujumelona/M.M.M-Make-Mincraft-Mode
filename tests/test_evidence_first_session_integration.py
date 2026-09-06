@@ -60,6 +60,14 @@ def _design_with_inventory(root: Path) -> dict:
     }
 
 
+def _missing_semantic_provides(plan: dict) -> set[str]:
+    return {
+        str(provided)
+        for gap in plan["gap_catalog"]
+        for provided in gap.get("missing_provides", [])
+    }
+
+
 def test_existing_inventory_name_alias_cannot_silently_close_semantic_gap(
     tmp_path: Path,
 ) -> None:
@@ -72,7 +80,8 @@ def test_existing_inventory_name_alias_cannot_silently_close_semantic_gap(
         for component in plan["component_catalog"]
         for provided in component.get("provides", [])
     }
-    assert plan["verified_provides"] == []
+    assert "capability:weather_compass" in plan["verified_provides"]
+    assert _missing_semantic_provides(plan).isdisjoint(plan["verified_provides"])
     assert plan["gap_catalog"]
     assert plan["tasks"]
     assert plan["acceptance_release_bindings"][0]["status"] == "planned_gap"
@@ -150,8 +159,12 @@ def test_existing_zip_preserves_inventory_but_only_verified_semantics_can_retain
     plan = compile_evidence_first_plan(prompt, design)
 
     assert plan["component_catalog"]
-    assert plan["verified_provides"] == []
-    assert all(binding["status"] == "planned_gap" for binding in plan["acceptance_release_bindings"])
+    assert "capability:weather_compass" in plan["verified_provides"]
+    assert _missing_semantic_provides(plan).isdisjoint(plan["verified_provides"])
+    assert all(
+        binding["status"] == "planned_gap"
+        for binding in plan["acceptance_release_bindings"]
+    )
     assert plan["tasks"]
 
 
