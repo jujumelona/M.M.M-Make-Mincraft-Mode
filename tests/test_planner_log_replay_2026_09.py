@@ -34,6 +34,7 @@ from minecraft_mod_ai.research_derived_requirements import (
     attach_derived_requirement_ledger,
 )
 from minecraft_mod_ai.research_requirement_plan_slice import host_facet_baseline
+from tests.planning_authority_fixtures import request_catalog
 
 
 def _recording():
@@ -145,7 +146,7 @@ def test_old_gates_and_runtime_with_test_only_binding_still_fail_closed():
     assert "TASK_RUNTIME_TEST_ONLY" in codes
 
 
-def _design(lock):
+def _design(lock, prompt, requirements):
     return {
         "_platform_selection": {
             "source": "platform_resolver",
@@ -153,6 +154,7 @@ def _design(lock):
         },
         "modules": [],
         "acceptance_tests": ["Trading is atomic."],
+        "_evidence_request_catalog": request_catalog(prompt, requirements),
     }
 
 
@@ -165,7 +167,24 @@ def test_real_plan_lowering_and_handoff_before_and_after_research(
     synthetic_platform_lock,
 ):
     prompt = "Add trade. Add quests."
-    design = _design(synthetic_platform_lock)
+    design = _design(
+        synthetic_platform_lock,
+        prompt,
+        [
+            {
+                "requirement_id": "req_trade",
+                "capability": "economy.trade",
+                "source_text": "Add trade.",
+                "statement": "Add atomic player trading.",
+            },
+            {
+                "requirement_id": "req_quests",
+                "capability": "quest.progression",
+                "source_text": "Add quests.",
+                "statement": "Add persistent quest progression.",
+            },
+        ],
+    )
     plan = compile_evidence_first_plan(prompt, design)
     for candidate in (
         plan,
@@ -283,7 +302,24 @@ def test_real_host_batches_compile_production_contract_without_rewriting_semanti
     from minecraft_mod_ai import production_contract
 
     prompt = "Add a persistent networked machine with a GUI and generated resources."
-    design = _design(synthetic_platform_lock)
+    design = _design(
+        synthetic_platform_lock,
+        prompt,
+        [
+            {
+                "requirement_id": "req_machine",
+                "capability": "automation.machine",
+                "source_text": prompt,
+                "statement": prompt,
+                "implementation_capabilities": [
+                    "automation.machine",
+                    "persistence.state_store",
+                    "network.action_sync",
+                    "ui.container",
+                ],
+            }
+        ],
+    )
     plan = compile_evidence_first_plan(prompt, design)
     original = copy.deepcopy(plan)
     planner = complete_planner.CompleteGameDesignPlanner(_ImplementationFixtureRouter())
