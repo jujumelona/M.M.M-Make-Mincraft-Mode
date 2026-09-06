@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import uuid
 
-from . import central_research, production_contract
+from . import production_contract
 from .complete_spec import (
     AssetRequest,
     CompleteProposal,
@@ -16,15 +16,14 @@ from .complete_spec import (
 from .evidence_execution_contract import task_batches
 from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
-from .planner_hole_filling import fill_evidence_pages
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .planner_trace_artifacts import repository_revision
-from .root_cause_trace import emit_root_cause, trace_scope
 from .research_derived_requirements import (
     attach_derived_requirement_ledger,
     derive_research_requirements,
 )
+from .root_cause_trace import emit_root_cause, trace_scope
 
 
 @dataclass(frozen=True)
@@ -40,12 +39,11 @@ class _ProductionBatch:
 
 
 class CompleteGameDesignPlanner:
-    """Canonical fail-closed complete planner.
+    """Compile one authored request into a coder-ready production proposal.
 
-    The live path is a compiler-like sequence owned by :class:`PlanningPipeline`:
-    semantic design -> platform receipt -> target evidence -> evidence PlanIR ->
-    research-derived implementation requirements -> typed production DAG.
-    Runtime installers do not decide whether a failed stage may advance.
+    All mandatory plan structure is host-owned. The planner model is not asked to fill
+    implementation holes, invent module identities, emit planning JSON, or decide whether
+    the plan exists.
     """
 
     def __init__(self, router: ModelRouter) -> None:
@@ -68,11 +66,7 @@ class CompleteGameDesignPlanner:
                 details=repository_revision(),
             )
             session_factory = getattr(self.router, "generation_session", None)
-            session = (
-                session_factory("planner")
-                if callable(session_factory)
-                else nullcontext()
-            )
+            session = session_factory("planner") if callable(session_factory) else nullcontext()
             with session:
                 return self._plan_in_session(
                     prompt,
@@ -102,32 +96,23 @@ class CompleteGameDesignPlanner:
         except Exception as exc:
             raise PlanningStageError(
                 PlanningStage.EVIDENCE,
-                "evidence-first PlanIR compilation failed",
+                "host PlanIR compiler produced an invalid internal state",
                 cause=exc,
             ) from exc
 
-        # Deterministic binding errors must not spend any optional research turns.
-        # Revalidate after augmentation because it can add execution obligations.
+        # Materializing host batches here checks the deterministic DAG before any
+        # optional enrichment is attached.
         _evidence_host_batches(evidence_plan)
 
-        try:
-            derived_ledger = derive_research_requirements(
-                self.router,
-                prompt=prompt,
-                evidence_plan=evidence_plan,
-                research_brief=artifacts.research_brief,
-                technical_evidence=artifacts.technical_evidence,
-                game_design=internal_design,
-            )
-            evidence_plan = attach_derived_requirement_ledger(
-                evidence_plan, derived_ledger
-            )
-        except Exception as exc:
-            raise PlanningStageError(
-                PlanningStage.EVIDENCE,
-                "research-derived requirement closure failed",
-                cause=exc,
-            ) from exc
+        derived_ledger = derive_research_requirements(
+            self.router,
+            prompt=prompt,
+            evidence_plan=evidence_plan,
+            research_brief=artifacts.research_brief,
+            technical_evidence=artifacts.technical_evidence,
+            game_design=internal_design,
+        )
+        evidence_plan = attach_derived_requirement_ledger(evidence_plan, derived_ledger)
 
         internal_design = {
             **internal_design,
@@ -137,8 +122,6 @@ class CompleteGameDesignPlanner:
         batches = _evidence_host_batches(evidence_plan)
         modules, assets, acceptance_tests = self._expand_batches(
             batches,
-            prompt=prompt,
-            game_design=internal_design,
             evidence_mode=True,
             evidence_acceptance_tests=tuple(
                 str(check)
@@ -177,10 +160,7 @@ class CompleteGameDesignPlanner:
             acceptance_tests=tuple(compiled.acceptance_tests),
             existing_input_sha256=existing_input_sha256,
         )
-        # Bind each verified reuse decision to its exact production owner before
-        # live-target lowering. Without this handoff the planner can discover and
-        # verify a donor while generation receives only the semantic task and is
-        # forced to reimplement the capability from scratch.
+
         from .resource_asset_production import bind_reuse_plan
 
         proposal = bind_reuse_plan(proposal)
@@ -192,18 +172,20 @@ class CompleteGameDesignPlanner:
         self,
         batches: Sequence[_ProductionBatch],
         *,
-        prompt: str,
-        game_design: dict[str, Any],
         evidence_mode: bool = False,
         evidence_acceptance_tests: Sequence[str] = (),
     ) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[str, ...]]:
-        del prompt, game_design
+        """Lower the host PlanIR DAG directly into production modules.
+
+        ``build_batch_skeleton`` already contains the evidence task, implementation
+        template, dependencies, gates, acceptance and deliverables. There is therefore no
+        model hole-fill stage and no model-output failure surface here.
+        """
         modules: list[ProductionModule] = []
         assets: list[AssetRequest] = []
         tests: list[str] = list(dict.fromkeys(evidence_acceptance_tests))
         known_module_ids: set[str] = set()
         exports_by_batch: dict[str, tuple[str, ...]] = {}
-
         pending_batches = list(batches)
         completed_batch_ids: set[str] = set()
 
@@ -214,6 +196,8 @@ class CompleteGameDesignPlanner:
                 if set(batch.depends_on_batches).issubset(completed_batch_ids)
             ]
             if not ready_batches:
+                # This can only be a host compiler bug because PlanIR is validated before
+                # lowering. Preserve diagnostics instead of invoking another planner.
                 unresolved = {
                     batch.batch_id: tuple(
                         dependency
@@ -224,18 +208,16 @@ class CompleteGameDesignPlanner:
                 }
                 raise PlanningStageError(
                     PlanningStage.EVIDENCE,
-                    f"production dependency DAG is unresolved: {unresolved}",
+                    f"host production dependency graph is internally inconsistent: {unresolved}",
                 )
 
-            batch_skeletons: list[dict[str, Any]] = []
-            expected_ids_by_batch: dict[str, set[str]] = {}
             for batch in ready_batches:
                 dependency_ids = tuple(
                     module_id
                     for dependency in batch.depends_on_batches
                     for module_id in exports_by_batch.get(dependency, ())
                 )
-                skeleton = build_batch_skeleton(
+                page = build_batch_skeleton(
                     batch_id=batch.batch_id,
                     scope=batch.scope,
                     deliverables=batch.deliverables,
@@ -256,72 +238,36 @@ class CompleteGameDesignPlanner:
                     ),
                     acceptance_tests=batch.acceptance_tests,
                 )
-                batch_skeletons.append(skeleton)
-                expected_ids_by_batch[batch.batch_id] = {
+                expected_ids = {
                     str(item["module_id"])
-                    for item in skeleton["modules"]
-                    if isinstance(item, dict) and item.get("module_id")
+                    for item in page["modules"]
+                    if isinstance(item, Mapping) and item.get("module_id")
                 }
-
-            filled_pages: dict[str, dict[str, Any]] = {}
-            skeletons_to_fill = [
-                (batch, skeleton)
-                for batch, skeleton in zip(ready_batches, batch_skeletons)
-                if evidence_mode and batch.task_contract is not None
-            ]
-            if skeletons_to_fill:
-                all_expected: set[str] = set().union(
-                    *(expected_ids_by_batch[batch.batch_id] for batch, _ in skeletons_to_fill)
-                )
-                valid_catalog = {*known_module_ids, *all_expected}
-                try:
-                    filled_results = fill_evidence_pages(
-                        self.router,
-                        [skeleton for _, skeleton in skeletons_to_fill],
-                        valid_module_catalog=valid_catalog,
-                    )
-                    for (batch, _), filled in zip(skeletons_to_fill, filled_results):
-                        filled_pages[batch.batch_id] = filled
-                except Exception as exc:
-                    raise PlanningStageError(
-                        PlanningStage.EVIDENCE,
-                        "production batch implementation-hole filling failed",
-                        cause=exc,
-                    ) from exc
-
-            for batch, skeleton in zip(ready_batches, batch_skeletons):
-                page = filled_pages.get(batch.batch_id)
-                if page is None:
-                    page = skeleton
-                expected_ids = expected_ids_by_batch[batch.batch_id]
-
                 accepted_modules = [
                     _module(raw)
                     for raw in page["modules"]
-                    if isinstance(raw, dict)
+                    if isinstance(raw, Mapping)
                     and str(raw.get("module_id") or "") in expected_ids
                     and str(raw.get("module_id") or "") not in known_module_ids
                 ]
                 if not accepted_modules:
+                    # The skeleton builder always owns at least one export. Reaching this
+                    # means host code is corrupt, not that another model turn is needed.
                     raise PlanningStageError(
                         PlanningStage.EVIDENCE,
-                        f"production batch {batch.batch_id!r} produced no valid modules",
+                        f"host batch {batch.batch_id!r} lost all compiled module exports",
                     )
 
-                for module in accepted_modules:
-                    modules.append(module)
-                    known_module_ids.add(module.module_id)
+                modules.extend(accepted_modules)
+                known_module_ids.update(module.module_id for module in accepted_modules)
 
                 known_asset_ids = {item.asset_id for item in assets}
                 known_asset_paths = {item.target_path for item in assets}
                 for raw in page["assets"]:
-                    if not isinstance(raw, dict):
+                    if not isinstance(raw, Mapping):
                         continue
                     asset = _asset(raw)
-                    if (
-                        asset.asset_id in known_asset_ids
-                        or asset.target_path in known_asset_paths
-                    ):
+                    if asset.asset_id in known_asset_ids or asset.target_path in known_asset_paths:
                         continue
                     assets.append(asset)
                     known_asset_ids.add(asset.asset_id)
@@ -335,52 +281,11 @@ class CompleteGameDesignPlanner:
                 pending_batches.remove(batch)
 
         if not modules and not evidence_mode:
-            raise PlanningStageError(
-                PlanningStage.EVIDENCE,
-                "production DAG contains no modules and no verified retain-only evidence",
-            )
-
+            return (), tuple(assets), tuple(dict.fromkeys(tests))
         tests = list(dict.fromkeys(test for test in tests if test))
         if not tests and modules:
             tests = [f"test_{module.module_id}_registers" for module in modules]
         return tuple(modules), tuple(assets), tuple(tests)
-
-
-def _host_batches(
-    prompt: str, game_design: Mapping[str, Any]
-) -> tuple[_ProductionBatch, ...]:
-    """Compatibility helper for stored callers without evidence PlanIR."""
-    raw_modules = game_design.get("modules")
-    exports: list[str] = []
-    seen: set[str] = set()
-    if isinstance(raw_modules, list):
-        for index, raw in enumerate(raw_modules):
-            if not isinstance(raw, Mapping):
-                continue
-            module_id = _identifier(raw.get("plugin_id"), f"feature_{index + 1}")
-            if module_id in seen:
-                continue
-            seen.add(module_id)
-            exports.append(module_id)
-
-    if not exports:
-        raise PlanningStageError(
-            PlanningStage.DESIGN,
-            "stored design has no explicit production modules",
-        )
-    catalog = ", ".join(exports)
-    return (
-        _ProductionBatch(
-            batch_id="requested_features",
-            scope=(
-                "Implement every requested capability in this host-owned production "
-                f"template: {catalog}."
-            ),
-            depends_on_batches=(),
-            deliverables=tuple(f"{module_id}_complete" for module_id in exports),
-            exports=tuple(exports),
-        ),
-    )
 
 
 def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, ...]:
@@ -406,9 +311,7 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
             _ProductionBatch(
                 batch_id=str(raw["batch_id"]),
                 scope=str(raw["scope"]),
-                depends_on_batches=tuple(
-                    str(item) for item in raw["depends_on_batches"]
-                ),
+                depends_on_batches=tuple(str(item) for item in raw["depends_on_batches"]),
                 deliverables=tuple(str(item) for item in raw["deliverables"]),
                 exports=tuple(str(item) for item in raw["exports"]),
                 task_contract=task,
@@ -417,66 +320,6 @@ def _evidence_host_batches(plan: Mapping[str, Any]) -> tuple[_ProductionBatch, .
             )
         )
     return tuple(batches)
-
-
-def _implementation_research_outline(game_design: Mapping[str, Any]) -> dict[str, Any]:
-    keys = (
-        "mod_id",
-        "mod_name",
-        "description",
-        "features",
-        "systems",
-        "constraints",
-        "acceptance_tests",
-        "modules",
-        "assets",
-        "_platform_selection",
-        "_platform_evidence",
-        "_research_brief",
-        "_technical_evidence",
-        "_pre_design_research",
-    )
-    outline = {key: game_design[key] for key in keys if key in game_design}
-    if (
-        "_technical_evidence" in outline
-        and "_platform_evidence" in outline
-        and outline["_technical_evidence"] == outline["_platform_evidence"]
-    ):
-        outline.pop("_technical_evidence")
-    return outline
-
-
-def _retrieve_implementation_evidence(
-    prompt: str,
-    game_design: dict[str, Any],
-    research_brief: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Compatibility entrypoint. It is intentionally fail-closed."""
-    existing = game_design.get("_platform_evidence")
-    if isinstance(existing, Mapping):
-        payload = dict(existing)
-        if payload.get("status") == "unavailable":
-            raise PlanningStageError(
-                PlanningStage.EVIDENCE,
-                "bound platform evidence is unavailable",
-            )
-        return payload
-    brief = research_brief or central_research.normalize_research_brief(
-        prompt, game_design
-    )
-    value = central_research.retrieve_domain_evidence(brief)
-    if not isinstance(value, Mapping):
-        raise PlanningStageError(
-            PlanningStage.EVIDENCE,
-            "central research returned a non-object evidence receipt",
-        )
-    payload = dict(value)
-    if payload.get("status") == "unavailable":
-        raise PlanningStageError(
-            PlanningStage.EVIDENCE,
-            "central research marked evidence unavailable",
-        )
-    return payload
 
 
 def _module(value: Mapping[str, Any]) -> ProductionModule:
@@ -498,17 +341,6 @@ def _asset(value: Mapping[str, Any]) -> AssetRequest:
         width=int(value.get("width", 16)),
         height=int(value.get("height", 16)),
     )
-
-
-def _identifier(value: Any, fallback: str) -> str:
-    import re
-
-    text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
-    if not text:
-        text = re.sub(r"[^a-z0-9_]+", "_", fallback.lower()).strip("_") or "feature"
-    if not text[0].isalpha():
-        text = f"feature_{text}"
-    return text[:63]
 
 
 def _unique_strings(value: Any) -> list[str]:
