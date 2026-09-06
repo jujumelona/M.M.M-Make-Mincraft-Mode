@@ -15,8 +15,6 @@ the authored source span that is supposed to justify it.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import re
-
 from . import semantic_requirement_authority as _semantic
 from .minecraft_template_catalog import (
     CUSTOM_CAPABILITY_SENTINEL,
@@ -25,7 +23,7 @@ from .minecraft_template_catalog import (
 )
 from .request_requirements import (
     LeafAtomicityStatus,
-    resegment_compound_leaf,
+    resegment_compound_leaves,
     validate_leaf_atomicity,
 )
 from .root_cause_trace import emit_root_cause
@@ -429,51 +427,75 @@ def _segment_batch(
         )
         raw_leaves, base_diagnostics = _normalize_segmented_leaves(payload, clauses)
         structural_diagnostics = [
-            d for d in base_diagnostics if d.get("error_code") != "REQ_SOURCE_PARTITION_GAP"
+            diagnostic
+            for diagnostic in base_diagnostics
+            if diagnostic.get("error_code") != "REQ_SOURCE_PARTITION_GAP"
         ]
         if structural_diagnostics:
             diagnostics = tuple(structural_diagnostics)
             continue
 
-        # Host-side atomicity validation and context filtering
         atomic_leaves: list[dict[str, Any]] = []
         context_leaves: list[dict[str, Any]] = []
         dropped_catch_alls: list[dict[str, Any]] = []
-        resegment_calls = 0
+        compound_items: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
 
         for leaf in raw_leaves:
             clause = clauses_by_index[int(leaf["source_clause_index"])]
-            status, reason = validate_leaf_atomicity(leaf, str(clause["text"]))
+            status, _ = validate_leaf_atomicity(leaf, str(clause["text"]))
             if status == LeafAtomicityStatus.CONTEXT:
                 context_leaves.append(dict(leaf))
             elif status == LeafAtomicityStatus.CATCH_ALL:
                 dropped_catch_alls.append(dict(leaf))
             elif status == LeafAtomicityStatus.COMPOUND:
-                sub_atomic, sub_context = resegment_compound_leaf(router, leaf, clause)
-                resegment_calls += 1
-                atomic_leaves.extend(sub_atomic)
-                context_leaves.extend(sub_context)
+                compound_items.append((leaf, clause))
             else:
                 atomic_leaves.append(dict(leaf))
 
-        resegment_calls_total += resegment_calls
+        if compound_items:
+            try:
+                sub_atomic, sub_non_executable, resegment_calls = (
+                    resegment_compound_leaves(router, compound_items)
+                )
+            except (ValueError, TypeError) as exc:
+                diagnostics = (
+                    _leaf_diagnostic(
+                        "REQ_ATOMIC_RESEGMENT",
+                        path="$.leaves",
+                        value=f"{type(exc).__name__}: {exc}",
+                        expected=(
+                            "compound leaves must re-segment into grounded atomic leaves that "
+                            "exactly partition each parent source span"
+                        ),
+                    ),
+                )
+                continue
+            atomic_leaves.extend(sub_atomic)
+            context_leaves.extend(sub_non_executable)
+            resegment_calls_total += resegment_calls
 
-        # Compute ignored spans (context and catch-all text)
-        ignored: list[tuple[int, int]] = []
-        for item in (*context_leaves, *dropped_catch_alls):
-            if "source_start" in item and "source_end" in item:
-                ignored.append((int(item["source_start"]), int(item["source_end"])))
-        for clause in clauses:
-            text = str(clause["text"])
-            c_start = int(clause["char_start"])
-            for pattern in (
-                re.compile(r"등\s*여러\s*가지.*$"),
-                re.compile(r"^우주\s*모드\s*(?:인데|입니다|이다|임)?"),
-            ):
-                for m in pattern.finditer(text):
-                    ignored.append((c_start + m.start(), c_start + m.end()))
-        ignored_spans = sorted(set(ignored))
+        atomic_leaves.sort(
+            key=lambda leaf: (
+                int(leaf["source_clause_index"]),
+                int(leaf.get("source_start", 0)),
+                int(leaf.get("source_end", 0)),
+            )
+        )
+        context_leaves.sort(
+            key=lambda leaf: (
+                int(leaf["source_clause_index"]),
+                int(leaf.get("source_start", 0)),
+                int(leaf.get("source_end", 0)),
+            )
+        )
 
+        ignored_spans = sorted(
+            {
+                (int(item["source_start"]), int(item["source_end"]))
+                for item in (*context_leaves, *dropped_catch_alls)
+                if "source_start" in item and "source_end" in item
+            }
+        )
         partition_diagnostics = validate_semantic_source_partition(
             atomic_leaves, clauses, ignored_spans=ignored_spans
         )
