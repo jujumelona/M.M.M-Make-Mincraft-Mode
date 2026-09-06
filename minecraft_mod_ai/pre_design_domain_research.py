@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+"""Host-grounded pre-design research projection.
+
+Retrieval and source materialization remain host-owned.  Pre-design no longer asks the
+planner model to summarize those pages: the design compiler already has authoritative
+requirements, while exact source excerpts are sufficient provenance for later target and
+implementation work.  This removes the long research-synthesis generation from the
+planning critical path without discarding retrieved evidence.
+"""
+
 import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-# Canonical pre-design research entrypoint. The previous corrective/page-gap state
-# machine is intentionally not on the execution path.
 from .research_evidence_state import record_grounded_evidence
-from .small_model_predesign_research import (
-    research_document_domain as _small_model_research_document_domain,
-)
 
 _STOP_TERMS = frozenset(
     {
@@ -42,7 +46,7 @@ def _tokens(value: Any) -> set[str]:
 
 
 def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
-    values: list[str] = [str(domain.get("objective") or "")]
+    values = [str(domain.get("objective") or "")]
     for key in ("requirements", "queries"):
         raw = domain.get(key)
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
@@ -54,8 +58,6 @@ def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
 
 
 def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
-    """Choose one exact source span deterministically without model paraphrase."""
-
     text = str(content or "")
     candidates = [
         chunk.strip()
@@ -68,13 +70,11 @@ def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
         (len(wanted & _tokens(chunk)), len(_tokens(chunk)), -index, chunk)
         for index, chunk in enumerate(candidates)
     ]
-    _score, _specificity, _order, selected = max(ranked)
-    return selected, max(0, int(_score))
+    score, _specificity, _order, selected = max(ranked)
+    return selected, max(0, int(score))
 
 
 def _source_unit(page: Mapping[str, Any]) -> dict[str, Any]:
-    """Recover the host-materialized source unit carried inside one evidence page."""
-
     raw = str(page.get("content") or "")
     try:
         value = json.loads(raw)
@@ -97,13 +97,7 @@ def _grounded_evidence_cards(
     document: Mapping[str, Any],
     domain: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Build host-verified evidence cards from every materialized source page.
-
-    These cards are not semantic claims. They are exact excerpts that keep retrieval
-    evidence and source identity visible to a small model even when its strict extraction
-    line format fails. No page is silently dropped by a semantic top-k shortlist.
-    """
-
+    """Build deterministic exact-excerpt evidence cards from materialized pages."""
     reader = getattr(project_rag, "_read_evidence_pages", None)
     if not callable(reader):
         return []
@@ -153,64 +147,47 @@ def research_document_domain(
     document: Mapping[str, Any],
     trace_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Canonical facade for host-owned small-model pre-design research.
-
-    Retrieval success and model extraction success are intentionally separate states.
-    A malformed/empty small-model extraction can never rewrite materialized source bodies
-    into ``no_relevant_external_evidence``. Exact host evidence cards remain available to
-    the downstream design worker, while only model claims that passed quote verification
-    remain in ``claims``.
-    """
-
-    note = _small_model_research_document_domain(
-        agentic_module,
-        project_rag,
-        router,
-        prompt=prompt,
-        domain=domain,
-        document=document,
-        trace_metadata=trace_metadata,
+    """Return host-grounded evidence directly; never spend a model turn synthesizing it."""
+    del agentic_module, router, trace_metadata
+    cards = _grounded_evidence_cards(project_rag, document, domain)
+    reader = getattr(project_rag, "_read_evidence_pages", None)
+    try:
+        pages = reader(document) if callable(reader) else ()
+    except Exception:
+        pages = ()
+    source_body_count = sum(
+        1
+        for page in pages if isinstance(page, Mapping) and str(page.get("content") or "").strip()
     )
-    if not isinstance(note, Mapping):
-        return dict(note)
-
-    value = dict(note)
-    source_body_count = max(0, int(value.get("source_body_count") or 0))
-    claims = value.get("claims")
-    model_claim_count = len(claims) if isinstance(claims, list) else 0
-    cards = (
-        _grounded_evidence_cards(project_rag, document, domain)
-        if source_body_count > 0
-        else []
-    )
-    value["model_grounded_claim_count"] = model_claim_count
-    value["host_grounded_evidence_card_count"] = len(cards)
-    value["grounded_evidence_cards"] = cards
-
-    if source_body_count > 0 and model_claim_count == 0:
-        value["research_evidence_status"] = "partial"
-        value["evidence_extraction_status"] = (
-            "host_source_evidence_available_model_exact_claim_absent"
-        )
-        diagnostics = value.get("page_local_diagnostics")
-        diagnostics_list = list(diagnostics) if isinstance(diagnostics, list) else []
-        marker = "model_extraction_empty_but_host_grounded_sources_preserved"
-        if marker not in diagnostics_list:
-            diagnostics_list.append(marker)
-        value["page_local_diagnostics"] = diagnostics_list
-    elif model_claim_count > 0:
-        value["research_evidence_status"] = "supported"
-        value["evidence_extraction_status"] = "model_exact_quote_verified"
-    else:
-        value["research_evidence_status"] = "no_relevant_external_evidence"
-        value["evidence_extraction_status"] = "no_claim_bearing_source_body"
-
+    status = "supported" if cards else "no_relevant_external_evidence"
+    note = {
+        "domain_id": str(domain.get("domain_id") or "unknown"),
+        "research_mode": "advisory_predesign",
+        "claims": [],
+        "gaps": [],
+        "next_queries": [],
+        "procedures": [],
+        "sufficient": True,
+        "fixed_point": False,
+        "checkpoint": {"status": "complete"},
+        "research_failures": [],
+        "source_body_count": source_body_count,
+        "model_called": False,
+        "model_grounded_claim_count": 0,
+        "host_grounded_evidence_card_count": len(cards),
+        "grounded_evidence_cards": cards,
+        "research_evidence_status": status,
+        "evidence_extraction_status": (
+            "host_exact_evidence_available" if cards else "no_claim_bearing_source_body"
+        ),
+        "page_local_diagnostics": ["model_synthesis_skipped_host_evidence_preserved"],
+    }
     record_grounded_evidence(
         prompt,
         source_body_count=source_body_count,
         evidence_card_count=len(cards),
     )
-    return value
+    return note
 
 
 def _root_page_claims(
