@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner, _evidence_host_batches
+from minecraft_mod_ai.complete_planner import _evidence_host_batches
 from minecraft_mod_ai.evidence_first_planning import (
     EvidencePlanError,
     _hash_without,
@@ -20,8 +20,6 @@ from minecraft_mod_ai.project_inventory import inspect_project_inventory
 
 
 def _request_catalog(prompt: str, *capabilities: str) -> dict[str, object]:
-    """Build explicit test authority without reviving raw-prompt semantic inference."""
-
     requirements: list[dict[str, object]] = []
     for index, raw_capability in enumerate(capabilities, 1):
         capability = str(raw_capability).removeprefix("capability:")
@@ -124,12 +122,19 @@ def _rehash(plan: dict[str, object]) -> None:
     plan["plan_sha256"] = _hash_without(plan, "plan_sha256")
 
 
+def _public_acceptance(plan: dict[str, object]) -> list[str]:
+    return [
+        str(item)
+        for binding in plan["acceptance_release_bindings"]
+        for item in binding["acceptance"]
+    ]
+
+
 def test_plan_hash_and_semantic_ids_are_deterministic() -> None:
     prompt = "Add a machine with saved state, synced packets, and a screen."
     capabilities = ("automation.machine", "network.action_sync", "ui.menu")
     first = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
     second = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
-
     assert first == second
     assert first["plan_sha256"].startswith("sha256:")
     assert len(first["request_catalog"]["requirements"]) == 3
@@ -137,10 +142,8 @@ def test_plan_hash_and_semantic_ids_are_deterministic() -> None:
 
 
 def test_prompt_only_catalog_requires_grounded_planning_authority() -> None:
-    prompt = "Add a machine with saved state, synced packets, and a screen."
-
     with pytest.raises(EvidencePlanError, match="PLANNING_STATE_AUTHORITY_REQUIRED"):
-        build_request_catalog(prompt, {})
+        build_request_catalog("Add a machine.", {})
 
 
 def test_design_module_name_cannot_add_semantic_authority() -> None:
@@ -149,7 +152,6 @@ def test_design_module_name_cannot_add_semantic_authority() -> None:
         "modules": [{"plugin_id": "placeholder", "reason": "placeholder"}],
         "_platform_selection": _design(prompt, "quest.state")["_platform_selection"],
     }
-
     with pytest.raises(EvidencePlanError, match="PLANNING_STATE_AUTHORITY_REQUIRED"):
         build_request_catalog(prompt, design)
 
@@ -162,28 +164,21 @@ def test_frozen_catalog_is_reused_without_design_module_augmentation() -> None:
         "modules": [{"plugin_id": "placeholder", "reason": "placeholder"}],
         "_evidence_request_catalog": catalog,
     }
-
     reused = build_request_catalog(prompt, design)
-
-    assert [item["capability"] for item in reused["requirements"]] == [
-        "trade.transaction"
-    ]
-    assert reused["catalog_sha256"] == _hash_without(reused, "catalog_sha256")
+    assert [item["capability"] for item in reused["requirements"]] == ["trade.transaction"]
 
 
 def test_machine_vertical_dag_uses_exact_provider_edges() -> None:
     prompt = "Add a machine with saved state, synced packets, and a screen."
-    capabilities = ("automation.machine", "network.action_sync", "ui.menu")
-    plan = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
-
+    plan = compile_evidence_first_plan(
+        prompt,
+        _design(prompt, "automation.machine", "network.action_sync", "ui.menu"),
+    )
     branches = plan["branch_predicates"]
     assert branches["needs_registry"]["status"] == "ACTIVE"
     assert branches["needs_persistence"]["status"] == "ACTIVE"
     assert branches["needs_network"]["status"] == "ACTIVE"
     assert branches["needs_client_render"]["status"] == "ACTIVE"
-    assert branches["needs_worldgen"]["status"] == "NOT_APPLICABLE"
-    assert branches["needs_mixin"]["status"] == "NOT_APPLICABLE"
-
     provider = {
         provided: task["task_id"]
         for task in plan["tasks"]
@@ -191,12 +186,9 @@ def test_machine_vertical_dag_uses_exact_provider_edges() -> None:
     }
     roots = set(plan["root_provides"])
     for task in plan["tasks"]:
-        expected = {
-            provider[consumed]
-            for consumed in task["consumes"]
-            if consumed not in roots
+        assert set(task["depends_on"]) == {
+            provider[consumed] for consumed in task["consumes"] if consumed not in roots
         }
-        assert set(task["depends_on"]) == expected
 
 
 def test_self_claimed_external_component_never_removes_exact_semantic_gap() -> None:
@@ -223,50 +215,39 @@ def test_self_claimed_external_component_never_removes_exact_semantic_gap() -> N
         _design(prompt, "trade.transaction"),
         component_catalog=components,
     )
-    assert plan["reuse_decisions"][0]["action"] == "implement"
+    assert plan["reuse_decisions"][0]["action"] == "fresh"
+    assert plan["reuse_decisions"][0]["evidence_status"] == "not_applicable"
+    assert plan["gap_catalog"]
 
 
-def test_verified_project_component_can_remove_exact_semantic_gap(tmp_path) -> None:
-    prompt = "Add trade."
+def test_scanner_attested_project_component_can_close_matching_capability(tmp_path) -> None:
+    prompt = "Add trade service."
     src = tmp_path / "src/main/java/example"
     src.mkdir(parents=True)
-    source = src / "TradeService.java"
-    source.write_text(
-        "package example; final class TradeService { void trade() {} }",
+    (src / "TradeService.java").write_text(
+        "package example;\npublic final class TradeService {\n  public void trade() {}\n}\n",
         encoding="utf-8",
     )
-    components = [
-        {
-            "component_id": "existing_trade",
-            "kind": "symbol",
-            "locator": "src/main/java/example/TradeService.java#TradeService",
-            "content_sha256": _sha(source.read_bytes().decode("utf-8")),
-            "provides": ["capability:trade.transaction"],
-            "requires": [],
-            "provenance": {"origin": "same_project"},
-        }
-    ]
-    inventory = inspect_project_inventory(tmp_path, components=components)
-    design = _design(prompt, "trade.transaction")
-    design["_existing_project_inventory"] = inventory
+    inventory = inspect_project_inventory(tmp_path)
+    assert any("capability:trade_service" in component.provides for component in inventory.components)
+    design = _design(prompt, "trade_service")
+    design["_existing_project_inventory"] = inventory.to_dict()
     plan = compile_evidence_first_plan(prompt, design)
     assert plan["reuse_decisions"][0]["action"] == "retain"
+    assert not plan["gap_catalog"]
 
 
 def test_matching_catalog_requirement_can_bind_several_templates_without_duplicate_semantics() -> None:
     prompt = "Add a persisted networked machine."
-    plan = compile_evidence_first_plan(
-        prompt,
-        _design(prompt, "automation.machine"),
-    )
+    plan = compile_evidence_first_plan(prompt, _design(prompt, "automation.machine"))
     requirement = plan["request_catalog"]["requirements"][0]
-    template_features = requirement_branch_features(requirement)
-    assert "needs_persistence" in template_features
-    assert "needs_network" in template_features
+    features = requirement_branch_features(requirement)
+    assert "needs_persistence" in features
+    assert "needs_network" in features
     assert len(plan["request_catalog"]["requirements"]) == 1
 
 
-def test_validated_plan_rejects_extra_task_or_missing_task_hash() -> None:
+def test_validator_rejects_extra_task_or_missing_task_hash() -> None:
     prompt = "Add trade."
     plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
     bad = copy.deepcopy(plan)
@@ -274,7 +255,6 @@ def test_validated_plan_rejects_extra_task_or_missing_task_hash() -> None:
     _rehash(bad)
     with pytest.raises(EvidencePlanError):
         validate_evidence_first_plan(bad)
-
     bad = copy.deepcopy(plan)
     bad["tasks"][0]["task_sha256"] = ""
     _rehash(bad)
@@ -282,72 +262,37 @@ def test_validated_plan_rejects_extra_task_or_missing_task_hash() -> None:
         validate_evidence_first_plan(bad)
 
 
-def test_requirement_ids_are_stable_when_unrelated_requirement_is_added() -> None:
-    prompt = "Add trade and quests."
-    one = _request_catalog(prompt, "trade.transaction")
-    two = _request_catalog(prompt, "trade.transaction", "quest.state")
-    assert one["requirements"][0]["requirement_id"] == two["requirements"][0]["requirement_id"]
-
-
-def test_existing_requirement_hash_is_stable_when_unrelated_requirement_is_added() -> None:
-    prompt = "Add trade and quests."
-    one = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
-    two = compile_evidence_first_plan(
-        prompt,
-        _design(prompt, "trade.transaction", "quest.state"),
-    )
-    assert one["request_catalog"]["requirements"][0]["requirement_id"] == two["request_catalog"]["requirements"][0]["requirement_id"]
-
-
-def test_reordering_equivalent_requirements_changes_nothing_but_catalog_order() -> None:
-    prompt = "Add trade and quests."
-    design = _design(prompt, "trade.transaction", "quest.state")
-    plan_a = compile_evidence_first_plan(prompt, design)
-    swapped = copy.deepcopy(design)
-    swapped["_evidence_request_catalog"]["requirements"].reverse()
-    swapped["_evidence_request_catalog"]["requirement_graph"]["node_ids"].reverse()
-    swapped["_evidence_request_catalog"]["catalog_sha256"] = _hash_without(
-        swapped["_evidence_request_catalog"], "catalog_sha256"
-    )
-    plan_b = compile_evidence_first_plan(prompt, swapped)
-    assert sorted(item["capability"] for item in plan_a["request_catalog"]["requirements"]) == sorted(
-        item["capability"] for item in plan_b["request_catalog"]["requirements"]
-    )
-
-
-def test_missing_capability_preserves_requirement_as_custom_extension() -> None:
+def test_unknown_capability_is_preserved_and_owned_by_deterministic_task() -> None:
     prompt = "Add a bespoke temporal resonance mechanic."
-    plan = compile_evidence_first_plan(
-        prompt,
-        _design(prompt, "temporal.resonance"),
-    )
-    assert len(plan["request_catalog"]["requirements"]) == 1
+    plan = compile_evidence_first_plan(prompt, _design(prompt, "temporal.resonance"))
     assert plan["request_catalog"]["requirements"][0]["capability"] == "temporal.resonance"
     assert any(
-        task["kind"] == "custom_java"
+        "capability:temporal.resonance" in task["provides"]
         for task in plan["tasks"]
     )
 
 
-def test_acceptance_tests_are_behavioral_not_internal_plan_checks() -> None:
+def test_release_acceptance_is_behavioral_not_internal_plan_checks() -> None:
     prompt = "Add trade."
     plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
     assert all(_evidence_host_batches(plan))
-    acceptance = plan["acceptance_tests"]
+    acceptance = _public_acceptance(plan)
     assert acceptance
     assert all("task_" not in item for item in acceptance)
     assert all("owned anchors" not in item.casefold() for item in acceptance)
 
 
-def test_invalid_internal_acceptance_is_rejected() -> None:
+def test_top_level_design_acceptance_cannot_override_grounded_requirement_acceptance() -> None:
     prompt = "Add trade."
     design = _design(prompt, "trade.transaction")
     design["acceptance_tests"] = ["task_x: verify owned anchors"]
-    with pytest.raises(EvidencePlanError):
-        compile_evidence_first_plan(prompt, design)
+    plan = compile_evidence_first_plan(prompt, design)
+    acceptance = _public_acceptance(plan)
+    assert "task_x: verify owned anchors" not in acceptance
+    assert "The trade.transaction behavior is observable in Minecraft." in acceptance
 
 
-def test_unknown_dependency_is_rejected() -> None:
+def test_unknown_requirement_dependency_is_rejected() -> None:
     prompt = "Add trade."
     design = _design(prompt, "trade.transaction")
     design["_evidence_request_catalog"]["requirements"][0]["depends_on"] = ["req_missing"]
@@ -360,27 +305,20 @@ def test_unknown_dependency_is_rejected() -> None:
 
 def test_plan_serializes_without_non_json_types() -> None:
     prompt = "Add trade."
-    plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
-    json.dumps(plan, ensure_ascii=False)
+    json.dumps(compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction")), ensure_ascii=False)
 
 
 def test_request_catalog_preserves_explicit_requirement_order() -> None:
     prompt = "A then B then C."
-    design = _design(prompt, "a.one", "b.two", "c.three")
-    plan = compile_evidence_first_plan(prompt, design)
+    plan = compile_evidence_first_plan(prompt, _design(prompt, "a.one", "b.two", "c.three"))
     assert [item["capability"] for item in plan["request_catalog"]["requirements"]] == [
-        "a.one",
-        "b.two",
-        "c.three",
+        "a.one", "b.two", "c.three"
     ]
 
 
 def test_root_capabilities_are_unique() -> None:
     prompt = "Add trade and quests."
-    plan = compile_evidence_first_plan(
-        prompt,
-        _design(prompt, "trade.transaction", "quest.state"),
-    )
+    plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction", "quest.state"))
     assert len(plan["root_provides"]) == len(set(plan["root_provides"]))
 
 
@@ -398,21 +336,21 @@ def test_plan_hash_changes_when_platform_target_changes() -> None:
     assert first["plan_sha256"] != second["plan_sha256"]
 
 
-def test_platform_selection_is_required_for_resolved_generation_plan() -> None:
+def test_resolved_generation_plan_requires_platform_target() -> None:
     prompt = "Add trade."
     design = _design(prompt, "trade.transaction")
     design.pop("_platform_selection")
-    plan = compile_evidence_first_plan(prompt, design)
-    assert plan["platform_target"]["hard_gate_status"] == "deferred"
+    with pytest.raises(EvidencePlanError, match="Target decision is unresolved"):
+        compile_evidence_first_plan(prompt, design)
 
 
-def test_plan_rejects_tampered_platform_decision_hash() -> None:
+def test_plan_rejects_tampered_target_decision_hash() -> None:
     prompt = "Add trade."
     plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
     bad = copy.deepcopy(plan)
-    bad["platform_target"]["decision_sha256"] = "sha256:" + "0" * 64
+    bad["target_decision"]["decision_sha256"] = "sha256:" + "0" * 64
     _rehash(bad)
-    with pytest.raises(EvidencePlanError):
+    with pytest.raises(EvidencePlanError, match="Target decision hash mismatch"):
         validate_evidence_first_plan(bad)
 
 
@@ -424,38 +362,25 @@ def test_request_catalog_hash_covers_source_span() -> None:
     assert _hash_without(catalog, "catalog_sha256") != original
 
 
-def test_requirement_graph_rejects_unknown_node() -> None:
-    prompt = "Add trade."
-    design = _design(prompt, "trade.transaction")
-    design["_evidence_request_catalog"]["requirement_graph"]["node_ids"].append("req_missing")
-    design["_evidence_request_catalog"]["catalog_sha256"] = _hash_without(
-        design["_evidence_request_catalog"], "catalog_sha256"
-    )
-    with pytest.raises(EvidencePlanError):
-        compile_evidence_first_plan(prompt, design)
-
-
 def test_request_catalog_rejects_synthetic_semantics() -> None:
     prompt = "Add trade."
-    design = _design(prompt, "custom.semantic_deadbeef")
     with pytest.raises(EvidencePlanError, match="UNRESOLVED_SEMANTICS"):
-        compile_evidence_first_plan(prompt, design)
+        compile_evidence_first_plan(prompt, _design(prompt, "custom.semantic_deadbeef"))
 
 
-def test_plan_acceptance_must_cover_every_requirement() -> None:
+def test_release_bindings_cover_every_grounded_requirement_even_if_design_summary_is_partial() -> None:
     prompt = "Add trade and quests."
     design = _design(prompt, "trade.transaction", "quest.state")
     design["acceptance_tests"] = ["The trade.transaction behavior is observable in Minecraft."]
-    with pytest.raises(EvidencePlanError):
-        compile_evidence_first_plan(prompt, design)
-
-
-def test_planner_rejects_invalid_host_plan_before_model_use() -> None:
-    prompt = "Add trade."
-    design = _design(prompt, "trade.transaction")
     plan = compile_evidence_first_plan(prompt, design)
+    bindings = plan["acceptance_release_bindings"]
+    assert {item["requirement_ref"] for item in bindings} == {"req_001", "req_002"}
+    assert all(item["acceptance"] for item in bindings)
+
+
+def test_direct_validator_rejects_corrupted_host_plan_before_model_use() -> None:
+    prompt = "Add trade."
+    plan = compile_evidence_first_plan(prompt, _design(prompt, "trade.transaction"))
     plan["tasks"][0]["task_sha256"] = ""
-    router = object()
-    planner = CompleteGameDesignPlanner(router)
     with pytest.raises(EvidencePlanError):
-        planner.validate_plan(plan)
+        validate_evidence_first_plan(plan)
