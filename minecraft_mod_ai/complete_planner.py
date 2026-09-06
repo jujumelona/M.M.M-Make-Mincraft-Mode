@@ -16,7 +16,7 @@ from .complete_spec import (
 from .evidence_execution_contract import task_batches
 from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
-from .planner_hole_filling import fill_evidence_page, fill_evidence_pages
+from .planner_hole_filling import fill_evidence_pages
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .planner_trace_artifacts import repository_revision
@@ -209,11 +209,23 @@ class CompleteGameDesignPlanner:
 
         while pending_batches:
             ready_batches = [
-                b for b in pending_batches
-                if set(b.depends_on_batches).issubset(completed_batch_ids)
+                batch
+                for batch in pending_batches
+                if set(batch.depends_on_batches).issubset(completed_batch_ids)
             ]
             if not ready_batches:
-                ready_batches = [pending_batches[0]]
+                unresolved = {
+                    batch.batch_id: tuple(
+                        dependency
+                        for dependency in batch.depends_on_batches
+                        if dependency not in completed_batch_ids
+                    )
+                    for batch in pending_batches
+                }
+                raise PlanningStageError(
+                    PlanningStage.EVIDENCE,
+                    f"production dependency DAG is unresolved: {unresolved}",
+                )
 
             batch_skeletons: list[dict[str, Any]] = []
             expected_ids_by_batch: dict[str, set[str]] = {}
@@ -253,19 +265,19 @@ class CompleteGameDesignPlanner:
 
             filled_pages: dict[str, dict[str, Any]] = {}
             skeletons_to_fill = [
-                (batch, skel)
-                for batch, skel in zip(ready_batches, batch_skeletons)
+                (batch, skeleton)
+                for batch, skeleton in zip(ready_batches, batch_skeletons)
                 if evidence_mode and batch.task_contract is not None
             ]
             if skeletons_to_fill:
                 all_expected: set[str] = set().union(
-                    *(expected_ids_by_batch[b.batch_id] for b, _ in skeletons_to_fill)
+                    *(expected_ids_by_batch[batch.batch_id] for batch, _ in skeletons_to_fill)
                 )
                 valid_catalog = {*known_module_ids, *all_expected}
                 try:
                     filled_results = fill_evidence_pages(
                         self.router,
-                        [skel for _, skel in skeletons_to_fill],
+                        [skeleton for _, skeleton in skeletons_to_fill],
                         valid_module_catalog=valid_catalog,
                     )
                     for (batch, _), filled in zip(skeletons_to_fill, filled_results):
