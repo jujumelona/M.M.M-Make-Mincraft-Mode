@@ -30,6 +30,41 @@ def _transition(operation: str, callback: Callable[[], _T]) -> _T:
     )()
 
 
+def _requirements_exist(state: Mapping[str, Any]) -> bool:
+    decisions = state.get("decisions")
+    return any(
+        isinstance(item, Mapping) and item.get("decision_type") == "requirement"
+        for item in decisions if isinstance(decisions, list)
+    )
+
+
+def _requirement_block_summary(state: Mapping[str, Any]) -> str:
+    unresolved = [
+        (
+            str(item.get("unresolved_id") or "?"),
+            str(item.get("reason") or "unknown"),
+            str(item.get("resolution_route") or "unknown"),
+            str(item.get("status") or "unknown"),
+        )
+        for item in state.get("unresolved", [])
+        if isinstance(item, Mapping) and item.get("status") != "resolved"
+    ]
+    research = [
+        (
+            str(item.get("research_id") or "?"),
+            str(item.get("status") or "unknown"),
+        )
+        for item in state.get("research_queue", [])
+        if isinstance(item, Mapping) and item.get("status") != "complete"
+    ]
+    blockers = [
+        str(item.get("statement") or item.get("stage") or item.get("blocker_id") or "unknown")
+        for item in state.get("blockers", [])
+        if isinstance(item, Mapping)
+    ]
+    return f"unresolved={unresolved}; research={research}; blockers={blockers}"
+
+
 def prepare_planning_state(
     router: Any,
     prompt: str,
@@ -53,11 +88,8 @@ def prepare_planning_state(
         return state
     if checkpoint is not None:
         checkpoint(deepcopy(state))
-    requirements_exist = any(
-        item.get("decision_type") == "requirement" for item in state["decisions"]
-    )
 
-    if not requirements_exist:
+    if not _requirements_exist(state):
         state = _transition(
             "collect_prompt_research",
             lambda: collect_planning_state_research(
@@ -75,6 +107,17 @@ def prepare_planning_state(
         )
         if checkpoint is not None:
             checkpoint(deepcopy(state))
+
+        # Requirement compilation is deliberately fail-closed: unresolved semantic or
+        # reference knowledge is represented as a blocked state instead of an exception.
+        # Do not mistake that valid blocked state for a code-ready one and descend into
+        # implementation research/detailed planning, where the real cause would be
+        # overwritten by the secondary "no researched requirements" invariant.
+        if not _requirements_exist(state):
+            raise ValueError(
+                "PLANNING_REQUIREMENT_SELECTION_BLOCKED: "
+                + _requirement_block_summary(state)
+            )
 
     # Pass 2 searches actual reusable implementations, source/API behavior and support
     # artifacts for each requirement. Prompt vocabulary is no longer the sole query source.
