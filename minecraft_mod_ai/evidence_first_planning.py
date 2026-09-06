@@ -2,12 +2,12 @@ from __future__ import annotations
 
 """Host-owned evidence-first Minecraft implementation planning.
 
-This compiler owns implementation architecture.  Authored behavior is represented by a
-canonical capability catalog upstream; this layer maps that capability to a researched
-Minecraft template, binds verified reuse and a resolved target, materializes a concrete
-DAG, and validates the DAG by deterministic recompilation with tracing disabled.
+This compiler owns implementation architecture. Authored behavior must arrive through the
+canonical planning-state/request-catalog authority upstream. This layer maps that grounded
+catalog to researched Minecraft templates, verified reuse, the canonical platform target
+decision, and a deterministic implementation DAG.
 
-No language model chooses registry/persistence/network/worldgen/UI architecture here.
+Raw prompt semantics and target coordinates are never reconstructed in this module.
 """
 
 import hashlib
@@ -17,7 +17,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
 from .minecraft_template_catalog import (
     FEATURE_DATAGEN,
     FEATURE_MIXIN,
@@ -29,6 +28,7 @@ from .minecraft_template_catalog import (
     requirement_branch_features,
 )
 from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep, steps_for_profile
+from .platform_resolver import compile_target_decision
 from .root_cause_trace import emit_root_cause
 
 SCHEMA = "mmm/evidence-first-implementation-plan-v1"
@@ -36,11 +36,6 @@ _SHA_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _COMPONENT_ID_RE = re.compile(
     r"^(?:[a-z][a-z0-9_]{1,63}|component:[a-z0-9_-]+:[0-9a-f]{64})$"
-)
-_SEMANTIC_BOUNDARY = re.compile(r"[^.!?\n\r]+(?:[.!?]+|$)", re.UNICODE)
-_CLAUSE_SEPARATOR = re.compile(
-    r"\s*(?:,|;|→|->|=>|/|\||•|\u2022|\u25b6|\u25cf|\u2013|\u2014)\s*",
-    re.UNICODE,
 )
 _BRANCHES = (
     "needs_registry",
@@ -119,133 +114,6 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _semantic_spans(prompt: str) -> tuple[tuple[int, int], ...]:
-    """Split only at authored sentence/list boundaries, never by token size."""
-
-    spans: list[tuple[int, int]] = []
-    line_offset = 0
-    for raw_line in re.split(r"\r?\n|\r", prompt):
-        line_start = line_offset
-        line_end = line_offset + len(raw_line)
-        line_offset = line_end + len(prompt[line_end : line_end + 1])
-        if not raw_line.strip():
-            continue
-        matched = False
-        for match in _SEMANTIC_BOUNDARY.finditer(raw_line):
-            start = line_start + match.start()
-            end = line_start + match.end()
-            inner = raw_line[match.start() : match.end()]
-            bullet = re.match(r"^[\s\-\*•▶●]*(?:\d+\.\s*)?", inner)
-            if bullet:
-                start += bullet.end()
-            while start < end and prompt[start].isspace():
-                start += 1
-            while end > start and prompt[end - 1].isspace():
-                end -= 1
-            if start < end:
-                spans.append((start, end))
-                matched = True
-        if not matched:
-            start = line_start
-            end = line_end
-            while start < end and prompt[start].isspace():
-                start += 1
-            while end > start and prompt[end - 1].isspace():
-                end -= 1
-            if start < end:
-                spans.append((start, end))
-    if not spans and prompt.strip():
-        spans.append((len(prompt) - len(prompt.lstrip()), len(prompt.rstrip())))
-    return tuple(spans)
-
-
-def _semantic_clause_spans(prompt: str) -> tuple[tuple[int, int], ...]:
-    result: list[tuple[int, int]] = []
-    for sentence_start, sentence_end in _semantic_spans(prompt):
-        cursor = sentence_start
-        for separator in _CLAUSE_SEPARATOR.finditer(
-            prompt, sentence_start, sentence_end
-        ):
-            left, right = cursor, separator.start()
-            while left < right and prompt[left].isspace():
-                left += 1
-            while right > left and prompt[right - 1].isspace():
-                right -= 1
-            if left < right:
-                result.append((left, right))
-            cursor = separator.end()
-        left, right = cursor, sentence_end
-        while left < right and prompt[left].isspace():
-            left += 1
-        while right > left and prompt[right - 1].isspace():
-            right -= 1
-        if left < right:
-            result.append((left, right))
-    return tuple(result)
-
-
-def _matched_source_span(prompt: str, statement: str) -> tuple[int, int] | None:
-    folded = prompt.casefold()
-    candidates = tuple(
-        dict.fromkeys(
-            candidate.strip()
-            for candidate in (
-                statement,
-                statement.strip().rstrip(".?!;:"),
-                statement.replace("_", " "),
-                statement.strip().rstrip(".?!;:").replace("_", " "),
-            )
-            if candidate.strip()
-        )
-    )
-    for candidate in candidates:
-        start = folded.find(candidate.casefold())
-        if start < 0:
-            continue
-        end = start + len(candidate)
-        return next(
-            (
-                (left, right)
-                for left, right in _semantic_clause_spans(prompt)
-                if left <= start and end <= right
-            ),
-            (start, end),
-        )
-    return None
-
-
-def _source_span(prompt: str, statement: str) -> dict[str, Any]:
-    matched = _matched_source_span(prompt, statement)
-    if matched is None:
-        spans = _semantic_spans(prompt)
-        start, end = spans[0] if spans else (0, len(prompt))
-    else:
-        start, end = matched
-    text = prompt[start:end]
-    return {
-        "source_id": "requested_prompt",
-        "char_start": start,
-        "char_end": end,
-        "text": text,
-        "text_sha256": _sha(text),
-    }
-
-
-def _fallback_capability(statement: str) -> str:
-    resolution = resolve_capabilities_from_phrase_structured(statement)
-    explicit = [
-        node.capability_id
-        for node in resolution.nodes
-        if node.origin == "explicit"
-        and not node.capability_id.startswith("unresolved:")
-    ]
-    if explicit:
-        return str(explicit[0]).casefold()
-    raise EvidencePlanError(
-        "UNRESOLVED_SEMANTICS: a grounded planning state is required for: " + statement
-    )
-
-
 def _is_public_acceptance(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -266,129 +134,39 @@ def _is_public_acceptance(value: Any) -> bool:
     )
 
 
-def _word_overlap(left: str, right: str) -> bool:
-    token = re.compile(r"[\w]{2,}", re.UNICODE)
-    return bool(
-        {item.casefold() for item in token.findall(left)}
-        & {item.casefold() for item in token.findall(right)}
-    )
-
-
 def build_request_catalog(
     prompt: str,
     game_design: Mapping[str, Any],
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Return the frozen authoritative catalog or a deterministic host-only fallback."""
+    """Return only a planning-authority catalog; raw-prompt fallback is forbidden."""
 
     del router
     if not isinstance(prompt, str) or not prompt.strip():
         raise EvidencePlanError("Evidence-first planning requires a non-empty request.")
+
     state = game_design.get("_planning_state")
     if isinstance(state, Mapping):
         from .planning_state_handoff import build_request_catalog_from_planning_state
+
         catalog = build_request_catalog_from_planning_state(prompt, state)
         stored = game_design.get("_evidence_request_catalog")
         if isinstance(stored, Mapping) and stored != catalog:
-            raise EvidencePlanError("PLANNING_STATE_AUTHORITY: catalog differs from its planning state")
+            raise EvidencePlanError(
+                "PLANNING_STATE_AUTHORITY: catalog differs from its planning state"
+            )
         return catalog
+
     existing = game_design.get("_evidence_request_catalog")
     if isinstance(existing, Mapping):
         catalog = dict(existing)
         _validate_request_catalog(catalog, prompt=prompt)
         return catalog
 
-    acceptance_source = _strings(game_design.get("acceptance_tests"))
-    requirements: list[dict[str, Any]] = []
-    for index, (start, end) in enumerate(_semantic_clause_spans(prompt)):
-        statement = prompt[start:end]
-        capability = _fallback_capability(statement)
-        requirement_id = _stable_id(
-            "req",
-            capability,
-            {"prompt_sha256": _sha(prompt), "index": index, "span": [start, end]},
-        )
-        profile = profile_for_capability(capability)
-        acceptance = [
-            item for item in acceptance_source if _word_overlap(item, statement)
-        ] or [
-            f"Verify the observable player-facing behavior for capability {capability}."
-        ]
-        span = _source_span(prompt, statement)
-        requirements.append(
-            {
-                "requirement_id": requirement_id,
-                "capability": capability,
-                "statement": statement,
-                "semantic_statement": statement,
-                "mandatory": True,
-                "provenance_role": "explicit",
-                "source_span": span,
-                "derived_from": [],
-                "depends_on": [],
-                "provides": [_canonical_capability(capability)],
-                "gameplay_capabilities": [capability],
-                "implementation_capabilities": list(
-                    profile.implementation_capabilities
-                ),
-                "artifact_task_ids": [
-                    _stable_id(
-                        "task",
-                        implementation,
-                        {"requirement_id": requirement_id, "layer": "implementation"},
-                    )
-                    for implementation in profile.implementation_capabilities
-                ],
-                "semantic_type": "gameplay_mechanic",
-                "unlock_policy": {
-                    "required_capabilities": [],
-                    "required_requirement_refs": [],
-                    "optional_capabilities": [],
-                    "optional_requirement_refs": [],
-                    "policy": "host_feature_model_and_authored_state_only",
-                },
-                "artifact_obligations": [
-                    {"kind": kind, "status": "REQUIRED_DESIGN_AND_GENERATION"}
-                    for kind in profile.artifact_kinds
-                ],
-                "design_resolution_obligations": list(
-                    profile.design_resolution_obligations
-                ),
-                "runtime_acceptance": [
-                    f"Exercise and independently observe the authored runtime behavior for {capability}."
-                ],
-                "semantic_status": "RESOLVED",
-                "unresolved_spans": [],
-                "acceptance": list(dict.fromkeys(acceptance)),
-                "observable_behavior": {
-                    "given": "the authored preconditions are established",
-                    "when": statement,
-                    "then": "the authored observable outcome occurs",
-                },
-                "template_profile": {
-                    "template_id": profile.template_id,
-                    "architecture_owner": "host",
-                },
-            }
-        )
-    if not requirements:
-        raise EvidencePlanError("The request did not yield any semantic requirement.")
-    catalog: dict[str, Any] = {
-        "prompt_sha256": _sha(prompt),
-        "prompt_char_length": len(prompt),
-        "purpose": str(
-            game_design.get("pitch") or game_design.get("description") or prompt
-        ).strip(),
-        "requirements": requirements,
-        "constraints": list(_strings(game_design.get("constraints"))),
-        "non_goals": list(_strings(game_design.get("non_goals"))),
-        "deployment_expectations": list(
-            _strings(game_design.get("deployment_expectations"))
-        ),
-        "catalog_sha256": "",
-    }
-    catalog["catalog_sha256"] = _hash_without(catalog, "catalog_sha256")
-    return catalog
+    raise EvidencePlanError(
+        "PLANNING_STATE_AUTHORITY_REQUIRED: evidence planning cannot derive semantics "
+        "from raw prompt text; supply the grounded planning state/request catalog"
+    )
 
 
 def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> None:
@@ -426,8 +204,12 @@ def _validate_request_catalog(catalog: Mapping[str, Any], *, prompt: str) -> Non
             raise EvidencePlanError(
                 f"Pre-target request source receipt is stale for {requirement_id}."
             )
-        if str(requirement.get("capability") or "").removeprefix("capability:").startswith("custom.semantic_"):
-            raise EvidencePlanError("UNRESOLVED_SEMANTICS: synthetic semantics are not resolved requirements.")
+        if str(requirement.get("capability") or "").removeprefix("capability:").startswith(
+            "custom.semantic_"
+        ):
+            raise EvidencePlanError(
+                "UNRESOLVED_SEMANTICS: synthetic semantics are not resolved requirements."
+            )
         if (
             bool(requirement.get("mandatory", True))
             and requirement.get("semantic_status", "RESOLVED") == "UNRESOLVED"
@@ -601,113 +383,6 @@ def _reuse_payload(game_design: Mapping[str, Any]) -> dict[str, Any]:
     ):
         return dict(selection["reuse_plan"])
     return {}
-
-
-def _target_decision(
-    game_design: Mapping[str, Any], target_decision: Any = None
-) -> dict[str, Any]:
-    raw = _mapping(target_decision)
-    if not raw:
-        raw = _mapping(game_design.get("_platform_selection"))
-    target = _mapping(raw.get("target"))
-    if not target:
-        target = {
-            "minecraft_version": "unresolved",
-            "loader": "unresolved",
-            "source_api_family": "unresolved",
-        }
-    policy = (
-        "preserve"
-        if raw.get("preserved_existing_target")
-        else "migrate"
-        if raw.get("migration_requested")
-        else "new"
-    )
-    optimizer = _mapping(raw.get("optimizer"))
-    inventory = _mapping(
-        game_design.get("_existing_project_inventory")
-        or game_design.get("_existing_snapshot")
-    )
-    inventory_target = _mapping(inventory.get("target"))
-    inventory_modules = (
-        inventory.get("modules") if isinstance(inventory.get("modules"), list) else []
-    )
-    topology_modules = [
-        item
-        for item in inventory_modules
-        if isinstance(item, Mapping)
-        and not (
-            len(inventory_modules) > 1
-            and str(item.get("module_id") or "") == ":"
-            and not _strings(item.get("source_sets"))
-        )
-    ]
-    project_topology = {
-        "module_ids": [
-            str(item.get("module_id") or "")
-            for item in topology_modules
-            if str(item.get("module_id") or "")
-        ],
-        "loaders": list(_strings(inventory_target.get("loaders"))),
-        "source_sets": sorted(
-            {
-                str(source_set)
-                for item in topology_modules
-                for source_set in _strings(item.get("source_sets"))
-            }
-        ),
-    }
-    supplied_topology = _mapping(raw.get("project_topology"))
-    if supplied_topology:
-        project_topology = {
-            "module_ids": list(_strings(supplied_topology.get("module_ids"))),
-            "loaders": list(_strings(supplied_topology.get("loaders"))),
-            "source_sets": list(_strings(supplied_topology.get("source_sets"))),
-        }
-    rejected: list[dict[str, Any]] = []
-    candidates = optimizer.get("candidates")
-    if isinstance(candidates, list):
-        selected_key = (
-            str(target.get("minecraft_version") or ""),
-            str(target.get("loader") or "").casefold(),
-        )
-        for candidate in candidates:
-            if not isinstance(candidate, Mapping):
-                continue
-            candidate_target = _mapping(candidate.get("target"))
-            key = (
-                str(candidate_target.get("minecraft_version") or ""),
-                str(candidate_target.get("loader") or "").casefold(),
-            )
-            if key != selected_key:
-                rejected.append(
-                    {
-                        "target": candidate_target,
-                        "total_expected_cost": candidate.get("total_expected_cost"),
-                        "reason": "ranked_below_selected_after_hard_gates_and_verified_reuse",
-                    }
-                )
-    resolved = bool(
-        str(target.get("minecraft_version") or "").strip().casefold()
-        not in {"", "unresolved"}
-        and str(target.get("loader") or "").strip().casefold() not in {"", "unresolved"}
-    )
-    result: dict[str, Any] = {
-        "policy": policy,
-        "coordinates": target,
-        "hard_gate_status": "passed" if resolved else "deferred",
-        "preserved_existing_target": bool(raw.get("preserved_existing_target")),
-        "migration_requested": bool(raw.get("migration_requested")),
-        "decision_reason": str(
-            raw.get("reason") or optimizer.get("selection_basis") or "host target input"
-        ),
-        "rejected_alternatives": rejected,
-        "project_topology": project_topology,
-        "evidence_refs": [f"platform-selection:{_sha(raw)}"] if raw else [],
-        "decision_sha256": "",
-    }
-    result["decision_sha256"] = _hash_without(result, "decision_sha256")
-    return result
 
 
 def _verified_project_provides(components: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -1567,7 +1242,19 @@ def compile_evidence_first_plan(
             "Reuse evidence is not bound to the frozen pre-retrieval semantic plan."
         )
 
-    target = _target_decision(game_design, target_decision)
+    selection_payload = (
+        dict(target_decision)
+        if isinstance(target_decision, Mapping)
+        else _mapping(game_design.get("_platform_selection"))
+    )
+    existing_inventory = _mapping(
+        game_design.get("_existing_project_inventory")
+        or game_design.get("_existing_snapshot")
+    )
+    target = compile_target_decision(
+        selection_payload,
+        existing_inventory=existing_inventory,
+    )
     if target.get("hard_gate_status") != "passed":
         raise EvidencePlanError(
             "Target decision is unresolved; semantic implementation planning is deferred."
@@ -1648,10 +1335,7 @@ def compile_evidence_first_plan(
         "schema_version": SCHEMA,
         "pre_retrieval_plan_sha256": pre_retrieval_sha256,
         "request_catalog": request_catalog,
-        "existing_snapshot": _mapping(
-            game_design.get("_existing_project_inventory")
-            or game_design.get("_existing_snapshot")
-        ),
+        "existing_snapshot": existing_inventory,
         "component_catalog": list(components),
         "reuse_decisions": list(decisions),
         "target_decision": target,
