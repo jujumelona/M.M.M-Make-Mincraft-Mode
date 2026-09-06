@@ -246,7 +246,7 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
     implementation_brief, reference_ids = _research_brief("persistent progression", implementation_state)
     domain = implementation_brief["domains"][0]
     assert reference_ids == set()
-    assert {"mod_catalog", "source_code", "minecraft_api", "local_project"}.issubset(
+    assert {"dependency", "source_code", "minecraft_api", "local_project"}.issubset(
         domain["evidence_kinds"]
     )
     assert domain["providers"][:3] == ["curseforge", "modrinth", "github"]
