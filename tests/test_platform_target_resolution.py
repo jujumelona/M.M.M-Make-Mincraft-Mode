@@ -7,9 +7,8 @@ import pytest
 
 from minecraft_mod_ai import platform_catalog as catalog
 from minecraft_mod_ai import platform_resolver as resolver
-from minecraft_mod_ai.generator import FabricProjectGenerator
+from minecraft_mod_ai.generator import FabricProjectGenerator, GenerationError
 from minecraft_mod_ai.knowledge import evidence_for_target
-from minecraft_mod_ai.platform_catalog import adapter_from_project
 from minecraft_mod_ai.platform_evidence_pipeline import PlatformOptimization, TargetEvidence
 from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
@@ -20,7 +19,6 @@ from minecraft_mod_ai.spec import (
     PlatformLock,
     SpecValidationError,
 )
-from minecraft_mod_ai.validator import ProjectValidator
 
 
 def _fabric_1201():
@@ -104,13 +102,13 @@ def test_supported_versions_are_provider_discovery_not_source_allowlist(monkeypa
         catalog.PlatformProvider(
             loader="fabric",
             provider_id=provider.provider_id,
-            discover_versions=lambda limit=32: ("future-a", "future-b", "future-c")[:limit],
+            discover_versions=lambda limit=32: ("1.21.1", "1.20.1")[:limit],
             resolve=provider.resolve,
         ),
     )
     assert catalog.supported_minecraft_versions(loader="fabric")[:2] == (
-        "future-a",
-        "future-b",
+        "1.21.1",
+        "1.20.1",
     )
 
 
@@ -235,40 +233,14 @@ def test_target_evidence_uses_live_sources_without_historical_javadoc_ids() -> N
     assert not any("1201" in source_id or "1211" in source_id for source_id in ids)
 
 
-def test_generator_uses_adapter_toolchain_resource_format_and_lock(tmp_path: Path) -> None:
+def test_generator_fails_closed_without_reviewed_deterministic_templates(
+    tmp_path: Path,
+) -> None:
     adapter = _fabric_1211()
-    spec = _simple_spec(adapter)
-    generated = FabricProjectGenerator().generate(spec, tmp_path / "project")
-    root = generated.root
+    assert adapter.deterministic_module_kinds == frozenset()
 
-    gradle = (root / "build.gradle").read_text(encoding="utf-8")
-    pack = json.loads((root / "src/main/resources/pack.mcmeta").read_text(encoding="utf-8"))
-    recipe = json.loads(
-        (root / "src/main/resources/data/target_probe/recipes/probe_item.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    lock = json.loads((root / ".minecraft_ai/platform-lock.json").read_text(encoding="utf-8"))
-
-    assert "Integer.parseInt(project.java_version)" in gradle
-    assert "JavaVersion.toVersion(project.java_version)" in gradle
-    assert pack["pack"]["pack_format"] == adapter.resource_pack_format
-    assert recipe["result"]["item"] == "target_probe:probe_item"
-    assert lock["adapter_id"] == adapter.adapter_id
-    assert adapter_from_project(root).adapter_id == adapter.adapter_id
-
-
-def test_static_validator_uses_adapter_selected_project_layout(tmp_path: Path) -> None:
-    spec = _simple_spec(_fabric_1211())
-    root = FabricProjectGenerator().generate(spec, tmp_path / "project").root
-    report = ProjectValidator().validate(root, spec)
-    assert report.status == "PASS", [item.__dict__ for item in report.findings]
-
-
-def test_validator_rejects_project_and_proposal_target_mismatch(tmp_path: Path) -> None:
-    root = FabricProjectGenerator().generate(
-        _simple_spec(_fabric_1211()), tmp_path / "project"
-    ).root
-    report = ProjectValidator().validate(root, _simple_spec(_fabric_1201()))
-    assert report.status == "FAIL"
-    assert any(item.code == "PLATFORM_LOCK_MISMATCH" for item in report.findings)
+    with pytest.raises(
+        GenerationError,
+        match="no reviewed deterministic module templates",
+    ):
+        FabricProjectGenerator().generate(_simple_spec(adapter), tmp_path / "project")
