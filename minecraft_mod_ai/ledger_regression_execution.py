@@ -34,7 +34,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-007": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
     "REG-008": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-009": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
-    "REG-010": RegressionExecutionRoute("tests/test_nonblocking_lossless_planner_contract.py"),
+    "REG-010": RegressionExecutionRoute("tests/test_minecraft_knowledge_request_completeness.py"),
     "REG-011": RegressionExecutionRoute("tests/test_progress_loop_liveness_regression.py"),
     "REG-012": RegressionExecutionRoute(
         "tests/test_source_set_boundary_contract.py::test_common_source_cannot_import_project_client_source"
@@ -51,7 +51,9 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-019": RegressionExecutionRoute("tests/test_rag_index_reuse_efficiency.py"),
     "REG-020": RegressionExecutionRoute("tests/test_resource_asset_backend_contract.py"),
     "REG-021": RegressionExecutionRoute("tests/test_space_progression_planner_and_verifier_regression.py"),
-    "REG-022": RegressionExecutionRoute("tests/test_semantic_grounding_no_magic_thresholds.py"),
+    "REG-022": RegressionExecutionRoute(
+        "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
+    ),
     "REG-023": RegressionExecutionRoute(
         "tests/test_agent_context_window_contract.py",
         evidence_scope="structural_harness",
@@ -76,7 +78,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
         "tests/test_space_progression_planner_and_verifier_regression.py"
     ),
     "REG-DESIGN-001": RegressionExecutionRoute(
-        "tests/test_semantic_grounding_no_magic_thresholds.py"
+        "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
     ),
 }
 
