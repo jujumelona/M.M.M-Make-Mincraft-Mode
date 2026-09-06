@@ -19,7 +19,6 @@ TEST_ROOTS = (
     "src/test/",
     "src/gametest/",
 )
-_NON_RUNTIME_OUTCOMES = frozenset({"test", "verification", "resource", "asset"})
 
 
 def _strings(value: Any) -> tuple[str, ...]:
@@ -64,11 +63,18 @@ def is_test_anchor(anchor: Mapping[str, Any]) -> bool:
 
 
 def claims_runtime(task: Mapping[str, Any]) -> bool:
-    provides = _strings(task.get("provides"))
-    if any(value.startswith("capability:") for value in provides):
-        return True
-    semantic = str(task.get("semantic_outcome") or "").strip().casefold()
-    return bool(semantic and semantic not in _NON_RUNTIME_OUTCOMES)
+    """Return whether PlanIR explicitly exports player-facing runtime capability work.
+
+    ``semantic_outcome`` is descriptive prose, not an execution-type authority. Treating
+    any non-empty outcome as runtime previously promoted registry/resource-only tasks into
+    fake Java implementation tasks. The canonical PlanIR runtime signal is an exported
+    ``capability:*`` provide.
+    """
+
+    return any(
+        value.casefold().startswith("capability:")
+        for value in _strings(task.get("provides"))
+    )
 
 
 __all__ = [
