@@ -55,6 +55,28 @@ def test_success_events_do_not_force_fsync_but_failure_boundary_does(tmp_path, m
     assert [item["event"] for item in _records(trace_path)] == ["start", "pass", "failure"]
 
 
+def test_success_events_do_not_force_stderr_flush_but_failure_boundary_does(tmp_path, monkeypatch):
+    trace_path = tmp_path / "root_cause.jsonl"
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))
+    flush_calls: list[None] = []
+
+    class StderrProbe:
+        def write(self, value: str) -> int:
+            return len(value)
+
+        def flush(self) -> None:
+            flush_calls.append(None)
+
+    monkeypatch.setattr(trace.sys, "stderr", StderrProbe())
+
+    trace.emit_root_cause("start", result="START")
+    trace.emit_root_cause("pass", result="PASS")
+    assert flush_calls == []
+
+    trace.emit_root_cause("failure", result="FAIL", reason="synthetic")
+    assert len(flush_calls) == 1
+
+
 def test_trace_serialization_failure_uses_emergency_record(tmp_path, monkeypatch):
     trace_path = tmp_path / "root_cause.jsonl"
     monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))

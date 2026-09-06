@@ -7,9 +7,9 @@ what gate/result was observed, and the original exception chain before callers w
 aggregate the failure.
 
 Every event is mirrored to stderr and appended to the JSONL journal. Failure and
-emergency records force an fsync, which also flushes earlier journal writes, so the
-critical failure tail is durable without forcing a disk barrier for every successful
-hot-path event.
+emergency records force an fsync and stderr flush, which also flush earlier buffered
+records, so the critical failure tail is durable without forcing a disk or pipe barrier
+for every successful hot-path event.
 """
 
 import heapq
@@ -258,10 +258,13 @@ def _append_durable_line(line: bytes, *, sync: bool) -> None:
             os.close(fd)
 
 
-def _stderr_line(line: str) -> None:
+def _stderr_line(line: str, *, flush: bool) -> None:
+    """Mirror one trace record without turning every success into a pipe barrier."""
+
     try:
         sys.stderr.write(_TRACE_PREFIX + line + "\n")
-        sys.stderr.flush()
+        if flush:
+            sys.stderr.flush()
     except BaseException:
         pass
 
@@ -305,7 +308,7 @@ def _emergency_trace(
     except BaseException:
         pass
     try:
-        _stderr_line(encoded.decode("utf-8", "replace").rstrip("\n"))
+        _stderr_line(encoded.decode("utf-8", "replace").rstrip("\n"), flush=True)
     except BaseException:
         pass
 
@@ -372,7 +375,7 @@ def emit_root_cause(
             (serialized + "\n").encode("utf-8", "backslashreplace"),
             sync=failure,
         )
-        _stderr_line(serialized)
+        _stderr_line(serialized, flush=failure)
     except BaseException as logger_exc:
         _emergency_trace(
             event=event,
