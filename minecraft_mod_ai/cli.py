@@ -15,9 +15,6 @@ from .complete_spec import CompleteProposal
 from .importer import inspect_existing_project_archive
 from .model_router import ModelRouter
 from .plan_render import render_complete_plan
-from .planner import HeuristicPlanner
-from .routed_planner import RoutedPlanner
-from .scalable_pipeline import ScalableMinecraftModPipeline
 from .spec import Proposal
 
 _HASH_CHUNK_SIZE = 1024 * 1024
@@ -96,35 +93,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--changelog",
         default="Generated and verified by M.M.M",
     )
-
-    slice_plan = subparsers.add_parser(
-        "plan-slice",
-        help="호환용 아이템·블록 슬라이스를 scalable 명세로 계획합니다.",
-    )
-    slice_plan.add_argument("prompt")
-    slice_plan.add_argument(
-        "--backend",
-        choices=("local", "heuristic-dev"),
-        default="local",
-    )
-    slice_plan.add_argument("--profile", default="Qwen3.5-9B_6GB")
-    slice_plan.add_argument("--existing-zip", type=Path)
-    slice_plan.add_argument("--save", type=Path)
-
-    slice_execute = subparsers.add_parser(
-        "execute-slice",
-        help="호환용 슬라이스를 shard generator와 정책 검증기로 실행합니다.",
-    )
-    slice_execute.add_argument("proposal", type=Path)
-    slice_execute.add_argument("--approve", required=True)
-    slice_execute.add_argument(
-        "--output",
-        type=Path,
-        default=Path("mmm-output"),
-    )
-    slice_execute.add_argument("--source-only", action="store_true")
-    slice_execute.add_argument("--skip-gametest", action="store_true")
-    slice_execute.add_argument("--existing-zip", type=Path)
 
     inspect_existing = subparsers.add_parser("inspect-existing")
     inspect_existing.add_argument("archive", type=Path)
@@ -259,36 +227,6 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(_json_dump(result.to_dict()) + "\n")
             else:
                 sys.stdout.write(_render_complete_result(result) + "\n")
-            return 0 if result.status in _SUCCESS_STATUSES else 1
-
-        if args.command == "plan-slice":
-            planner = (
-                RoutedPlanner(profile=args.profile)
-                if args.backend == "local"
-                else HeuristicPlanner()
-            )
-            proposal = ScalableMinecraftModPipeline(planner=planner).plan(
-                args.prompt,
-                existing_input=args.existing_zip,
-            )
-            rendered = _json_dump(proposal.to_dict()) + "\n"
-            if args.save:
-                args.save.parent.mkdir(parents=True, exist_ok=True)
-                args.save.write_text(rendered, encoding="utf-8")
-            sys.stdout.write(rendered)
-            return 0
-
-        if args.command == "execute-slice":
-            proposal = Proposal.from_dict(_read_json(args.proposal))
-            result = ScalableMinecraftModPipeline().execute(
-                proposal,
-                approval_hash=args.approve,
-                output_root=args.output,
-                build=not args.source_only,
-                run_gametest=not args.skip_gametest,
-                existing_input=args.existing_zip,
-            )
-            sys.stdout.write(_json_dump(result.to_dict()) + "\n")
             return 0 if result.status in _SUCCESS_STATUSES else 1
 
         if args.command == "inspect-existing":
