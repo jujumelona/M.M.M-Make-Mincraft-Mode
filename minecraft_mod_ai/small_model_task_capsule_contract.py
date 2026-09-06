@@ -21,7 +21,7 @@ from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
 
-from .implementation_template_contract import build_implementation_template, sanitize_hole_fills
+from .implementation_template_contract import build_implementation_template
 from .root_cause_trace import emit_root_cause, trace_scope
 
 _MARKER = "_mmm_small_model_task_capsule_v2"
@@ -380,7 +380,7 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
 
 
 def compact_task_local_module_contract(module: Any) -> dict[str, Any]:
-    """Project PlanIR plus its bounded planner fill to task-local coder facts."""
+    """Project PlanIR plus the complete host-owned coder execution contract."""
 
     task = _evidence_task(module)
     if task is None:
@@ -395,18 +395,7 @@ def compact_task_local_module_contract(module: Any) -> dict[str, Any]:
     compact_task = {
         key: copy.deepcopy(task[key]) for key in _COMPACT_TASK_FIELDS if key in task
     }
-    implementation_template = build_implementation_template(task)
-    compact_task["implementation_template"] = implementation_template
-
-    config = getattr(module, "config", None)
-    raw_planner_fill = config.get("model_fill") if isinstance(config, Mapping) else None
-    if isinstance(raw_planner_fill, Mapping):
-        sanitized_fills = sanitize_hole_fills(
-            implementation_template,
-            raw_planner_fill.get("hole_fills"),
-        )
-        if sanitized_fills:
-            compact_task["planner_fill"] = {"hole_fills": sanitized_fills}
+    compact_task["coder_execution_contract"] = build_implementation_template(task)
 
     return {
         "module_id": str(getattr(module, "module_id", "")),
