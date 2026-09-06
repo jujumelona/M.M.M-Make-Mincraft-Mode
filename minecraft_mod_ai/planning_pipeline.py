@@ -327,6 +327,12 @@ class PlanningPipeline:
                 "status": "host_only",
             }
         payload = dict(value)
+        status = str(payload.get("status") or "").strip().casefold()
+        if status in {"unavailable", "error", "failed"}:
+            raise PlanningStageError(
+                PlanningStage.EVIDENCE,
+                f"technical evidence is explicitly unavailable ({status})",
+            )
         if not str(payload.get("schema_version") or "").strip():
             payload["schema_version"] = "mmm/technical-evidence-host-normalized-v1"
         return payload
