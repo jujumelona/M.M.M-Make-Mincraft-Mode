@@ -5,21 +5,12 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from minecraft_mod_ai.api import _attach_existing_target
 from minecraft_mod_ai.complete_orchestrator import _semantic_execution_observation
-from minecraft_mod_ai.complete_spec import (
-    ProductionModule,
-    complete_proposal_from_parts,
-)
+from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
-from minecraft_mod_ai.pipeline import MinecraftModPipeline
-from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_inventory import inspect_project_inventory
-from minecraft_mod_ai.spec import SpecValidationError
-from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
 def _existing_weather_project(root: Path) -> None:
@@ -50,18 +41,12 @@ def _existing_weather_project(root: Path) -> None:
     ).write_text('{"parent":"minecraft:item/generated"}\n', encoding="utf-8")
 
 
-def _retained_plan(root: Path, prompt: str) -> tuple[dict, dict]:
+def _design_with_inventory(root: Path) -> dict:
     _existing_weather_project(root)
     inventory = inspect_project_inventory(root).to_dict()
-    design = {
-        "pitch": "Keep the existing weather compass behavior.",
-        "modules": [
-            {
-                "plugin_id": "weather_compass",
-                "reason": "weather_compass",
-            }
-        ],
-        "acceptance_tests": ["The existing weather compass remains available."],
+    return {
+        "pitch": "Preserve existing project content while implementing the authored request.",
+        "acceptance_tests": ["The requested behavior is observable in Minecraft."],
         "_existing_project_inventory": inventory,
         "_existing_snapshot": inventory,
         "_platform_selection": {
@@ -73,93 +58,24 @@ def _retained_plan(root: Path, prompt: str) -> tuple[dict, dict]:
             "migration_requested": False,
         },
     }
-    return design, compile_evidence_first_plan(prompt, design)
 
 
-def test_retained_only_plan_builds_validation_graph_without_generation(
+def test_existing_inventory_name_alias_cannot_silently_close_semantic_gap(
     tmp_path: Path,
 ) -> None:
     prompt = "Keep the weather compass."
-    design, plan = _retained_plan(tmp_path / "existing", prompt)
-    assert plan["gap_catalog"] == []
-    assert plan["tasks"] == []
+    design = _design_with_inventory(tmp_path / "existing")
+    plan = compile_evidence_first_plan(prompt, design)
 
-    compiled = compile_production_contract(
-        requested_prompt=prompt,
-        game_design={"pitch": design["pitch"]},
-        modules=(),
-        assets=(),
-        acceptance_tests=("The existing weather compass remains available.",),
-        evidence_plan=plan,
-    )
-    implementation_kinds = {
-        item["source_kind"] for item in compiled.contract["implementation_catalog"]
+    assert "capability:weather_compass" in {
+        provided
+        for component in plan["component_catalog"]
+        for provided in component.get("provides", [])
     }
-    assert implementation_kinds == {"evidence_plan", "retained_component"}
-    atom_groups = [
-        item
-        for item in compiled.contract["coverage_groups"]
-        if next(
-            requirement
-            for requirement in compiled.contract["requirement_catalog"]
-            if requirement["requirement_ref"] == item["requirement_ref"]
-        )["source"]
-        == "evidence_plan"
-    ]
-    retained_components = plan["acceptance_release_bindings"][0]["component_refs"]
-    assert atom_groups[0]["implementation_refs"] == [
-        f"implementation:retained_component:{component}"
-        for component in retained_components
-    ]
-
-    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(prompt)
-    proposal = complete_proposal_from_parts(
-        requested_prompt=prompt,
-        base_proposal=base,
-        game_design={
-            **design,
-            "_evidence_first_plan": plan,
-            "_production_contract": compiled.contract,
-        },
-        modules=(),
-        acceptance_tests=compiled.acceptance_tests,
-    )
-    proposal.validate()
-    work = build_production_work_plan(proposal)
-    assert work.module_count == 0
-    assert not any(node.stage.startswith("generate:") for node in work.nodes)
-    assert {node.node_id for node in work.nodes} >= {
-        "prepare-project",
-        "validate-source",
-        "build-project",
-        "validate-jar",
-    }
-
-
-def test_retained_only_proposal_rejects_stale_evidence_plan(tmp_path: Path) -> None:
-    prompt = "Keep the weather compass."
-    design, plan = _retained_plan(tmp_path / "existing", prompt)
-    compiled = compile_production_contract(
-        requested_prompt=prompt,
-        game_design={"pitch": design["pitch"]},
-        modules=(),
-        acceptance_tests=("The existing weather compass remains available.",),
-        evidence_plan=plan,
-    )
-    plan["verified_provides"] = []
-    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan(prompt)
-    with pytest.raises(SpecValidationError, match="evidence-first implementation plan"):
-        complete_proposal_from_parts(
-            requested_prompt=prompt,
-            base_proposal=base,
-            game_design={
-                **design,
-                "_evidence_first_plan": plan,
-                "_production_contract": compiled.contract,
-            },
-            modules=(),
-            acceptance_tests=compiled.acceptance_tests,
-        )
+    assert plan["verified_provides"] == []
+    assert plan["gap_catalog"]
+    assert plan["tasks"]
+    assert plan["acceptance_release_bindings"][0]["status"] == "planned_gap"
 
 
 def test_existing_archive_inventory_starts_before_planning_and_is_hash_bound(
@@ -199,7 +115,7 @@ def test_existing_archive_inventory_starts_before_planning_and_is_hash_bound(
     }
 
 
-def test_existing_zip_retains_symbol_resource_and_test_then_generates_only_gap(
+def test_existing_zip_preserves_inventory_but_only_verified_semantics_can_retain(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "source"
@@ -216,13 +132,8 @@ def test_existing_zip_retains_symbol_resource_and_test_then_generates_only_gap(
     payload = inventory.to_dict()
     prompt = "Keep the existing weather compass and add quests."
     design = {
-        "modules": [
-            {"plugin_id": "weather_compass", "reason": "weather_compass"},
-            {"plugin_id": "quests", "reason": "quests"},
-        ],
         "acceptance_tests": [
-            "The weather compass remains unchanged.",
-            "Quests work.",
+            "The existing behavior is preserved and the requested quest behavior works."
         ],
         "_existing_project_inventory": payload,
         "_existing_snapshot": payload,
@@ -237,30 +148,16 @@ def test_existing_zip_retains_symbol_resource_and_test_then_generates_only_gap(
         },
     }
     plan = compile_evidence_first_plan(prompt, design)
-    weather = next(
-        binding
-        for binding in plan["acceptance_release_bindings"]
-        if binding["capability"] == "weather_compass"
-    )
-    retained = {
-        component["kind"]
-        for component in plan["component_catalog"]
-        if component["component_id"] in weather["component_refs"]
-    }
 
-    assert weather["status"] == "retained"
-    assert {"symbol", "resource", "test"} <= retained
-    assert all(
-        "weather_compass" not in task["semantic_outcome"].casefold()
-        for task in plan["tasks"]
-    )
-    assert any("quest" in task["semantic_outcome"].casefold() for task in plan["tasks"])
+    assert plan["component_catalog"]
+    assert plan["verified_provides"] == []
+    assert all(binding["status"] == "planned_gap" for binding in plan["acceptance_release_bindings"])
+    assert plan["tasks"]
 
 
-def test_one_requirement_can_bind_every_semantic_slice_without_a_fixed_ref_cap() -> None:
+def test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap() -> None:
     prompt = "Add a persistent networked machine with a GUI and generated resources."
     design = {
-        "modules": [{"plugin_id": "machine", "reason": prompt}],
         "acceptance_tests": ["The complete machine vertical slice works."],
         "_platform_selection": {
             "target": {
