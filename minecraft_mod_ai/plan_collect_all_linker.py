@@ -15,13 +15,10 @@ from typing import Any
 
 from .root_cause_trace import emit_root_cause
 from .task_execution_classification import (
-    SOURCE_ROOTS as _SOURCE_ROOTS,
-    TEST_ROOTS as _TEST_ROOTS,
     anchor_locator,
     claims_runtime,
     is_source_symbol,
     is_test_anchor,
-    path_from_locator,
 )
 
 _COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
@@ -95,10 +92,6 @@ def _anchors(task: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
 
 def _locator(anchor: Mapping[str, Any]) -> str:
     return anchor_locator(anchor)
-
-
-def _path_from_locator(locator: str) -> str:
-    return path_from_locator(locator)
 
 
 def _is_source_symbol(anchor: Mapping[str, Any]) -> bool:
