@@ -30,9 +30,19 @@ def _evidence_skeleton() -> dict[str, object]:
         "depends_on": [],
         "consumes": [],
         "provides": ["runtime_done"],
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "yarn",
+            "java_version": "21",
+        },
         "implementation_capabilities": ["runtime.behavior"],
+        "implementation_obligations": [
+            "Bind the researched runtime behavior to the owned CoreRuntime symbol."
+        ],
         "required_gates": ["source_static_validation", "target_compile"],
         "public_acceptance": ["The runtime behavior is observable."],
+        "runtime_acceptance": ["The owned runtime path produces the requested behavior."],
         "owned_anchors": [
             {
                 "kind": "symbol",
@@ -155,6 +165,15 @@ def test_evidence_page_contains_complete_host_coder_contract() -> None:
 
     assert contract["schema_version"] == CODER_SCHEMA
     assert contract["task_ref"] == "core_runtime_api"
+    assert contract["target_constraints"] == {
+        "minecraft_version": "1.21.1",
+        "loader": "fabric",
+        "mappings": "yarn",
+        "mappings_applicable": True,
+        "naming_regime": "mapped_obfuscated",
+        "java_version": "21",
+        "policy": "Use only the immutable host-selected target and compatible evidence.",
+    }
     assert contract["targets"] == [
         {
             "kind": "symbol",
@@ -212,7 +231,9 @@ def test_model_cannot_widen_evidence_owned_contract_or_acceptance() -> None:
     assert module["required_gates"] == ["source_static_validation", "target_compile"]
     assert config["evidence_task"] == original_config["evidence_task"]
     assert config["coder_execution_contract"] == original_config["coder_execution_contract"]
-    assert config["model_fill"] == {"implementation_notes": "non-authoritative note"}
+    assert config["optional_coder_notes"] == {
+        "implementation_notes": "non-authoritative note"
+    }
     assert page["assets"] == []
     assert page["acceptance_tests"] == ["The runtime behavior is observable."]
     assert page["completed_deliverables"] == ["runtime_done"]
