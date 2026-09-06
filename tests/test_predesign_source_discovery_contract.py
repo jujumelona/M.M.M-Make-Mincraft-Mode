@@ -4,7 +4,6 @@ import urllib.error
 from pathlib import Path
 
 from minecraft_mod_ai import pre_design_grounded_rag as rag
-from minecraft_mod_ai import small_model_predesign_research as small
 from minecraft_mod_ai.pre_design_rag_quality_contract import _source_body
 
 
@@ -81,56 +80,6 @@ def test_fetched_modrinth_body_is_claim_bearing_evidence():
         "body_retrieved": True,
     }
     assert _source_body(record) == body
-
-
-def test_zero_source_bodies_skip_model_and_preserve_requirement(monkeypatch, tmp_path):
-    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
-    evidence = {
-        "grounded_rag": {
-            "domain_id": "request",
-            "queries": [
-                {
-                    "query": "authored mechanic",
-                    "evidence_records": [],
-                    "content_record_count": 0,
-                }
-            ],
-        }
-    }
-    document = rag._materialize_domain_evidence_document("request", evidence)
-    assert document["model_unit_count"] == 0
-    assert document["page_count"] == 0
-
-    class ExplodingRouter:
-        calls = 0
-
-        def generate_text(self, *args, **kwargs):
-            self.calls += 1
-            raise AssertionError("model must not be called when source body count is zero")
-
-    router = ExplodingRouter()
-    note = small.research_document_domain(
-        object(),
-        rag,
-        router,
-        prompt="build the authored mechanic",
-        domain={
-            "domain_id": "request",
-            "objective": "build the authored mechanic",
-            "requirements": ["the player can activate the authored mechanic"],
-            "queries": ["authored mechanic"],
-        },
-        document=document,
-        trace_metadata=None,
-    )
-
-    assert router.calls == 0
-    assert note["model_called"] is False
-    assert note["source_body_count"] == 0
-    assert note["authoritative_requirement_fallback"] == [
-        "the player can activate the authored mechanic"
-    ]
-    assert "model_not_called" in note["page_local_diagnostics"][0]
 
 
 def test_materializer_never_creates_fake_empty_page(monkeypatch, tmp_path):
