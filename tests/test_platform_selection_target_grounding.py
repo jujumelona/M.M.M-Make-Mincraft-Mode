@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
 from minecraft_mod_ai.platform_resolver import PlatformSelection
-from minecraft_mod_ai.target_grounding_contract import (
-    _required_target_fields,
-    _validate_complete_target,
-)
+from minecraft_mod_ai.target_contract import required_target_fields, validate_complete_target
 
 
 def _mapped_adapter() -> PlatformAdapter:
@@ -76,7 +73,7 @@ def test_mapped_platform_selection_preserves_complete_provider_target_receipt() 
 
     assert not [
         field
-        for field in _required_target_fields(target)
+        for field in required_target_fields(target)
         if target.get(field) in (None, "", "unresolved")
     ]
     assert target["mappings_kind"] == adapter.mappings_kind
@@ -90,7 +87,7 @@ def test_mapped_platform_selection_preserves_complete_provider_target_receipt() 
 
 
 def test_serialized_mapped_provider_target_passes_grounding_contract() -> None:
-    grounded = _validate_complete_target(_selection(_mapped_adapter()).to_dict()["target"])
+    grounded = validate_complete_target(_selection(_mapped_adapter()).to_dict()["target"])
 
     assert grounded["mappings"] == {"kind": "mojang", "version": "mojang"}
     assert grounded["naming_regime"]["kind"] == "mapped_obfuscated"
@@ -107,10 +104,10 @@ def test_native_provider_target_requires_no_legacy_mapping_coordinates() -> None
     adapter.validate()
     target = _selection(adapter).to_dict()["target"]
 
-    required = _required_target_fields(target)
+    required = required_target_fields(target)
     assert "mappings_kind" not in required
     assert "mappings_version" not in required
-    grounded = _validate_complete_target(target)
+    grounded = validate_complete_target(target)
     assert grounded["naming_regime"] == {
         "kind": "native_unobfuscated",
         "mappings_applicable": False,
