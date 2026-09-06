@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import platform_evidence_pipeline as evidence
-from minecraft_mod_ai.planning_pipeline import PlanningPipeline
+from minecraft_mod_ai.planning_pipeline import (
+    PlanningPipeline,
+    PlanningStage,
+    PlanningStageError,
+)
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, PlatformProvider
 from minecraft_mod_ai.spec import PlatformLock, SpecValidationError
 
@@ -52,16 +56,16 @@ def test_complete_planner_uses_canonical_pipeline_and_no_synthetic_module_fallba
     assert "from .live_module_lowering import lower_live_modules" in source
 
 
-def test_evidence_transport_preserves_explicit_unavailable_status() -> None:
+def test_explicit_unavailable_evidence_fails_closed() -> None:
     payload = {
         "schema_version": "mmm/central-evidence-graph-v1",
         "status": "unavailable",
     }
 
-    normalized = PlanningPipeline._validated_evidence(payload)
+    with pytest.raises(PlanningStageError, match="explicitly unavailable") as exc_info:
+        PlanningPipeline._validated_evidence(payload)
 
-    assert normalized == payload
-    assert normalized["status"] == "unavailable"
+    assert exc_info.value.stage is PlanningStage.EVIDENCE
 
 
 def test_platform_lock_validation_is_offline_and_does_not_reresolve(
