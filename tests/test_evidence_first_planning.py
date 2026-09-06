@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 
 import pytest
 
@@ -9,6 +10,7 @@ from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner, _eviden
 from minecraft_mod_ai.evidence_first_planning import (
     EvidencePlanError,
     _hash_without,
+    _sha,
     build_request_catalog,
     compile_evidence_first_plan,
     validate_evidence_first_plan,
@@ -17,7 +19,87 @@ from minecraft_mod_ai.minecraft_template_catalog import requirement_branch_featu
 from minecraft_mod_ai.project_inventory import inspect_project_inventory
 
 
-def _design(*capabilities: str) -> dict[str, object]:
+def _request_catalog(prompt: str, *capabilities: str) -> dict[str, object]:
+    """Build explicit test authority without reviving raw-prompt semantic inference."""
+
+    requirements: list[dict[str, object]] = []
+    for index, raw_capability in enumerate(capabilities, 1):
+        capability = str(raw_capability).removeprefix("capability:")
+        acceptance = f"The {capability} behavior is observable in Minecraft."
+        requirements.append(
+            {
+                "requirement_id": f"req_{index:03d}",
+                "capability": capability,
+                "statement": prompt,
+                "semantic_statement": prompt,
+                "mandatory": True,
+                "provenance_role": "explicit_test_authority",
+                "source_span": {
+                    "source_id": "requested_prompt",
+                    "char_start": 0,
+                    "char_end": len(prompt),
+                    "text": prompt,
+                    "text_sha256": _sha(prompt),
+                },
+                "evidence_refs": [],
+                "derived_from": [],
+                "depends_on": [],
+                "provides": [f"capability:{capability}"],
+                "gameplay_capabilities": [capability],
+                "implementation_capabilities": [capability],
+                "implementation_obligations": [
+                    f"Implement the grounded {capability} capability and verify its observable behavior."
+                ],
+                "artifact_task_ids": [],
+                "semantic_type": "gameplay_mechanic",
+                "unlock_policy": {},
+                "artifact_obligations": [],
+                "design_resolution_obligations": [],
+                "runtime_acceptance": [acceptance],
+                "semantic_status": "RESOLVED",
+                "unresolved_spans": [],
+                "acceptance": [acceptance],
+                "observable_behavior": {
+                    "given": "the grounded requirement preconditions are established",
+                    "when": prompt,
+                    "then": acceptance,
+                },
+                "template_profile": {
+                    "template_id": "explicit_test_authority",
+                    "architecture_owner": "host",
+                },
+                "search_queries": [],
+                "reuse_candidates": [],
+                "detailed_plan_ref": f"detail_{index:03d}",
+                "engineering_worksheet": None,
+            }
+        )
+
+    catalog: dict[str, object] = {
+        "prompt_sha256": _sha(prompt),
+        "prompt_char_length": len(prompt),
+        "purpose": prompt,
+        "requirements": requirements,
+        "constraints": [],
+        "non_goals": [],
+        "deployment_expectations": [],
+        "requirement_graph": {
+            "node_ids": [item["requirement_id"] for item in requirements],
+            "edges": [],
+        },
+        "dependency_provenance": [],
+        "semantic_audit": {
+            "status": "APPROVED",
+            "generation_policy": "explicit_test_authority",
+        },
+        "planning_state_sha256": "test-fixture",
+        "catalog_sha256": "",
+    }
+    catalog["catalog_sha256"] = _hash_without(catalog, "catalog_sha256")
+    return catalog
+
+
+def _design(prompt: str, *capabilities: str) -> dict[str, object]:
     return {
         "pitch": "Implement only the requested behavior.",
         "modules": [
@@ -28,6 +110,7 @@ def _design(*capabilities: str) -> dict[str, object]:
             f"The {capability} behavior is observable in Minecraft."
             for capability in capabilities
         ],
+        "_evidence_request_catalog": _request_catalog(prompt, *capabilities),
         "_platform_selection": {
             "target": {
                 "minecraft_version": "1.21.1",
@@ -47,8 +130,9 @@ def _rehash(plan: dict[str, object]) -> None:
 
 def test_plan_hash_and_semantic_ids_are_deterministic() -> None:
     prompt = "Add a machine with saved state, synced packets, and a screen."
-    first = compile_evidence_first_plan(prompt, _design("machine"))
-    second = compile_evidence_first_plan(prompt, _design("machine"))
+    capabilities = ("automation.machine", "network.action_sync", "ui.menu")
+    first = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
+    second = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
 
     assert first == second
     assert first["plan_sha256"].startswith("sha256:")
@@ -56,38 +140,32 @@ def test_plan_hash_and_semantic_ids_are_deterministic() -> None:
     assert len(first["tasks"]) > 10
 
 
-def test_prompt_only_catalog_preserves_each_authored_requirement_clause() -> None:
+def test_prompt_only_catalog_requires_grounded_planning_authority() -> None:
     prompt = "Add a machine with saved state, synced packets, and a screen."
-    catalog = build_request_catalog(prompt, {})
 
-    assert [item["capability"] for item in catalog["requirements"]] == [
-        "automation.machine",
-        "network.action_sync",
-        "ui.menu",
-    ]
-    assert [item["source_span"]["text"] for item in catalog["requirements"]] == [
-        "Add a machine with saved state",
-        "synced packets",
-        "and a screen.",
-    ]
+    with pytest.raises(EvidencePlanError, match="PLANNING_STATE_AUTHORITY_REQUIRED"):
+        build_request_catalog(prompt, {})
 
 
 def test_design_module_name_cannot_add_semantic_authority() -> None:
-    catalog = build_request_catalog("Add quests.", _design("placeholder"))
+    prompt = "Add quests."
+    design = {
+        "modules": [{"plugin_id": "placeholder", "reason": "placeholder"}],
+        "_platform_selection": _design(prompt, "quest.state")["_platform_selection"],
+    }
 
-    assert [item["capability"] for item in catalog["requirements"]] == ["quest.state"]
-    assert all(item["provenance_role"] == "explicit" for item in catalog["requirements"])
+    with pytest.raises(EvidencePlanError, match="PLANNING_STATE_AUTHORITY_REQUIRED"):
+        build_request_catalog(prompt, design)
 
 
 def test_frozen_catalog_is_reused_without_design_module_augmentation() -> None:
     prompt = "Add trade. Add quests."
-    catalog = build_request_catalog(prompt, _design("trade"))
-    catalog["requirements"] = [
-        item for item in catalog["requirements"] if item["capability"] != "quest.state"
-    ]
-    catalog["catalog_sha256"] = _hash_without(catalog, "catalog_sha256")
-    design = _design("placeholder")
-    design["_evidence_request_catalog"] = catalog
+    catalog = _request_catalog(prompt, "trade.transaction")
+    design = {
+        **_design(prompt, "trade.transaction"),
+        "modules": [{"plugin_id": "placeholder", "reason": "placeholder"}],
+        "_evidence_request_catalog": catalog,
+    }
 
     reused = build_request_catalog(prompt, design)
 
@@ -99,7 +177,8 @@ def test_frozen_catalog_is_reused_without_design_module_augmentation() -> None:
 
 def test_machine_vertical_dag_uses_exact_provider_edges() -> None:
     prompt = "Add a machine with saved state, synced packets, and a screen."
-    plan = compile_evidence_first_plan(prompt, _design("machine"))
+    capabilities = ("automation.machine", "network.action_sync", "ui.menu")
+    plan = compile_evidence_first_plan(prompt, _design(prompt, *capabilities))
 
     branches = plan["branch_predicates"]
     assert branches["needs_registry"]["status"] == "ACTIVE"
@@ -125,6 +204,7 @@ def test_machine_vertical_dag_uses_exact_provider_edges() -> None:
 
 
 def test_self_claimed_external_component_never_removes_exact_semantic_gap() -> None:
+    prompt = "Add trade."
     components = [
         {
             "component_id": "existing_trade",
@@ -146,8 +226,8 @@ def test_self_claimed_external_component_never_removes_exact_semantic_gap() -> N
         }
     ]
     plan = compile_evidence_first_plan(
-        "Add trade.",
-        _design("trade"),
+        prompt,
+        _design(prompt, "trade.transaction"),
         component_catalog=components,
     )
 
@@ -166,23 +246,32 @@ def test_self_claimed_external_component_never_removes_exact_semantic_gap() -> N
 
 
 def test_inventory_symbol_without_exact_semantic_alias_does_not_retain(tmp_path) -> None:
+    prompt = "Keep the weather compass."
+    capability = "item.weather_compass"
     source = tmp_path / "src" / "main" / "java" / "example" / "WeatherCompass.java"
     source.parent.mkdir(parents=True)
     source.write_text(
         "package example;\npublic final class WeatherCompass {}\n",
         encoding="utf-8",
     )
-    design = _design("weather_compass")
+    design = _design(prompt, capability)
     design["_existing_project_inventory"] = inspect_project_inventory(tmp_path).to_dict()
 
-    # A source filename proves neither the requested behavior nor its semantics.
-    # Unknown behavior must return to grounded planning, never a synthetic capability.
-    with pytest.raises(EvidencePlanError, match="UNRESOLVED_SEMANTICS"):
-        compile_evidence_first_plan("Keep the weather compass.", design)
+    plan = compile_evidence_first_plan(prompt, design)
+
+    assert f"capability:{capability}" not in plan["verified_provides"]
+    assert [gap["missing_provides"] for gap in plan["gap_catalog"]] == [
+        [f"capability:{capability}"]
+    ]
+    assert plan["reuse_decisions"][0]["action"] == "fresh"
 
 
 def test_task_graph_rejects_missing_provider_edge_even_with_valid_hashes() -> None:
-    plan = compile_evidence_first_plan("Add a block.", _design("block"))
+    prompt = "Add a machine."
+    plan = compile_evidence_first_plan(
+        prompt,
+        _design(prompt, "automation.machine"),
+    )
     tampered = copy.deepcopy(plan)
     dependent = next(task for task in tampered["tasks"] if task["depends_on"])
     dependent["depends_on"] = []
@@ -191,14 +280,15 @@ def test_task_graph_rejects_missing_provider_edge_even_with_valid_hashes() -> No
     _rehash(tampered)
 
     with pytest.raises(EvidencePlanError, match="deterministic template DAG"):
-        validate_evidence_first_plan(tampered, prompt="Add a block.")
+        validate_evidence_first_plan(tampered, prompt=prompt)
 
 
-def test_design_modules_do_not_override_prompt_semantic_capabilities() -> None:
-    plan = compile_evidence_first_plan(
-        "Add trade. Add quests.",
-        _design("placeholder"),
-    )
+def test_design_modules_do_not_override_explicit_semantic_authority() -> None:
+    prompt = "Add trade. Add quests."
+    design = _design(prompt, "trade.transaction", "quest.state")
+    design["modules"] = [{"plugin_id": "placeholder", "reason": "placeholder"}]
+
+    plan = compile_evidence_first_plan(prompt, design)
 
     assert [
         item["capability"] for item in plan["request_catalog"]["requirements"]
@@ -214,27 +304,29 @@ def test_long_semantic_capability_is_not_truncated_to_identifier_budget() -> Non
         "interdimensional_player_owned_energy_distribution_network_with_audited_access"
     )
     prompt = capability.replace("_", " ") + "."
-    plan = compile_evidence_first_plan(prompt, _design())
+    plan = compile_evidence_first_plan(prompt, _design(prompt, capability))
 
     result_cap = plan["request_catalog"]["requirements"][0]["capability"]
-    assert result_cap
-    import re
-
+    assert result_cap == capability
     assert re.match(r"^[a-z0-9_.]+$", result_cap)
 
 
 def test_unresolved_target_defers_semantic_implementation_planning() -> None:
+    prompt = "Add quests."
+    design = {
+        "modules": [{"plugin_id": "quests", "reason": "quests"}],
+        "_evidence_request_catalog": _request_catalog(prompt, "quest.state"),
+    }
+
     with pytest.raises(EvidencePlanError, match="planning is deferred"):
-        compile_evidence_first_plan(
-            "Add quests.",
-            {"modules": [{"plugin_id": "quests", "reason": "quests"}]},
-        )
+        compile_evidence_first_plan(prompt, design)
 
 
 def test_multiloader_creates_cross_module_owned_loader_binding() -> None:
+    prompt = "Add quests to both loader leaves."
     plan = compile_evidence_first_plan(
-        "Add quests to both loader leaves.",
-        _design("quests"),
+        prompt,
+        _design(prompt, "quest.state"),
         target_decision={
             "target": {"minecraft_version": "1.21.1", "loader": "multiloader"},
             "project_topology": {
@@ -283,9 +375,10 @@ def test_template_feature_model_activates_only_applicable_subsystems(
 
 def test_pre_target_catalog_is_reused_and_stale_prompt_is_rejected() -> None:
     prompt = "Add a quest system."
-    original = compile_evidence_first_plan(prompt, _design("quests"))["request_catalog"]
-    design = _design("quests")
+    original = _request_catalog(prompt, "quest.state")
+    design = _design(prompt, "quest.state")
     design["_evidence_request_catalog"] = original
+
     reused = compile_evidence_first_plan(prompt, design)
     assert reused["request_catalog"] == original
 
@@ -294,9 +387,10 @@ def test_pre_target_catalog_is_reused_and_stale_prompt_is_rejected() -> None:
 
 
 def test_recomputed_hashes_cannot_forge_unverified_retain_coverage() -> None:
+    prompt = "Add trade."
     plan = compile_evidence_first_plan(
-        "Add trade.",
-        _design("trade"),
+        prompt,
+        _design(prompt, "trade.transaction"),
         component_catalog=[
             {
                 "component_id": "external_trade_candidate",
@@ -333,7 +427,7 @@ def test_recomputed_hashes_cannot_forge_unverified_retain_coverage() -> None:
     _rehash(forged)
 
     with pytest.raises(EvidencePlanError, match="without exact capability evidence"):
-        validate_evidence_first_plan(forged, prompt="Add trade.")
+        validate_evidence_first_plan(forged, prompt=prompt)
 
 
 def test_validated_multiloader_inventory_binds_cross_module_anchors(tmp_path) -> None:
@@ -370,9 +464,10 @@ def test_validated_multiloader_inventory_binds_cross_module_anchors(tmp_path) ->
         'license="MIT"\n[[mods]]\nmodId="multi"\nversion="1.0.0"\ndisplayName="Multi"\n',
         encoding="utf-8",
     )
-    design = _design("quests")
+    prompt = "Add quests."
+    design = _design(prompt, "quest.state")
     design["_existing_project_inventory"] = inspect_project_inventory(tmp_path).to_dict()
-    plan = compile_evidence_first_plan("Add quests.", design)
+    plan = compile_evidence_first_plan(prompt, design)
 
     assert plan["branch_predicates"]["needs_loader_leaf"]["status"] == "ACTIVE"
     cross_module_tasks = [
@@ -416,8 +511,9 @@ def _hole_fill_response(messages) -> tuple[str, int]:
 
 
 def test_host_task_pages_allow_only_bounded_implementation_hole_fills() -> None:
-    prompt = "Add a block with a very specific observable behavior."
-    plan = compile_evidence_first_plan(prompt, _design("block"))
+    prompt = "Add a machine with a very specific observable behavior."
+    design = _design(prompt, "automation.machine")
+    plan = compile_evidence_first_plan(prompt, design)
     batches = _evidence_host_batches(plan)
 
     class Router:
@@ -435,7 +531,7 @@ def test_host_task_pages_allow_only_bounded_implementation_hole_fills() -> None:
     modules, _assets, _tests = CompleteGameDesignPlanner(router)._expand_batches(
         batches,
         prompt=prompt,
-        game_design={**_design("block"), "_evidence_first_plan": plan},
+        game_design={**design, "_evidence_first_plan": plan},
         evidence_mode=True,
     )
 
