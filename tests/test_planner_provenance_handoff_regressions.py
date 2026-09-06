@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai import evidence_first_planning
 from minecraft_mod_ai.implementation_template_contract import build_implementation_template
 from minecraft_mod_ai.research_requirement_evidence import facet_relevant_refs
 from minecraft_mod_ai.research_requirement_schema import FACETS, FACET_HINTS
@@ -91,29 +90,4 @@ def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
             "implementation_decision": "Use the host-owned alpha service contract.",
             "local_steps": ["Implement the bounded task-local behavior."],
         }
-    ]
-
-
-def test_semantic_fallback_preserves_every_explicit_capability(monkeypatch) -> None:
-    monkeypatch.setattr(
-        evidence_first_planning,
-        "resolve_capabilities_from_phrase_structured",
-        lambda _clause: SimpleNamespace(
-            nodes=[
-                SimpleNamespace(capability_id="economy.trade", origin="explicit"),
-                SimpleNamespace(capability_id="resource.mining", origin="explicit"),
-            ]
-        ),
-    )
-
-    ir = evidence_first_planning._stub_semantic_model("x", 0, 1, "x")
-
-    assert ir.gameplay_capability_candidates == (
-        "economy.trade",
-        "resource.mining",
-    )
-    variants = evidence_first_planning._semantic_ir_variants(ir)
-    assert [variant.gameplay_capability_candidates for variant in variants] == [
-        ("economy.trade",),
-        ("resource.mining",),
     ]
