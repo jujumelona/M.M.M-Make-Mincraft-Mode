@@ -172,10 +172,11 @@ def _compile_knowledge_plan_with_active_catalog(
             raw.get("semantic_statement") or raw.get("statement") or source_text
         ).strip()
         planned = raw.get("search_queries")
+        planned_queries = planned if isinstance(planned, list) else []
         queries = list(
             dict.fromkeys(
                 query
-                for value in planned if isinstance(planned, list)
+                for value in planned_queries
                 if (query := _query_text(value)) and _is_english_retrieval_query(query)
             )
         )[:_MAX_QUERIES_PER_REQUIREMENT]
