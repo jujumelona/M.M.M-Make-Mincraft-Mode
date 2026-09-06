@@ -84,7 +84,10 @@ def test_semantic_authority_batches_all_authored_clauses_in_one_turn():
     }
     assert catalog["semantic_audit"]["normal_model_turns"] == 1
     assert catalog["semantic_audit"]["max_repair_turns"] == 0
-    assert catalog["semantic_audit"]["generation_policy"] == "single_pass_constrained"
+    assert (
+        catalog["semantic_audit"]["generation_policy"]
+        == "host_catalog_classification_only"
+    )
     assert catalog["semantic_audit"]["source_grounding_owner"] == "host"
 
 
