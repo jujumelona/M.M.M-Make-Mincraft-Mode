@@ -56,7 +56,7 @@ def register_platform_provider(provider: PlatformProvider, *, replace: bool = Fa
 
 
 def executable_loaders() -> tuple[str, ...]:
-    with _PROVIDERS_LOCK:
+    with _PROVIDER_LOCK:
         return tuple(sorted(_PROVIDERS))
 
 
