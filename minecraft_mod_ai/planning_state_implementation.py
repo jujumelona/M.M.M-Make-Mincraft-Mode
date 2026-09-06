@@ -15,6 +15,12 @@ from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
+from .planning_detail_contract import (
+    GROUNDED_BINDING_KINDS,
+    REUSE_MODES,
+    validate_detailed_plan_grounding,
+    validate_evidence_refs,
+)
 from .planning_detail_template import (
     WORKSHEET_SCHEMA,
     normalize_required_sections,
@@ -25,13 +31,8 @@ from .planning_detail_template import (
 from .planning_state_contract import validate_planning_state
 
 _TOOL = "submit_detailed_implementation_plan"
-_GROUNDED_BINDING_KINDS = {
-    "api_symbol",
-    "version_compatibility",
-    "repository_fact",
-    "dependency",
-    "source_behavior",
-}
+_GROUNDED_BINDING_KINDS = set(GROUNDED_BINDING_KINDS)
+_REUSE_MODES = set(REUSE_MODES)
 
 
 def _constraint_refs_schema() -> dict[str, Any]:
@@ -135,7 +136,7 @@ _PARAMETERS: dict[str, Any] = {
                     "evidence_ref": {"type": "string"},
                     "mode": {
                         "type": "string",
-                        "enum": ["reuse", "adapt", "reference_only", "new_required"],
+                        "enum": sorted(_REUSE_MODES),
                     },
                     "reason": {
                         "type": "string",
@@ -238,6 +239,34 @@ def _allowed_refs(evidence: list[Mapping[str, Any]]) -> set[str]:
     }
 
 
+def _requirement_grounding(
+    state: Mapping[str, Any], requirement_ref: str
+) -> tuple[list[Mapping[str, Any]], set[str]]:
+    evidence = _implementation_evidence(state, requirement_ref)
+    allowed = _allowed_refs(evidence)
+    if not evidence or not allowed:
+        raise ValueError(
+            f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
+        )
+    return evidence, allowed
+
+
+def _preflight_detailed_planning(
+    state: Mapping[str, Any], requirements: list[Mapping[str, Any]]
+) -> None:
+    """Reject deterministic readiness failures before the first expensive model call."""
+
+    seen: set[str] = set()
+    for requirement in requirements:
+        requirement_ref = _text(requirement.get("requirement_id"))
+        if not requirement_ref or requirement_ref in seen:
+            raise ValueError(
+                "DETAILED_PLAN_REQUIREMENTS: requirement IDs must be non-empty and unique"
+            )
+        seen.add(requirement_ref)
+        _requirement_grounding(state, requirement_ref)
+
+
 def _validate_refs(
     refs: Any,
     allowed: set[str],
@@ -245,21 +274,7 @@ def _validate_refs(
     field: str,
     require: bool = True,
 ) -> list[str]:
-    if not isinstance(refs, list):
-        raise ValueError(f"DETAILED_PLAN_{field.upper()}: evidence refs must be an array")
-    raw_values = [_text(ref) for ref in refs]
-    if any(not value for value in raw_values):
-        raise ValueError(f"DETAILED_PLAN_{field.upper()}: evidence refs contain an empty value")
-    if len(set(raw_values)) != len(raw_values):
-        raise ValueError(f"DETAILED_PLAN_{field.upper()}: duplicate evidence refs")
-    if require and not raw_values:
-        raise ValueError(f"DETAILED_PLAN_{field.upper()}: grounded evidence is required")
-    unknown = [ref for ref in raw_values if ref not in allowed]
-    if unknown:
-        raise ValueError(
-            f"DETAILED_PLAN_{field.upper()}: unknown evidence refs: " + ", ".join(unknown)
-        )
-    return raw_values
+    return validate_evidence_refs(refs, allowed, field=field, require=require)
 
 
 def _constraint_refs(refs: Any, allowed: set[str], *, field: str) -> list[str]:
@@ -284,12 +299,7 @@ def _compile_requirement_plan(
 
     selected_sections = normalize_required_sections(required_sections)
     requirement_ref = str(requirement.get("requirement_id") or "")
-    evidence = _implementation_evidence(state, requirement_ref)
-    allowed = _allowed_refs(evidence)
-    if not evidence or not allowed:
-        raise ValueError(
-            f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
-        )
+    evidence, allowed = _requirement_grounding(state, requirement_ref)
 
     context = {
         "requirement": deepcopy(dict(requirement)),
@@ -415,7 +425,7 @@ def _compile_requirement_plan(
         ref = _text(item.get("evidence_ref"))
         mode = _text(item.get("mode"))
         reason = _text(item.get("reason"))
-        if mode not in {"reuse", "adapt", "reference_only", "new_required"} or not reason:
+        if mode not in _REUSE_MODES or not reason:
             raise ValueError("DETAILED_PLAN_REUSE: invalid reuse verdict or missing rationale")
         _validate_refs([ref], allowed, field="reuse")
         reuse.append({"evidence_ref": ref, "mode": mode, "reason": reason})
@@ -439,7 +449,7 @@ def _compile_requirement_plan(
             f"DETAILED_PLAN_VERIFICATION: {requirement_ref} has no verification plan"
         )
 
-    return {
+    plan = {
         "requirement_ref": requirement_ref,
         "required_detail_sections": list(selected_sections),
         "engineering_worksheet": worksheet,
@@ -450,6 +460,8 @@ def _compile_requirement_plan(
         "reuse_candidates": reuse,
         "verification_obligations": checks,
     }
+    validate_detailed_plan_grounding(plan, allowed)
+    return plan
 
 
 def _host_section_selection(
@@ -495,6 +507,8 @@ def compile_detailed_implementation_plans(
     requirements = _requirement_decisions(value)
     if not requirements:
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: no researched requirements exist")
+
+    _preflight_detailed_planning(value, requirements)
     section_selection = _host_section_selection(
         requirements, required_sections_by_requirement
     )
