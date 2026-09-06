@@ -15,7 +15,6 @@ from .complete_spec import CompleteProposal
 from .importer import inspect_existing_project_archive
 from .model_router import ModelRouter
 from .plan_render import render_complete_plan
-from .spec import Proposal
 
 _HASH_CHUNK_SIZE = 1024 * 1024
 _SUCCESS_STATUSES = frozenset({"VERIFIED", "SOURCE_READY"})
@@ -125,16 +124,16 @@ def _read_playtest_actions(path: Path | None) -> list[dict]:
 
 
 def _proposal_validation_result(raw: dict) -> dict[str, object]:
-    if raw.get("schema_version") in _COMPLETE_SCHEMA_VERSIONS:
-        proposal = CompleteProposal.from_dict(raw)
-        kind = "complete"
-    else:
-        proposal = Proposal.from_dict(raw)
-        kind = "slice"
+    schema_version = raw.get("schema_version")
+    if schema_version not in _COMPLETE_SCHEMA_VERSIONS:
+        raise ValueError(
+            "Unsupported proposal schema_version; expected a complete proposal."
+        )
+    proposal = CompleteProposal.from_dict(raw)
     approval_hash = proposal.calculate_hash()
     return {
         "status": "PASS",
-        "kind": kind,
+        "kind": "complete",
         "approval_hash": approval_hash,
         "stored_hash_matches": proposal.approval_hash == approval_hash,
     }
