@@ -1,30 +1,34 @@
 from __future__ import annotations
 
-"""Fail-closed requirement-to-design readiness without a second design owner.
+"""Host-owned design-readiness bootstrap checks.
 
-The canonical game-design producer, Markdown parser, module representation, and coverage
-validator live in ``agentic_research_game_design``. This contract only exposes readiness
-helpers for callers that already depend on them and preserves the lossless semantic-span
-fix. It must not mutate the design schema, replace section messages, replace the section
-parser, or wrap the design generator.
+Canonical schema and requirement validation live in their dedicated contract modules.
+This bootstrap only verifies that schema and preserves lossless semantic source offsets;
+it never reaches through the game-design producer's private namespace.
 """
 
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import agentic_research_game_design as _design
 from . import evidence_first_planning as _evidence
+from .design_requirement_contract import (
+    _active_requirement_ledger as _requirement_ledger,
+    _nonempty_text_list as _require_nonempty_text_list,
+    _validate_requirement_coverage,
+    _validate_section_types,
+)
+from .design_section_schema import _SECTION_SPECS
 
 _INSTALLED = False
 
 
 def _active_requirement_ledger(prompt: str) -> tuple[dict[str, Any], ...]:
-    return _design._active_requirement_ledger(prompt)
+    return _requirement_ledger(prompt)
 
 
 def _nonempty_text_list(value: Any, *, field: str) -> list[str]:
-    return _design._nonempty_text_list(value, field=field)
+    return _require_nonempty_text_list(value, field=field)
 
 
 def _strict_validate_section_types(
@@ -36,23 +40,19 @@ def _strict_validate_section_types(
         for item in _active_requirement_ledger("")
         if str(item.get("requirement_id") or "").strip()
     )
-    _design._validate_section_types(
-        section,
-        fields,
-        requirement_ids=ledger_ids,
-    )
+    _validate_section_types(section, fields, requirement_ids=ledger_ids)
 
 
 def _validate_design_coverage(
     design: Mapping[str, Any],
     ledger: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    return _design._validate_requirement_coverage(design, ledger)
+    return _validate_requirement_coverage(design, ledger)
 
 
 def _assert_module_trace_schema() -> None:
-    """Assert the canonical owner already contains the required module representation."""
-    for section_id, _fields, properties in _design._SECTION_SPECS:
+    """Assert the canonical section schema contains implementation-bearing modules."""
+    for section_id, _fields, properties in _SECTION_SPECS:
         if section_id != "modules_and_assets":
             continue
         modules = properties.get("modules")
