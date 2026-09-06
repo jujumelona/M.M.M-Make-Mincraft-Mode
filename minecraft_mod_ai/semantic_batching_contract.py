@@ -1,14 +1,12 @@
-"""Bound semantic extraction for small models without fragile semantic retry loops.
+"""Bound semantic extraction with a complete host fallback plan.
 
-Each host-owned clause batch is compiled by exactly one structured semantic model call.
-The model returns independently observable authored behaviors plus one host-catalog
-capability choice. The host validates schema and source grounding, drops pure context and
-catch-all leaves, and conservatively demotes visibly compound leaves to custom.semantic
-rather than asking the model to re-segment or re-classify them.
+Every authored clause has a host-owned ``custom.semantic`` requirement before the model is
+called. A small model gets one bounded structured call to refine those defaults into more
+specific semantic leaves/capabilities. Valid model leaves replace the corresponding host
+default; malformed output, missing clauses, or a model exception never erase authored work.
 
-There is no semantic repair loop, no exact authored-character partition requirement, and
-no second capability-classification turn. Source anchors are evidence locators; exact
-source offsets remain host-owned.
+There is no semantic retry loop, no re-segmentation loop, no exact-character partition
+requirement, and no second classification turn. Only host contract corruption is fatal.
 """
 
 from __future__ import annotations
@@ -42,7 +40,6 @@ def _sha_receipt(value: Any, *, field: str) -> str:
 
 
 def _resolve_batch_contract(router: Any) -> dict[str, Any]:
-    """Return a measured batch contract or an explicit conservative fallback."""
     raw = getattr(router, _RECEIPT_ATTRIBUTE, None)
     if raw is None:
         return {
@@ -57,7 +54,6 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
         raise _semantic._evidence.EvidencePlanError(
             "REQ_SCALE_BATCH_RECEIPT: semantic_extraction_batch_receipt must be a mapping."
         )
-
     status = str(raw.get("status") or "").strip().upper()
     size = raw.get("max_clauses_per_turn")
     if status != _MEASURED_STATUS:
@@ -68,7 +64,6 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
         raise _semantic._evidence.EvidencePlanError(
             "REQ_SCALE_BATCH_RECEIPT: measured max_clauses_per_turn must be a positive integer."
         )
-
     return {
         "max_clauses_per_turn": int(size),
         "source": "measured_model_runtime_receipt",
@@ -86,13 +81,51 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
 
 
 def _chunks(
-    clauses: Sequence[Mapping[str, Any]],
-    size: int,
+    clauses: Sequence[Mapping[str, Any]], size: int
 ) -> tuple[tuple[Mapping[str, Any], ...], ...]:
     return tuple(
         tuple(clauses[index : index + size])
         for index in range(0, len(clauses), size)
     )
+
+
+def _host_default_node(clause: Mapping[str, Any], *, ordinal: int) -> dict[str, Any]:
+    """Compile a lossless minimum requirement directly from one authored clause."""
+    clause_index = int(clause["clause_index"])
+    text = str(clause["text"])
+    grounding = {
+        "source_quote": text,
+        "source_start": int(clause["char_start"]),
+        "source_end": int(clause["char_end"]),
+        "grounding_method": "host_full_clause_default",
+        "grounding_similarity": 1.0,
+        "model_anchor": "",
+    }
+    capability = _semantic._host_capability_id(
+        CUSTOM_CAPABILITY_SENTINEL,
+        grounding=grounding,
+        clause_index=clause_index,
+        item_index=ordinal,
+    )
+    return {
+        "capability_id": capability,
+        "model_capability_choice": CUSTOM_CAPABILITY_SENTINEL,
+        "semantic_type": "gameplay_mechanic",
+        "provenance_role": "explicit",
+        "source_clause_index": clause_index,
+        **grounding,
+        "semantic_statement": text,
+        "derived_from": [],
+        "depends_on": [],
+        "derivation_reason": "",
+        "observable_behavior": {
+            "given": "The authored mod context for this clause is active.",
+            "when": "The behavior described by this authored clause is exercised.",
+            "then": text,
+        },
+        "required_prerequisite_capabilities": [],
+        "optional_prerequisite_capabilities": [],
+    }
 
 
 def _source_batch_receipt(
@@ -103,20 +136,20 @@ def _source_batch_receipt(
     approved_leaf_count: int,
     compound_demotions: int,
     non_executable_drops: int,
+    host_fallback_count: int,
+    model_error: str,
 ) -> dict[str, Any]:
     return {
         "batch_index": batch_index,
         "semantic_compile_calls": 1,
         "semantic_model_calls_total": 1,
         "semantic_repair_turns_used": 0,
-        "segmentation_attempts": 0,
-        "classification_attempts": 0,
-        "segmentation_repaired": False,
-        "classification_repaired": False,
         "input_leaf_count": input_leaf_count,
         "approved_leaf_count": approved_leaf_count,
         "compound_demotions": compound_demotions,
         "non_executable_drops": non_executable_drops,
+        "host_fallback_count": host_fallback_count,
+        "model_error": model_error,
         "source_clauses": [
             {
                 "source_clause_index": int(clause["clause_index"]),
@@ -130,9 +163,7 @@ def _source_batch_receipt(
 
 
 def _demote_compound_node(
-    node: Mapping[str, Any],
-    *,
-    item_index: int,
+    node: Mapping[str, Any], *, item_index: int
 ) -> dict[str, Any]:
     result = dict(node)
     result["model_capability_choice"] = CUSTOM_CAPABILITY_SENTINEL
@@ -150,33 +181,28 @@ def _compile_bounded_batch(
     batch_index: int,
     batch: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Compile one batch with exactly one semantic model call and no repair turns."""
+    """Refine host defaults with one model call; never fail because of model output."""
+    defaults = {
+        int(clause["clause_index"]): _host_default_node(clause, ordinal=index)
+        for index, clause in enumerate(batch)
+    }
+    model_error = ""
+    nodes: list[dict[str, Any]] = []
+    invalid_clauses: set[int] = set(defaults)
+    diagnostics: list[dict[str, Any]] = []
     try:
         payload = _semantic._call_semantic_model(router, batch)
+        nodes, invalid_clauses, diagnostics = _semantic._evaluate_batch(payload, batch)
     except Exception as exc:
-        raise _semantic._evidence.EvidencePlanError(
-            "single-pass semantic compilation model call failed for bounded batch "
-            f"{batch_index}: {type(exc).__name__}: {exc}"
-        ) from exc
-
-    nodes, invalid_clauses, diagnostics = _semantic._evaluate_batch(payload, batch)
-    if invalid_clauses:
-        raise _semantic._evidence.EvidencePlanError(
-            "single-pass semantic compilation rejected invalid structured output for bounded "
-            f"batch {batch_index}: "
-            + _semantic._canonical(
-                {
-                    "invalid_clause_indices": sorted(invalid_clauses),
-                    "diagnostics": diagnostics,
-                }
-            )
-        )
+        model_error = f"{type(exc).__name__}: {exc}"
 
     approved: list[dict[str, Any]] = []
     compound_demotions = 0
     non_executable_drops = 0
+    valid_clause_indices: set[int] = set()
     for item_index, raw in enumerate(nodes):
         node = dict(raw)
+        clause_index = int(node["source_clause_index"])
         status, _ = validate_leaf_atomicity(
             {
                 "source_anchor": str(node.get("source_quote") or ""),
@@ -190,10 +216,30 @@ def _compile_bounded_batch(
             node = _demote_compound_node(node, item_index=item_index)
             compound_demotions += 1
         approved.append(node)
+        valid_clause_indices.add(clause_index)
+
+    fallback_indices = set(defaults) - valid_clause_indices
+    fallback_indices.update(index for index in invalid_clauses if index in defaults)
+    for clause_index in sorted(fallback_indices):
+        approved.append(defaults[clause_index])
+
+    # Deduplicate a fallback that was added because another leaf from the same clause was
+    # invalid while a valid leaf also survived. Valid authored leaves take precedence.
+    if valid_clause_indices:
+        approved = [
+            node
+            for node in approved
+            if not (
+                node.get("grounding_method") == "host_full_clause_default"
+                and int(node["source_clause_index"]) in valid_clause_indices
+            )
+        ]
 
     if not approved:
+        # This can only happen if the host itself supplied an empty batch, which callers
+        # must never do.
         raise _semantic._evidence.EvidencePlanError(
-            "REQ_SCALE_BATCH_EMPTY: semantic compile produced no executable authored behavior."
+            "REQ_SCALE_BATCH_EMPTY: host semantic batch contained no authored clause."
         )
 
     return approved, _source_batch_receipt(
@@ -203,6 +249,12 @@ def _compile_bounded_batch(
         approved_leaf_count=len(approved),
         compound_demotions=compound_demotions,
         non_executable_drops=non_executable_drops,
+        host_fallback_count=sum(
+            1
+            for node in approved
+            if node.get("grounding_method") == "host_full_clause_default"
+        ),
+        model_error=model_error or (_semantic._canonical(diagnostics) if diagnostics else ""),
     )
 
 
@@ -220,7 +272,6 @@ def _generate_bounded_nodes(
 ) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], ...]]:
     batches = _chunks(clauses, batch_size)
     workers = _batch_worker_count(router, len(batches))
-
     if workers == 1:
         compiled = tuple(
             _compile_bounded_batch(router, batch_index, batch)
@@ -248,11 +299,10 @@ def _generate_bounded_nodes(
     for batch_nodes, receipt in compiled:
         nodes.extend(batch_nodes)
         receipts.append(receipt)
-
     assigned = _semantic._assign_local_ids(nodes)
     if not assigned:
         raise _semantic._evidence.EvidencePlanError(
-            "REQ_SCALE_BATCH_EMPTY: bounded semantic extraction produced no approved leaves."
+            "REQ_SCALE_BATCH_EMPTY: host semantic defaults produced no requirement."
         )
     return assigned, tuple(receipts)
 
@@ -261,7 +311,6 @@ def build_bounded_requirement_catalog(
     prompt: str,
     router: Any | None = None,
 ) -> dict[str, Any]:
-    """Compile semantic leaves once, then let the host resolve the global feature DAG."""
     if router is None:
         return _semantic.build_approved_requirement_catalog(prompt, router=None)
     if not isinstance(prompt, str) or not prompt.strip():
@@ -273,11 +322,8 @@ def build_bounded_requirement_catalog(
     contract = _resolve_batch_contract(router)
     batch_size = int(contract["max_clauses_per_turn"])
     nodes, batch_receipts = _generate_bounded_nodes(
-        router,
-        clauses,
-        batch_size=batch_size,
+        router, clauses, batch_size=batch_size
     )
-
     catalog = _semantic._build_catalog(prompt, nodes, clauses)
     try:
         catalog = bind_selected_feature_dependencies(catalog)
@@ -296,6 +342,7 @@ def build_bounded_requirement_catalog(
     non_executable_drops = sum(
         int(receipt["non_executable_drops"]) for receipt in batch_receipts
     )
+    host_fallbacks = sum(int(receipt["host_fallback_count"]) for receipt in batch_receipts)
     audit.update(
         {
             "normal_model_turns": model_calls_total,
@@ -307,16 +354,17 @@ def build_bounded_requirement_catalog(
             "semantic_repair_turns_used": 0,
             "semantic_max_repair_turns_per_batch": 0,
             "semantic_base_stage_calls_per_batch": 1,
-            "generation_policy": "single_pass_bounded_host_owned_semantics",
-            "semantic_generation_protocol": "one_structured_compile_then_host_ground",
-            "semantic_segmentation_owner": "bounded_model_single_pass_host_validated",
-            "semantic_classification_owner": "host_catalog_bounded_model_choice_same_turn",
-            "semantic_source_fidelity_policy": "host_grounded_source_anchor_without_exact_character_partition",
+            "generation_policy": "host_default_single_pass_model_refinement",
+            "semantic_generation_protocol": "host_clause_defaults_then_one_structured_refinement",
+            "semantic_segmentation_owner": "host_defaults_model_optional_refinement",
+            "semantic_classification_owner": "host_catalog_model_optional_choice",
+            "semantic_source_fidelity_policy": "host_exact_clause_fallback_or_host_grounded_model_anchor",
             "semantic_source_fidelity_owner": "host",
             "semantic_leaf_mutability_after_grounding": "immutable",
             "semantic_compound_policy": "demote_to_custom_without_resegmentation",
             "semantic_compound_demotions": compound_demotions,
             "semantic_non_executable_drops": non_executable_drops,
+            "semantic_host_fallback_count": host_fallbacks,
             "semantic_batch_size": batch_size,
             "semantic_batch_count": batch_count,
             "semantic_batch_parallel_workers": parallel_workers,
@@ -339,7 +387,7 @@ def build_bounded_requirement_catalog(
             ),
             "feature_dependency_owner": "host_minecraft_feature_model",
             "source_clause_index_owner": "host",
-            "source_anchor_owner": "host_grounded_model_locator",
+            "source_anchor_owner": "host_default_or_host_grounded_model_locator",
             "source_grounding_owner": "host",
         }
     )
@@ -377,9 +425,7 @@ def _assert_static_bounded_owner(target: Any, *, owner: str) -> None:
 
 
 def install_semantic_batching_contract() -> None:
-    """Revalidate static bounded owners on every reconciliation pass."""
     global _INSTALLED
-
     from . import evidence_request_guard as guard
     from . import planning_authority as planning
 
@@ -394,7 +440,4 @@ def install_semantic_batching_contract() -> None:
     _INSTALLED = True
 
 
-__all__ = [
-    "build_bounded_requirement_catalog",
-    "install_semantic_batching_contract",
-]
+__all__ = ["build_bounded_requirement_catalog", "install_semantic_batching_contract"]
