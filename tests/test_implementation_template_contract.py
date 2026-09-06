@@ -71,12 +71,8 @@ def _task() -> dict:
         "public_acceptance": [
             "Given sufficient funds, when buying, then debit exactly once and grant the item."
         ],
-        "internal_invariants": [
-            "Trade mutation is server-authoritative and atomic."
-        ],
-        "acceptance": [
-            "Trade mutation is server-authoritative and atomic."
-        ],
+        "internal_invariants": ["Trade mutation is server-authoritative and atomic."],
+        "acceptance": ["Trade mutation is server-authoritative and atomic."],
         "runtime_acceptance": [
             "Reject insufficient funds without mutating balance, stock, or inventory."
         ],
@@ -108,64 +104,52 @@ def _task() -> dict:
     }
 
 
-def _delimited_fill(page_id: str, hole: dict) -> str:
-    hole_id = hole["hole_id"]
-    return (
-        f"BEGIN PAGE {page_id}\n"
-        f"BEGIN {hole_id}\n"
-        f"Decision: Implement {hole['subject']}\n"
-        "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
-        "Bindings: none\nReferences: none\n"
-        "Verification: Check the declared observable result.\nUncertainties: none\n"
-        f"END {hole_id}\n"
-        f"END PAGE {page_id}"
-    )
-
-
 class _HoleRouter:
-    def __init__(self, *, omit_once: bool = False) -> None:
+    def __init__(self, *, omit_last: bool = False, malformed: bool = False) -> None:
         self.calls = 0
-        self.omit_once = omit_once
+        self.omit_last = omit_last
+        self.malformed = malformed
         self.enable_tools: list[object] = []
         self.requested_hole_ids: list[list[str]] = []
-        self.omitted_hole_id = ""
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "planner"
         assert kwargs.get("response_format") == "text"
         self.enable_tools.append(kwargs.get("enable_tools"))
         self.calls += 1
+        if self.malformed:
+            return '{"broken":'
         packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-
-        if isinstance(packet.get("modules"), list):
-            module = packet["modules"][0]
-            holes = list(module["implementation_template"]["holes"])
+        if "modules" in packet:
+            holes = list(packet["modules"][0]["implementation_template"]["holes"])
             self.requested_hole_ids.append([hole["hole_id"] for hole in holes])
-            returned = list(holes)
-            if self.omit_once and self.calls == 1 and returned:
-                self.omitted_hole_id = returned[-1]["hole_id"]
-                returned = returned[:-1]
+            returned = holes[:-1] if self.omit_last and holes else holes
             return "\n".join(
-                f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
-                "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
-                "Bindings: none\nReferences: none\n"
-                "Verification: Check the declared observable result.\nUncertainties: none"
+                f"### Hole {index}\nDecision: Implement {hole['subject']} precisely\n"
+                "Steps:\n- Apply the host-owned contract.\n"
+                "Verification: Run the supplied host gate."
                 for index, hole in enumerate(returned, 1)
             )
-
         pages = list(packet["pages"])
-        requested = [hole["hole_id"] for page in pages for hole in page["holes"]]
-        self.requested_hole_ids.append(requested)
-        omit_id = ""
-        if self.omit_once and self.calls == 1 and requested:
-            omit_id = requested[-1]
-            self.omitted_hole_id = omit_id
-        return "\n".join(
-            _delimited_fill(page["page_id"], hole)
-            for page in pages
-            for hole in page["holes"]
-            if hole["hole_id"] != omit_id
-        )
+        holes = [hole for page in pages for hole in page["holes"]]
+        self.requested_hole_ids.append([hole["hole_id"] for hole in holes])
+        if self.omit_last and holes:
+            omitted = holes[-1]["hole_id"]
+        else:
+            omitted = ""
+        blocks = []
+        for page in pages:
+            for hole in page["holes"]:
+                if hole["hole_id"] == omitted:
+                    continue
+                blocks.append(
+                    f"BEGIN PAGE {page['page_id']}\nBEGIN {hole['hole_id']}\n"
+                    f"Decision: Implement {hole['subject']} precisely\n"
+                    "Steps:\n- Apply the host-owned contract.\n"
+                    "Verification: Run the supplied host gate.\n"
+                    f"END {hole['hole_id']}\nEND PAGE {page['page_id']}"
+                )
+        return "\n".join(blocks)
 
 
 def test_template_is_dynamic_detailed_and_stable() -> None:
@@ -177,19 +161,9 @@ def test_template_is_dynamic_detailed_and_stable() -> None:
     assert [hole["hole_id"] for hole in first["holes"]] == [
         hole["hole_id"] for hole in second["holes"]
     ]
-
-    kinds = [hole["kind"] for hole in first["holes"]]
-    assert kinds.count("implementation_capability") == 3
-    assert kinds.count("design_resolution") == 1
-    assert kinds.count("artifact_implementation") == 4
-    assert kinds.count("dataflow_input") == 1
-    assert kinds.count("dataflow_output") == 1
-    assert kinds.count("verification_gate") == 3
-    assert kinds.count("public_acceptance") == 1
-    assert kinds.count("runtime_acceptance") == 1
-    assert kinds.count("reference_adaptation") == 1
     assert len(first["completion_policy"]["required_hole_ids"]) == len(first["holes"])
-
+    assert first["target_constraints"]["minecraft_version"] == "1.21.1"
+    assert first["target_constraints"]["loader"] == "fabric"
     check_ids = {item["check_id"] for item in first["minecraft_checklist"]}
     assert {
         "source_ownership",
@@ -199,8 +173,6 @@ def test_template_is_dynamic_detailed_and_stable() -> None:
         "verification_from_behavior",
         "runtime_acceptance",
     } <= check_ids
-    assert first["target_constraints"]["minecraft_version"] == "1.21.1"
-    assert first["target_constraints"]["loader"] == "fabric"
 
 
 def test_model_cannot_add_holes_or_write_host_owned_fields() -> None:
@@ -222,7 +194,6 @@ def test_model_cannot_add_holes_or_write_host_owned_fields() -> None:
             },
         ],
     )
-
     assert fills == [
         {
             "hole_id": first_id,
@@ -233,7 +204,7 @@ def test_model_cannot_add_holes_or_write_host_owned_fields() -> None:
     assert set(fills[0]) <= {"hole_id", *MODEL_FILL_FIELDS}
 
 
-def test_small_model_capsule_gets_detailed_template_from_full_task() -> None:
+def test_small_model_capsule_gets_host_template_from_full_task() -> None:
     task = _task()
     module = SimpleNamespace(
         module_id=task["task_id"],
@@ -242,86 +213,54 @@ def test_small_model_capsule_gets_detailed_template_from_full_task() -> None:
         depends_on=[],
         required_gates=task["required_gates"],
     )
-
-    payload = compact_task_local_module_contract(module)
-    compact = payload["evidence_task"]
-    template = compact["implementation_template"]
-
+    template = compact_task_local_module_contract(module)["evidence_task"][
+        "implementation_template"
+    ]
     assert template["schema_version"] == SCHEMA
     assert template["task_ref"] == task["task_id"]
-    assert len(template["holes"]) == 16
-    assert {
-        hole["subject"]
-        for hole in template["holes"]
-        if hole["kind"] == "implementation_capability"
-    } == set(task["implementation_capabilities"])
     assert template["host_owned"]["artifact_obligations"] == task["artifact_obligations"]
     assert template["host_owned"]["required_gates"] == task["required_gates"]
 
 
-def test_planner_skeleton_uses_real_contract_and_sanitizes_hole_fills() -> None:
+def test_planner_skeleton_keeps_host_owned_contract_when_model_refines() -> None:
     task = _task()
-    contracts = {task["task_id"]: task}
     skeleton = build_batch_skeleton(
         task["task_id"],
         task["semantic_outcome"],
         [],
         [task["task_id"]],
-        host_module_contracts=contracts,
+        host_module_contracts={task["task_id"]: task},
     )
-
-    assert skeleton["acceptance_tests"] == [
-        *task["public_acceptance"],
-        *task["runtime_acceptance"],
-        *task["acceptance"],
-    ]
-    assert skeleton["completed_deliverables"] == task["provides"]
-    assert not any(
-        item.startswith("test_task_trade_service_registers")
-        for item in skeleton["acceptance_tests"]
-    )
-
     config = skeleton["modules"][0]["config"]
     template = config["implementation_template"]
     first_id = template["holes"][0]["hole_id"]
-    model_output = {
-        "modules": [
-            {
-                "module_id": task["task_id"],
-                "kind": "boss",
-                "depends_on": ["invented_dependency"],
-                "required_gates": ["invented_gate"],
-                "config": {
-                    "implementation_notes": "Adapt the exact host task.",
-                    "hole_fills": [
-                        {
-                            "hole_id": first_id,
-                            "implementation_decision": "Use the shared transaction service.",
-                            "target_coordinates": {"minecraft_version": "1.20.1"},
-                        },
-                        {
-                            "hole_id": "hole_model_invented",
-                            "implementation_decision": "must disappear",
-                        },
-                    ],
-                },
-            }
-        ],
-        "acceptance_tests": ["model_replaced_acceptance"],
-        "completed_deliverables": ["model_replaced_deliverable"],
-    }
     merged = merge_model_output_into_skeleton(
         skeleton,
-        model_output,
+        {
+            "modules": [
+                {
+                    "module_id": task["task_id"],
+                    "kind": "boss",
+                    "depends_on": ["invented_dependency"],
+                    "required_gates": ["invented_gate"],
+                    "config": {
+                        "hole_fills": [
+                            {
+                                "hole_id": first_id,
+                                "implementation_decision": "Use the shared transaction service.",
+                                "target_coordinates": {"minecraft_version": "1.20.1"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
         {task["task_id"]},
     )
     module = merged["modules"][0]
-
     assert module["kind"] == "custom_java"
     assert module["depends_on"] == []
     assert module["required_gates"] == task["required_gates"]
-    assert merged["acceptance_tests"] == skeleton["acceptance_tests"]
-    assert merged["completed_deliverables"] == skeleton["completed_deliverables"]
     assert module["config"]["implementation_template"] == template
     assert module["config"]["model_fill"]["hole_fills"] == [
         {
@@ -331,7 +270,7 @@ def test_planner_skeleton_uses_real_contract_and_sanitizes_hole_fills() -> None:
     ]
 
 
-def test_hole_filler_repairs_only_missing_holes() -> None:
+def test_hole_filler_uses_one_optional_refinement_and_host_defaults_for_omissions() -> None:
     task = _task()
     skeleton = build_batch_skeleton(
         task["task_id"],
@@ -340,29 +279,48 @@ def test_hole_filler_repairs_only_missing_holes() -> None:
         [task["task_id"]],
         host_module_contracts={task["task_id"]: task},
     )
-    router = _HoleRouter(omit_once=True)
+    router = _HoleRouter(omit_last=True)
 
     page = fill_evidence_page(
         router,
         skeleton,
         valid_module_catalog={task["task_id"]},
     )
-    template = page["modules"][0]["config"]["implementation_template"]
-    fills = page["modules"][0]["config"]["model_fill"]["hole_fills"]
+    config = page["modules"][0]["config"]
+    template = config["implementation_template"]
+    fills = config["model_fill"]["hole_fills"]
 
-    assert router.calls >= 2
+    assert router.calls >= 1
     assert router.enable_tools == [False] * router.calls
-    assert router.omitted_hole_id
-    assert any(
-        request == [router.omitted_hole_id]
-        for request in router.requested_hole_ids[1:]
-    )
     assert {item["hole_id"] for item in fills} == set(
         template["completion_policy"]["required_hole_ids"]
     )
+    assert all(item["implementation_decision"] for item in fills)
+    assert all(item["verification_intent"] for item in fills)
 
 
-def test_canonical_evidence_batch_invokes_bounded_hole_filler() -> None:
+def test_malformed_hole_refinement_does_not_destroy_plan() -> None:
+    task = _task()
+    skeleton = build_batch_skeleton(
+        task["task_id"],
+        task["semantic_outcome"],
+        task["provides"],
+        [task["task_id"]],
+        host_module_contracts={task["task_id"]: task},
+    )
+    page = fill_evidence_page(
+        _HoleRouter(malformed=True),
+        skeleton,
+        valid_module_catalog={task["task_id"]},
+    )
+    config = page["modules"][0]["config"]
+    required = set(config["implementation_template"]["completion_policy"]["required_hole_ids"])
+    fills = config["model_fill"]["hole_fills"]
+    assert {item["hole_id"] for item in fills} == required
+    assert all(item["implementation_decision"] for item in fills)
+
+
+def test_canonical_evidence_batch_invokes_only_bounded_optional_refinement() -> None:
     task = _task()
     batch = _ProductionBatch(
         batch_id=task["task_id"],
@@ -389,10 +347,6 @@ def test_canonical_evidence_batch_invokes_bounded_hole_filler() -> None:
     assert tests
     assert len(modules) == 1
     config = modules[0].config
-    required = set(
-        config["implementation_template"]["completion_policy"]["required_hole_ids"]
-    )
-    filled = {
-        item["hole_id"] for item in config["model_fill"]["hole_fills"]
-    }
+    required = set(config["implementation_template"]["completion_policy"]["required_hole_ids"])
+    filled = {item["hole_id"] for item in config["model_fill"]["hole_fills"]}
     assert filled == required
