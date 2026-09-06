@@ -649,6 +649,10 @@ _SELECTED_PREDECESSORS: dict[str, tuple[str, ...]] = {
         "spaceship.vehicle",
         "spacecraft.component_construction",
         "spaceship.component_crafting",
+        "spacecraft.weapon_upgrade",
+        "crew.recruitment",
+        "spacecraft.performance_upgrade",
+        "spacecraft.expansion",
     ),
     "space.travel": ("space.launch",),
     "planet.special_mineral": ("worldgen.planet", "space.launch"),
@@ -736,18 +740,6 @@ def _direct_features(capability: str) -> frozenset[str]:
     return _TEMPLATE_FEATURES[template_id]
 
 
-def _feature_closure(capability: str, seen: set[str] | None = None) -> frozenset[str]:
-    visited = set() if seen is None else seen
-    if capability in visited or capability not in _DEFINITIONS:
-        return frozenset()
-    visited.add(capability)
-    features = set(_direct_features(capability))
-    for dependency in _DEFINITIONS[capability].default_dependencies:
-        if dependency in _DEFINITIONS:
-            features.update(_feature_closure(dependency, visited))
-    return frozenset(features)
-
-
 def profile_for_capability(
     capability: Any,
     *,
@@ -770,7 +762,7 @@ def profile_for_capability(
     else:
         template_id = _template_id_for_known(known)
         category = _DEFINITIONS[known].category
-        features = _feature_closure(known)
+        features = _direct_features(known)
         canonical = known
         known_flag = True
 
