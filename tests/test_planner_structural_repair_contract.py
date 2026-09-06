@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
 from minecraft_mod_ai.minecraft_template_catalog import profile_for_capability
