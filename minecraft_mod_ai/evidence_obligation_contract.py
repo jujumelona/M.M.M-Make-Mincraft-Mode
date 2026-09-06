@@ -18,7 +18,7 @@ from typing import Any
 
 from . import agentic_research_game_design as _agentic
 from . import central_research as _central
-from . import evidence_request_guard as _guard
+from . import planning_authority as _guard
 from . import parallel_runtime_contract as _parallel
 from . import retrieval as _retrieval
 
