@@ -132,6 +132,7 @@ jobs:
           tests/test_planning_detail_runtime_selection.py
           tests/test_planning_detail_applicability.py
           tests/test_planning_detail_grounding.py
+          tests/test_planning_handoff_contract.py
 
   coder-contract:
     needs: audit
@@ -225,6 +226,7 @@ jobs:
               "test_planning_detail_runtime_selection.py",
               "test_planning_detail_applicability.py",
               "test_planning_detail_grounding.py",
+              "test_planning_handoff_contract.py",
               "test_evidence_execution_contract.py",
               "test_coder_execution_contract.py",
               "test_task_local_small_model_architecture.py",
