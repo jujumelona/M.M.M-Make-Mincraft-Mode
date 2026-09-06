@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 
 import minecraft_mod_ai
-from minecraft_mod_ai.agent_capability_context import build_agent_capability_context
+from minecraft_mod_ai.agent_capability_context import (
+    _compact_type_contracts,
+    build_agent_capability_context,
+)
 from minecraft_mod_ai.contract_schema_catalog import contract_schema_manifest
 
 
@@ -45,8 +48,9 @@ def test_catalog_exposes_target_contract_field_shape() -> None:
     assert fields["deterministic_module_kinds"] == "frozenset[str]"
 
 
-def test_small_agent_context_contains_the_same_contract_manifest() -> None:
+def test_small_agent_context_contains_lossless_compact_contract_encoding() -> None:
     context = _decode_context(build_agent_capability_context("research", ()))
     assert context["schema_version"] == "mmm/agent-capability-context-v7"
-    assert context["type_contracts"] == json.loads(json.dumps(contract_schema_manifest()))
+    assert context["type_contracts"] == json.loads(json.dumps(_compact_type_contracts()))
+    assert context["type_contract_encoding"].startswith("module=(path,types,aliases)")
     assert "obey type_contracts exactly" in str(context["routing_policy"])
