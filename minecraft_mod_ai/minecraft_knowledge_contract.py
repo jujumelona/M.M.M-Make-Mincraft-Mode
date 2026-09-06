@@ -8,6 +8,7 @@ by EvidenceRequestCatalog before keyword-derived knowledge routes are attached.
 """
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from . import minecraft_knowledge_nodes as _nodes
@@ -26,6 +27,7 @@ for _name in dir(_nodes):
 _base_compile_minecraft_knowledge_plan = _nodes.compile_minecraft_knowledge_plan
 _base_validate_plan = _nodes.validate_plan
 _base_compact_plan = _nodes.compact_plan
+_base_evaluate_route_coverage = _nodes.evaluate_route_coverage
 
 
 def _authored_requirement_lifecycle(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -138,6 +140,26 @@ def validate_plan(plan: Mapping[str, Any]) -> None:
         raise ValueError("Minecraft authored requirements may not be dropped.")
 
 
+def evaluate_route_coverage(
+    plan: Mapping[str, Any],
+    research: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Evaluate only current grounded/official receipts at the canonical boundary.
+
+    ``forced_project_rag`` was the retired pre-design owner.  Ignoring it here prevents a
+    stale receipt from satisfying route coverage after the grounded-RAG migration while
+    keeping the static node taxonomy free of runtime compatibility mutation.
+    """
+
+    value = deepcopy(dict(research))
+    deterministic = value.get("deterministic")
+    if isinstance(deterministic, Mapping):
+        current = dict(deterministic)
+        current.pop("forced_project_rag", None)
+        value["deterministic"] = current
+    return _base_evaluate_route_coverage(plan, value)
+
+
 def compact_plan(
     plan: Mapping[str, Any],
     coverage: Mapping[str, Any] | None = None,
@@ -163,6 +185,7 @@ __all__ = sorted(
     | {
         "compile_minecraft_knowledge_plan",
         "compact_plan",
+        "evaluate_route_coverage",
         "validate_plan",
     }
 )
