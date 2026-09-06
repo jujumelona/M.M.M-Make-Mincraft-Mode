@@ -1,23 +1,28 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai import agentic_research_game_design as design
 from minecraft_mod_ai.agentic_research_game_design import generate_sectioned_game_design
 
 
-class _Router:
-    def __init__(self, outputs: list[str]) -> None:
-        self.outputs = list(outputs)
-        self.calls: list[dict[str, object]] = []
+class _NoModelRouter:
+    calls = 0
 
-    def generate_text(self, role, messages, **kwargs):
-        self.calls.append({"role": role, "messages": messages, **kwargs})
-        return self.outputs.pop(0)
+    def generate_text(self, *_args, **_kwargs):
+        self.calls += 1
+        pytest.fail("Deterministic game design must not call generate_text")
+
+    def generate_tool_decision(self, *_args, **_kwargs):
+        self.calls += 1
+        pytest.fail("Deterministic game design must not call generate_tool_decision")
 
 
 class _GameDesignModule:
     @staticmethod
     def _validate_design(value):
         assert isinstance(value["title"], str)
+        assert isinstance(value["pitch"], str)
         assert isinstance(value["core_loop"], list)
         assert isinstance(value["progression"], list)
         assert isinstance(value["combat"], dict)
@@ -27,90 +32,86 @@ class _GameDesignModule:
         assert isinstance(value["acceptance_tests"], list)
 
 
-def _outputs() -> list[str]:
-    return [
-        """## title
-Orbital Frontier
-## pitch
-행성을 탐사하고 우주 기지를 확장한다.
-## core_loop
-- 탐사
-- 자원 회수
-- 기지 확장
-""",
-        """## progression
-- 궤도 진입
-- 달 기지
-- 심우주 탐사
-## combat
-### hazards
-- 방사선 폭풍
-### enemies
-- 적대 드론
-## mod_context
-### persistence
-- 행성 진행도를 저장한다
-""",
-        """## modules
-- none
-## assets
-- orbital_console | gui | 궤도 항법 콘솔
-""",
-        """## acceptance_tests
-- 플레이어가 탐사와 귀환 루프를 완료할 수 있다
-## art_direction
-### palette
-- 차가운 금속과 강한 경고 조명
-""",
-    ]
-
-
-def test_game_design_drafting_is_text_not_json_schema():
-    router = _Router(
-        [
-            design._section_field_body(raw, field, fields)
-            for raw, (_, fields, _) in zip(
-                _outputs(), design._SECTION_SPECS, strict=True
-            )
-            for field in fields
-        ]
+def _ledger():
+    return (
+        {
+            "requirement_id": "req_trade",
+            "capability": "economy.trade",
+            "authored_text": "거래한다",
+            "semantic_statement": "Trade resources for upgrades.",
+            "observable_behavior": {
+                "given": "The player has currency.",
+                "when": "The player trades.",
+                "then": "Items and currency are exchanged.",
+            },
+            "acceptance": ["Trade updates items and currency atomically."],
+        },
+        {
+            "requirement_id": "req_colony",
+            "capability": "colony.colonization",
+            "authored_text": "식민지화한다",
+            "semantic_statement": "Establish a colony on a planet.",
+            "observable_behavior": {
+                "given": "The player reaches a planet.",
+                "when": "The player establishes a colony.",
+                "then": "The colony exists.",
+            },
+            "acceptance": ["A colony can be established on the reached planet."],
+        },
     )
+
+
+def test_game_design_is_host_projected_with_zero_model_calls(monkeypatch):
+    ledger = _ledger()
+    monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: ledger)
+    router = _NoModelRouter()
+
     result = generate_sectioned_game_design(
         _GameDesignModule,
         router,
-        "우주 탐사 모드를 만들어줘",
-        research={},
+        "거래하고 식민지화하는 우주 모드",
+        research={"claims": ["must not rewrite authored design"]},
     )
 
-    assert result["title"] == "Orbital Frontier"
-    assert result["progression"] == ["궤도 진입", "달 기지", "심우주 탐사"]
-    assert result["assets"][0]["id"] == "orbital_console"
-    assert len(router.calls) == 10
-    for call in router.calls:
-        assert call["response_format"] == "text"
-        assert call["response_schema"] is None
-        system = call["messages"][0]["content"]
-        assert "No JSON" in system
+    assert router.calls == 0
+    assert result["core_loop"] == [
+        "Trade resources for upgrades.",
+        "Establish a colony on a planet.",
+    ]
+    assert result["progression"] == result["core_loop"]
+    assert result["assets"] == []
+    assert [module["requirement_refs"] for module in result["modules"]] == [
+        ["req_trade"],
+        ["req_colony"],
+    ]
+    assert result["acceptance_tests"] == [
+        "Trade updates items and currency atomically.",
+        "A colony can be established on the reached planet.",
+    ]
 
 
-def test_missing_heading_repairs_only_missing_field():
-    router = _Router(
-        ["Orbital Frontier", "행성을 탐사한다.", "", "- 탐사하고 귀환한다"]
+def test_missing_optional_semantic_detail_uses_host_default_without_retry(monkeypatch):
+    ledger = (
+        {
+            "requirement_id": "req_explore",
+            "capability": "custom.semantic_explore",
+            "authored_text": "행성을 탐사한다",
+            "semantic_statement": "Explore a planet.",
+            "observable_behavior": {},
+            "acceptance": [],
+        },
     )
-    section = design._generate_section(
+    monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: ledger)
+    router = _NoModelRouter()
+
+    result = generate_sectioned_game_design(
+        _GameDesignModule,
         router,
-        prompt="우주 탐사 모드를 만들어줘",
-        section_id="identity_and_loop",
-        fields=("title", "pitch", "core_loop"),
+        "행성을 탐사한다",
         research={},
-        media_paths=(),
-        trace_metadata=None,
     )
-    assert section["title"] == "Orbital Frontier"
-    assert section["core_loop"] == ["탐사하고 귀환한다"]
-    assert len(router.calls) == 4
-    assert "content is missing" in router.calls[-1]["messages"][-1]["content"]
-    assert [
-        call["messages"][1]["content"].split("FIELD\n")[1].split("\n")[0]
-        for call in router.calls
-    ] == ["title", "pitch", "core_loop", "core_loop"]
+
+    assert router.calls == 0
+    assert result["core_loop"] == ["Explore a planet."]
+    assert result["acceptance_tests"] == ["Explore a planet."]
+    assert result["modules"][0]["implementation_obligations"] == ["Explore a planet."]
