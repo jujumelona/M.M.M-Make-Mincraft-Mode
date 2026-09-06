@@ -44,11 +44,27 @@ def test_facet_evidence_requires_requirement_provenance() -> None:
 
 
 def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/generated/mod/AlphaService.java#AlphaService",
+        "ownership": "exclusive",
+        "status": "host_reserved",
+        "module_id": "root",
+        "source_set": "main",
+    }
     task = {
         "task_id": "task_alpha",
         "semantic_outcome": "Implement alpha gameplay behavior",
         "requirement_refs": ["req_alpha_123"],
         "implementation_capabilities": ["gameplay.alpha.service"],
+        "owned_anchors": [anchor],
+        "production_bindings": [
+            {
+                "task_ref": "task_alpha",
+                "reuse_action": "fresh",
+                "owned_anchors": [anchor],
+            }
+        ],
         "target_cell": {
             "minecraft_version": "1.21.1",
             "loader": "fabric",
