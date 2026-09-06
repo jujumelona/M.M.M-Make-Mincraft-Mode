@@ -13,36 +13,39 @@ def _record(provider: str, query: str) -> dict[str, object]:
     }
 
 
-def test_reference_provider_jobs_overlap_and_preserve_result_order(monkeypatch) -> None:
-    barrier = Barrier(4)
+def test_reference_queries_overlap_and_preserve_result_order(monkeypatch) -> None:
+    barrier = Barrier(2)
 
-    def provider(name: str):
-        def retrieve(query: str):
-            barrier.wait(timeout=5)
-            return [
-                _record(name, query)
-            ], {
-                "provider": name,
-                "status": "available",
-                "result_count": 1,
-            }
+    def wikipedia(query: str):
+        barrier.wait(timeout=5)
+        return [
+            _record("wikipedia", query)
+        ], {
+            "provider": "wikipedia",
+            "status": "available",
+            "result_count": 1,
+        }
 
-        return retrieve
+    def forbidden_github(_query: str):
+        raise AssertionError("GitHub fallback must not run when Wikipedia has evidence")
 
-    monkeypatch.setattr(reference_research, "_wikipedia_sources", provider("wikipedia"))
-    monkeypatch.setattr(reference_research, "_github_reference_sources", provider("github_reference"))
+    monkeypatch.setattr(reference_research, "_wikipedia_sources", wikipedia)
+    monkeypatch.setattr(reference_research, "_github_reference_sources", forbidden_github)
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha", "beta"])
 
     assert [row["query"] for row in payload["queries"]] == ["alpha", "beta"]
     for query, row in zip(("alpha", "beta"), payload["queries"], strict=True):
         assert list(row["provider_receipts"]) == ["wikipedia", "github_reference"]
+        assert row["provider_receipts"]["github_reference"]["status"] == (
+            "skipped_wikipedia_has_evidence"
+        )
         assert [record["source_id"] for record in row["evidence_records"]] == [
             f"wikipedia:{query}",
-            f"github_reference:{query}",
         ]
-        assert row["content_record_count"] == 2
+        assert row["content_record_count"] == 1
         assert row["retrieval_errors"] == []
+        assert row["provider_policy"] == "wikipedia_then_github_empty_fallback"
 
 
 def test_reference_provider_failure_is_isolated(monkeypatch) -> None:
