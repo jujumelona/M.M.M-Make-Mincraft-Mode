@@ -51,10 +51,8 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Reviewed surface: the prior finalized runtime was 431. The small-model task
-          # capsule removes the obsolete pre-finalization authority install and adds the
-          # final outer task scope/tool binder plus compact task projection. The measured
-          # net reviewed surface is 433. Any further rebinding remains a hard CI failure.
+          # Keep the audited runtime mutation surface bounded. Change this budget only
+          # with an intentional runtime-composition change and matching review evidence.
           budget = 433
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
