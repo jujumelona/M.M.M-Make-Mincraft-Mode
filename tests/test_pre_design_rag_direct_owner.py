@@ -3,7 +3,7 @@ from __future__ import annotations
 from minecraft_mod_ai import pre_design_domain_research as owner
 
 
-def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is_safe():
+def test_direct_owner_rejects_irrelevant_materialized_bodies_without_model_call():
     calls: list[dict[str, object]] = []
 
     class Rag:
@@ -20,7 +20,7 @@ def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is
     class Router:
         def generate_text(self, role, messages, **kwargs):
             calls.append({"role": role, "messages": messages, **kwargs})
-            raise AssertionError("zero source bodies must not call the model")
+            raise AssertionError("host evidence projection must not call the model")
 
     document = {
         "domain_id": "req_colony",
@@ -44,11 +44,12 @@ def test_direct_owner_is_small_model_host_pipeline_and_missing_receipt_helper_is
     assert owner.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"
     assert calls == []
     assert note["model_called"] is False
-    assert note["source_body_count"] == 0
+    assert note["source_body_count"] == 1
+    assert note["host_grounded_evidence_card_count"] == 0
     assert note["research_mode"] == "advisory_predesign"
     assert note["research_evidence_status"] == "no_relevant_external_evidence"
-    assert note["sufficient"] is True
-    assert note["gaps"] == []
-    assert note["quality_contract"]["model_json"] is False
-    assert note["quality_contract"]["model_corrective_queries"] is False
-    assert note["evidence_document"]["document_sha256"] == "sha256:doc"
+    assert note["evidence_extraction_status"] == "no_claim_bearing_source_body"
+    assert note["sufficient"] is False
+    assert note["checkpoint"]["status"] == "blocked"
+    assert note["research_failures"] == ["no_claim_bearing_source_body"]
+    assert note["gaps"]
