@@ -1,12 +1,10 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .evidence_request_guard import install_evidence_request_guard
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_set_boundary_installation import install as install_source_set_boundary
 
 initialize_runtime()
-install_evidence_request_guard()
 from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
