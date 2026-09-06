@@ -475,7 +475,10 @@ def compile_detailed_implementation_plans(
     value["plan_ready"] = not blocking and len(coverage) == len(requirements)
     if not value["plan_ready"]:
         raise ValueError("DETAILED_PLAN_NOT_READY: unresolved planning obligations remain")
-    return _rehash(value)
+
+    result = _rehash(value)
+    validate_planning_state(result, prompt=prompt)
+    return result
 
 
 __all__ = ["compile_detailed_implementation_plans"]
