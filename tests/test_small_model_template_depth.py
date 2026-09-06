@@ -21,7 +21,7 @@ def _worksheet() -> dict[str, object]:
                 f"{key} section defines concrete evidence-backed implementation behavior "
                 "with an explicit owner, condition, boundary, and observable result."
             ),
-            "evidence_refs": ["ev:1"],
+            "constraint_evidence_refs": ["ev:1"],
         }
         for key in DETAIL_FIELDS
     }
@@ -35,7 +35,7 @@ def test_engineering_worksheet_exposes_deep_small_model_checklists() -> None:
     for key in DETAIL_FIELDS:
         section = WORKSHEET_SCHEMA["properties"][key]
         assert section["properties"]["specification"]["minLength"] >= 24
-        assert section["properties"]["evidence_refs"]["uniqueItems"] is True
+        assert section["properties"]["constraint_evidence_refs"]["uniqueItems"] is True
         for concern in DETAIL_SLOT_GUIDANCE[key]:
             assert concern in section["description"]
     prompt = worksheet_prompt()
@@ -52,7 +52,7 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
     placeholder = _worksheet()
     placeholder["persistence"] = {
         "specification": "N/A",
-        "evidence_refs": ["ev:1"],
+        "constraint_evidence_refs": ["ev:1"],
     }
     with pytest.raises(ValueError, match="persistence has no concrete specification"):
         validate_worksheet(placeholder, {"ev:1"})
@@ -60,7 +60,7 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
     shallow = _worksheet()
     shallow["algorithm"] = {
         "specification": "Handle it correctly.",
-        "evidence_refs": ["ev:1"],
+        "constraint_evidence_refs": ["ev:1"],
     }
     with pytest.raises(ValueError, match="algorithm has no concrete specification"):
         validate_worksheet(shallow, {"ev:1"})
@@ -73,17 +73,17 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
     forged = _worksheet()
     forged["algorithm"] = {
         "specification": "Concrete ordered algorithm with branches and observable result.",
-        "evidence_refs": ["ev:forged"],
+        "constraint_evidence_refs": ["ev:forged"],
     }
-    with pytest.raises(ValueError, match="algorithm lacks grounded evidence"):
+    with pytest.raises(ValueError, match="algorithm has invalid constraint evidence"):
         validate_worksheet(forged, {"ev:1"})
 
     duplicate_ref = _worksheet()
     duplicate_ref["verification"] = {
         "specification": "Given a valid state, when behavior runs, then the expected result is observable.",
-        "evidence_refs": ["ev:1", "ev:1"],
+        "constraint_evidence_refs": ["ev:1", "ev:1"],
     }
-    with pytest.raises(ValueError, match="verification lacks grounded evidence"):
+    with pytest.raises(ValueError, match="verification has invalid constraint evidence"):
         validate_worksheet(duplicate_ref, {"ev:1"})
 
 
@@ -92,28 +92,34 @@ def test_detailed_planner_receives_canonical_worksheet_contract_once() -> None:
         def __init__(self) -> None:
             self.messages: list[dict[str, str]] = []
 
-        def generate_tool_decision(self, _role: str, messages: list[dict[str, str]], **_kwargs: object) -> dict[str, object]:
+        def generate_tool_decision(
+            self,
+            _role: str,
+            messages: list[dict[str, str]],
+            **_kwargs: object,
+        ) -> dict[str, object]:
             self.messages = messages
             return {
                 "engineering_worksheet": _worksheet(),
                 "implementation_capabilities": [
                     {
                         "capability": "Persist one evidence-backed gameplay state transition.",
-                        "evidence_refs": ["ev:1"],
+                        "constraint_evidence_refs": [],
                     }
                 ],
                 "implementation_obligations": [
                     {
                         "obligation": "The authoritative owner persists the state when the transition succeeds.",
-                        "evidence_refs": ["ev:1"],
+                        "constraint_evidence_refs": [],
                     }
                 ],
                 "artifact_obligations": [],
+                "grounded_bindings": [],
                 "reuse_candidates": [],
                 "verification_obligations": [
                     {
                         "check": "Given persisted state, when reload occurs, then the same state is observable.",
-                        "evidence_refs": ["ev:1"],
+                        "constraint_evidence_refs": [],
                     }
                 ],
             }
