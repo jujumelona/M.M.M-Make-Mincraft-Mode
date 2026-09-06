@@ -59,27 +59,7 @@ class PlatformSelection:
             "explicit_loader": self.explicit_loader,
             "preserved_existing_target": self.preserved_existing_target,
             "migration_requested": self.migration_requested,
-            "target": {
-                "adapter_id": self.adapter.adapter_id,
-                "edition": self.adapter.edition,
-                "loader": self.adapter.loader,
-                "minecraft_version": self.adapter.minecraft_version,
-                "java_version": self.adapter.java_version,
-                "yarn_mappings": self.adapter.yarn_mappings,
-                "mappings_kind": self.adapter.mappings_kind,
-                "mappings_version": self.adapter.mappings_version,
-                "mappings": self.adapter.yarn_mappings,
-                "fabric_loader": self.adapter.fabric_loader,
-                "fabric_api": self.adapter.fabric_api,
-                "fabric_loom": self.adapter.fabric_loom,
-                "gradle": self.adapter.gradle,
-                "gradle_sha256": self.adapter.gradle_sha256,
-                "data_pack_version": self.adapter.data_pack_version,
-                "resource_pack_version": self.adapter.resource_pack_version,
-                "resource_pack_format": self.adapter.resource_pack_format,
-                "release_metadata_url": self.adapter.release_metadata_url,
-                "source_api_family": self.adapter.source_api_family,
-            },
+            "target": self.adapter.public_dict(),
         }
         if self.optimization is not None:
             payload["optimizer"] = self.optimization.to_dict()
