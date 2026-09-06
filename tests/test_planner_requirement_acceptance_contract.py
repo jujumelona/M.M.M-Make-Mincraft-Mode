@@ -6,6 +6,7 @@ from minecraft_mod_ai.evidence_first_planning import (
     build_request_catalog,
 )
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph
+from tests.planning_authority_fixtures import request_catalog
 
 
 def test_prompt_only_unknown_requirement_is_one_opaque_provisional() -> None:
@@ -29,14 +30,36 @@ def test_requirement_acceptance_never_copies_whole_prompt() -> None:
         "Build a space progression mod with mining, trading, modular ships, "
         "colonies, bosses, and research across several planets."
     )
-    design = {
-        "modules": [
-            {"capability": "resource.mining"},
-            {"capability": "economy.trade"},
-            {"capability": "spaceship.modular_build"},
-        ]
-    }
-    catalog = build_request_catalog(prompt, design)
+    grounded = request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_mining",
+                "capability": "resource.mining",
+                "source_text": "mining",
+                "statement": "Mining progression is observable to the player.",
+                "acceptance": ["Mining progression produces the authored observable result."],
+            },
+            {
+                "requirement_id": "req_trade",
+                "capability": "economy.trade",
+                "source_text": "trading",
+                "statement": "Trading progression is observable to the player.",
+                "acceptance": ["Trading progression produces the authored observable result."],
+            },
+            {
+                "requirement_id": "req_ships",
+                "capability": "spaceship.modular_build",
+                "source_text": "modular ships",
+                "statement": "Modular ship construction is observable to the player.",
+                "acceptance": ["Modular ship construction produces the authored observable result."],
+            },
+        ],
+    )
+    catalog = build_request_catalog(
+        prompt,
+        {"_evidence_request_catalog": grounded},
+    )
     acceptance = [
         item
         for requirement in catalog["requirements"]
@@ -44,7 +67,11 @@ def test_requirement_acceptance_never_copies_whole_prompt() -> None:
     ]
     assert acceptance
     assert all(prompt not in item for item in acceptance)
-    assert all("Verify the observable player-facing behavior for capability" in item for item in acceptance)
+    assert acceptance == [
+        "Mining progression produces the authored observable result.",
+        "Trading progression produces the authored observable result.",
+        "Modular ship construction produces the authored observable result.",
+    ]
 
 
 def test_task_acceptance_keeps_internal_checks_for_dag_validation() -> None:
@@ -60,4 +87,3 @@ def test_task_acceptance_keeps_internal_checks_for_dag_validation() -> None:
     assert all(any("declared provides" in item.casefold() for item in task["acceptance"]) for task in tasks)
     assert all(public_acceptance not in task["acceptance"] for task in tasks)
     assert public_acceptance in tasks[-1].get("public_acceptance", [])
-
