@@ -13,10 +13,13 @@ from minecraft_mod_ai.planning_detail_template import (
 from minecraft_mod_ai.research_requirement_template import build_facet_slot
 
 
-def _worksheet(specification: str = "Concrete evidence-backed implementation behavior with explicit owner and observable result.") -> dict[str, object]:
+def _worksheet() -> dict[str, object]:
     return {
         key: {
-            "specification": specification,
+            "specification": (
+                f"{key} section defines concrete evidence-backed implementation behavior "
+                "with an explicit owner, condition, boundary, and observable result."
+            ),
             "evidence_refs": ["ev:1"],
         }
         for key in DETAIL_FIELDS
@@ -37,10 +40,11 @@ def test_engineering_worksheet_exposes_deep_small_model_checklists() -> None:
     prompt = worksheet_prompt()
     assert "mandatory completion protocol" in prompt
     assert "Never use a bare N/A" in prompt
+    assert "distinct section-specific specification" in prompt
     assert "cross-check" in prompt
 
 
-def test_engineering_worksheet_fails_closed_on_placeholders_and_forged_refs() -> None:
+def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills() -> None:
     valid = _worksheet()
     assert validate_worksheet(valid, {"ev:1"}) == valid
 
@@ -52,6 +56,19 @@ def test_engineering_worksheet_fails_closed_on_placeholders_and_forged_refs() ->
     with pytest.raises(ValueError, match="persistence has no concrete specification"):
         validate_worksheet(placeholder, {"ev:1"})
 
+    shallow = _worksheet()
+    shallow["algorithm"] = {
+        "specification": "Handle it correctly.",
+        "evidence_refs": ["ev:1"],
+    }
+    with pytest.raises(ValueError, match="algorithm has no concrete specification"):
+        validate_worksheet(shallow, {"ev:1"})
+
+    copied = _worksheet()
+    copied["state_model"] = dict(copied["behavior_contract"])
+    with pytest.raises(ValueError, match="state_model duplicates behavior_contract"):
+        validate_worksheet(copied, {"ev:1"})
+
     forged = _worksheet()
     forged["algorithm"] = {
         "specification": "Concrete ordered algorithm with branches and observable result.",
@@ -60,13 +77,13 @@ def test_engineering_worksheet_fails_closed_on_placeholders_and_forged_refs() ->
     with pytest.raises(ValueError, match="algorithm lacks grounded evidence"):
         validate_worksheet(forged, {"ev:1"})
 
-    duplicate = _worksheet()
-    duplicate["verification"] = {
+    duplicate_ref = _worksheet()
+    duplicate_ref["verification"] = {
         "specification": "Given a valid state, when behavior runs, then the expected result is observable.",
         "evidence_refs": ["ev:1", "ev:1"],
     }
     with pytest.raises(ValueError, match="verification lacks grounded evidence"):
-        validate_worksheet(duplicate, {"ev:1"})
+        validate_worksheet(duplicate_ref, {"ev:1"})
 
 
 def test_research_facet_slot_carries_explicit_review_method() -> None:
@@ -129,7 +146,15 @@ def test_coder_execution_steps_include_small_model_edit_and_cleanup_protocol() -
     for step in contract["implementation_steps"]:
         assert len(step["execution_checklist"]) >= 8
         assert "no obsolete/placeholder" in step["done_when"]
-        assert any("Inspect the existing owned target" in item for item in step["execution_checklist"])
-        assert any("Do not leave TODO" in item for item in step["execution_checklist"])
+        assert any(
+            "Inspect the existing owned target" in item
+            for item in step["execution_checklist"]
+        )
+        assert any(
+            "Do not leave TODO" in item for item in step["execution_checklist"]
+        )
     assert "cleanup_rule" in contract["protected_boundaries"]
-    assert any("no TODO/FIXME/stub" in item for item in contract["completion_predicate"]["conditions"])
+    assert any(
+        "no TODO/FIXME/stub" in item
+        for item in contract["completion_predicate"]["conditions"]
+    )
