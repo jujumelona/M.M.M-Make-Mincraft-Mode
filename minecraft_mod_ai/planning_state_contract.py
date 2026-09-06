@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Canonical task-state contract for prompt understanding and grounded planning.
+"""Canonical task-state SSOT for prompt understanding and grounded planning.
 
-The model has one bounded responsibility at the prompt boundary: extract authored facts,
-named references, and genuinely unresolved questions. It does not choose retrieval routes,
-sources, IDs, queries, state transitions, evidence, design decisions, or implementation
-architecture. Host code derives those deterministically from the semantic reason.
+The model performs exactly one bounded semantic extraction at the request boundary. It
+may report authored facts, named references, scope status, and genuine unknowns. Host
+code owns IDs, reason->route policy, allowed sources, query compilation, evidence,
+state transitions, decisions, coverage, blockers, and readiness.
 """
 
 import hashlib
@@ -31,10 +31,6 @@ UNRESOLVED_REASONS = (
     "user_preference",
     "insufficient_evidence",
 )
-
-# Only reasons that represent prompt semantics are model-authored. Reference and scope
-# unknowns are mechanically derived from references/scope_status. insufficient_evidence
-# is a runtime research outcome, never an initial semantic guess.
 _MODEL_UNRESOLVED_REASONS = (
     "external_fact",
     "repository_fact",
@@ -44,7 +40,6 @@ _MODEL_UNRESOLVED_REASONS = (
     "contradiction",
     "user_preference",
 )
-
 RESOLUTION_ROUTES = (
     "reference_research",
     "external_research",
@@ -55,7 +50,6 @@ RESOLUTION_ROUTES = (
     "default_policy",
     "user_only",
 )
-
 SOURCE_KINDS = (
     "reference_sources",
     "web_sources",
@@ -77,7 +71,16 @@ _ROUTE_BY_REASON: dict[str, str] = {
     "contradiction": "user_only",
     "user_preference": "user_only",
 }
-
+_RESEARCH_ROUTES = frozenset(
+    {
+        "reference_research",
+        "external_research",
+        "repository_rag",
+        "minecraft_research",
+        "implementation_research",
+        "compatibility_research",
+    }
+)
 ROUTE_SOURCES: dict[str, tuple[str, ...]] = {
     "reference_research": ("reference_sources", "web_sources"),
     "external_research": ("web_sources",),
@@ -198,7 +201,7 @@ def _strings(value: Any) -> list[str]:
 
 
 def _source_receipt(prompt: str, quote: Any) -> dict[str, Any]:
-    """Keep optional provenance hints without turning literal formatting into a gate."""
+    """Store an optional prompt provenance hint; literal formatting is never a fail gate."""
     text = str(quote or "")
     start = prompt.find(text) if text else -1
     exact = start >= 0
@@ -219,6 +222,22 @@ def _route_for_reason(reason: str) -> str:
         raise ValueError(
             f"PROMPT_STATE_ROUTE: reason {reason!r} has no initial host route"
         ) from exc
+
+
+def _validated_route(reason: str, route: str) -> str:
+    """Single route-policy validator used by state construction and invariants."""
+    if reason == "insufficient_evidence":
+        if route not in _RESEARCH_ROUTES:
+            raise ValueError(
+                "PROMPT_STATE_ROUTE: insufficient_evidence must retain a research route"
+            )
+        return route
+    expected = _route_for_reason(reason)
+    if route != expected:
+        raise ValueError(
+            f"PROMPT_STATE_ROUTE: reason {reason!r} requires {expected!r}, got {route!r}"
+        )
+    return route
 
 
 def _unknown(
@@ -263,7 +282,7 @@ def _model_unknown(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
         reason=reason,
         blocks=_strings(raw.get("blocks")),
         information_needed=information_needed,
-        research_id=f"r_{index + 1:03d}" if ROUTE_SOURCES[route] else "",
+        research_id=f"r_{index + 1:03d}" if route in _RESEARCH_ROUTES else "",
     )
 
 
@@ -288,21 +307,19 @@ def _append_host_unknown(
     blocks: Sequence[str],
     information_needed: str,
 ) -> None:
-    unresolved_id = _next_numeric_id(unresolved, "unresolved_id", "u_")
     route = _route_for_reason(reason)
-    research_id = (
-        _next_numeric_id(unresolved, "research_ref", "r_")
-        if ROUTE_SOURCES[route]
-        else ""
-    )
     unresolved.append(
         _unknown(
-            unresolved_id=unresolved_id,
+            unresolved_id=_next_numeric_id(unresolved, "unresolved_id", "u_"),
             question=question,
             reason=reason,
             blocks=blocks,
             information_needed=information_needed,
-            research_id=research_id,
+            research_id=(
+                _next_numeric_id(unresolved, "research_ref", "r_")
+                if route in _RESEARCH_ROUTES
+                else ""
+            ),
         )
     )
 
@@ -338,8 +355,6 @@ def _ensure_mechanical_unknowns(
     references: Sequence[Mapping[str, Any]],
     scope_status: str,
 ) -> None:
-    # A named external reference always needs grounded semantics. The model never has to
-    # duplicate that fact as an unresolved row.
     for reference in references:
         name = _text(reference.get("name"))
         _append_host_unknown(
@@ -352,9 +367,6 @@ def _ensure_mechanical_unknowns(
                 or f"Documented behavior and structure of {name}"
             ),
         )
-
-    # Missing scope is a host policy question, not something the model should turn into
-    # arbitrary feature guesses or research fan-out.
     if scope_status in {"partial", "unspecified"}:
         _append_host_unknown(
             unresolved,
@@ -377,7 +389,6 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
     references_raw = model_value.get("references")
     unresolved_raw = model_value.get("unresolved")
     scope_status = _text(model_value.get("scope_status"))
-
     if not isinstance(goal_raw, Mapping) or not _text(goal_raw.get("statement")):
         raise ValueError("PROMPT_STATE_GOAL: goal must contain a statement")
     if not isinstance(known_raw, list) or not isinstance(references_raw, list) or not isinstance(unresolved_raw, list):
@@ -446,7 +457,7 @@ def validate_planning_state(
     *,
     prompt: str | None = None,
 ) -> None:
-    """Validate structural integrity without re-interpreting prompt semantics."""
+    """Validate state topology and host policies without re-interpreting prompt text."""
     if state.get("schema_version") != SCHEMA:
         raise ValueError("PROMPT_STATE_SCHEMA: unsupported planning-state schema")
     original = str(state.get("original_prompt") or "")
@@ -473,16 +484,11 @@ def validate_planning_state(
         reason = str(item.get("reason") or "")
         if reason not in UNRESOLVED_REASONS:
             raise ValueError(f"PROMPT_STATE_UNRESOLVED: unsupported reason {reason!r}")
-        if reason != "insufficient_evidence":
-            expected_route = _route_for_reason(reason)
-            if item.get("resolution_route") != expected_route:
-                raise ValueError(
-                    "PROMPT_STATE_ROUTE: unresolved route differs from host reason policy"
-                )
-            if list(item.get("source_kinds") or []) != list(ROUTE_SOURCES[expected_route]):
-                raise ValueError(
-                    "PROMPT_STATE_ROUTE: unresolved source kinds differ from host route policy"
-                )
+        route = _validated_route(reason, str(item.get("resolution_route") or ""))
+        if list(item.get("source_kinds") or []) != list(ROUTE_SOURCES[route]):
+            raise ValueError(
+                "PROMPT_STATE_ROUTE: unresolved source kinds differ from host route policy"
+            )
 
     research_ids: set[str] = set()
     for item in queue:
@@ -516,12 +522,10 @@ def validate_planning_state(
     if type(state.get("plan_ready")) is not bool:
         raise ValueError("PROMPT_STATE_READY: plan_ready must be boolean")
     if state.get("plan_ready"):
-        blocking = [
-            item
+        if any(
+            isinstance(item, Mapping) and item.get("status") != "resolved"
             for item in unresolved
-            if isinstance(item, Mapping) and item.get("status") != "resolved"
-        ]
-        if blocking:
+        ):
             raise ValueError(
                 "PROMPT_STATE_READY: plan cannot be ready while blocking unknowns remain"
             )
@@ -535,17 +539,19 @@ def validate_planning_state(
 
 
 def _validate_initial_state(state: Mapping[str, Any]) -> None:
-    derived_fields = (
-        "evidence",
-        "resolved",
-        "decisions",
-        "implementation_candidates",
-        "coverage",
-        "blockers",
-    )
-    if any(state.get(field) for field in derived_fields):
+    if any(
+        state.get(field)
+        for field in (
+            "evidence",
+            "resolved",
+            "decisions",
+            "implementation_candidates",
+            "coverage",
+            "blockers",
+        )
+    ):
         raise ValueError(
-            "PROMPT_STATE_INITIAL: initial semantic extraction cannot contain derived artifacts"
+            "PROMPT_STATE_INITIAL: semantic extraction cannot contain derived artifacts"
         )
     if state.get("plan_ready") is not False:
         raise ValueError("PROMPT_STATE_INITIAL: initial state cannot be plan-ready")
@@ -560,30 +566,26 @@ def _validate_initial_state(state: Mapping[str, Any]) -> None:
 
 
 def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
-    """Perform the single model-owned semantic extraction at the request boundary."""
+    """Perform the sole model-owned semantic extraction for an authored request."""
     authored = str(prompt or "")
     if not authored.strip():
         raise ValueError("PROMPT_STATE_PROMPT: prompt must not be empty")
-
     messages = [
         {
             "role": "system",
             "content": (
-                "Fill the canonical prompt-understanding template only. Your job is semantic "
-                "extraction, not planning. Preserve the user's actual goal. Put only facts "
-                "explicitly authored by the user into known. Put named games, mods, products, "
-                "styles, works, or external concepts that must be understood into references; "
-                "do not also create reference_semantics unresolved rows because the host creates "
-                "those automatically. Mark scope_status explicit, partial, or unspecified; do "
-                "not create a scope unresolved row because the host creates it automatically. "
-                "For each other genuine unknown, provide only question, semantic reason, what "
-                "information is needed, and what later decision it blocks. Never choose research "
-                "routes, source kinds, IDs, queries, APIs, files, architecture, or implementation "
-                "details. Never use model memory as evidence. Contradictions and user preferences "
-                "remain explicit unknowns rather than invented answers. source_quote is optional "
-                "metadata and need not reproduce whitespace exactly. There is no target number of "
-                "known or unresolved rows: represent the request faithfully without artificial "
-                "splitting or merging to satisfy a count."
+                "Fill the canonical prompt-understanding template only. Preserve the user's "
+                "goal. known contains only facts explicitly authored by the user. references "
+                "contains named games, mods, products, styles, works, or external concepts that "
+                "must be understood; do not duplicate them as reference_semantics unknowns, "
+                "because the host creates those. Set scope_status from the request; do not create "
+                "scope unknowns, because the host creates those. For every other genuine unknown, "
+                "provide question, semantic reason, information_needed, and what it blocks. Do not "
+                "choose routes, sources, IDs, queries, APIs, files, architecture, mechanics, or "
+                "implementation details. Do not use model memory as evidence. Contradictions and "
+                "user preferences remain unknown rather than invented answers. source_quote is "
+                "optional metadata and need not preserve literal whitespace. There is no target "
+                "number of rows: represent the request faithfully without count-driven splitting."
             ),
         },
         {"role": "user", "content": "USER REQUEST:\n" + authored},
