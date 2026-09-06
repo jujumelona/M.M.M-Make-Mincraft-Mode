@@ -2,11 +2,12 @@ from __future__ import annotations
 
 """Catalog-first provider policy for Minecraft research.
 
-Provider transport lives in ``pre_design_grounded_rag``. This module owns the retrieval
+Provider transport lives in ``pre_design_grounded_rag``. This module owns retrieval
 policy: discover actual Minecraft mods from CurseForge/Modrinth first, follow only their
 explicit source repository links, and use broad GitHub repository search only when the
-catalog stage produced no mod candidates at all. Official/project sources remain separate
-from ecosystem discovery.
+catalog stage produced no mod candidates at all. GitHub is an internal source/fallback
+mechanism, not a peer Minecraft catalog provider. Official/project sources remain
+separate from ecosystem discovery.
 """
 
 import os
@@ -68,8 +69,6 @@ def _run_catalogs(
                     errors.append(receipt)
                     results[provider] = []
 
-    # Stable authority order. CurseForge is first when configured because it is the
-    # explicitly authenticated Minecraft catalog in MMM; Modrinth is the public peer.
     records = results.get("curseforge", []) + results.get("modrinth", [])
     return records, receipts, errors
 
@@ -111,7 +110,10 @@ def _query_bundle(
         receipts.update(catalog_receipts)
         errors.extend(catalog_errors)
 
-    if "github" in allowed:
+    # Catalog domains automatically own their source-verification/fallback policy.
+    # They do not need to advertise GitHub as a peer provider in the planning state.
+    github_policy_active = catalog_allowed or "github" in allowed
+    if github_policy_active:
         if catalog_records:
             linked, receipt = backend._linked_github_sources(
                 catalog_records,
@@ -120,14 +122,8 @@ def _query_bundle(
             )
             records.extend(linked)
             if linked:
-                receipt = {
-                    **dict(receipt),
-                    "policy": "exact_catalog_link_only",
-                }
+                receipt = {**dict(receipt), "policy": "exact_catalog_link_only"}
             else:
-                # A real mod was found. Absence of an exposed source repository is not
-                # permission to search an unrelated broad GitHub concept and call it a
-                # reusable implementation candidate.
                 receipt = {
                     **dict(receipt),
                     "status": (
@@ -138,9 +134,7 @@ def _query_bundle(
                     "policy": "no_broad_fallback_when_catalog_has_candidates",
                 }
             receipts["github"] = receipt
-        else:
-            # GitHub repository search is a last-resort discovery path only when mod
-            # catalogs yielded nothing (or when this domain never requested catalogs).
+        elif catalog_allowed:
             try:
                 found, receipt = backend._search_github(
                     query,
@@ -150,11 +144,24 @@ def _query_bundle(
                 records.extend(found)
                 receipts["github"] = {
                     **dict(receipt),
-                    "policy": (
-                        "catalog_empty_fallback"
-                        if catalog_allowed
-                        else "repository_domain_direct"
-                    ),
+                    "policy": "catalog_empty_fallback",
+                }
+            except Exception as exc:
+                receipt = backend._error("github", exc)
+                receipts["github"] = receipt
+                errors.append(receipt)
+        else:
+            # Explicit repository-only domains may still request direct GitHub lookup.
+            try:
+                found, receipt = backend._search_github(
+                    query,
+                    disabled=github_disabled,
+                    disable=disable_github,
+                )
+                records.extend(found)
+                receipts["github"] = {
+                    **dict(receipt),
+                    "policy": "repository_domain_direct",
                 }
             except Exception as exc:
                 receipt = backend._error("github", exc)
@@ -165,12 +172,20 @@ def _query_bundle(
     project_rag = (
         backend._search_authoritative_catalog(query, versions)
         if allowed & {"official_docs", "project_rag"}
-        else {"schema_version": "mmm/project-rag-query-v3", "sources": [], "errors": []}
+        else {
+            "schema_version": "mmm/project-rag-query-v3",
+            "sources": [],
+            "errors": [],
+        }
     )
     code_rag = (
         backend._search_code_index(backend._existing_code_index(), query)
         if "project_rag" in allowed
-        else {"schema_version": "mmm/code-rag-query-v3", "status": "not_requested", "hits": []}
+        else {
+            "schema_version": "mmm/code-rag-query-v3",
+            "status": "not_requested",
+            "hits": [],
+        }
     )
 
     gh = receipts.get("github", {}) if isinstance(receipts.get("github"), Mapping) else {}
@@ -192,12 +207,23 @@ def _query_bundle(
                     for provider in ("curseforge", "modrinth")
                     if provider in allowed
                 ],
+                "github_role": (
+                    "internal_exact_source_or_empty_catalog_fallback"
+                    if catalog_allowed
+                    else (
+                        "direct_repository_domain" if "github" in allowed else "not_requested"
+                    )
+                ),
                 "github_broad_search": (
                     "fallback_only_after_empty_catalog"
                     if catalog_allowed
-                    else "direct_repository_domain"
+                    else (
+                        "direct_repository_domain" if "github" in allowed else "not_requested"
+                    )
                 ),
-                "github_linked_source": "exact_catalog_source_url_only",
+                "github_linked_source": (
+                    "exact_catalog_source_url_only" if catalog_allowed else "not_applicable"
+                ),
             },
             "github_retrieval": {
                 "provider_status": _text(gh.get("status") or "not_requested"),
@@ -219,9 +245,13 @@ def forced_rag_bundle(
     router: Any,
     research_brief: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build the existing grounded-RAG wire shape under catalog-first provider policy."""
+    """Build the grounded-RAG wire shape under catalog-first provider policy."""
     domains = (
-        [dict(item) for item in research_brief.get("domains", []) if isinstance(item, Mapping)]
+        [
+            dict(item)
+            for item in research_brief.get("domains", [])
+            if isinstance(item, Mapping)
+        ]
         if isinstance(research_brief.get("domains"), list)
         else []
     )
@@ -249,7 +279,10 @@ def forced_rag_bundle(
 
     by_spec: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     if specs:
-        max_workers = max(1, min(int(getattr(backend, "_MAX_QUERY_WORKERS", 4)), len(specs)))
+        max_workers = max(
+            1,
+            min(int(getattr(backend, "_MAX_QUERY_WORKERS", 4)), len(specs)),
+        )
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(
