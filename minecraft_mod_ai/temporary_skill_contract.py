@@ -7,6 +7,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -333,17 +334,7 @@ def _install_model_skill(model_router_module: Any) -> None:
         if skill is None or qualified_count < 2:
             return stage, runtime, tools, request
 
-        from .model_adapters import GenerationRequest
-
-        rebuilt = GenerationRequest(
-            messages=_inject(request.messages, skill),
-            media_paths=request.media_paths,
-            response_format=request.response_format,
-            response_schema=request.response_schema,
-            tools=request.tools,
-            tool_choice=request.tool_choice,
-            parallel_tool_calls=request.parallel_tool_calls,
-        )
+        rebuilt = replace(request, messages=_inject(request.messages, skill))
         print(
             "temporary skill:",
             f"class={task_class}",
