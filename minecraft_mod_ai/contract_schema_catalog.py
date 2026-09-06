@@ -3,8 +3,8 @@ from __future__ import annotations
 """Compact, deterministic catalog of canonical contract type shapes.
 
 MMM already keeps many subsystem contracts in ``*_contract.py`` / ``*_contracts.py``
-modules.  Small coding models should not have to guess which similarly named payload
-shape a producer or consumer expects.  This module derives a compact manifest directly
+modules. Small coding models should not have to guess which similarly named payload
+shape a producer or consumer expects. This module derives a compact manifest directly
 from those canonical source files so the model context and the Python source cannot drift.
 """
 
@@ -103,14 +103,14 @@ def contract_schema_manifest() -> tuple[dict[str, Any], ...]:
     """Return every canonical contract module and its explicit type shape.
 
     The manifest is sorted by repository-relative path so prompts, traces, and tests stay
-    deterministic.  It intentionally contains type names and annotated fields rather than
+    deterministic. It intentionally contains type names and annotated fields rather than
     full source text to keep small-model context compact.
     """
 
     package_root = Path(__file__).resolve().parent
     paths = sorted(
         path
-        for path in package_root.glob("*.py")
+        for path in package_root.rglob("*.py")
         if path.is_file() and _is_contract_file(path)
     )
     return tuple(_module_contracts(path, package_root) for path in paths)
