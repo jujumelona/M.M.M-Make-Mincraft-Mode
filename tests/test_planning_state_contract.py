@@ -222,7 +222,7 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
     domain = reference_brief["domains"][0]
     assert reference_ids == {"r_001"}
     assert "gameplay_reference" in domain["evidence_kinds"]
-    assert domain["providers"] == ["wikipedia", "external_mcp"]
+    assert domain["providers"] == ["wikipedia"]
 
     implementation_state = {
         "unresolved": [{"question": "implementation?", "status": "open"}],
