@@ -9,22 +9,29 @@ last-resort fallback only when Wikipedia returns no claim-bearing body. It is ne
 parallel with a successful encyclopedia lookup.
 """
 
+import atexit
 import hashlib
-import json
 import os
 import re
+import threading
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+import httpx
 
 _TIMEOUT = 12.0
 _UA = "MMM-ReferenceResearch/2.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 _GITHUB_API = "https://api.github.com"
 _MAX_WIKI_PAGES = 3
 _MAX_GITHUB_REPOS = 2
+_MAX_QUERY_WORKERS = 4
+_HTTP_MAX_CONNECTIONS = 12
 
 _ReferenceProvider = Callable[[str], tuple[list[dict[str, Any]], dict[str, Any]]]
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = threading.Lock()
 
 
 def _sha(text: str) -> str:
@@ -35,13 +42,40 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def _http_client() -> httpx.Client:
+    """Return the process-owned client so reference requests reuse keep-alive connections."""
+    global _HTTP_CLIENT
+    client = _HTTP_CLIENT
+    if client is not None:
+        return client
+    with _HTTP_CLIENT_LOCK:
+        if _HTTP_CLIENT is None:
+            _HTTP_CLIENT = httpx.Client(
+                timeout=_TIMEOUT,
+                follow_redirects=True,
+                headers={"User-Agent": _UA},
+                limits=httpx.Limits(
+                    max_connections=_HTTP_MAX_CONNECTIONS,
+                    max_keepalive_connections=_HTTP_MAX_CONNECTIONS,
+                ),
+            )
+            atexit.register(_HTTP_CLIENT.close)
+        return _HTTP_CLIENT
+
+
 def _json(url: str, *, headers: Mapping[str, str] | None = None) -> Any:
-    request = urllib.request.Request(
+    response = _http_client().get(
         url,
-        headers={"Accept": "application/json", "User-Agent": _UA, **dict(headers or {})},
+        headers={"Accept": "application/json", **dict(headers or {})},
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
-        return json.loads(response.read().decode("utf-8", errors="replace"))
+    response.raise_for_status()
+    return response.json()
+
+
+def _body(url: str, *, headers: Mapping[str, str] | None = None) -> str:
+    response = _http_client().get(url, headers=dict(headers or {}))
+    response.raise_for_status()
+    return response.content.decode("utf-8", errors="replace")
 
 
 def _github_headers() -> dict[str, str]:
@@ -218,9 +252,7 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
             download_url = str(readme.get("download_url") or "") if isinstance(readme, Mapping) else ""
             if not download_url:
                 continue
-            request = urllib.request.Request(download_url, headers={"User-Agent": _UA})
-            with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
-                body = response.read().decode("utf-8", errors="replace").strip()
+            body = _body(download_url, headers={"User-Agent": _UA}).strip()
         except Exception as exc:
             errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
             continue
@@ -270,59 +302,68 @@ def _retrieve_provider(
         )
 
 
+def _retrieve_query_row(query: str) -> dict[str, Any]:
+    """Retrieve one query without changing Wikipedia-first/GitHub-fallback semantics."""
+    records: list[dict[str, Any]] = []
+    providers: dict[str, Any] = {}
+    errors: list[dict[str, str]] = []
+
+    wiki_found, wiki_receipt, wiki_error = _retrieve_provider(
+        query, "wikipedia", _wikipedia_sources
+    )
+    records.extend(wiki_found)
+    providers["wikipedia"] = wiki_receipt
+    if wiki_error is not None:
+        errors.append(wiki_error)
+
+    if wiki_found:
+        providers["github_reference"] = {
+            "provider": "github_reference",
+            "status": "skipped_wikipedia_has_evidence",
+            "result_count": 0,
+            "policy": "wikipedia_empty_fallback_only",
+        }
+    else:
+        github_found, github_receipt, github_error = _retrieve_provider(
+            query, "github_reference", _github_reference_sources
+        )
+        records.extend(github_found)
+        providers["github_reference"] = github_receipt
+        if github_error is not None:
+            errors.append(github_error)
+
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        key = str(record.get("content_sha256") or record.get("source_id") or "")
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(record)
+    return {
+        "query": query,
+        "query_sha256": _sha(query),
+        "evidence_records": unique,
+        "content_record_count": len(unique),
+        "provider_receipts": providers,
+        "retrieval_errors": errors,
+        "provider_policy": "wikipedia_then_github_empty_fallback",
+    }
+
+
 def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, Any]:
-    """Retrieve encyclopedia evidence first; GitHub is a no-result fallback per query."""
+    """Retrieve independent queries concurrently while preserving authored query order."""
     query_list = [_text(raw) for raw in queries]
     query_list = [query for query in query_list if query]
-    rows: list[dict[str, Any]] = []
 
-    for query in query_list:
-        records: list[dict[str, Any]] = []
-        providers: dict[str, Any] = {}
-        errors: list[dict[str, str]] = []
-
-        wiki_found, wiki_receipt, wiki_error = _retrieve_provider(
-            query, "wikipedia", _wikipedia_sources
-        )
-        records.extend(wiki_found)
-        providers["wikipedia"] = wiki_receipt
-        if wiki_error is not None:
-            errors.append(wiki_error)
-
-        if wiki_found:
-            providers["github_reference"] = {
-                "provider": "github_reference",
-                "status": "skipped_wikipedia_has_evidence",
-                "result_count": 0,
-                "policy": "wikipedia_empty_fallback_only",
-            }
-        else:
-            github_found, github_receipt, github_error = _retrieve_provider(
-                query, "github_reference", _github_reference_sources
-            )
-            records.extend(github_found)
-            providers["github_reference"] = github_receipt
-            if github_error is not None:
-                errors.append(github_error)
-
-        unique: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for record in records:
-            key = str(record.get("content_sha256") or record.get("source_id") or "")
-            if key and key not in seen:
-                seen.add(key)
-                unique.append(record)
-        rows.append(
-            {
-                "query": query,
-                "query_sha256": _sha(query),
-                "evidence_records": unique,
-                "content_record_count": len(unique),
-                "provider_receipts": providers,
-                "retrieval_errors": errors,
-                "provider_policy": "wikipedia_then_github_empty_fallback",
-            }
-        )
+    if len(query_list) <= 1:
+        rows = [_retrieve_query_row(query) for query in query_list]
+    else:
+        workers = min(_MAX_QUERY_WORKERS, len(query_list))
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mmm-reference",
+        ) as executor:
+            rows = list(executor.map(_retrieve_query_row, query_list))
 
     return {
         "schema_version": "mmm/reference-grounded-evidence-v2",
