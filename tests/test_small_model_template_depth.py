@@ -10,6 +10,7 @@ from minecraft_mod_ai.planning_detail_template import (
     validate_worksheet,
     worksheet_prompt,
 )
+from minecraft_mod_ai.planning_state_implementation import _compile_requirement_plan
 from minecraft_mod_ai.research_requirement_template import build_facet_slot
 
 
@@ -84,6 +85,73 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
     }
     with pytest.raises(ValueError, match="verification lacks grounded evidence"):
         validate_worksheet(duplicate_ref, {"ev:1"})
+
+
+def test_detailed_planner_receives_canonical_worksheet_contract_once() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.messages: list[dict[str, str]] = []
+
+        def generate_tool_decision(self, _role: str, messages: list[dict[str, str]], **_kwargs: object) -> dict[str, object]:
+            self.messages = messages
+            return {
+                "engineering_worksheet": _worksheet(),
+                "implementation_capabilities": [
+                    {
+                        "capability": "Persist one evidence-backed gameplay state transition.",
+                        "evidence_refs": ["ev:1"],
+                    }
+                ],
+                "implementation_obligations": [
+                    {
+                        "obligation": "The authoritative owner persists the state when the transition succeeds.",
+                        "evidence_refs": ["ev:1"],
+                    }
+                ],
+                "artifact_obligations": [],
+                "reuse_candidates": [],
+                "verification_obligations": [
+                    {
+                        "check": "Given persisted state, when reload occurs, then the same state is observable.",
+                        "evidence_refs": ["ev:1"],
+                    }
+                ],
+            }
+
+    router = Router()
+    state = {
+        "research_queue": [
+            {
+                "research_id": "research_001",
+                "requirement_ref": "req_001",
+                "status": "complete",
+            }
+        ],
+        "evidence": [
+            {
+                "research_ref": "research_001",
+                "sufficient": True,
+                "evidence_refs": ["ev:1"],
+            }
+        ],
+    }
+    _compile_requirement_plan(
+        router,
+        state,
+        {
+            "requirement_id": "req_001",
+            "statement": "Persist the gameplay state across reload.",
+        },
+    )
+
+    system_text = router.messages[0]["content"]
+    user_text = router.messages[1]["content"]
+    marker = "mandatory completion protocol"
+    assert marker in system_text
+    assert marker not in user_text
+    assert "engineering_worksheet_contract" not in user_text
+    assert "req_001" in user_text
+    assert "ev:1" in user_text
 
 
 def test_research_facet_slot_carries_explicit_review_method() -> None:
