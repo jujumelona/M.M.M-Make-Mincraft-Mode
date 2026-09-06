@@ -53,6 +53,12 @@ def _module(*, binding: bool = True, reuse_action: str = "fresh"):
         "task_sha256": "sha256:" + "a" * 64,
         "requirement_refs": ["req_resource_gathering"],
         "gap_refs": ["gap_resource_gathering"],
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "yarn",
+            "java_version": "21",
+        },
         "owned_anchors": [
             main_anchor,
             test_anchor,
@@ -61,6 +67,9 @@ def _module(*, binding: bool = True, reuse_action: str = "fresh"):
                 "locator": "registry:generated_mod:resource_gathering",
                 "status": "host_reserved",
             },
+        ],
+        "implementation_obligations": [
+            "Implement the approved resource gathering behavior in the owned source targets."
         ],
         "provides": ["capability:space_mode_resource_gathering"],
         "acceptance": ["resource gathering changes an observable player resource state"],
@@ -253,6 +262,9 @@ def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
     assert compact_task["owned_anchors"] == original_task["owned_anchors"]
     assert compact_task["production_bindings"] == original_task["production_bindings"]
     assert compact_task["acceptance"] == original_task["acceptance"]
+    assert compact_task["coder_execution_contract"]["schema_version"] == (
+        "mmm/coder-execution-contract-v2"
+    )
 
     original_bytes = len(json.dumps(original_task).encode("utf-8"))
     compact_bytes = len(json.dumps(compact_task).encode("utf-8"))
