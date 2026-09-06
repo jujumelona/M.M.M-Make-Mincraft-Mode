@@ -12,6 +12,7 @@ from typing import Any
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
 from .research_code_context import ResearchCodeContext
+from .target_contract import TargetContractError, validate_target_coordinates
 
 
 def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None=None) -> tuple[str, str, str]:
@@ -19,12 +20,21 @@ def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None
     loader = str(kwargs.get('loader') or '').strip().casefold()
     mappings = str(kwargs.get('mappings') or '').strip()
     if version or loader or mappings:
-        if not version or not loader or (not mappings):
-            raise ValueError('Custom generation target must provide minecraft_version, loader and mappings together.')
+        if not version or not loader:
+            raise ValueError('Custom generation target must provide minecraft_version and loader together.')
         adapter = adapter_for_target(version, loader)
-        if mappings != adapter.yarn_mappings:
+        try:
+            coordinates = validate_target_coordinates(
+                version,
+                loader,
+                mappings,
+                declared_mappings_applicable=adapter.mappings_applicable,
+            )
+        except (ValueError, TargetContractError) as exc:
+            raise ValueError(str(exc)) from exc
+        if coordinates.mappings != str(adapter.yarn_mappings or "").strip():
             raise ValueError('Custom generation mappings disagree with the executable platform provider.')
-        return (version, loader, mappings)
+        return (coordinates.minecraft_version, coordinates.loader, coordinates.mappings)
     if project_root is not None:
         try:
             adapter = adapter_from_project(project_root)
@@ -218,7 +228,12 @@ def _research_state(text: str, bundle: Mapping[str, Any] | None, violations: Seq
 
 
 def _run_single_with_research(self: Any, original: Any, project_root: str | Path, *, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
-    version, loader, mappings = _target_values(kwargs, project_root=project_root)
+    try:
+        version, loader, mappings = _target_values(kwargs, project_root=project_root)
+    except (ValueError, TargetContractError) as exc:
+        from .custom_module_generator import CustomModuleGenerationError
+
+        raise CustomModuleGenerationError(str(exc)) from exc
     old_router = self.router
     research_router = _ResearchEvidenceRouter(_strip_research_router(old_router), owner=self, project_root=project_root, module=kwargs.get('module'), minecraft_version=version, loader=loader, mappings=mappings)
     self.router = research_router

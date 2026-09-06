@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .spec import PlatformLock, SpecValidationError, platform_receipt_sha256
-from .target_profile_semantics import minimum_java_major, uses_native_names
+from .target_contract import minimum_java_major, uses_native_names
 
 _INSTALLED = False
 

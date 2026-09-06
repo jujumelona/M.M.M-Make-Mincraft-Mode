@@ -7,7 +7,7 @@ import pytest
 
 from minecraft_mod_ai import verified_scaffold_registry as scaffold
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
-from minecraft_mod_ai.target_profile_semantics import minimum_java_major
+from minecraft_mod_ai.target_contract import minimum_java_major
 
 
 def _adapter(

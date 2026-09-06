@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.target_profile_semantics import (
+from minecraft_mod_ai.target_contract import (
     mappings_applicable,
     minecraft_version_tuple,
     minimum_java_major,

@@ -78,7 +78,7 @@ def _required_target(
     version = str(minecraft_version or "").strip()
     loader_id = str(loader or "").strip().casefold()
     mapping_id = str(mappings or "").strip()
-    if not version or not loader_id or not mapping_id:
+    if not version or not loader_id:
         raise module_api.CustomModuleGenerationError(
             "Custom coder requires a host-selected minecraft_version, loader and mappings."
         )
@@ -114,7 +114,18 @@ def _install_custom_generator_scope(module_api: Any) -> None:
             raise module_api.CustomModuleGenerationError(
                 "Custom coder target could not be resolved: " + str(exc)
             ) from exc
-        if mapping_id != adapter.yarn_mappings:
+        from .target_contract import TargetContractError, validate_target_coordinates
+
+        try:
+            coordinates = validate_target_coordinates(
+                version,
+                loader_id,
+                mapping_id,
+                declared_mappings_applicable=adapter.mappings_applicable,
+            )
+        except (ValueError, TargetContractError) as exc:
+            raise module_api.CustomModuleGenerationError(str(exc)) from exc
+        if coordinates.mappings != str(adapter.yarn_mappings or "").strip():
             raise module_api.CustomModuleGenerationError(
                 "Custom coder mappings disagree with the approved platform target: "
                 f"{mapping_id!r} != {adapter.yarn_mappings!r}."

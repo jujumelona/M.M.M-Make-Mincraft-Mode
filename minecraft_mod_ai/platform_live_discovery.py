@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-from .target_profile_semantics import mappings_applicable
+from .target_contract import mappings_applicable
 
 
 class PlatformDiscoveryError(RuntimeError):
