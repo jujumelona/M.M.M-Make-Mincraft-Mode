@@ -12,25 +12,58 @@ from minecraft_mod_ai.structured_output import (
 )
 
 
-def _systems_schema() -> dict:
-    section_id, fields, properties = design._SECTION_SPECS[1]
-    assert section_id == "systems_and_progression"
+def _valid_design() -> dict[str, object]:
     return {
+        "title": "Space Colony",
+        "pitch": "Build the authored space-colony behavior without expanding scope.",
+        "core_loop": ["gather", "build", "launch"],
+        "progression": ["gather", "launch"],
+        "combat": {"authored_combat": ["defend the colony"]},
+        "mod_context": {"authored_scope": ["space colony"]},
+        "modules": [
+            {
+                "plugin_id": "design_req_space",
+                "status": "custom_required",
+                "capability": "space.colony",
+                "reason": "Implement the authored colony behavior.",
+                "requirement_refs": ["req_space"],
+                "implementation_obligations": [
+                    "Implement the authored colony behavior.",
+                    "The player can launch after completing the colony requirements.",
+                ],
+            }
+        ],
+        "assets": [],
+        "acceptance_tests": [
+            "The player can launch after completing the colony requirements."
+        ],
+    }
+
+
+def test_unrelated_structured_transport_still_validates_json_shape() -> None:
+    schema = {
         "type": "object",
         "properties": {
             "section": {
                 "type": "object",
-                "properties": dict(properties),
-                "required": list(fields),
+                "properties": {
+                    "progression": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "combat": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "mod_context": {"type": "object"},
+                },
+                "required": ["progression", "combat", "mod_context"],
                 "additionalProperties": False,
             }
         },
         "required": ["section"],
         "additionalProperties": False,
     }
-
-
-def test_unrelated_structured_transport_still_validates_json_shape() -> None:
     raw = json.dumps(
         {
             "section": {
@@ -44,7 +77,7 @@ def test_unrelated_structured_transport_still_validates_json_shape() -> None:
     validated = validate_structured_output(
         raw,
         response_format="json",
-        response_schema=_systems_schema(),
+        response_schema=schema,
     )
 
     assert json.loads(validated)["section"]["combat"] == [
@@ -53,110 +86,32 @@ def test_unrelated_structured_transport_still_validates_json_shape() -> None:
     ]
 
 
-def test_design_section_owner_rejects_missing_content_after_local_retry() -> None:
-    class Router:
-        def __init__(self) -> None:
-            self.calls = 0
-            self.kwargs = None
+def test_host_design_canonicalization_drops_private_transport_state() -> None:
+    payload = _valid_design()
+    payload["_planner_private"] = {"legacy_parser": "must not escape"}
 
-        def generate_text(self, *_args, **kwargs) -> str:
-            self.calls += 1
-            self.kwargs = kwargs
-            return """## progression
-- gather
-- launch
-## mod_context
-### persistence
-- save progression
-"""
+    canonical = design.canonical_game_design(payload)
 
-    router = Router()
-    _section_id, fields, _properties = design._SECTION_SPECS[1]
-    with pytest.raises(SpecValidationError, match="combat"):
-        design._generate_section(
-            router,
-            prompt="우주 모드를 설계해줘",
-            section_id="systems_and_progression",
-            fields=fields,
-            research={},
-            media_paths=(),
-            trace_metadata=None,
-        )
-    assert router.calls == 4  # progression + combat twice + mod_context
-    assert router.kwargs["response_format"] == "text"
-    assert router.kwargs["response_schema"] is None
+    assert canonical == _valid_design()
+    assert "_planner_private" not in canonical
 
 
-def test_modules_use_one_semantic_contract_with_multiple_safe_markdown_encodings() -> (
-    None
-):
-    messages = design._field_messages(
-        prompt="우주 모드를 설계해줘",
-        section_id="modules_and_assets",
-        field="modules",
-        research={},
-    )
-    system = messages[0]["content"]
-    assert "No JSON" in system
-    assert "requirement_refs" in system
-    assert "implementation_obligations" in system
-    assert "module records only" in system
+def test_host_design_rejects_incomplete_canonical_shape() -> None:
+    payload = _valid_design()
+    payload["combat"] = []
 
-    legacy = design._module_rows(
-        "- mining_core | planning | 광물 채굴 | req_mining, req_economy | "
-        "광물 상태 관리; 채굴 보상 계산"
-    )
-    labeled = design._module_rows(
-        """### mining_core
-- status: planning
-- reason: 광물 채굴
-- requirement_refs: req_mining, req_economy
-- implementation_obligations:
-  - 광물 상태 관리
-  - 채굴 보상 계산
-"""
-    )
-    expected = [
-        {
-            "plugin_id": "mining_core",
-            "status": "planning",
-            "reason": "광물 채굴",
-            "requirement_refs": ["req_mining", "req_economy"],
-            "implementation_obligations": ["광물 상태 관리", "채굴 보상 계산"],
-        }
-    ]
-    assert legacy == expected
-    assert labeled == expected
+    with pytest.raises(SpecValidationError, match="game_design.combat must be an object"):
+        design.canonical_game_design(payload)
 
 
-def test_old_three_column_module_contract_still_fails_on_missing_semantics() -> None:
-    with pytest.raises(
-        SpecValidationError, match="Could not parse|implementation_obligations"
-    ):
-        design._module_rows(
-            "- mining_core | planning | 광물 채굴; requirement_refs: req_mining"
-        )
+def test_canonical_module_shape_keeps_semantic_execution_obligations() -> None:
+    canonical = design.canonical_game_design(_valid_design())
+    module = canonical["modules"][0]
 
-
-def test_requirement_coverage_consumes_the_same_canonical_module_shape() -> None:
-    design_value = {
-        "modules": [
-            {
-                "plugin_id": "mining_core",
-                "status": "planning",
-                "reason": "광물 채굴",
-                "requirement_refs": ["req_mining"],
-                "implementation_obligations": ["광물 상태 관리"],
-            }
-        ]
-    }
-    result = design._validate_requirement_coverage(
-        design_value,
-        [{"requirement_id": "req_mining"}],
-    )
-    assert result["_requirement_design_bindings"]["requirement_ids"] == ["req_mining"]
-    assert result["_requirement_design_bindings"]["bindings"][0]["module_ids"] == [
-        "mining_core"
+    assert module["requirement_refs"] == ["req_space"]
+    assert module["implementation_obligations"] == [
+        "Implement the authored colony behavior.",
+        "The player can launch after completing the colony requirements.",
     ]
 
 
