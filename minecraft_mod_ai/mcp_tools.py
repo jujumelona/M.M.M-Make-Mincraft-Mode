@@ -19,11 +19,11 @@ from .complete_planner import CompleteGameDesignPlanner
 from .complete_spec import CompleteProposal
 from .conversation import merge_design_brief
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .game_design import GameDesignPlanner
 from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
 from .plan_render import render_complete_plan
+from .planning_pipeline import PlanningPipeline
 from .production_contract import quality_contract_summary, quality_unresolved
 from .proposal_store import (
     load_sharded_complete_proposal,
@@ -89,8 +89,12 @@ class MMMToolService:
         return assess_technology_candidate(requirement, assessed_candidate, receipt_key=self._technology_receipt_key)
 
     def plan_game(self, prompt: str, media_paths: Sequence[str]=()) -> dict[str, Any]:
-        planner = GameDesignPlanner(self.router_factory())
-        design, proposal = planner.plan(prompt, media_paths=self._scoped_media_paths(media_paths))
+        artifacts = PlanningPipeline(self.router_factory()).prepare(
+            prompt,
+            media_paths=self._scoped_media_paths(media_paths),
+        )
+        design = artifacts.game_design
+        proposal = artifacts.base_proposal
         return {'schema_version': 'mmm/plan-result-v2', 'profile': self.profile, 'game_design': design, 'proposal': proposal.to_dict(), 'approval_hash': proposal.calculate_hash()}
 
     def plan_complete_game(self, prompt: str, media_paths: Sequence[str]=(), existing_input_sha256: str='') -> dict[str, Any]:
