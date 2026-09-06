@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Plan*RAG-style evidence-obligation DAG bound to approved requirements.
 
-This module removes the legacy "whole request + implementation/dependencies/assets/license/tests"
-retrieval authority. Every approved requirement is expanded into independent evidence obligations;
-retrieval, correction and coverage are evaluated per obligation rather than per document count.
+Every approved requirement is expanded into independent evidence obligations; retrieval,
+correction and coverage are evaluated per obligation rather than per document count. The
+request catalog itself is read from the canonical planning-authority context and is never
+wrapped, rebuilt, or cached here.
 """
 
 import hashlib
@@ -24,7 +25,6 @@ from . import retrieval as _retrieval
 
 _INSTALLED = False
 _LOCK = threading.RLock()
-_ACTIVE_BY_PROMPT: dict[str, dict[str, Any]] = {}
 _QUERY_META: dict[str, dict[str, Any]] = {}
 _MIXED_SUFFIX = "minecraft java mod implementation dependencies assets license tests"
 _TOKEN = re.compile(r"[a-z0-9_]+|[가-힣]{2,}", re.IGNORECASE)
@@ -44,8 +44,6 @@ _OBLIGATIONS: tuple[dict[str, Any], ...] = (
         "kind": "reusable_implementation",
         "evidence_kind": "local_project",
         "providers": ("project_rag", "github"),
-        # A reusable donor claim is not grounded until actual public source was read.
-        # Local project evidence remains useful context but is not an OR substitute.
         "required_providers": ("github",),
         "query": "{capability} reusable implementation source code {statement}",
         "depends_on": (),
@@ -135,19 +133,14 @@ def _anchors(value: str) -> tuple[str, ...]:
     return tuple(result[:16])
 
 
-def _remember(prompt: str, catalog: Mapping[str, Any]) -> None:
-    if catalog.get("schema_version") != "mmm/approved-requirement-graph-v1":
-        return
-    with _LOCK:
-        _ACTIVE_BY_PROMPT[_sha(prompt)] = dict(catalog)
-        while len(_ACTIVE_BY_PROMPT) > 128:
-            _ACTIVE_BY_PROMPT.pop(next(iter(_ACTIVE_BY_PROMPT)))
-
-
 def _catalog_for(prompt: str) -> dict[str, Any] | None:
-    with _LOCK:
-        value = _ACTIVE_BY_PROMPT.get(_sha(prompt))
-        return dict(value) if isinstance(value, Mapping) else None
+    """Read the request catalog only from the active canonical planning scope."""
+
+    active = _guard._ACTIVE_REQUEST_CATALOG.get()
+    if active is None or active[0] != prompt:
+        return None
+    catalog = active[1]
+    return dict(catalog) if isinstance(catalog, Mapping) else None
 
 
 def _target_is_frozen(game_design: Mapping[str, Any] | None) -> bool:
@@ -541,18 +534,8 @@ def install_evidence_obligation_contract() -> None:
     if _INSTALLED:
         return
 
-    current_builder = _guard.build_authoritative_request_catalog
-    if not getattr(current_builder, "_mmm_evidence_obligation_context", False):
-        @wraps(current_builder)
-        def build_with_context(prompt: str, router: Any | None = None):
-            catalog = current_builder(prompt, router=router)
-            if isinstance(catalog, Mapping):
-                _remember(prompt, catalog)
-            return catalog
-
-        build_with_context._mmm_evidence_obligation_context = True
-        _guard.build_authoritative_request_catalog = build_with_context
-
+    # Do not wrap planning_authority.build_authoritative_request_catalog. Request authority
+    # must remain one exact compiler callable; downstream evidence logic reads its ContextVar.
     original_normalize = _central.normalize_research_brief
     if not getattr(original_normalize, "_mmm_approved_obligation_dag", False):
         @wraps(original_normalize)
