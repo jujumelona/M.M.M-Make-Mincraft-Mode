@@ -4,11 +4,15 @@ import json
 from dataclasses import dataclass, field
 
 from minecraft_mod_ai import research_code_context as research
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.project_index import ProjectIndex
 
-_TEST_MINECRAFT_VERSION = "mmm-test-target"
+_TEST_MINECRAFT_VERSION = "1.21.1"
 _TEST_LOADER = "fabric"
-_TEST_MAPPINGS = "mmm-test-target+test-mappings"
+
+
+def _adapter():
+    return adapter_for_target(_TEST_MINECRAFT_VERSION, _TEST_LOADER)
 
 
 @dataclass
@@ -30,6 +34,7 @@ class _Router:
 
 
 def _repo(tmp_path):
+    adapter = _adapter()
     entry = tmp_path / "src/main/java/example/Entry.java"
     service = tmp_path / "src/main/java/example/Service.java"
     unrelated = tmp_path / "src/main/java/example/Unused.java"
@@ -82,11 +87,11 @@ public final class Unused {
     (tmp_path / "gradle.properties").write_text(
         "\n".join(
             (
-                f"minecraft_version={_TEST_MINECRAFT_VERSION}",
-                f"yarn_mappings={_TEST_MAPPINGS}",
-                "loader_version=test-loader",
-                "fabric_version=test-api",
-                "loom_version=test-loom",
+                f"minecraft_version={adapter.minecraft_version}",
+                f"yarn_mappings={adapter.yarn_mappings}",
+                f"loader_version={adapter.fabric_loader}",
+                f"fabric_version={adapter.fabric_api}",
+                f"loom_version={adapter.fabric_loom}",
             )
         )
         + "\n",
@@ -96,15 +101,16 @@ public final class Unused {
 
 
 def _context(tmp_path):
+    adapter = _adapter()
     index = _repo(tmp_path)
     return research.ResearchCodeContext(
         tmp_path,
         project_index=index,
         router=_Router(),
         module=_Module(),
-        minecraft_version=_TEST_MINECRAFT_VERSION,
-        loader=_TEST_LOADER,
-        mappings=_TEST_MAPPINGS,
+        minecraft_version=adapter.minecraft_version,
+        loader=adapter.loader,
+        mappings=adapter.yarn_mappings,
         byte_budget=32 * 1024,
     )
 
@@ -186,12 +192,13 @@ public class X {
 
 
 def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_and_target_drift(tmp_path) -> None:
+    adapter = _adapter()
     _repo(tmp_path)
     monitor = research.DependencyMonitor(
         tmp_path,
-        minecraft_version=_TEST_MINECRAFT_VERSION,
-        loader=_TEST_LOADER,
-        mappings=_TEST_MAPPINGS,
+        minecraft_version=adapter.minecraft_version,
+        loader=adapter.loader,
+        mappings=adapter.yarn_mappings,
     )
     bad = json.dumps(
         {
@@ -231,7 +238,7 @@ def test_dependency_monitor_rejects_unknown_packages_coordinates_repositories_an
                     "content": (
                         'repositories { maven { url "https://maven.fabricmc.net" } }\n'
                         'dependencies { implementation '
-                        '"net.fabricmc.fabric-api:fabric-api:test-api" }'
+                        f'"net.fabricmc.fabric-api:fabric-api:{adapter.fabric_api}" }}'
                     ),
                 }
             ]
