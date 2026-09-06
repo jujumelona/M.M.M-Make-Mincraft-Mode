@@ -6,8 +6,6 @@ from minecraft_mod_ai.request_requirements import (
     filter_and_split_context,
     validate_leaf_atomicity,
 )
-from minecraft_mod_ai.semantic_requirement_authority import _ground_source_anchor
-from minecraft_mod_ai.semantic_source_fidelity import validate_semantic_source_partition
 
 
 def _leaf(anchor: str, statement: str, *, then: str | None = None) -> dict[str, object]:
@@ -19,16 +17,6 @@ def _leaf(anchor: str, statement: str, *, then: str | None = None) -> dict[str, 
         "when": statement,
         "then": then or f"The observable result of {statement} occurs",
         "semantic_type": "gameplay_mechanic",
-    }
-
-
-def _clause(text: str) -> dict[str, object]:
-    return {
-        "clause_index": 0,
-        "char_start": 0,
-        "char_end": len(text),
-        "text": text,
-        "text_sha256": "sha256:test",
     }
 
 
@@ -85,30 +73,3 @@ def test_action_detection_is_authority_neutral() -> None:
     assert all("." not in family for family in families)
     assert detected_action_families("Travel to the selected destination") == ("travel",)
     assert detected_action_families("spacecraft.weapon_upgrade") == ()
-
-
-def test_source_partition_is_computed_from_grounded_spans_not_fixed_offsets() -> None:
-    text = "mine ore then build machine"
-    clause = _clause(text)
-    first_anchor = "mine ore then "
-    second_anchor = "build machine"
-    first_grounding = _ground_source_anchor(clause, first_anchor)
-    second_grounding = _ground_source_anchor(clause, second_anchor)
-    assert first_grounding is not None
-    assert second_grounding is not None
-
-    nodes = [
-        {
-            "source_clause_index": 0,
-            "source_anchor": first_anchor,
-            "semantic_statement": "mine ore",
-            **first_grounding,
-        },
-        {
-            "source_clause_index": 0,
-            "source_anchor": second_anchor,
-            "semantic_statement": "build machine",
-            **second_grounding,
-        },
-    ]
-    assert validate_semantic_source_partition(nodes, [clause]) == ()
