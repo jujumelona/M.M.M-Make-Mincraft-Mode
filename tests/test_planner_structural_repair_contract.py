@@ -18,12 +18,11 @@ class _SemanticRouter:
         return self.outputs.pop(0)
 
 
-def _leaf(index: int, capability: str, anchor: str) -> dict[str, Any]:
+def _segmentation(index: int, anchor: str) -> dict[str, Any]:
     return {
-        "requirements": [
+        "leaves": [
             {
                 "source_clause_index": index,
-                "capability_id": capability,
                 "source_anchor": anchor,
                 "semantic_statement": anchor,
                 "given": "the authored precondition holds",
@@ -35,10 +34,32 @@ def _leaf(index: int, capability: str, anchor: str) -> dict[str, Any]:
     }
 
 
+def _classification(capability: str) -> dict[str, Any]:
+    return {
+        "classifications": [
+            {
+                "leaf_index": 0,
+                "capability_id": capability,
+            }
+        ]
+    }
+
+
+def _two_stage_outputs(
+    capabilities: tuple[str, ...],
+    anchors: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    outputs: list[dict[str, Any]] = []
+    for index, (capability, anchor) in enumerate(zip(capabilities, anchors, strict=True)):
+        outputs.append(_segmentation(index, anchor))
+        outputs.append(_classification(capability))
+    return outputs
+
+
 def test_unknown_capability_keeps_host_custom_template_identity() -> None:
     profile = profile_for_capability("custom.semantic_deadbeefcafebabe")
     assert profile.template_id == "custom_gameplay"
-    assert profile.architecture_owner == "host"
+    assert profile.implementation_capabilities
 
 
 def test_bounded_semantic_catalog_preserves_every_authored_leaf() -> None:
@@ -63,12 +84,11 @@ def test_bounded_semantic_catalog_preserves_every_authored_leaf() -> None:
         "Add progression levels",
         "Add item upgrades",
     )
-    router = _SemanticRouter(
-        [_leaf(index, capability, anchor) for index, (capability, anchor) in enumerate(zip(capabilities, anchors))]
-    )
+    router = _SemanticRouter(_two_stage_outputs(capabilities, anchors))
     catalog = build_bounded_requirement_catalog(prompt, router=router)
     assert {item["capability"] for item in catalog["requirements"]} == set(capabilities)
     assert all(len(item["provides"]) == 1 for item in catalog["requirements"])
+    assert catalog["semantic_audit"]["semantic_model_calls_total_observed"] == 10
 
 
 def test_frozen_catalog_compiles_a_task_chain_for_every_root() -> None:
@@ -77,9 +97,7 @@ def test_frozen_catalog_compiles_a_task_chain_for_every_root() -> None:
     anchors = ("Spawn hostile mobs", "Add a boss entity", "Add equipment")
     catalog = build_bounded_requirement_catalog(
         prompt,
-        router=_SemanticRouter(
-            [_leaf(index, capability, anchor) for index, (capability, anchor) in enumerate(zip(capabilities, anchors))]
-        ),
+        router=_SemanticRouter(_two_stage_outputs(capabilities, anchors)),
     )
     plan = compile_evidence_first_plan(
         prompt,
