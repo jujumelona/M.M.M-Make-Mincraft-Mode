@@ -77,8 +77,16 @@ def test_model_cannot_route_scope_to_user_only_to_bypass_research_policy() -> No
         ]
     )
 
-    with pytest.raises(ValueError, match="PROMPT_STATE_ROUTE"):
-        build_initial_planning_state(router, prompt)
+    state = build_initial_planning_state(router, prompt)
+    scope = next(item for item in state["unresolved"] if item["reason"] == "scope")
+    assert scope["resolution_route"] == "default_policy"
+    assert scope["source_kinds"] == []
+    assert scope["status"] == "resolved"
+    assert any(
+        item.get("unresolved_id") == scope["unresolved_id"]
+        and item.get("basis") == "host_default_policy"
+        for item in state["resolved"]
+    )
 
 
 def test_reference_query_compiler_is_explicitly_target_neutral() -> None:
