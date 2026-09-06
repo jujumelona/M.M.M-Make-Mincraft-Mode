@@ -231,7 +231,6 @@ def _compile_requirement_plan(
         "requirement": deepcopy(dict(requirement)),
         "implementation_research": deepcopy(evidence),
         "allowed_evidence_refs": sorted(allowed),
-        "engineering_worksheet_contract": worksheet_prompt(),
     }
     messages = [
         {
