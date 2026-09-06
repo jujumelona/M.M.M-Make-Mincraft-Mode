@@ -8,6 +8,8 @@ from minecraft_mod_ai.planner_template_schema import (
     build_batch_skeleton,
     merge_model_output_into_skeleton,
 )
+from minecraft_mod_ai.planning_state_research import _evidence_refs
+from minecraft_mod_ai.pre_design_domain_research import research_document_domain
 
 
 def _skeleton() -> dict[str, object]:
@@ -237,3 +239,40 @@ def test_model_cannot_widen_evidence_owned_contract_or_acceptance() -> None:
     assert page["assets"] == []
     assert page["acceptance_tests"] == ["The runtime behavior is observable."]
     assert page["completed_deliverables"] == ["runtime_done"]
+
+
+def test_host_grounded_cards_feed_planning_claim_transport_without_model_synthesis() -> None:
+    class ProjectRag:
+        @staticmethod
+        def _read_evidence_pages(_document: object) -> list[dict[str, str]]:
+            return [
+                {
+                    "page_ref": "page:r_001:1",
+                    "content": (
+                        "Warp drive systems use an activation sequence and a bounded resource cost. "
+                        "The behavior is documented by this materialized source page."
+                    ),
+                }
+            ]
+
+    note = research_document_domain(
+        None,
+        ProjectRag(),
+        None,
+        prompt="Build a warp drive mechanic.",
+        domain={
+            "domain_id": "r_001",
+            "objective": "Document warp drive behavior.",
+            "requirements": ["activation sequence", "resource cost"],
+            "queries": ["warp drive activation resource cost"],
+        },
+        document={},
+        trace_metadata=None,
+    )
+
+    assert note["model_called"] is False
+    assert note["grounded_evidence_cards"]
+    assert note["claims"]
+    assert note["claims"][0]["semantic_claim"] is False
+    assert note["claims"][0]["evidence_refs"] == ["page:r_001:1"]
+    assert _evidence_refs(note) == ["page:r_001:1"]
