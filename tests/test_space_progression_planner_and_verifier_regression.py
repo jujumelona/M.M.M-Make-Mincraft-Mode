@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import evidence_first_planning as planning
-from minecraft_mod_ai import planning_authority
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
@@ -19,6 +18,7 @@ from minecraft_mod_ai.small_model_task_capsule_contract import (
     _TaskBoundAdapter,
     compile_task_capsule,
 )
+from tests.planning_authority_fixtures import request_catalog
 
 PROMPT = (
     "자원파밍으로 돈을 모으고 거래하여 우주선을 부위마다 제작하고 무기를 업그레이드하고 "
@@ -27,137 +27,190 @@ PROMPT = (
 )
 
 
-def _semantic_item(
-    capability: str,
-    anchor: str,
-    given: str,
-    when: str,
-    then: str,
-    *,
-    semantic_type="gameplay_mechanic",
-):
-    return {
-        "source_clause_index": 0,
-        "capability_id": capability,
-        "source_anchor": anchor,
-        "semantic_statement": f"Player-visible {capability} behavior",
-        "given": given,
-        "when": when,
-        "then": then,
-        "semantic_type": semantic_type,
+def _grounded_requirements() -> list[dict[str, object]]:
+    ids = {
+        "resource.farming": "req_resource_farming",
+        "economy.currency": "req_economy_currency",
+        "economy.trade": "req_economy_trade",
+        "spacecraft.component_construction": "req_spacecraft_component_construction",
+        "spacecraft.weapon_upgrade": "req_spacecraft_weapon_upgrade",
+        "crew.recruitment": "req_crew_recruitment",
+        "spacecraft.performance_upgrade": "req_spacecraft_performance_upgrade",
+        "spacecraft.expansion": "req_spacecraft_expansion",
+        "space.launch": "req_space_launch",
+        "planet.special_mineral": "req_planet_special_mineral",
+        "alien.combat": "req_alien_combat",
+        "colony.colonization": "req_colony_colonization",
     }
 
+    def row(
+        capability: str,
+        source_text: str,
+        given: str,
+        when: str,
+        then: str,
+        *,
+        depends: tuple[str, ...] = (),
+        implementation_capabilities: tuple[str, ...] = (),
+        obligations: tuple[str, ...] = (),
+        artifacts: tuple[dict[str, str], ...] = (),
+    ) -> dict[str, object]:
+        return {
+            "requirement_id": ids[capability],
+            "capability": capability,
+            "statement": f"Player-visible {capability} behavior",
+            "source_text": source_text,
+            "semantic_type": "gameplay_mechanic",
+            "acceptance": [then],
+            "depends_on": [ids[item] for item in depends],
+            "implementation_capabilities": list(
+                implementation_capabilities or (capability,)
+            ),
+            "implementation_obligations": list(
+                obligations
+                or (
+                    f"Establish precondition: {given}",
+                    f"Implement action: {when}",
+                    f"Verify observable result: {then}",
+                )
+            ),
+            "artifact_obligations": list(artifacts),
+        }
 
-def _semantic_requirements() -> list[dict[str, object]]:
     return [
-        _semantic_item(
+        row(
             "resource.farming",
             "자원파밍으로",
             "farmable resources exist",
             "the player farms resources",
             "resource inventory increases",
         ),
-        _semantic_item(
+        row(
             "economy.currency",
             "돈을 모으고",
             "the player owns gathered resources",
             "the player earns money",
             "currency balance increases",
+            depends=("resource.farming",),
         ),
-        _semantic_item(
+        row(
             "economy.trade",
             "거래하여",
             "resources and currency are available",
             "the player accepts a priced stocked trade",
             "inventory, stock and balance change atomically",
+            depends=("resource.farming", "economy.currency"),
+            obligations=(
+                "Define buy/sell prices, stock semantics, and atomic trade settlement.",
+                "Verify inventory, stock and balance change atomically.",
+            ),
         ),
-        _semantic_item(
+        row(
             "spacecraft.component_construction",
             "우주선을 부위마다 제작하고",
             "resources, currency and trading are available",
             "the player acquires and assembles compatible ship parts",
             "the assembled spacecraft records its parts",
+            depends=("economy.trade",),
         ),
-        _semantic_item(
+        row(
             "spacecraft.weapon_upgrade",
             "무기를 업그레이드하고",
             "a spacecraft and trading are available",
             "the player buys and installs a weapon tier",
             "the weapon slot and combat stats increase",
+            depends=("spacecraft.component_construction", "economy.trade"),
         ),
-        _semantic_item(
+        row(
             "crew.recruitment",
             "선원을 고용하고",
             "a spacecraft and trading are available",
             "the player hires and assigns crew",
             "crew roles and skills affect the spacecraft",
+            depends=("spacecraft.component_construction", "economy.trade"),
+            obligations=(
+                "Define crew recruitment, assignment, and removal/death behavior.",
+                "Verify crew roles and skills affect the spacecraft.",
+            ),
         ),
-        _semantic_item(
+        row(
             "spacecraft.performance_upgrade",
             "우주선 성능을 업그레이드하고",
             "a spacecraft and trading are available",
             "the player buys a performance tier",
             "thrust, speed, fuel capacity or durability increases",
-            semantic_type="software_quality",
+            depends=("spacecraft.component_construction", "economy.trade"),
+            implementation_capabilities=(
+                "spacecraft.performance_upgrade",
+                "spacecraft.gameplay_stat_schema",
+            ),
+            obligations=(
+                "Resolve authored spacecraft stat dimensions before implementing upgrade tiers.",
+                "Implement transactional performance-tier purchase and persistent stat updates.",
+                "Verify thrust, speed, fuel capacity or durability increases.",
+            ),
+            artifacts=(
+                {"kind": "item_model", "purpose": "upgrade item presentation"},
+                {"kind": "recipe", "purpose": "upgrade acquisition"},
+                {"kind": "tag", "purpose": "upgrade compatibility"},
+                {"kind": "lang", "purpose": "upgrade labels"},
+            ),
         ),
-        _semantic_item(
+        row(
             "spacecraft.expansion",
             "우주선을 확장한 뒤",
             "a spacecraft and trading are available",
             "the player buys and installs expansion modules",
             "cargo or module capacity increases",
+            depends=("spacecraft.component_construction", "economy.trade"),
         ),
-        _semantic_item(
+        row(
             "space.launch",
             "우주로 나가서",
             "the spacecraft, weapons, crew, performance and expansion meet launch requirements",
             "the player spends fuel and selects a destination",
             "the player and spacecraft enter space",
+            depends=(
+                "spacecraft.component_construction",
+                "spacecraft.weapon_upgrade",
+                "crew.recruitment",
+                "spacecraft.performance_upgrade",
+                "spacecraft.expansion",
+            ),
         ),
-        _semantic_item(
+        row(
             "planet.special_mineral",
             "다른 행성 광물을 채굴하고",
             "the player is in space and has reached another planet",
             "the player mines a special mineral",
             "the special mineral enters inventory",
+            depends=("space.launch",),
         ),
-        _semantic_item(
+        row(
             "alien.combat",
             "외계인과 전투하고",
             "the player is in space on an alien planet",
             "the player and an alien exchange attacks",
             "combat damage, death and drops are observable",
+            depends=("space.launch",),
         ),
-        _semantic_item(
+        row(
             "colony.colonization",
             "다른 행성을 식민지화한다",
             "the player is in space on a colonizable planet",
             "the player establishes a colony",
             "colony ownership, storage and development persist",
+            depends=("space.launch",),
+            obligations=(
+                "Define colony ownership, storage, and development stages.",
+                "Verify colony state persists across reloads.",
+            ),
         ),
     ]
 
 
-class _SemanticRouter:
-    def generate_tool_decision(self, role, messages, **kwargs):
-        assert role == "planner"
-        assert kwargs["tool_name"] == "compile_semantic_requirements"
-        payload = json.loads(messages[-1]["content"])
-        clause_indices = {
-            int(item["source_clause_index"])
-            for item in payload["host_owned_clauses"]
-        }
-        return {
-            "requirements": [
-                item
-                for item in _semantic_requirements()
-                if int(item["source_clause_index"]) in clause_indices
-            ]
-        }
-
-
 def test_space_progression_semantics_dependencies_and_obligations_are_complete() -> None:
-    catalog = planning_authority.build_authoritative_request_catalog(PROMPT, _SemanticRouter())
+    catalog = request_catalog(PROMPT, _grounded_requirements())
     by_capability = {item["capability"]: item for item in catalog["requirements"]}
 
     assert len(by_capability) == 12
