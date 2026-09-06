@@ -173,6 +173,7 @@ def _derivation_plan() -> dict[str, object]:
                     "requirement_id": "req_demo",
                     "statement": "travel to another world",
                     "capability": "capability:space_travel",
+                    "implementation_capabilities": ["network.action_sync"],
                 }
             ],
         },
@@ -220,12 +221,12 @@ def test_research_derivation_closes_facets_without_model_planning(
     assert len(decisions) == len(derivation.FACETS)
     assert all(item["disposition"] != "unresolved" for item in decisions)
     derived = [item for item in decisions if item["disposition"] == "derived"]
-    assert derived
-    assert all(item["parent_requirement_ref"] == "req_demo" for item in derived)
-    assert all(item["provenance_role"] == "logically_derived" for item in derived)
-    assert all(item["owner_task_ref"] == "task_demo" for item in derived)
-    assert all(item["acceptance"] for item in derived)
-    assert all(item["implementation_obligations"] for item in derived)
+    assert [item["facet"] for item in derived] == ["server_network_authority"]
+    assert derived[0]["parent_requirement_ref"] == "req_demo"
+    assert derived[0]["provenance_role"] == "logically_derived"
+    assert derived[0]["owner_task_ref"] == "task_demo"
+    assert derived[0]["acceptance"]
+    assert derived[0]["implementation_obligations"]
 
 
 def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(
@@ -273,4 +274,4 @@ def test_research_absence_is_closed_by_host_template_not_model_failure(
     assert all(
         item["disposition"] != "unresolved" for item in ledger["facet_decisions"]
     )
-    assert ledger["host_closure"]["required_facets_closed"] >= 1
+    assert ledger["host_closure"]["required_facets_closed"] == 1
