@@ -21,7 +21,7 @@ from .platform_live_discovery import (
     latest_stable_versions,
 )
 from .target_contract import (
-    TargetContract as PlatformAdapter,
+    TargetContract,
     uses_native_names,
 )
 
@@ -31,7 +31,7 @@ class PlatformProvider:
     loader: str
     provider_id: str
     discover_versions: Callable[[int], tuple[str, ...]]
-    resolve: Callable[[str], PlatformAdapter]
+    resolve: Callable[[str], TargetContract]
 
 
 _PROVIDER_LOCK = RLock()
@@ -91,7 +91,7 @@ def _candidate_versions(
 def _resolve_candidate(
     provider: PlatformProvider,
     version: str,
-) -> tuple[PlatformAdapter | None, str | None]:
+) -> tuple[TargetContract | None, str | None]:
     try:
         adapter = provider.resolve(version)
         adapter.validate()
@@ -184,9 +184,9 @@ def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...
     return tuple(values)
 
 
-def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
+def adapters_for_version(minecraft_version: str) -> tuple[TargetContract, ...]:
     version = str(minecraft_version).strip()
-    result: list[PlatformAdapter] = []
+    result: list[TargetContract] = []
     for loader in executable_loaders():
         try:
             result.append(adapter_for_target(version, loader))
@@ -195,7 +195,7 @@ def adapters_for_version(minecraft_version: str) -> tuple[PlatformAdapter, ...]:
     return tuple(result)
 
 
-def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
+def adapter_for_target(minecraft_version: str, loader: str) -> TargetContract:
     version = str(minecraft_version).strip()
     if not version:
         raise ValueError("Minecraft version must not be empty when resolving an exact target.")
@@ -222,14 +222,14 @@ def adapter_for_target(minecraft_version: str, loader: str) -> PlatformAdapter:
         raise
 
 
-def newest_adapter(*, loader: str) -> PlatformAdapter:
+def newest_adapter(*, loader: str) -> TargetContract:
     keys = discover_target_keys(loader=loader, limit_per_loader=12)
     if not keys:
         raise ValueError(f"No executable platform target for loader={loader!r}.")
     return adapter_for_target(keys[0][1], keys[0][0])
 
 
-def adapter_for_lock_values(value: Any) -> PlatformAdapter:
+def adapter_for_lock_values(value: Any) -> TargetContract:
     adapter = adapter_for_target(
         str(getattr(value, "minecraft_version", "")),
         str(getattr(value, "loader", "")),
@@ -257,7 +257,7 @@ def adapter_for_lock_values(value: Any) -> PlatformAdapter:
     return adapter
 
 
-def adapter_from_project(project_root: str | Path) -> PlatformAdapter:
+def adapter_from_project(project_root: str | Path) -> TargetContract:
     root = Path(project_root).expanduser().resolve()
     lock_file = root / ".minecraft_ai" / "platform-lock.json"
     if lock_file.is_file() and not lock_file.is_symlink():
@@ -342,7 +342,7 @@ def _fabric_versions(limit: int) -> tuple[str, ...]:
         raise
 
 
-def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
+def _fabric_adapter(minecraft_version: str) -> TargetContract:
     version = str(minecraft_version).strip()
     if not version:
         raise ValueError("Minecraft version must not be empty for Fabric discovery.")
@@ -360,7 +360,7 @@ def _fabric_adapter(minecraft_version: str) -> PlatformAdapter:
     native_names = uses_native_names(target.minecraft_version)
     mappings_kind = "" if native_names else target.mappings_kind
     mappings_version = "" if native_names else target.mappings_version
-    adapter = PlatformAdapter(
+    adapter = TargetContract(
         adapter_id=f"fabric_live_{_safe_id(version)}_{digest}",
         edition="java",
         loader="fabric",
