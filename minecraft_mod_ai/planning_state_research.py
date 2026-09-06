@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Resolve planning-state unknowns with route-appropriate grounded evidence.
 
-The planning-state SSOT owns *why* information is needed before any retrieval query is
+The planning-state SSOT owns why information is needed before any retrieval query is
 compiled. Reference/world knowledge is retrieved without Minecraft filtering; Minecraft
 implementation research uses the existing mod/code/API RAG path. Model prose is never
 promoted to evidence without materialized-page grounding and validation.
@@ -32,7 +32,6 @@ _QUERY_PARAMETERS: dict[str, Any] = {
     "required": ["queries"],
     "additionalProperties": False,
 }
-
 _DEFAULT_SCOPE_POLICY = (
     "When authored scope is unspecified, select only an externally evidenced, coherent "
     "end-to-end gameplay slice that preserves the reference's distinctive loop. Never "
@@ -99,7 +98,7 @@ def _compile_queries(router: Any, state: Mapping[str, Any], research: Mapping[st
 def _providers_for(source_kinds: Sequence[str]) -> list[str]:
     kinds = set(source_kinds)
     if kinds & _REFERENCE_SOURCE_KINDS:
-        return ["wikipedia", "github_reference"]
+        return ["wikipedia", "github"]
     providers: list[str] = []
     if kinds & {"repository", "existing_mods"}:
         providers.extend(["github", "modrinth", "curseforge"])
@@ -108,6 +107,20 @@ def _providers_for(source_kinds: Sequence[str]) -> list[str]:
     if "project_rag" in kinds:
         providers.append("project_rag")
     return list(dict.fromkeys(providers)) or ["github", "project_rag"]
+
+
+def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
+    kinds = set(source_kinds)
+    output: list[str] = []
+    if kinds & _REFERENCE_SOURCE_KINDS:
+        output.append("gameplay_reference")
+    if kinds & {"repository", "existing_mods"}:
+        output.append("source_code")
+    if kinds & {"minecraft_docs", "minecraft_source"}:
+        output.append("minecraft_api")
+    if "project_rag" in kinds:
+        output.append("local_project")
+    return list(dict.fromkeys(output)) or ["scholarly_reference"]
 
 
 def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
@@ -122,27 +135,29 @@ def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
         research["queries"] = _compile_queries(router, state, research)
 
 
-def _research_brief(prompt: str, state: Mapping[str, Any]) -> dict[str, Any]:
+def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, Any], set[str]]:
     domains: list[dict[str, Any]] = []
+    reference_domain_ids: set[str] = set()
     for raw in state.get("research_queue", []) if isinstance(state.get("research_queue"), list) else []:
         if not isinstance(raw, Mapping) or str(raw.get("status") or "") != "pending":
             continue
         queries = [
-            _text(item)
-            for item in raw.get("queries", [])
-            if _text(item)
+            _text(item) for item in raw.get("queries", []) if _text(item)
         ] if isinstance(raw.get("queries"), list) else []
         if not queries:
             raise ValueError(
                 f"PLANNING_RESEARCH_QUERY: pending research {raw.get('research_id')!r} has no compiled queries"
             )
-        source_kinds = list(raw.get("source_kinds") or [])
+        source_kinds = [str(item) for item in raw.get("source_kinds", [])]
+        domain_id = str(raw.get("research_id") or "")
+        if set(source_kinds) & _REFERENCE_SOURCE_KINDS:
+            reference_domain_ids.add(domain_id)
         domains.append(
             {
-                "domain_id": str(raw.get("research_id") or ""),
+                "domain_id": domain_id,
                 "objective": _text(raw.get("objective")),
                 "requirements": [_text(raw.get("information_needed"))],
-                "evidence_kinds": source_kinds,
+                "evidence_kinds": _evidence_kinds_for(source_kinds),
                 "queries": queries,
                 "providers": _providers_for(source_kinds),
                 "depends_on": [],
@@ -157,22 +172,14 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(item, Mapping) and item.get("status") == "open"
         ],
     }
-    return normalize_research_brief(prompt, {"title": "prompt-state research"}, candidate)
-
-
-def _is_reference_domain(domain: Mapping[str, Any]) -> bool:
-    kinds = domain.get("evidence_kinds")
-    return bool(
-        isinstance(kinds, list)
-        and _REFERENCE_SOURCE_KINDS.intersection(str(item) for item in kinds)
+    return (
+        normalize_research_brief(prompt, {"title": "prompt-state research"}, candidate),
+        reference_domain_ids,
     )
 
 
 def _domain_note_by_id(notes: Sequence[Mapping[str, Any]], domain_id: str) -> Mapping[str, Any] | None:
-    return next(
-        (note for note in notes if str(note.get("domain_id") or "") == domain_id),
-        None,
-    )
+    return next((note for note in notes if str(note.get("domain_id") or "") == domain_id), None)
 
 
 def _evidence_refs(note: Mapping[str, Any]) -> list[str]:
@@ -211,9 +218,7 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
 def _grounded_reference_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
     from .reference_source_research import retrieve_reference_grounded_evidence
     queries = [
-        _text(item)
-        for item in domain.get("queries", [])
-        if _text(item)
+        _text(item) for item in domain.get("queries", []) if _text(item)
     ] if isinstance(domain.get("queries"), list) else []
     return retrieve_reference_grounded_evidence(queries)
 
@@ -243,26 +248,28 @@ def collect_planning_state_research(
             _apply_scope_policy(value, unresolved)
 
     _compile_pending_queries(router, value)
-    brief = _research_brief(prompt, value)
+    brief, reference_domain_ids = _research_brief(prompt, value)
     if not brief.get("domains"):
         return _rehash(value)
 
     minecraft_domains = [
         dict(domain)
         for domain in brief.get("domains", [])
-        if isinstance(domain, Mapping) and not _is_reference_domain(domain)
+        if isinstance(domain, Mapping) and str(domain.get("domain_id") or "") not in reference_domain_ids
     ]
     minecraft_bundle: dict[str, Any] | None = None
     if minecraft_domains:
-        minecraft_brief = {**brief, "domains": minecraft_domains}
-        minecraft_bundle = project_rag._forced_rag_bundle(router, minecraft_brief)
+        minecraft_bundle = project_rag._forced_rag_bundle(
+            router,
+            {**brief, "domains": minecraft_domains},
+        )
 
     notes: list[dict[str, Any]] = []
     for domain in brief.get("domains", []):
         if not isinstance(domain, Mapping):
             continue
         domain_id = str(domain.get("domain_id") or "")
-        if _is_reference_domain(domain):
+        if domain_id in reference_domain_ids:
             grounded = _grounded_reference_domain(domain)
         else:
             if minecraft_bundle is None:
@@ -299,14 +306,15 @@ def collect_planning_state_research(
         if note is None:
             research["status"] = "blocked"
             continue
-        sufficient = note.get("sufficient") is True and bool(note.get("claims"))
+        refs = _evidence_refs(note)
+        sufficient = note.get("sufficient") is True and bool(note.get("claims")) and bool(refs)
         research["status"] = "complete" if sufficient else "blocked"
         value["evidence"].append(
             {
                 "evidence_id": f"e_{len(value['evidence']) + 1:03d}",
                 "research_ref": research_id,
                 "claims": deepcopy(note.get("claims") or []),
-                "evidence_refs": _evidence_refs(note),
+                "evidence_refs": refs,
                 "sufficient": sufficient,
                 "source": "grounded_materialized_pages",
             }
@@ -322,7 +330,7 @@ def collect_planning_state_research(
                         "unresolved_id": unresolved["unresolved_id"],
                         "resolution": deepcopy(note.get("claims") or []),
                         "basis": "grounded_research",
-                        "evidence_refs": _evidence_refs(note),
+                        "evidence_refs": refs,
                     }
                 )
             else:
@@ -330,7 +338,7 @@ def collect_planning_state_research(
                     {
                         "blocker_id": f"b_{len(value['blockers']) + 1:03d}",
                         "unresolved_id": unresolved["unresolved_id"],
-                        "statement": "Grounded research did not produce sufficient evidence for this required decision.",
+                        "statement": "Grounded research did not produce sufficient cited evidence for this required decision.",
                     }
                 )
 
