@@ -40,12 +40,11 @@ def _assert_known_requirement_ids(
 
 def _active_requirement_ledger(prompt: str) -> tuple[dict[str, Any], ...]:
     """Read the already-frozen authored request authority without rebuilding scope."""
-    from . import evidence_request_guard as request_guard
+    from .planning_authority import active_authoritative_request_catalog
 
-    active = request_guard._ACTIVE_REQUEST_CATALOG.get()
-    if active is None or active[0] != prompt:
+    catalog = active_authoritative_request_catalog(prompt)
+    if not isinstance(catalog, Mapping):
         return ()
-    catalog = active[1]
     raw_requirements = catalog.get("requirements", [])
     if not isinstance(raw_requirements, list):
         return ()
