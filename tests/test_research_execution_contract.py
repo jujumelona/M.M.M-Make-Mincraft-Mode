@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from minecraft_mod_ai import evidence_execution_contract as execution
 from minecraft_mod_ai import research_derived_requirements as derivation
 from minecraft_mod_ai.plan_collect_all_linker import collect_plan_link_issues
@@ -15,10 +11,11 @@ def _task(
     provides: list[str],
     anchors: list[dict[str, object]],
     depends_on: list[str] | None = None,
+    semantic_outcome: str | None = None,
 ) -> dict[str, object]:
     return {
         "task_id": task_id,
-        "semantic_outcome": task_id,
+        "semantic_outcome": semantic_outcome or task_id,
         "gap_refs": ["gap_demo"],
         "requirement_refs": ["req_demo"],
         "target_cell": {},
@@ -70,6 +67,7 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
     resource = _task(
         "task_resource_binding",
         provides=["resource:space_travel"],
+        semantic_outcome="resource",
         anchors=[
             {
                 "kind": "resource",
@@ -125,10 +123,11 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
     registry_lowered = by_id["task_registry_identity"]
     assert registry_lowered["execution_role"] == "production"
     assert {anchor["kind"] for anchor in registry_lowered["owned_anchors"]} == {
-        "registry_id"
+        "registry_id",
+        "symbol",
     }
-    assert "source_static_validation" not in registry_lowered["required_gates"]
-    assert "target_compile" not in registry_lowered["required_gates"]
+    assert "source_static_validation" in registry_lowered["required_gates"]
+    assert "target_compile" in registry_lowered["required_gates"]
     assert any(
         binding["task_ref"] == "task_registry_identity"
         for binding in handoff["production_modules"]
@@ -136,6 +135,7 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
 
     resource_lowered = by_id["task_resource_binding"]
     assert resource_lowered["execution_role"] == "resource"
+    assert {anchor["kind"] for anchor in resource_lowered["owned_anchors"]} == {"resource"}
     assert "source_static_validation" not in resource_lowered["required_gates"]
     assert "target_compile" not in resource_lowered["required_gates"]
 
@@ -144,28 +144,12 @@ def test_execution_lowering_binds_runtime_and_keeps_non_source_steps_typed(monke
 
 
 class _FacetRouter:
-    def __init__(self, unresolved: bool = False) -> None:
-        self.unresolved = unresolved
+    def __init__(self) -> None:
         self.calls = 0
 
-    def generate_text(self, _role, messages, **_kwargs):
+    def generate_text(self, *_args, **_kwargs):
         self.calls += 1
-        payload = json.loads(messages[1]["content"])["host_owned"]
-        evidence_ref = payload["evidence_catalog"][0]["evidence_ref"]
-        decision = "insufficient_evidence" if self.unresolved else "add_obligation"
-        return json.dumps(
-            {
-                "decision": decision,
-                "rationale": "The supplied source adds a requirement-specific check.",
-                "evidence_refs": [evidence_ref],
-                "acceptance": []
-                if self.unresolved
-                else ["The requested transition passes an external check."],
-                "implementation_obligations": []
-                if self.unresolved
-                else ["Add a GameTest covering the transition."],
-            }
-        )
+        raise AssertionError("deterministic host facet closure must not call the model")
 
 
 class _NoCallRouter:
@@ -197,23 +181,12 @@ def _derivation_plan() -> dict[str, object]:
     }
 
 
-def test_research_derivation_requires_traceable_evidence_and_one_facet_turn(
-    monkeypatch, synthetic_platform_lock
-):
-    monkeypatch.setattr(
-        derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
-    )
-    router = _FacetRouter()
-    ledger = derivation.derive_research_requirements(
+def _derive(router, synthetic_platform_lock, *, research_brief):
+    return derivation.derive_research_requirements(
         router,
         prompt="travel to another world",
         evidence_plan=_derivation_plan(),
-        research_brief={
-            "source_id": "research:runtime",
-            "url": "https://example.org/test-fixture/runtime",
-            "requirement_ref": "req_demo",
-            "claim": "verification evidence: runtime transition is externally observable",
-        },
+        research_brief=research_brief,
         technical_evidence={},
         game_design={
             "_platform_selection": {
@@ -222,18 +195,39 @@ def test_research_derivation_requires_traceable_evidence_and_one_facet_turn(
             }
         },
     )
+
+
+def test_research_derivation_closes_facets_without_model_planning(
+    monkeypatch, synthetic_platform_lock
+):
+    monkeypatch.setattr(
+        derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
+    )
+    router = _FacetRouter()
+    ledger = _derive(
+        router,
+        synthetic_platform_lock,
+        research_brief={
+            "source_id": "research:runtime",
+            "url": "https://example.org/test-fixture/runtime",
+            "requirement_ref": "req_demo",
+            "claim": "verification evidence: runtime transition is externally observable",
+        },
+    )
     decisions = ledger["facet_decisions"]
-    assert router.calls == 1
-    assert ledger["model_call_policy"]["actual_calls_including_retries"] == 1
+    assert router.calls == 0
+    assert ledger["model_call_policy"]["actual_calls_including_retries"] == 0
+    assert ledger["model_call_policy"]["unit"] == "none"
+    assert ledger["host_template"]["model_generated_planning_json"] is False
     assert len(decisions) == len(derivation.FACETS)
+    assert all(item["disposition"] != "unresolved" for item in decisions)
     derived = [item for item in decisions if item["disposition"] == "derived"]
-    assert len(derived) == 1
-    assert derived[0]["facet"] == "verification_testing"
-    assert derived[0]["parent_requirement_ref"] == "req_demo"
-    assert derived[0]["provenance_role"] == "logically_derived"
-    assert derived[0]["evidence_refs"]
-    assert derived[0]["acceptance"]
-    assert derived[0]["implementation_obligations"]
+    assert derived
+    assert all(item["parent_requirement_ref"] == "req_demo" for item in derived)
+    assert all(item["provenance_role"] == "logically_derived" for item in derived)
+    assert all(item["owner_task_ref"] == "task_demo" for item in derived)
+    assert all(item["acceptance"] for item in derived)
+    assert all(item["implementation_obligations"] for item in derived)
 
 
 def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(
@@ -242,20 +236,12 @@ def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(
     monkeypatch.setattr(
         derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
     )
-    ledger = derivation.derive_research_requirements(
+    ledger = _derive(
         _NoCallRouter(),
-        prompt="travel to another world",
-        evidence_plan=_derivation_plan(),
+        synthetic_platform_lock,
         research_brief={
             "source_id": "research:generic",
             "claim": "general platform metadata is available",
-        },
-        technical_evidence={},
-        game_design={
-            "_platform_selection": {
-                "source": "platform_resolver",
-                "target": synthetic_platform_lock.to_dict(),
-            }
         },
     )
     assert ledger["model_call_policy"]["actual_calls_including_retries"] == 0
@@ -264,28 +250,29 @@ def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(
     )
 
 
-def test_research_derivation_fails_closed_on_relevant_unresolved_facet(
+def test_research_absence_is_closed_by_host_template_not_model_failure(
     monkeypatch, synthetic_platform_lock
 ):
     monkeypatch.setattr(
         derivation, "validate_evidence_first_plan", lambda _plan, prompt=None: None
     )
-    with pytest.raises(derivation.ResearchRequirementError, match="underspecified"):
-        derivation.derive_research_requirements(
-            _FacetRouter(unresolved=True),
-            prompt="travel to another world",
-            evidence_plan=_derivation_plan(),
-            research_brief={
-                "source_id": "research:persistence",
-                "url": "https://example.org/test-fixture/persistence",
-                "requirement_ref": "req_demo",
-                "claim": "persistence reload evidence for travel state is incomplete",
-            },
-            technical_evidence={},
-            game_design={
-                "_platform_selection": {
-                    "source": "platform_resolver",
-                    "target": synthetic_platform_lock.to_dict(),
-                }
-            },
-        )
+    router = _FacetRouter()
+    ledger = _derive(
+        router,
+        synthetic_platform_lock,
+        research_brief={
+            "source_id": "research:persistence",
+            "url": "https://example.org/test-fixture/persistence",
+            "requirement_ref": "req_demo",
+            "claim": "persistence reload evidence for travel state is incomplete",
+        },
+    )
+    assert router.calls == 0
+    assert ledger["model_call_policy"]["actual_calls_including_retries"] == 0
+    assert ledger["model_call_policy"]["research_absence_behavior"] == (
+        "continue_with_host_template"
+    )
+    assert all(
+        item["disposition"] != "unresolved" for item in ledger["facet_decisions"]
+    )
+    assert ledger["host_closure"]["required_facets_closed"] >= 1
