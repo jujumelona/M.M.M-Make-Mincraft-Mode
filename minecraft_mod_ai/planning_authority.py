@@ -324,6 +324,8 @@ def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]
     audit = dict(catalog.get("semantic_audit") or {})
     batch_size = audit.get("semantic_batch_size")
     batch_count = audit.get("semantic_batch_count")
+    model_calls = audit.get("semantic_model_calls_total_observed")
+    base_calls_per_batch = audit.get("semantic_base_stage_calls_per_batch")
     if type(batch_size) is not int or batch_size <= 0:
         raise _evidence.EvidencePlanError(
             "REQ_SCALE_BATCH_AUDIT: semantic batch size was lost before planning finalization."
@@ -332,14 +334,22 @@ def _compile_semantic_catalog(prompt: str, router: Any | None) -> dict[str, Any]
         raise _evidence.EvidencePlanError(
             "REQ_SCALE_BATCH_AUDIT: semantic batch count was lost before planning finalization."
         )
+    if type(base_calls_per_batch) is not int or base_calls_per_batch <= 0:
+        raise _evidence.EvidencePlanError(
+            "REQ_SCALE_BATCH_AUDIT: semantic base-stage call count was lost before planning finalization."
+        )
+    minimum_calls = batch_count * base_calls_per_batch
+    if type(model_calls) is not int or model_calls < minimum_calls:
+        raise _evidence.EvidencePlanError(
+            "REQ_SCALE_BATCH_AUDIT: observed semantic model calls contradict the bounded two-stage receipts."
+        )
 
     audit.update(
         {
-            "normal_model_turns": batch_count,
-            "semantic_model_turns": batch_count,
-            "semantic_discovery_model_turns": batch_count,
+            "normal_model_turns": model_calls,
+            "semantic_model_turns": model_calls,
+            "semantic_discovery_model_turns": model_calls,
             "semantic_detail_model_turns": 0,
-            "max_repair_turns": 0,
             "generation_policy": "bounded_host_catalog_classification_batches",
             "semantic_generation_protocol": "bounded_host_catalog_classification_batches",
             "max_clauses_per_model_turn": batch_size,
