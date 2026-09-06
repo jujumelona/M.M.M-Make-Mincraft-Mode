@@ -37,28 +37,9 @@ def _domain() -> dict[str, object]:
     }
 
 
-def test_source_bodies_survive_empty_small_model_extraction(monkeypatch) -> None:
-    monkeypatch.setattr(
-        domain_research,
-        "_small_model_research_document_domain",
-        lambda *_args, **_kwargs: {
-            "domain_id": "request",
-            "claims": [],
-            "gaps": [],
-            "next_queries": [],
-            "procedures": [],
-            "sufficient": True,
-            "fixed_point": False,
-            "research_mode": "advisory_predesign",
-            "research_evidence_status": "no_relevant_external_evidence",
-            "source_body_count": 2,
-            "model_called": True,
-            "page_local_diagnostics": ["ignored_malformed_model_line"],
-        },
-    )
-
+def test_source_bodies_are_projected_without_small_model_extraction() -> None:
     note = domain_research.research_document_domain(
-        object(),
+        None,
         _ProjectRag(),
         object(),
         prompt="persistent trading with reusable item code",
@@ -67,14 +48,17 @@ def test_source_bodies_survive_empty_small_model_extraction(monkeypatch) -> None
         trace_metadata=None,
     )
 
-    assert note["research_evidence_status"] == "partial"
-    assert note["evidence_extraction_status"] == (
-        "host_source_evidence_available_model_exact_claim_absent"
-    )
+    assert note["research_evidence_status"] == "supported"
+    assert note["evidence_extraction_status"] == "host_exact_evidence_available"
+    assert note["model_called"] is False
     assert note["model_grounded_claim_count"] == 0
     assert note["host_grounded_evidence_card_count"] == 2
     cards = note["grounded_evidence_cards"]
     assert {card["page_ref"] for card in cards} == {"page:alpha", "page:beta"}
+    assert {claim["evidence_refs"][0] for claim in note["claims"]} == {
+        "page:alpha",
+        "page:beta",
+    }
     for card in cards:
         source = next(
             page["content"]
