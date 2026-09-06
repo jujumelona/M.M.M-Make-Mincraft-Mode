@@ -51,8 +51,6 @@ jobs:
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           behavioral = int(payload["behavioral_count"])
-          # Keep the audited runtime mutation surface bounded. Change this budget only
-          # with an intentional runtime-composition change and matching review evidence.
           budget = 433
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
@@ -135,6 +133,24 @@ jobs:
           tests/test_planning_detail_applicability.py
           tests/test_planning_detail_grounding.py
 
+  coder-contract:
+    needs: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Coder task-local contract
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - run: >-
+          python -m pytest -q
+          tests/test_evidence_execution_contract.py
+          tests/test_coder_execution_contract.py
+          tests/test_task_local_small_model_architecture.py
+
   ui-contract:
     needs: audit
     runs-on: ubuntu-latest
@@ -209,6 +225,9 @@ jobs:
               "test_planning_detail_runtime_selection.py",
               "test_planning_detail_applicability.py",
               "test_planning_detail_grounding.py",
+              "test_evidence_execution_contract.py",
+              "test_coder_execution_contract.py",
+              "test_task_local_small_model_architecture.py",
               "test_conversational_ui.py",
               "test_agentic_search_efficiency_contract.py",
               "test_repair_candidate_purity_contract.py",
