@@ -128,7 +128,9 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     capability = capability_messages[-1]
     assert "ground-production-with-live-evidence" in capability
     assert "mmm/agent-capability-context-v7" in capability
-    assert len(capability.encode("utf-8")) < 24_000
+    # Keep this synchronized with the reviewed richest-route capability budget enforced
+    # by the security regression. The full request has its own stricter packing preflight.
+    assert len(capability.encode("utf-8")) < 25_000
 
     schema = {
         "type": "object",
