@@ -4,8 +4,9 @@ from __future__ import annotations
 
 Minecraft ecosystem retrieval intentionally filters for Minecraft mods. Reference-driven
 requests need a different source path before any Minecraft implementation decision exists.
-This module retrieves full claim-bearing bodies from general reference sources without
-silently converting the query into a Minecraft-mod query.
+Encyclopedic sources are authoritative for reference semantics; GitHub README search is a
+last-resort fallback only when Wikipedia returns no claim-bearing body. It is never run in
+parallel with a successful encyclopedia lookup.
 """
 
 import hashlib
@@ -15,15 +16,13 @@ import re
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 _TIMEOUT = 12.0
-_UA = "MMM-ReferenceResearch/1.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
+_UA = "MMM-ReferenceResearch/2.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 _GITHUB_API = "https://api.github.com"
 _MAX_WIKI_PAGES = 3
 _MAX_GITHUB_REPOS = 2
-_MAX_REFERENCE_WORKERS = 4
 
 _ReferenceProvider = Callable[[str], tuple[list[dict[str, Any]], dict[str, Any]]]
 
@@ -238,7 +237,7 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
                 "content": body,
                 "content_sha256": _sha(body),
                 "body_retrieved": True,
-                "evidence_origin": "github_reference_readme",
+                "evidence_origin": "github_reference_readme_fallback",
                 "metadata": {"provider": "github", "repository": full_name, "query": query},
             }
         )
@@ -247,6 +246,7 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
         "status": "available",
         "result_count": len(records),
         "errors": errors[:3],
+        "policy": "wikipedia_empty_fallback_only",
     }
 
 
@@ -271,46 +271,43 @@ def _retrieve_provider(
 
 
 def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, Any]:
-    """Return the same claim-bearing grounded shape used by research document materialization."""
+    """Retrieve encyclopedia evidence first; GitHub is a no-result fallback per query."""
     query_list = [_text(raw) for raw in queries]
     query_list = [query for query in query_list if query]
-    provider_functions: tuple[tuple[str, _ReferenceProvider], ...] = (
-        ("wikipedia", _wikipedia_sources),
-        ("github_reference", _github_reference_sources),
-    )
-    jobs = [
-        (query_index, query, provider, function)
-        for query_index, query in enumerate(query_list)
-        for provider, function in provider_functions
-    ]
-
-    if jobs:
-        workers = min(_MAX_REFERENCE_WORKERS, len(jobs))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="reference-source") as pool:
-            futures = [
-                pool.submit(_retrieve_provider, query, provider, function)
-                for _, query, provider, function in jobs
-            ]
-            results = [future.result() for future in futures]
-    else:
-        results = []
-
-    grouped_records: list[list[dict[str, Any]]] = [[] for _ in query_list]
-    grouped_providers: list[dict[str, Any]] = [{} for _ in query_list]
-    grouped_errors: list[list[dict[str, str]]] = [[] for _ in query_list]
-    for job, result in zip(jobs, results, strict=True):
-        query_index, _, provider, _ = job
-        found, receipt, error = result
-        grouped_records[query_index].extend(found)
-        grouped_providers[query_index][provider] = receipt
-        if error is not None:
-            grouped_errors[query_index].append(error)
-
     rows: list[dict[str, Any]] = []
-    for query_index, query in enumerate(query_list):
+
+    for query in query_list:
+        records: list[dict[str, Any]] = []
+        providers: dict[str, Any] = {}
+        errors: list[dict[str, str]] = []
+
+        wiki_found, wiki_receipt, wiki_error = _retrieve_provider(
+            query, "wikipedia", _wikipedia_sources
+        )
+        records.extend(wiki_found)
+        providers["wikipedia"] = wiki_receipt
+        if wiki_error is not None:
+            errors.append(wiki_error)
+
+        if wiki_found:
+            providers["github_reference"] = {
+                "provider": "github_reference",
+                "status": "skipped_wikipedia_has_evidence",
+                "result_count": 0,
+                "policy": "wikipedia_empty_fallback_only",
+            }
+        else:
+            github_found, github_receipt, github_error = _retrieve_provider(
+                query, "github_reference", _github_reference_sources
+            )
+            records.extend(github_found)
+            providers["github_reference"] = github_receipt
+            if github_error is not None:
+                errors.append(github_error)
+
         unique: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for record in grouped_records[query_index]:
+        for record in records:
             key = str(record.get("content_sha256") or record.get("source_id") or "")
             if key and key not in seen:
                 seen.add(key)
@@ -321,12 +318,14 @@ def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, An
                 "query_sha256": _sha(query),
                 "evidence_records": unique,
                 "content_record_count": len(unique),
-                "provider_receipts": grouped_providers[query_index],
-                "retrieval_errors": grouped_errors[query_index],
+                "provider_receipts": providers,
+                "retrieval_errors": errors,
+                "provider_policy": "wikipedia_then_github_empty_fallback",
             }
         )
+
     return {
-        "schema_version": "mmm/reference-grounded-evidence-v1",
+        "schema_version": "mmm/reference-grounded-evidence-v2",
         "queries": rows,
     }
 
