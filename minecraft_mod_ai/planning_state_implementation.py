@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Evidence-backed detailed-plan template between research and coder lowering.
+"""Detailed-plan compilation between grounded research and coder lowering.
 
-One small-model decision is made per researched user-visible requirement. Every concrete
-implementation obligation must cite grounded evidence already stored in the planning
-state. Host code owns readiness and refuses semantic-only or evidence-free handoffs.
+One small-model decision is made per researched user-visible requirement. Host code owns
+readiness, section applicability, evidence closure and target-fact validation. Authored
+design obligations are intentionally distinct from externally grounded bindings: design
+may be new, while API/version/repository/dependency/source facts must cite evidence.
 """
 
 from collections.abc import Iterable, Mapping
@@ -24,6 +25,26 @@ from .planning_detail_template import (
 from .planning_state_contract import validate_planning_state
 
 _TOOL = "submit_detailed_implementation_plan"
+_GROUNDED_BINDING_KINDS = {
+    "api_symbol",
+    "version_compatibility",
+    "repository_fact",
+    "dependency",
+    "source_behavior",
+}
+
+
+def _constraint_refs_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "uniqueItems": True,
+        "description": (
+            "Evidence that constrains this authored design row. Empty is valid when the row is a new design decision rather than an external fact."
+        ),
+        "items": {"type": "string"},
+    }
+
+
 _PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -36,16 +57,11 @@ _PARAMETERS: dict[str, Any] = {
                 "properties": {
                     "capability": {
                         "type": "string",
-                        "description": "Concrete implementation capability required by this requirement; never a vague feature label.",
+                        "description": "Concrete technical capability the authored implementation must possess; never a vague feature label.",
                     },
-                    "evidence_refs": {
-                        "type": "array",
-                        "minItems": 1,
-                        "uniqueItems": True,
-                        "items": {"type": "string"},
-                    },
+                    "constraint_evidence_refs": _constraint_refs_schema(),
                 },
-                "required": ["capability", "evidence_refs"],
+                "required": ["capability", "constraint_evidence_refs"],
                 "additionalProperties": False,
             },
         },
@@ -57,16 +73,11 @@ _PARAMETERS: dict[str, Any] = {
                 "properties": {
                     "obligation": {
                         "type": "string",
-                        "description": "One executable obligation with actor/owner, action, condition and observable result where applicable.",
+                        "description": "One executable authored obligation with actor/owner, action, condition and observable result where applicable.",
                     },
-                    "evidence_refs": {
-                        "type": "array",
-                        "minItems": 1,
-                        "uniqueItems": True,
-                        "items": {"type": "string"},
-                    },
+                    "constraint_evidence_refs": _constraint_refs_schema(),
                 },
-                "required": ["obligation", "evidence_refs"],
+                "required": ["obligation", "constraint_evidence_refs"],
                 "additionalProperties": False,
             },
         },
@@ -77,11 +88,33 @@ _PARAMETERS: dict[str, Any] = {
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "Artifact class such as source symbol, registry/data resource, generated resource, test, config or migration artifact.",
+                        "description": "Artifact class such as source component, registry/data resource, generated resource, test, config or migration artifact; do not invent a target path or symbol here.",
                     },
                     "purpose": {
                         "type": "string",
-                        "description": "Why this artifact is required and which observable behavior or implementation invariant it realizes.",
+                        "description": "Why this authored artifact class is required and which observable behavior or implementation invariant it realizes.",
+                    },
+                    "constraint_evidence_refs": _constraint_refs_schema(),
+                },
+                "required": ["kind", "purpose", "constraint_evidence_refs"],
+                "additionalProperties": False,
+            },
+        },
+        "grounded_bindings": {
+            "type": "array",
+            "description": (
+                "Externally verifiable implementation facts only. Every API/symbol/version/repository/dependency/source-behavior claim belongs here and requires evidence."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": sorted(_GROUNDED_BINDING_KINDS),
+                    },
+                    "fact": {
+                        "type": "string",
+                        "description": "One concrete externally verifiable fact established by supplied evidence; never an authored design preference.",
                     },
                     "evidence_refs": {
                         "type": "array",
@@ -90,7 +123,7 @@ _PARAMETERS: dict[str, Any] = {
                         "items": {"type": "string"},
                     },
                 },
-                "required": ["kind", "purpose", "evidence_refs"],
+                "required": ["kind", "fact", "evidence_refs"],
                 "additionalProperties": False,
             },
         },
@@ -106,7 +139,7 @@ _PARAMETERS: dict[str, Any] = {
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Specific compatibility/provenance/semantic reason for the reuse verdict, including what must change when adapting.",
+                        "description": "Specific compatibility/provenance/semantic reason for the evidence-backed reuse verdict, including what must change when adapting.",
                     },
                 },
                 "required": ["evidence_ref", "mode", "reason"],
@@ -123,13 +156,9 @@ _PARAMETERS: dict[str, Any] = {
                         "type": "string",
                         "description": "Observable Given/When/Then-style proof obligation with expected result; include success, rejection and relevant boundary cases.",
                     },
-                    "evidence_refs": {
-                        "type": "array",
-                        "uniqueItems": True,
-                        "items": {"type": "string"},
-                    },
+                    "constraint_evidence_refs": _constraint_refs_schema(),
                 },
-                "required": ["check", "evidence_refs"],
+                "required": ["check", "constraint_evidence_refs"],
                 "additionalProperties": False,
             },
         },
@@ -139,6 +168,7 @@ _PARAMETERS: dict[str, Any] = {
         "implementation_capabilities",
         "implementation_obligations",
         "artifact_obligations",
+        "grounded_bindings",
         "reuse_candidates",
         "verification_obligations",
     ],
@@ -147,15 +177,15 @@ _PARAMETERS: dict[str, Any] = {
 
 _SMALL_MODEL_PLAN_PROTOCOL = """SMALL-MODEL DETAILED-PLAN PROTOCOL
 1. Scope lock: plan exactly the supplied requirement. Do not redesign unrelated requirements or host-owned target coordinates.
-2. Evidence pass: read every supplied implementation_research record first; distinguish proved facts from examples, proposals and unresolved target bindings.
-3. Worksheet pass: fill exactly the host-required engineering_worksheet sections using the canonical checklists. Never add omitted sections or copy one generic sentence into multiple sections.
-4. Capability pass: name the concrete technical capabilities the implementation must possess; each one needs allowed evidence.
-5. Obligation pass: decompose implementation into independently executable obligations. State owner/action/condition/result instead of 'implement/support/handle X' alone.
-6. Artifact pass: enumerate only artifacts actually required by the grounded design. Do not invent paths, symbols, IDs or APIs that evidence does not establish.
-7. Reuse pass: classify each relevant source as reuse/adapt/reference_only/new_required and explain compatibility plus the adaptation boundary.
-8. Verification pass: prove authored success, rejection/failure and important boundaries. Add reload, multiplayer/authority and resource checks when those branches apply.
-9. Consistency pass: cross-check state transitions against algorithm, integration, applicable network/persistence/resource branches, artifacts and verification. Resolve contradictions before submission.
-10. Fail closed: if evidence cannot safely establish an implementation detail, keep it explicitly unresolved instead of fabricating a target-specific fact.
+2. Evidence pass: read every supplied implementation_research record first; distinguish proved external facts from examples, authored proposals and unresolved target bindings.
+3. Worksheet pass: fill exactly the host-required engineering_worksheet sections using the canonical checklists. These specifications are authored design contracts, not quotations from research.
+4. Capability pass: name concrete technical capabilities. Use constraint_evidence_refs only when research constrains the capability; an empty array is valid for a new design decision.
+5. Obligation pass: decompose implementation into independently executable authored obligations. State owner/action/condition/result instead of 'implement/support/handle X' alone.
+6. Artifact pass: enumerate only artifact classes required by the authored design. Do not invent target paths, symbols or identifiers.
+7. Binding pass: put every claimed API, symbol, version compatibility, repository fact, dependency or source behavior into grounded_bindings with one or more allowed evidence refs. Never put a design choice there.
+8. Reuse pass: classify each relevant source as reuse/adapt/reference_only/new_required and explain compatibility plus the adaptation boundary. Reuse verdicts are evidence-backed facts.
+9. Verification pass: prove authored success, rejection/failure and important boundaries. Add reload, multiplayer/authority and resource checks when those branches apply.
+10. Fail closed: if research cannot establish an external target fact, omit that factual binding and keep the design abstract instead of fabricating one.
 """
 
 
@@ -180,7 +210,9 @@ def _requirement_decisions(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     ]
 
 
-def _implementation_evidence(state: Mapping[str, Any], requirement_ref: str) -> list[Mapping[str, Any]]:
+def _implementation_evidence(
+    state: Mapping[str, Any], requirement_ref: str
+) -> list[Mapping[str, Any]]:
     research_ids = {
         str(item.get("research_id") or "")
         for item in state.get("research_queue", [])
@@ -206,18 +238,32 @@ def _allowed_refs(evidence: list[Mapping[str, Any]]) -> set[str]:
     }
 
 
-def _validate_refs(refs: Any, allowed: set[str], *, field: str, require: bool = True) -> list[str]:
+def _validate_refs(
+    refs: Any,
+    allowed: set[str],
+    *,
+    field: str,
+    require: bool = True,
+) -> list[str]:
     if not isinstance(refs, list):
-        raise ValueError(f"DETAILED_PLAN_{field.upper()}: evidence_refs must be an array")
-    values = list(dict.fromkeys(_text(ref) for ref in refs if _text(ref)))
-    if require and not values:
+        raise ValueError(f"DETAILED_PLAN_{field.upper()}: evidence refs must be an array")
+    raw_values = [_text(ref) for ref in refs]
+    if any(not value for value in raw_values):
+        raise ValueError(f"DETAILED_PLAN_{field.upper()}: evidence refs contain an empty value")
+    if len(set(raw_values)) != len(raw_values):
+        raise ValueError(f"DETAILED_PLAN_{field.upper()}: duplicate evidence refs")
+    if require and not raw_values:
         raise ValueError(f"DETAILED_PLAN_{field.upper()}: grounded evidence is required")
-    unknown = [ref for ref in values if ref not in allowed]
+    unknown = [ref for ref in raw_values if ref not in allowed]
     if unknown:
         raise ValueError(
             f"DETAILED_PLAN_{field.upper()}: unknown evidence refs: " + ", ".join(unknown)
         )
-    return values
+    return raw_values
+
+
+def _constraint_refs(refs: Any, allowed: set[str], *, field: str) -> list[str]:
+    return _validate_refs(refs, allowed, field=field, require=False)
 
 
 def _rehash(state: dict[str, Any]) -> dict[str, Any]:
@@ -244,6 +290,7 @@ def _compile_requirement_plan(
         raise ValueError(
             f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
         )
+
     context = {
         "requirement": deepcopy(dict(requirement)),
         "implementation_research": deepcopy(evidence),
@@ -258,15 +305,14 @@ def _compile_requirement_plan(
                 + "\n"
                 + worksheet_prompt(selected_sections)
                 + "\nGROUNDING RULES:\n"
-                "- This is a fill-and-verify task, not a redesign task.\n"
-                "- Never invent API names, files, symbols, dependencies, versions, identifiers or implementation mechanisms absent from evidence.\n"
-                "- Every implementation capability and implementation obligation must cite one or more supplied allowed evidence refs.\n"
-                "- Artifact entries must state a concrete artifact purpose supported by evidence; omit artifacts that are not required.\n"
+                "- This is a fill-and-verify task, not a redesign of requirement scope.\n"
+                "- Authored behavior, algorithms, state machines, constants and verification scenarios are design decisions; do not attach unrelated evidence merely to satisfy a field.\n"
+                "- constraint_evidence_refs may be empty. Populate them only when supplied evidence constrains that design row.\n"
+                "- Every API/symbol/version/repository/dependency/source-behavior claim belongs in grounded_bindings and every grounded binding must cite allowed evidence.\n"
+                "- Never invent target paths, API names, symbols, dependencies, versions or identifiers absent from evidence.\n"
                 "- Reuse mode must reflect what the cited source really supports; a retrieved pattern is not proof that it can be copied unchanged.\n"
-                "- Verification checks must prove the user-visible requirement or an evidence-backed invariant; compilation alone never proves behavior.\n"
+                "- Verification checks prove the authored requirement; compilation alone never proves behavior.\n"
                 "- Fill exactly the host-required worksheet sections; never add a branch the host omitted.\n"
-                "- New algorithms and proposed identifiers are design decisions, not retrieved facts.\n"
-                "- Keep unverified target-specific bindings explicitly separate from source examples.\n"
                 "- Prefer explicit numbers, units, state owners, branch conditions and expected outcomes over vague quality adjectives."
             ),
         },
@@ -279,7 +325,7 @@ def _compile_requirement_plan(
             tool_name=_TOOL,
             parameters=_parameters_for_sections(selected_sections),
             description=(
-                "Fill the host-required grounded engineering worksheet and concrete implementation, artifact, reuse and verification obligations for exactly one requirement."
+                "Fill the host-required authored engineering design, evidence-backed external bindings, reuse assessment and verification obligations for exactly one requirement."
             ),
         )
     if not isinstance(raw, Mapping):
@@ -290,6 +336,7 @@ def _compile_requirement_plan(
         allowed,
         selected_sections,
     )
+
     capabilities: list[dict[str, Any]] = []
     for item in raw.get("implementation_capabilities", []):
         if not isinstance(item, Mapping) or not _text(item.get("capability")):
@@ -297,9 +344,14 @@ def _compile_requirement_plan(
         capabilities.append(
             {
                 "capability": _text(item.get("capability")),
-                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="capability"),
+                "constraint_evidence_refs": _constraint_refs(
+                    item.get("constraint_evidence_refs"),
+                    allowed,
+                    field="capability_constraint",
+                ),
             }
         )
+
     obligations: list[dict[str, Any]] = []
     for item in raw.get("implementation_obligations", []):
         if not isinstance(item, Mapping) or not _text(item.get("obligation")):
@@ -307,7 +359,11 @@ def _compile_requirement_plan(
         obligations.append(
             {
                 "obligation": _text(item.get("obligation")),
-                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="obligation"),
+                "constraint_evidence_refs": _constraint_refs(
+                    item.get("constraint_evidence_refs"),
+                    allowed,
+                    field="obligation_constraint",
+                ),
             }
         )
     if not capabilities or not obligations:
@@ -326,7 +382,29 @@ def _compile_requirement_plan(
             {
                 "kind": kind,
                 "purpose": purpose,
-                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="artifact"),
+                "constraint_evidence_refs": _constraint_refs(
+                    item.get("constraint_evidence_refs"),
+                    allowed,
+                    field="artifact_constraint",
+                ),
+            }
+        )
+
+    grounded_bindings: list[dict[str, Any]] = []
+    for item in raw.get("grounded_bindings", []):
+        if not isinstance(item, Mapping):
+            raise ValueError("DETAILED_PLAN_BINDING: invalid grounded binding")
+        kind = _text(item.get("kind"))
+        fact = _text(item.get("fact"))
+        if kind not in _GROUNDED_BINDING_KINDS or not fact:
+            raise ValueError("DETAILED_PLAN_BINDING: invalid kind or missing fact")
+        grounded_bindings.append(
+            {
+                "kind": kind,
+                "fact": fact,
+                "evidence_refs": _validate_refs(
+                    item.get("evidence_refs"), allowed, field="binding"
+                ),
             }
         )
 
@@ -349,13 +427,17 @@ def _compile_requirement_plan(
         checks.append(
             {
                 "check": _text(item.get("check")),
-                "evidence_refs": _validate_refs(
-                    item.get("evidence_refs"), allowed, field="verification", require=False
+                "constraint_evidence_refs": _constraint_refs(
+                    item.get("constraint_evidence_refs"),
+                    allowed,
+                    field="verification_constraint",
                 ),
             }
         )
     if not checks:
-        raise ValueError(f"DETAILED_PLAN_VERIFICATION: {requirement_ref} has no verification plan")
+        raise ValueError(
+            f"DETAILED_PLAN_VERIFICATION: {requirement_ref} has no verification plan"
+        )
 
     return {
         "requirement_ref": requirement_ref,
@@ -364,6 +446,7 @@ def _compile_requirement_plan(
         "implementation_capabilities": capabilities,
         "implementation_obligations": obligations,
         "artifact_obligations": artifacts,
+        "grounded_bindings": grounded_bindings,
         "reuse_candidates": reuse,
         "verification_obligations": checks,
     }
@@ -377,7 +460,10 @@ def _host_section_selection(
 
     requirement_ids = [str(item.get("requirement_id") or "") for item in requirements]
     if required_sections_by_requirement is None:
-        return {requirement_id: normalize_required_sections() for requirement_id in requirement_ids}
+        return {
+            requirement_id: normalize_required_sections()
+            for requirement_id in requirement_ids
+        }
     if not isinstance(required_sections_by_requirement, Mapping):
         raise ValueError("DETAILED_PLAN_SECTIONS: host selection must be a requirement mapping")
 
@@ -409,7 +495,9 @@ def compile_detailed_implementation_plans(
     requirements = _requirement_decisions(value)
     if not requirements:
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: no researched requirements exist")
-    section_selection = _host_section_selection(requirements, required_sections_by_requirement)
+    section_selection = _host_section_selection(
+        requirements, required_sections_by_requirement
+    )
 
     workers = min(len(requirements), router_native_model_parallelism(router))
     if workers <= 1:
@@ -423,10 +511,9 @@ def compile_detailed_implementation_plans(
             for requirement in requirements
         ]
     else:
-        # Each requirement is evidence-isolated. Run only as many generations as the
-        # active native backend proves it can serve concurrently, then consume futures
-        # in authored order so decision IDs and coverage remain deterministic.
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="planning-detail"
+        ) as pool:
             futures = [
                 pool.submit(
                     _compile_requirement_plan,
