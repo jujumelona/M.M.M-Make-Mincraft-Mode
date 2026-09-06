@@ -10,6 +10,7 @@ from minecraft_mod_ai.minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
 )
+from tests.planning_authority_fixtures import request_catalog
 
 
 def _sha(value: object) -> str:
@@ -145,7 +146,28 @@ def test_single_slot_failure_is_not_replayed() -> None:
 
 
 def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> None:
-    plan = compile_minecraft_knowledge_plan("새 보스 몬스터를 추가해줘.")
+    prompt = "새 보스 몬스터를 추가해줘."
+    catalog = request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_boss",
+                "capability": "combat.boss_entity",
+                "statement": "새 보스 몬스터를 추가한다.",
+                "implementation_capabilities": [
+                    "entity.registration",
+                    "entity.attributes",
+                    "entity.ai_goals",
+                    "boss.bossbar",
+                    "combat.damage",
+                ],
+            }
+        ],
+    )
+    plan = compile_minecraft_knowledge_plan(
+        prompt,
+        {"_evidence_request_catalog": catalog},
+    )
     domains = list(plan["research_domains"])
     research = {
         "research_brief": {
