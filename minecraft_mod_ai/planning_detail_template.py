@@ -1,41 +1,218 @@
 from __future__ import annotations
 
-"""One evidence-bound engineering worksheet shared by planning and coding."""
+"""One evidence-bound engineering worksheet shared by planning and coding.
+
+The worksheet deliberately keeps a compact, stable wire shape for small models while
+making the meaning of every slot explicit.  The model fills exactly ten sections, each as
+one grounded specification plus evidence references; host code owns the section list and
+rejects omissions, placeholders, and invented evidence IDs.
+"""
 
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-DETAIL_FIELDS = {
-    "behavior_contract": "Exact actors, trigger, preconditions, inputs, outputs, units, bounds and observable postconditions.",
-    "state_model": "Owned state, types, defaults, legal transitions, invariants, reset and lifecycle rules.",
-    "algorithm": "Ordered operations, branches, termination, boundary cases and determinism; no vague 'implement behavior'.",
-    "integration": "Required platform hooks and call relationships supported by source evidence; distinguish verified symbols from requirements still needing target binding.",
-    "authority_and_network": "Client/server ownership, packet direction, validation, synchronization and reconnect behavior; explain inapplicability.",
-    "persistence": "Save/load ownership, format, lifetime, migration and malformed-data behavior; explain inapplicability.",
-    "resources_and_ui": "Required data/assets, identifiers, resource dependencies and UI interactions; explain inapplicability.",
-    "failure_and_limits": "Failure handling, cleanup, concurrency, resource limits and algorithmic cost supported by the intended behavior.",
-    "reuse_assessment": "Source locator, relevant implementation, what transfers, what changes, license/dependency/target compatibility and missing evidence. Unverified reuse stays reference-only.",
-    "verification": "Given/when/then checks, boundary/failure cases, observation method and expected outcome for each behavioral invariant.",
+DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
+    "behavior_contract": (
+        "actors and authoritative owner",
+        "trigger or entry condition",
+        "preconditions and eligibility rules",
+        "all inputs with type, unit, range, default and source",
+        "all outputs and externally visible side effects",
+        "success postconditions",
+        "rejection/no-op postconditions",
+        "ordering, timing, cooldown or frequency semantics when relevant",
+        "explicit boundaries and non-goals",
+    ),
+    "state_model": (
+        "every owned state variable and owning component",
+        "type, unit, default and valid domain for each state value",
+        "legal state transitions with trigger and guard",
+        "invariants that must hold before and after each transition",
+        "initialization and construction behavior",
+        "tick/update/lifecycle mutation rules",
+        "reset, death, removal, unload and cleanup behavior",
+        "concurrency/reentrancy assumptions when state may be touched from multiple paths",
+    ),
+    "algorithm": (
+        "ordered operations from entry to observable result",
+        "branch predicates and the action for every branch",
+        "formulae, thresholds, units and rounding/clamping rules",
+        "iteration order and termination condition",
+        "determinism/randomness source and seed ownership",
+        "boundary values and empty/null/missing cases",
+        "atomicity requirements for multi-step mutations",
+        "algorithmic cost or bounded-work expectation",
+    ),
+    "integration": (
+        "entry hook/event/callback/service boundary",
+        "caller and callee responsibilities",
+        "verified target APIs/symbols distinguished from design requirements",
+        "registry or initialization order dependencies",
+        "cross-module inputs/outputs and dependency direction",
+        "side-only versus common/server-safe placement",
+        "compatibility assumptions and extension points",
+        "fallback when a desired public hook is unavailable",
+    ),
+    "authority_and_network": (
+        "authoritative logical side for every mutable gameplay decision",
+        "client prediction/presentation boundary",
+        "packet direction and exact purpose when networking applies",
+        "payload fields, validation and trust boundary",
+        "permission, ownership, distance/rate-limit and replay checks when applicable",
+        "state synchronization recipients and trigger",
+        "join/reconnect/resync behavior",
+        "disconnect, stale packet and malformed payload behavior",
+        "explicit evidence-backed reason when networking is inapplicable",
+    ),
+    "persistence": (
+        "which state persists and its storage owner/scope",
+        "serialization keys/shape or the requirement to bind them after target research",
+        "defaults for absent data",
+        "save/dirty/update trigger",
+        "load and restart behavior",
+        "schema/version migration policy",
+        "malformed, stale or partially missing data behavior",
+        "copy/clone/death/dimension-transfer semantics when relevant",
+        "explicit evidence-backed reason when persistence is inapplicable",
+    ),
+    "resources_and_ui": (
+        "all required registries, identifiers and data resources",
+        "recipes, loot, tags, models, blockstates, language and worldgen data as applicable",
+        "client assets and generated-versus-authored ownership",
+        "menu/screen/container interaction contract when applicable",
+        "server-authoritative data exposed to UI",
+        "resource paths or path-binding requirements without inventing unsupported names",
+        "missing-resource fallback and validation",
+        "accessibility/localization or tooltip feedback required by observable behavior",
+        "explicit evidence-backed reason for inapplicable resource/UI branches",
+    ),
+    "failure_and_limits": (
+        "invalid user/input states and rejection result",
+        "missing dependency, registry entry, resource or target binding behavior",
+        "duplicate/repeated invocation behavior",
+        "partial-failure rollback or cleanup",
+        "unload/removal/disconnect/restart interruption behavior",
+        "concurrency/reentrancy hazards",
+        "rate, size, count, tick-time or memory bounds",
+        "logging/diagnostic signal required for non-user-visible failures",
+        "fail-closed conditions where inventing a fallback would change semantics",
+    ),
+    "reuse_assessment": (
+        "source/evidence locator and exact relevant implementation pattern",
+        "what can transfer unchanged",
+        "what must be adapted for the selected target and authored semantics",
+        "API/version/loader/mappings compatibility",
+        "dependency and transitive-dependency impact",
+        "license or provenance constraint when supplied by evidence",
+        "ownership/path collision risk with the current project",
+        "missing evidence that prevents direct reuse",
+        "verdict: reuse, adapt, reference-only or new implementation required",
+    ),
+    "verification": (
+        "at least one success Given/When/Then observation",
+        "at least one rejection or failure observation",
+        "boundary-value checks for authored limits",
+        "state transition/invariant checks",
+        "persistence reload/restart check when applicable",
+        "multiplayer/authority/resync check when applicable",
+        "resource/data loading check when applicable",
+        "target compile/static gate required before runtime claims",
+        "observable expected result and how the host can measure it",
+        "explicit mapping from important behavior invariants to checks",
+    ),
 }
+
+DETAIL_FIELDS = {
+    "behavior_contract": "Freeze the complete externally observable behavior contract.",
+    "state_model": "Freeze owned state, lifecycle, transitions and invariants.",
+    "algorithm": "Freeze the deterministic ordered implementation logic and edge handling.",
+    "integration": "Freeze platform/module integration boundaries without inventing target APIs.",
+    "authority_and_network": "Freeze logical-side authority, validation and synchronization semantics.",
+    "persistence": "Freeze persistence ownership, codec lifecycle, migration and malformed-data behavior.",
+    "resources_and_ui": "Freeze required registries, data/resources, assets and UI interaction contracts.",
+    "failure_and_limits": "Freeze rejection, recovery, cleanup, concurrency and resource-limit behavior.",
+    "reuse_assessment": "Freeze evidence-backed reuse/adaptation boundaries and compatibility constraints.",
+    "verification": "Freeze executable/observable proof obligations for success, failure and boundaries.",
+}
+
+WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
+    "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
+    "Read all supplied evidence before filling any section and cite only allowed evidence refs.",
+    "Fill all ten sections. Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
+    "For an inapplicable concern, state the concrete reason it is inapplicable and cite evidence that supports that conclusion.",
+    "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, APIs, constants or bindings are not facts unless evidence proves them.",
+    "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of adjectives such as robust, proper, appropriate or handle correctly.",
+    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or be a necessary dependency stated by evidence.",
+    "Treat compile/static checks as necessary but insufficient: verification must also prove the user-visible runtime behavior and relevant failure paths.",
+    "Before submission, cross-check that state, algorithm, integration, persistence/network branches and verification describe one internally consistent design.",
+)
+
+
+def _section_description(key: str) -> str:
+    checklist = "; ".join(DETAIL_SLOT_GUIDANCE[key])
+    return f"{DETAIL_FIELDS[key]} Explicitly cover: {checklist}."
+
+
+def worksheet_prompt() -> str:
+    """Return the canonical small-model instructions for filling the worksheet."""
+
+    rows = ["ENGINEERING WORKSHEET — mandatory completion protocol:"]
+    rows.extend(f"{index}. {rule}" for index, rule in enumerate(WORKSHEET_INSTRUCTIONS, start=1))
+    rows.append("Section checklists:")
+    for key in DETAIL_FIELDS:
+        rows.append(f"- {key}: " + "; ".join(DETAIL_SLOT_GUIDANCE[key]))
+    return "\n".join(rows)
+
 
 WORKSHEET_SCHEMA = {
     "type": "object",
+    "description": (
+        "Complete evidence-bound engineering worksheet. Every section is mandatory; "
+        "each specification must explicitly address that section's checklist rather than "
+        "summarizing the requirement in one vague sentence."
+    ),
     "properties": {
         key: {
             "type": "object",
-            "description": description,
+            "description": _section_description(key),
             "properties": {
-                "specification": {"type": "string", "minLength": 1},
-                "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                "specification": {
+                    "type": "string",
+                    "minLength": 24,
+                    "description": (
+                        _section_description(key)
+                        + " Write a self-contained implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder."
+                    ),
+                },
+                "evidence_refs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": True,
+                    "description": "Only evidence references supplied by the host for this requirement.",
+                    "items": {"type": "string", "minLength": 1},
+                },
             },
             "required": ["specification", "evidence_refs"],
             "additionalProperties": False,
         }
-        for key, description in DETAIL_FIELDS.items()
+        for key in DETAIL_FIELDS
     },
     "required": list(DETAIL_FIELDS),
     "additionalProperties": False,
+}
+
+_PLACEHOLDERS = {
+    "n/a",
+    "na",
+    "none",
+    "not applicable",
+    "not-applicable",
+    "todo",
+    "tbd",
+    "unknown",
+    "same as above",
+    "same-as-above",
 }
 
 
@@ -43,9 +220,27 @@ def validate_worksheet(value: Any, allowed_refs: set[str]) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != set(DETAIL_FIELDS):
         raise ValueError("DETAILED_PLAN_WORKSHEET: every engineering section must be filled")
     for key, row in value.items():
-        if not isinstance(row, Mapping) or not str(row.get("specification") or "").strip():
-            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has no specification")
+        if not isinstance(row, Mapping):
+            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} is not an object")
+        specification = " ".join(str(row.get("specification") or "").split()).strip()
+        if not specification or specification.casefold() in _PLACEHOLDERS:
+            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification")
         refs = row.get("evidence_refs")
-        if not isinstance(refs, list) or not refs or any(ref not in allowed_refs for ref in refs):
+        if (
+            not isinstance(refs, list)
+            or not refs
+            or len(set(str(ref) for ref in refs)) != len(refs)
+            or any(ref not in allowed_refs for ref in refs)
+        ):
             raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} lacks grounded evidence")
     return deepcopy(dict(value))
+
+
+__all__ = [
+    "DETAIL_FIELDS",
+    "DETAIL_SLOT_GUIDANCE",
+    "WORKSHEET_INSTRUCTIONS",
+    "WORKSHEET_SCHEMA",
+    "validate_worksheet",
+    "worksheet_prompt",
+]
