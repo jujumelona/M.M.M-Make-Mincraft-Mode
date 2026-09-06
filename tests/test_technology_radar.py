@@ -20,7 +20,7 @@ _TARGET = {
     "edition": "java",
     "minecraft_version": "1.20.1",
     "loader": "fabric",
-    "mappings": "1.20.1+build.10",
+    "mappings": "mojang",
     "java_version": "17",
     "fabric_loader": "0.15.11",
     "fabric_api": "0.92.11+1.20.1",
