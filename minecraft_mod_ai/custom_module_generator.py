@@ -25,6 +25,7 @@ from .project_index import ProjectIndex
 from .research_ledger import select_module_research_context
 from .scale_policy import ScalePolicy
 from .source_patch import SourcePatchError, TransactionalSourcePatcher
+from .target_contract import TargetContractError, validate_target_coordinates
 
 
 class CustomModuleGenerationError(RuntimeError):
@@ -295,7 +296,7 @@ def _verify_reuse_application(
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     """Project one immutable semantic work item into the coder request.
 
-    Evidence-first planning already owns global proposal state.  Generation receives the
+    Evidence-first planning already owns global proposal state. Generation receives the
     task-local contract (CodePlan-style per-edit authority) rather than replaying the
     complete module/proposal configuration into every model turn.
     """
@@ -310,8 +311,6 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
             "depends_on": list(module.depends_on),
             "required_gates": list(module.required_gates),
         }
-    # Compatibility for callers that have not yet been compiled through the
-    # evidence-first semantic work graph.  No fields are silently discarded.
     return {
         "module_id": module.module_id,
         "kind": module.kind,
@@ -470,19 +469,11 @@ def _coder_project_context_budget(
         return fallback
     if live_request_bytes <= 0:
         return fallback
-    # Exact-source grounding is only one component of the request. The model can
-    # retrieve more source from the host index after the first turn.
     return min(hard_cap, max(1024, live_request_bytes // 2))
 
 
 class CustomModuleGenerator:
-    """Implement one approved module through the canonical tool-capable coder loop.
-
-    The host owns indexing, source receipts, checkpointing, validation and transactional
-    application. The model sees bounded exact source and research receipts, retrieves
-    more evidence on demand, and performs edits with normal tools. There is no second
-    file-plan, cursor, scalar-repair or tool-disabled recovery protocol here.
-    """
+    """Implement one approved module through the canonical tool-capable coder loop."""
 
     def __init__(
         self,
@@ -528,19 +519,25 @@ class CustomModuleGenerator:
                 "Custom module target must be a regular project directory."
             )
 
-        requested = tuple(
-            str(value or "").strip() for value in (minecraft_version, loader, mappings)
-        )
-        if any(requested):
-            if not all(requested):
+        requested_version = str(minecraft_version or "").strip()
+        requested_loader = str(loader or "").strip()
+        requested_mappings = str(mappings or "").strip()
+        if requested_version or requested_loader or requested_mappings:
+            if not requested_version or not requested_loader:
                 raise CustomModuleGenerationError(
-                    "minecraft_version, loader and mappings must be supplied together."
+                    "minecraft_version and loader must be supplied together; mappings are required only when the canonical target contract says they are applicable."
                 )
             try:
-                adapter = adapter_for_target(requested[0], requested[1])
-            except ValueError as exc:
+                adapter = adapter_for_target(requested_version, requested_loader)
+                coordinates = validate_target_coordinates(
+                    requested_version,
+                    requested_loader,
+                    requested_mappings,
+                    declared_mappings_applicable=adapter.mappings_applicable,
+                )
+            except (ValueError, TargetContractError) as exc:
                 raise CustomModuleGenerationError(str(exc)) from exc
-            if requested[2] != adapter.yarn_mappings:
+            if coordinates.mappings != str(adapter.yarn_mappings or "").strip():
                 raise CustomModuleGenerationError(
                     "Requested mappings disagree with the executable provider target."
                 )
@@ -720,18 +717,9 @@ class CustomModuleGenerator:
         if approved_reuse_context is not None:
             request["approved_reuse_context"] = approved_reuse_context
             request["rules"][2:2] = [
-                (
-                    "Adapt the pinned approved_reuse_context donor snippets before "
-                    "attempting fresh implementation."
-                ),
-                (
-                    "Donor files are read-only evidence; write only the exact "
-                    "task-owned target path."
-                ),
-                (
-                    "The final source must retain an attributable verified donor symbol "
-                    "or concrete donor code structure; a fresh rewrite is not reuse."
-                ),
+                "Adapt the pinned approved_reuse_context donor snippets before attempting fresh implementation.",
+                "Donor files are read-only evidence; write only the exact task-owned target path.",
+                "The final source must retain an attributable verified donor symbol or concrete donor code structure; a fresh rewrite is not reuse.",
             ]
         initial_messages = [
             {
@@ -1599,8 +1587,6 @@ def _observation_context_pages(
         if cursor >= len(remaining):
             break
         if not page_records:
-            # One oversized observation stays host-indexed; the coder can re-read it
-            # with path/symbol tools rather than forcing it into the initial prompt.
             cursor += 1
     page_count = len(pages)
     for index, page in enumerate(pages):
@@ -1636,7 +1622,6 @@ def _observation_page_payload(
 
 def _query_tokens(value: str) -> set[str]:
     import re
-
     return {token.lower() for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,127}", value)}
 
 
