@@ -231,7 +231,7 @@ def test_planning_compiler_preserves_bounded_two_stage_protocol():
     audit = catalog["semantic_audit"]
     batch_count = math.ceil(len(clauses) / 2)
 
-    assert audit["semantic_generation_protocol"] == "segment_then_host_ground_then_classify"
+    assert audit["semantic_generation_protocol"] == "bounded_host_catalog_classification_batches"
     assert audit["semantic_model_turns"] == batch_count * 2
     assert audit["semantic_base_stage_calls_per_batch"] == 2
     assert audit["feature_dependency_owner"] == "host_minecraft_feature_model"
