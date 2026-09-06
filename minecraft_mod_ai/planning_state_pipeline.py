@@ -11,6 +11,10 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any, TypeVar
 
+from .planning_detail_applicability import (
+    ensure_host_detail_section_applicability,
+    required_sections_by_requirement,
+)
 from .planning_state_contract import build_initial_planning_state, validate_planning_state
 from .planning_state_implementation import compile_detailed_implementation_plans
 from .planning_state_research import collect_planning_state_research
@@ -160,6 +164,13 @@ def prepare_planning_state(
             )
 
     state = _transition(
+        "normalize_detail_section_applicability",
+        lambda: ensure_host_detail_section_applicability(state),
+    )
+    if checkpoint is not None:
+        checkpoint(deepcopy(state))
+
+    state = _transition(
         "collect_implementation_research",
         lambda: collect_planning_state_research(
             router,
@@ -180,9 +191,18 @@ def prepare_planning_state(
             + _block_summary(state, stage="implementation_plan")
         )
 
+    section_selection = _transition(
+        "select_detail_sections",
+        lambda: required_sections_by_requirement(state),
+    )
     state = _transition(
         "compile_detailed_implementation_plans",
-        lambda: compile_detailed_implementation_plans(router, prompt, state),
+        lambda: compile_detailed_implementation_plans(
+            router,
+            prompt,
+            state,
+            required_sections_by_requirement=section_selection,
+        ),
     )
     _transition("validate_final", lambda: validate_planning_state(state, prompt=prompt))
     if state.get("plan_ready") is not True:
