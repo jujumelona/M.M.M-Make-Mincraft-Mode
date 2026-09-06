@@ -3,15 +3,13 @@ from __future__ import annotations
 """Host-owned design-readiness bootstrap checks.
 
 Canonical schema and requirement validation live in their dedicated contract modules.
-This bootstrap only verifies that schema and preserves lossless semantic source offsets;
-it never reaches through the game-design producer's private namespace.
+This bootstrap only verifies the live schema surface; it never reaches through retired
+planning internals or recreates prompt-semantic authority.
 """
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import evidence_first_planning as _evidence
 from .design_requirement_contract import (
     _active_requirement_ledger as _requirement_ledger,
     _nonempty_text_list as _require_nonempty_text_list,
@@ -84,76 +82,11 @@ def _assert_module_trace_schema() -> None:
     raise RuntimeError("modules_and_assets section schema was not found")
 
 
-def _lossless_semantic_spans(prompt: str) -> tuple[tuple[int, int], ...]:
-    """Semantic line spans whose offsets remain exact for LF, CRLF, and CR."""
-    spans: list[tuple[int, int]] = []
-    line_offset = 0
-    for raw_with_eol in prompt.splitlines(keepends=True):
-        raw_line = raw_with_eol.rstrip("\r\n")
-        line_start = line_offset
-        line_offset += len(raw_with_eol)
-        stripped = re.sub(r"^[\s\-\*•▶●]+|^\s*\d+\.\s*", "", raw_line)
-        if not stripped.strip():
-            continue
-        matched_any = False
-        for match in _evidence._SEMANTIC_BOUNDARY.finditer(raw_line):
-            start = line_start + match.start()
-            end = line_start + match.end()
-            inner = raw_line[match.start() : match.end()]
-            inner_stripped = re.sub(
-                r"^[\s\-\*•▶●]+|^\s*\d+\.\s*",
-                "",
-                inner,
-            )
-            if not inner_stripped.strip():
-                continue
-            leading = len(inner) - len(inner.lstrip())
-            bullet_stripped = inner.lstrip()
-            bullet_cleaned = re.sub(
-                r"^[\-\*•▶●]+|^\d+\.\s*",
-                "",
-                bullet_stripped,
-            )
-            start += leading + (len(bullet_stripped) - len(bullet_cleaned))
-            while start < end and prompt[start].isspace():
-                start += 1
-            while end > start and prompt[end - 1].isspace():
-                end -= 1
-            if start < end:
-                spans.append((start, end))
-                matched_any = True
-        if not matched_any:
-            leading = len(raw_line) - len(raw_line.lstrip())
-            bullet_stripped = raw_line.lstrip()
-            bullet_cleaned = re.sub(
-                r"^[\-\*•▶●]+|^\d+\.\s*",
-                "",
-                bullet_stripped,
-            )
-            start = line_start + leading + (len(bullet_stripped) - len(bullet_cleaned))
-            end = line_start + len(raw_line.rstrip())
-            while start < end and prompt[start].isspace():
-                start += 1
-            if start < end:
-                spans.append((start, end))
-    if not spans and prompt.strip():
-        spans.append((len(prompt) - len(prompt.lstrip()), len(prompt.rstrip())))
-    return tuple(spans)
-
-
-def _install_lossless_source_offsets() -> None:
-    if getattr(_evidence._semantic_spans, "__mmm_crlf_lossless__", False):
-        return
-    _lossless_semantic_spans.__mmm_crlf_lossless__ = True  # type: ignore[attr-defined]
-    _evidence._semantic_spans = _lossless_semantic_spans
-
-
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     _assert_module_trace_schema()
-    _install_lossless_source_offsets()
     _INSTALLED = True
 
 
