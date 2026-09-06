@@ -60,9 +60,9 @@ def _exception_payload(exc: BaseException) -> dict[str, Any]:
 def _active_requirement_texts(prompt: str) -> list[str]:
     """Return every active authored requirement in stable order, never model-generated text."""
     try:
-        from . import evidence_request_guard as request_guard
+        from . import planning_authority
 
-        active = request_guard._ACTIVE_REQUEST_CATALOG.get()
+        active = planning_authority._ACTIVE_REQUEST_CATALOG.get()
     except Exception:
         active = None
     values: list[str] = []
