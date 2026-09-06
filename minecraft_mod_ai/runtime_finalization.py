@@ -98,7 +98,6 @@ def finalize_runtime() -> None:
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
         from .small_model_task_capsule_contract import install as install_small_model_task_capsule
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
-        from .target_grounding_contract import install_target_grounding_contract
         from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
         from .tool_validation_surface_contract import install as install_tool_validation_surface
@@ -153,7 +152,6 @@ def finalize_runtime() -> None:
         install_deep_design_execution()
         install_evidence_obligation_contract()
         install_authored_scope_research()
-        install_target_grounding_contract()
         install_requirement_branch_scope_contract()
         install_task_artifact_contract()
         install_design_resolution_provenance_contract()
