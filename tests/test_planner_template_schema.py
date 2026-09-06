@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from minecraft_mod_ai.complete_planner import (
-    CompleteGameDesignPlanner,
-    _host_batches,
-    _implementation_research_outline,
-)
+from minecraft_mod_ai.implementation_template_contract import SCHEMA as CODER_SCHEMA
 from minecraft_mod_ai.planner_template_schema import (
     ASSET_KEYS,
     MODULE_KEYS,
@@ -22,6 +18,44 @@ def _skeleton() -> dict[str, object]:
         exports=("core_runtime_api",),
         depends_on_batches=("existing_module",),
         known_module_ids=("existing_module",),
+    )
+
+
+def _evidence_skeleton() -> dict[str, object]:
+    task = {
+        "task_id": "core_runtime_api",
+        "task_sha256": "sha256:" + "a" * 64,
+        "semantic_outcome": "The runtime behavior is observable in Minecraft.",
+        "requirement_refs": ["req_runtime"],
+        "depends_on": [],
+        "consumes": [],
+        "provides": ["runtime_done"],
+        "implementation_capabilities": ["runtime.behavior"],
+        "required_gates": ["source_static_validation", "target_compile"],
+        "public_acceptance": ["The runtime behavior is observable."],
+        "owned_anchors": [
+            {
+                "kind": "symbol",
+                "locator": "src/main/java/demo/CoreRuntime.java#CoreRuntime",
+                "status": "host_reserved",
+                "module_id": ":",
+                "source_set": "main",
+            }
+        ],
+    }
+    return build_batch_skeleton(
+        batch_id="core_runtime",
+        scope="Implement the core runtime.",
+        deliverables=("runtime_done",),
+        exports=("core_runtime_api",),
+        host_module_contracts={
+            "core_runtime_api": {
+                **task,
+                "evidence_plan_sha256": "sha256:" + "b" * 64,
+                "evidence_task": task,
+            }
+        },
+        acceptance_tests=("The runtime behavior is observable.",),
     )
 
 
@@ -113,65 +147,72 @@ def test_invalid_module_kind_falls_back_without_new_contract_layer() -> None:
     assert page["modules"][0]["kind"] == "custom_java"
 
 
-def test_multiple_design_modules_use_host_template_without_model_fill() -> None:
-    class Router:
-        def __init__(self) -> None:
-            self.calls = 0
+def test_evidence_page_contains_complete_host_coder_contract() -> None:
+    page = _evidence_skeleton()
+    module = page["modules"][0]
+    config = module["config"]
+    contract = config["implementation_template"]
 
-        def generate_text(self, *_args, **_kwargs):
-            self.calls += 1
-            raise AssertionError("host-owned batch expansion must not call the model")
-
-    design = {
-        "modules": [
-            {"plugin_id": "combat", "reason": "combat behavior"},
-            {"plugin_id": "economy", "reason": "economy behavior"},
-            {"plugin_id": "quests", "reason": "quest behavior"},
-        ]
-    }
-    batches = _host_batches("Build combat, economy, and quests", design)
-    router = Router()
-    modules, _assets, _tests = CompleteGameDesignPlanner(router)._expand_batches(
-        batches,
-        prompt="Build combat, economy, and quests",
-        game_design=design,
-    )
-
-    assert len(batches) == 1
-    assert batches[0].exports == ("combat", "economy", "quests")
-    assert router.calls == 0
-    assert tuple(module.module_id for module in modules) == (
-        "combat",
-        "economy",
-        "quests",
-    )
-
-
-def test_identical_platform_and_technical_evidence_is_sent_once() -> None:
-    evidence = {
-        "schema_version": "mmm/platform-evidence-v1",
-        "domains": [{"provider": "fabric", "version": "1.20.1"}],
-    }
-    outline = _implementation_research_outline(
+    assert contract["schema_version"] == CODER_SCHEMA
+    assert contract["task_ref"] == "core_runtime_api"
+    assert contract["targets"] == [
         {
-            "mod_id": "demo",
-            "_platform_evidence": evidence,
-            "_technical_evidence": dict(evidence),
+            "kind": "symbol",
+            "locator": "src/main/java/demo/CoreRuntime.java#CoreRuntime",
+            "path": "src/main/java/demo/CoreRuntime.java",
+            "symbol": "CoreRuntime",
+            "operation": "create_or_modify",
+            "module_id": ":",
+            "source_set": "main",
         }
+    ]
+    assert contract["protected_boundaries"]["writable_paths"] == [
+        "src/main/java/demo/CoreRuntime.java"
+    ]
+    assert module["required_gates"] == ["source_static_validation", "target_compile"]
+
+
+def test_model_cannot_widen_evidence_owned_contract_or_acceptance() -> None:
+    skeleton = _evidence_skeleton()
+    original_config = skeleton["modules"][0]["config"]
+    page = merge_model_output_into_skeleton(
+        skeleton=skeleton,
+        model_output={
+            "modules": [
+                {
+                    "module_id": "core_runtime_api",
+                    "kind": "boss",
+                    "config": {
+                        "evidence_task": {"task_id": "invented"},
+                        "implementation_template": {"targets": [{"path": "../escape"}]},
+                        "implementation_notes": "non-authoritative note",
+                    },
+                    "depends_on": ["invented_module"],
+                    "required_gates": ["invented_gate"],
+                }
+            ],
+            "assets": [
+                {
+                    "asset_id": "invented",
+                    "kind": "icon",
+                    "prompt": "invented",
+                    "target_path": "assets/invented.png",
+                }
+            ],
+            "acceptance_tests": ["invented acceptance"],
+            "completed_deliverables": ["invented deliverable"],
+        },
+        valid_module_catalog={"core_runtime_api"},
     )
+    module = page["modules"][0]
+    config = module["config"]
 
-    assert outline["_platform_evidence"] == evidence
-    assert "_technical_evidence" not in outline
-
-
-def test_distinct_technical_evidence_is_preserved() -> None:
-    outline = _implementation_research_outline(
-        {
-            "mod_id": "demo",
-            "_platform_evidence": {"kind": "platform"},
-            "_technical_evidence": {"kind": "implementation"},
-        }
-    )
-
-    assert outline["_platform_evidence"] == {"kind": "platform"}
-    assert outline["_technical_evidence"] == {"kind": "implementation"}
+    assert module["kind"] == "custom_java"
+    assert module["depends_on"] == []
+    assert module["required_gates"] == ["source_static_validation", "target_compile"]
+    assert config["evidence_task"] == original_config["evidence_task"]
+    assert config["implementation_template"] == original_config["implementation_template"]
+    assert config["model_fill"] == {"implementation_notes": "non-authoritative note"}
+    assert page["assets"] == []
+    assert page["acceptance_tests"] == ["The runtime behavior is observable."]
+    assert page["completed_deliverables"] == ["runtime_done"]
