@@ -54,7 +54,7 @@ def test_reference_prompt_creates_reference_and_scope_research_without_mod_guess
     assert all(item["queries"] == [] for item in state["research_queue"])
 
 
-def test_model_cannot_route_scope_to_user_only_to_bypass_research_policy() -> None:
+def test_model_cannot_author_scope_or_route_it_to_bypass_host_policy() -> None:
     prompt = "무언가 큰 모드 만들어줘"
     router = _Router(
         [
@@ -77,16 +77,11 @@ def test_model_cannot_route_scope_to_user_only_to_bypass_research_policy() -> No
         ]
     )
 
-    state = build_initial_planning_state(router, prompt)
-    scope = next(item for item in state["unresolved"] if item["reason"] == "scope")
-    assert scope["resolution_route"] == "default_policy"
-    assert scope["source_kinds"] == []
-    assert scope["status"] == "resolved"
-    assert any(
-        item.get("unresolved_id") == scope["unresolved_id"]
-        and item.get("basis") == "host_default_policy"
-        for item in state["resolved"]
-    )
+    with pytest.raises(
+        ValueError,
+        match="PROMPT_STATE_UNRESOLVED: model cannot author reason 'scope'",
+    ):
+        build_initial_planning_state(router, prompt)
 
 
 def test_reference_query_compiler_is_explicitly_target_neutral() -> None:
