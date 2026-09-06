@@ -6,11 +6,27 @@ import pytest
 
 from minecraft_mod_ai import platform_live_discovery as live
 from minecraft_mod_ai import reuse_planner as reuse
-from minecraft_mod_ai.evidence_first_planning import build_request_catalog
+from tests.planning_authority_fixtures import request_catalog
 
 
 def _catalog(prompt: str) -> dict[str, object]:
-    return build_request_catalog(prompt, {})
+    return request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_trade",
+                "capability": "economy.player_trading",
+                "statement": "Persistent player trading follows the authored request.",
+                "implementation_capabilities": [
+                    "economy.player_trading",
+                    "persistence.trade_state",
+                ],
+                "search_queries": [
+                    "Minecraft persistent player trading Fabric implementation",
+                ],
+            }
+        ],
+    )
 
 
 def test_pre_retrieval_plan_is_frozen_before_any_target_search() -> None:
