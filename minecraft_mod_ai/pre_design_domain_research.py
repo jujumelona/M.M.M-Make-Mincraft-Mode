@@ -116,7 +116,11 @@ def _grounded_evidence_cards(
         if not page_ref or page_ref in seen_refs or not source_content.strip():
             continue
         excerpt, score = _exact_excerpt(source_content, wanted)
-        if not excerpt:
+        # A materialized body is not evidence merely because it contains text. When the
+        # research domain has semantic anchors, at least one anchor must occur in the
+        # selected exact excerpt. This prevents unrelated provider noise from becoming a
+        # sufficient research claim.
+        if not excerpt or (wanted and score <= 0):
             continue
         seen_refs.add(page_ref)
         cards.append(
