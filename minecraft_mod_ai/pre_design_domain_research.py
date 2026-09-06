@@ -137,6 +137,27 @@ def _grounded_evidence_cards(
     return cards
 
 
+def _claims_from_grounded_cards(
+    cards: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose host exact excerpts through the legacy claim/ref transport contract."""
+    claims: list[dict[str, Any]] = []
+    for card in cards:
+        page_ref = str(card.get("page_ref") or "").strip()
+        excerpt = str(card.get("exact_excerpt") or "").strip()
+        if not page_ref or not excerpt:
+            continue
+        claims.append(
+            {
+                "claim": excerpt,
+                "evidence_refs": [page_ref],
+                "grounding": "host_exact_substring_from_materialized_source_page",
+                "semantic_claim": False,
+            }
+        )
+    return claims
+
+
 def research_document_domain(
     agentic_module: Any,
     project_rag: Any,
@@ -150,6 +171,7 @@ def research_document_domain(
     """Return host-grounded evidence directly; never spend a model turn synthesizing it."""
     del agentic_module, router, trace_metadata
     cards = _grounded_evidence_cards(project_rag, document, domain)
+    claims = _claims_from_grounded_cards(cards)
     reader = getattr(project_rag, "_read_evidence_pages", None)
     try:
         pages = reader(document) if callable(reader) else ()
@@ -163,7 +185,7 @@ def research_document_domain(
     note = {
         "domain_id": str(domain.get("domain_id") or "unknown"),
         "research_mode": "advisory_predesign",
-        "claims": [],
+        "claims": claims,
         "gaps": [],
         "next_queries": [],
         "procedures": [],
@@ -247,6 +269,7 @@ def _merge_page_notes(
 __all__ = [
     "research_document_domain",
     "_grounded_evidence_cards",
+    "_claims_from_grounded_cards",
     "_root_page_claims",
     "_merge_page_notes",
 ]
