@@ -20,11 +20,11 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     assert "project_rag" in providers
     assert "modrinth" in providers
     assert "curseforge" in providers
-    assert "github" in providers
+    assert "github" not in providers
     assert all(not domain["domain_id"].startswith("obl_") for domain in domains)
 
 
-def test_pre_design_public_discovery_is_enabled_without_post_design_domain_expansion() -> None:
+def test_pre_design_public_discovery_uses_catalog_providers_without_broad_github_peer() -> None:
     brief = pipeline._pre_design_brief("우주선 모드를 설계해줘")
     providers = {
         provider
@@ -33,7 +33,8 @@ def test_pre_design_public_discovery_is_enabled_without_post_design_domain_expan
     }
 
     assert [domain["domain_id"] for domain in brief["domains"]] == ["request"]
-    assert {"modrinth", "curseforge", "github"} <= providers
+    assert {"modrinth", "curseforge", "official_docs", "project_rag"} <= providers
+    assert "github" not in providers
     assert "openverse_images" not in providers
 
 
@@ -63,28 +64,9 @@ def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None
     assert calls == []
 
 
-def test_research_transport_schema_matches_host_normalization_surface() -> None:
-    schema = agentic._RESEARCH_NOTE_SCHEMA
-    assert "required" not in schema
-    assert schema["additionalProperties"] is True
-
-    note = schema["properties"]["research_note"]
-    assert "required" not in note
-    assert note["additionalProperties"] is True
-    assert note["properties"]["claims"]["items"] == {}
-    assert note["properties"]["gaps"]["items"] == {}
-    assert note["properties"]["next_queries"]["items"] == {}
-    assert note["properties"]["procedures"]["items"] == {}
+def test_retired_model_owned_research_transport_schema_is_absent() -> None:
+    assert not hasattr(agentic, "_RESEARCH_NOTE_SCHEMA")
 
 
-def test_host_parser_accepts_compact_qwen_claim_variants() -> None:
-    raw = (
-        '{"claims":["Fabric API 근거"],"gaps":[],"next_queries":[],'
-        '"sufficient":true}'
-    )
-    note = agentic._parse_research_note(raw, "request")
-
-    assert note["domain_id"] == "request"
-    assert note["claims"] == [{"claim": "Fabric API 근거", "evidence_refs": []}]
-    assert note["sufficient"] is True
-    assert note["procedures"] == []
+def test_retired_model_owned_research_note_parser_is_absent() -> None:
+    assert not hasattr(agentic, "_parse_research_note")
