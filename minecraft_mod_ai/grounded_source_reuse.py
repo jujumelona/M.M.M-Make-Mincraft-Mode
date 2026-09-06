@@ -3,10 +3,10 @@ from __future__ import annotations
 """Host-owned bridge from grounded repository evidence to executable code reuse.
 
 The small coder never searches for or selects a donor. Only GitHub repositories that
-already have host-materialized evidence in pre-design RAG or were explicitly supplied
-by the host/user may enter this pipeline. A candidate is then pinned, license/closure
-checked, materialized, and compiled against the selected target before its source is
-attached to a generation task.
+have host-materialized evidence in the planning-state RAG, legacy pre-design RAG, or
+were explicitly supplied by the host/user may enter this pipeline. A discovery receipt
+is reference-only: a candidate is pinned, license/closure checked, materialized, and
+compiled against the selected target before its source is attached to a generation task.
 """
 
 import os
@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .platform_catalog import PlatformAdapter, adapter_for_target
+from .research_reuse_candidates import planning_state_repository_cards
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
 from .source_transplant import (
     DonorSlice,
@@ -128,11 +129,42 @@ def _host_reference_cards() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _merge_card(cards: list[dict[str, Any]], by_repository: dict[str, int], raw: Mapping[str, Any]) -> None:
+    repository = str(raw.get("repository") or "").strip()
+    if not repository:
+        return
+    key = repository.casefold()
+    if key not in by_repository:
+        by_repository[key] = len(cards)
+        cards.append(dict(raw))
+        return
+    existing = cards[by_repository[key]]
+    existing["explicit_reference"] = bool(existing.get("explicit_reference")) or bool(
+        raw.get("explicit_reference")
+    )
+    for field in ("page_refs", "source_ids", "source_urls"):
+        target = existing.setdefault(field, [])
+        values = raw.get(field)
+        for value in values if isinstance(values, list) else ():
+            if value and value not in target:
+                target.append(value)
+    merged = f"{existing.get('evidence_text', '')} {raw.get('evidence_text', '')}".strip()
+    existing["evidence_text"] = merged[:1280]
+    existing["evidence_tokens"] = sorted(_tokens(existing["evidence_text"]))
+
+
 def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
-    research = design.get("_pre_design_research")
-    notes = research.get("domain_notes") if isinstance(research, Mapping) else None
+    # Prompt-first planning writes only host-stamped, reference-only candidates here.
+    # They still have zero reuse authority until inspect/proof below succeeds.
     cards: list[dict[str, Any]] = []
     by_repository: dict[str, int] = {}
+    for raw in planning_state_repository_cards(design):
+        _merge_card(cards, by_repository, raw)
+
+    # Keep legacy pre-design evidence readable during migration, but do not make it an
+    # alternate authority path: these cards enter the same verifier/proof gates.
+    research = design.get("_pre_design_research")
+    notes = research.get("domain_notes") if isinstance(research, Mapping) else None
     for note in notes if isinstance(notes, list) else ():
         raw_cards = note.get("grounded_evidence_cards") if isinstance(note, Mapping) else None
         for raw in raw_cards if isinstance(raw_cards, list) else ():
@@ -148,48 +180,30 @@ def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any
                 str(raw.get(key) or "")
                 for key in ("source_title", "exact_excerpt")
             )
-            key = repository.casefold()
-            if key not in by_repository:
-                by_repository[key] = len(cards)
-                cards.append(
-                    {
-                        "repository": repository,
-                        "page_refs": [str(raw.get("page_ref") or "")],
-                        "source_ids": [str(raw.get("source_id") or "")],
-                        "source_urls": [str(raw.get("source_url") or "")],
-                        "evidence_text": evidence_text,
-                        "explicit_reference": False,
-                    }
-                )
-                continue
-            existing = cards[by_repository[key]]
-            for field, field_value in (
-                ("page_refs", str(raw.get("page_ref") or "")),
-                ("source_ids", str(raw.get("source_id") or "")),
-                ("source_urls", str(raw.get("source_url") or "")),
-            ):
-                if field_value and field_value not in existing[field]:
-                    existing[field].append(field_value)
-            existing["evidence_text"] = (
-                f"{existing['evidence_text']} {evidence_text}"
-            ).strip()
+            _merge_card(
+                cards,
+                by_repository,
+                {
+                    "repository": repository,
+                    "page_refs": [str(raw.get("page_ref") or "")],
+                    "source_ids": [str(raw.get("source_id") or "")],
+                    "source_urls": [str(raw.get("source_url") or "")],
+                    "evidence_text": evidence_text,
+                    "evidence_tokens": sorted(_tokens(evidence_text)),
+                    "explicit_reference": False,
+                    "reference_only": True,
+                    "source_reuse_authority": "verification_required",
+                },
+            )
 
     for host_card in _host_reference_cards():
-        repository = str(host_card["repository"])
-        key = repository.casefold()
-        if key not in by_repository:
-            by_repository[key] = len(cards)
-            cards.append(dict(host_card))
-            continue
-        existing = cards[by_repository[key]]
-        existing["explicit_reference"] = True
-        for field in ("page_refs", "source_ids", "source_urls"):
-            for field_value in host_card[field]:
-                if field_value and field_value not in existing[field]:
-                    existing[field].append(field_value)
+        _merge_card(cards, by_repository, host_card)
 
     for card in cards:
-        card["evidence_tokens"] = sorted(_tokens(card["evidence_text"]))
+        card["evidence_tokens"] = sorted(
+            set(str(value) for value in card.get("evidence_tokens", ()))
+            | _tokens(card.get("evidence_text", ""))
+        )
     return tuple(cards)
 
 
@@ -345,6 +359,7 @@ def build_repository_reuse_plan(
                             "repository": repository,
                             "page_refs": list(card.get("page_refs", ())),
                             "explicit_reference": explicit_reference,
+                            "candidate_origin": str(card.get("candidate_origin") or "legacy_or_explicit"),
                             "status": "inspection_error",
                             "error": f"{type(exc).__name__}: {exc}",
                         }
@@ -361,6 +376,7 @@ def build_repository_reuse_plan(
                         "repository": repository,
                         "page_refs": list(card.get("page_refs", ())),
                         "explicit_reference": explicit_reference,
+                        "candidate_origin": str(card.get("candidate_origin") or "legacy_or_explicit"),
                         "status": "proof_pending" if admitted else "inspection_rejected",
                         "overlap": overlap,
                     }
@@ -431,21 +447,23 @@ def build_repository_reuse_plan(
         if temporary is not None:
             temporary.cleanup()
 
+    planning_cards = planning_state_repository_cards(design)
     return {
         "schema_version": _SCHEMA,
         "source_plan_sha256": source_plan_sha256,
         "capability_graph": graph,
         "capabilities": decisions,
         "grounded_repository_count": len(cards),
+        "planning_rag_candidate_repository_count": len(planning_cards),
         "explicit_reference_repository_count": sum(
             bool(card.get("explicit_reference")) for card in cards
         ),
         "inspection_receipts": inspections,
         "proof_receipts": proofs,
         "selection_policy": (
-            "grounded/explicit GitHub evidence -> frozen-intent capability inspection -> "
-            "immutable source inspection -> authoritative target compile -> complete verified "
-            "artifact coverage -> task-owned code context"
+            "reference-only host-grounded/explicit GitHub candidate -> frozen-intent capability "
+            "inspection -> immutable source + permissive-license closure -> authoritative target "
+            "compile -> complete verified artifact coverage -> task-owned approved source context"
         ),
     }
 
