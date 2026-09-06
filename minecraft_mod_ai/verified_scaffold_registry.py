@@ -213,8 +213,6 @@ def validate_scaffold_buildability(adapter: PlatformAdapter) -> None:
         raise UnsupportedTargetSpecificationError("Invalid Java release") from exc
     if java <= 0 or not adapter.fabric_loader or not adapter.fabric_api or not adapter.fabric_loom:
         raise UnsupportedTargetSpecificationError("Incomplete Fabric build receipt")
-    if adapter.mappings_kind not in {"mojang", "yarn"}:
-        raise UnsupportedTargetSpecificationError("Unsupported mappings kind")
 
 
 def is_target_supported(loader: str, minecraft_version: str) -> bool:
