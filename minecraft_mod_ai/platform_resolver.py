@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-"""Platform selection DTOs, parsing, and proposal binding.
+"""Platform selection DTOs, parsing, proposal binding, and target decision lowering.
 
 Actual optimisation lives in platform_evidence_pipeline through the canonical
 platform_selection_pipeline. This module performs no search, retry, or ranking itself.
+It is also the single lowering boundary from a verified PlatformSelection receipt into
+the planner-facing target-decision receipt; downstream planners must not reconstruct
+TargetContract coordinates themselves.
 """
 
+import hashlib
+import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -20,7 +25,7 @@ from .platform_catalog import (
 )
 from .platform_evidence_pipeline import PlatformOptimization, TargetResearchFn
 from .spec import PlatformLock, Proposal, SpecValidationError, platform_receipt_sha256
-from .target_contract import TargetContract
+from .target_contract import TargetContract, target_contract_from_mapping
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
 _ASCII_WORD = r"A-Za-z0-9_"
@@ -32,6 +37,32 @@ _MIGRATION_RE = re.compile(
     r"migrat|port\s+(?:to|from)|upgrade\s+to|downgrade\s+to",
     re.IGNORECASE,
 )
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        return ()
+    return tuple(dict.fromkeys(text for item in values if (text := str(item).strip())))
+
+
+def _payload_sha(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -64,6 +95,123 @@ class PlatformSelection:
         if self.optimization is not None:
             payload["optimizer"] = self.optimization.to_dict()
         return payload
+
+
+def compile_target_decision(
+    selection_payload: Mapping[str, Any] | None,
+    *,
+    existing_inventory: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Lower one platform-selection receipt into the planner target decision.
+
+    Target coordinates are never reconstructed field-by-field here.  A supplied target
+    must deserialize through TargetContract and is then re-emitted with public_dict().
+    Project topology and optimizer rejection metadata are decision-layer concerns and are
+    derived here once so evidence planners only consume this receipt.
+    """
+
+    raw = _mapping(selection_payload)
+    raw_target = raw.get("target")
+    if isinstance(raw_target, Mapping) and raw_target:
+        target = target_contract_from_mapping(raw_target).public_dict()
+    else:
+        target = {
+            "minecraft_version": "unresolved",
+            "loader": "unresolved",
+            "source_api_family": "unresolved",
+        }
+
+    policy = (
+        "preserve"
+        if raw.get("preserved_existing_target")
+        else "migrate"
+        if raw.get("migration_requested")
+        else "new"
+    )
+    optimizer = _mapping(raw.get("optimizer"))
+    inventory = _mapping(existing_inventory)
+    inventory_target = _mapping(inventory.get("target"))
+    inventory_modules = (
+        inventory.get("modules") if isinstance(inventory.get("modules"), list) else []
+    )
+    topology_modules = [
+        item
+        for item in inventory_modules
+        if isinstance(item, Mapping)
+        and not (
+            len(inventory_modules) > 1
+            and str(item.get("module_id") or "") == ":"
+            and not _strings(item.get("source_sets"))
+        )
+    ]
+    project_topology = {
+        "module_ids": [
+            str(item.get("module_id") or "")
+            for item in topology_modules
+            if str(item.get("module_id") or "")
+        ],
+        "loaders": list(_strings(inventory_target.get("loaders"))),
+        "source_sets": sorted(
+            {
+                str(source_set)
+                for item in topology_modules
+                for source_set in _strings(item.get("source_sets"))
+            }
+        ),
+    }
+    supplied_topology = _mapping(raw.get("project_topology"))
+    if supplied_topology:
+        project_topology = {
+            "module_ids": list(_strings(supplied_topology.get("module_ids"))),
+            "loaders": list(_strings(supplied_topology.get("loaders"))),
+            "source_sets": list(_strings(supplied_topology.get("source_sets"))),
+        }
+
+    rejected: list[dict[str, Any]] = []
+    candidates = optimizer.get("candidates")
+    if isinstance(candidates, list):
+        selected_key = (
+            str(target.get("minecraft_version") or ""),
+            str(target.get("loader") or "").casefold(),
+        )
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            candidate_target = _mapping(candidate.get("target"))
+            key = (
+                str(candidate_target.get("minecraft_version") or ""),
+                str(candidate_target.get("loader") or "").casefold(),
+            )
+            if key != selected_key:
+                rejected.append(
+                    {
+                        "target": candidate_target,
+                        "total_expected_cost": candidate.get("total_expected_cost"),
+                        "reason": "ranked_below_selected_after_hard_gates_and_verified_reuse",
+                    }
+                )
+
+    resolved = bool(
+        str(target.get("minecraft_version") or "").strip().casefold()
+        not in {"", "unresolved"}
+        and str(target.get("loader") or "").strip().casefold() not in {"", "unresolved"}
+    )
+    result: dict[str, Any] = {
+        "policy": policy,
+        "coordinates": target,
+        "hard_gate_status": "passed" if resolved else "deferred",
+        "preserved_existing_target": bool(raw.get("preserved_existing_target")),
+        "migration_requested": bool(raw.get("migration_requested")),
+        "decision_reason": str(
+            raw.get("reason") or optimizer.get("selection_basis") or "host target input"
+        ),
+        "rejected_alternatives": rejected,
+        "project_topology": project_topology,
+        "evidence_refs": [f"platform-selection:{_payload_sha(raw)}"] if raw else [],
+        "decision_sha256": "",
+    }
+    result["decision_sha256"] = _payload_sha(result)
+    return result
 
 
 def lock_from_adapter(adapter: TargetContract) -> PlatformLock:
@@ -276,6 +424,7 @@ def executable_target_names() -> tuple[str, ...]:
 
 __all__ = [
     "PlatformSelection",
+    "compile_target_decision",
     "executable_target_names",
     "lock_from_adapter",
     "resolve_platform",
