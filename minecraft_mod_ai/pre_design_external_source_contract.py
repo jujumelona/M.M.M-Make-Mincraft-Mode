@@ -13,6 +13,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any
 
@@ -20,6 +21,7 @@ _INSTALLED = False
 _DEFAULT_MAX_QUERIES = 20
 _HARD_MAX_QUERIES = 20
 _MAX_REPOSITORIES_PER_QUERY = 3
+_MAX_EXTERNAL_SOURCE_WORKERS = 4
 _GITHUB_API = "https://api.github.com"
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
 _STOP = {
@@ -490,6 +492,8 @@ def _planned_requirement_query_keys(payload: Mapping[str, Any]) -> list[str]:
                 seen.add(key)
                 result.append(query)
     return result
+
+
 def _fallback_query_keys(bundle: Mapping[str, Any], limit: int) -> set[str]:
     del limit
     all_queries: list[str] = []
@@ -530,6 +534,72 @@ def _repository_identity(record: Mapping[str, Any]) -> str:
     return str(record.get("title") or record.get("source_locator") or "").strip()
 
 
+def _skipped_after_rate_limit_receipt() -> dict[str, Any]:
+    return {
+        "records": [],
+        "search_requests": 0,
+        "source_requests": 0,
+        "provider_status": "rate_limited",
+        "saturation_reason": "skipped_after_provider_rate_limit",
+        "errors": ["github provider already reported rate limit in this pre-design pass"],
+    }
+
+
+def _retrieve_selected_source_receipts(selected_order: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Fetch approved queries concurrently in bounded batches while preserving order semantics."""
+
+    queries = [_clean_query(query) for query in selected_order if _clean_query(query)]
+    if not queries:
+        return {}
+    workers = max(1, min(_MAX_EXTERNAL_SOURCE_WORKERS, len(queries)))
+    receipts: dict[str, dict[str, Any]] = {}
+    _emit_source_trace(
+        "external_query_parallel_plan",
+        query_count=len(queries),
+        max_workers=workers,
+    )
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="mmm-predesign-source",
+    ) as executor:
+        for offset in range(0, len(queries), workers):
+            batch = queries[offset : offset + workers]
+            for query in batch:
+                _emit_source_trace("external_query_selected", query=query, reason="approved_parallel_batch")
+            batch_receipts = list(executor.map(_retrieve_github_source_body, batch))
+            rate_limit_index: int | None = None
+            for index, (query, raw_receipt) in enumerate(zip(batch, batch_receipts)):
+                if rate_limit_index is not None:
+                    receipts[query.casefold()] = _skipped_after_rate_limit_receipt()
+                    _emit_source_trace(
+                        "external_query_skipped",
+                        query=query,
+                        reason="provider_already_rate_limited",
+                    )
+                    continue
+                receipt = dict(raw_receipt) if isinstance(raw_receipt, Mapping) else {
+                    "records": [],
+                    "search_requests": 0,
+                    "source_requests": 0,
+                    "provider_status": "unavailable",
+                    "saturation_reason": "invalid_retrieval_receipt",
+                    "errors": ["external source retriever returned an invalid receipt"],
+                }
+                receipts[query.casefold()] = receipt
+                if str(receipt.get("provider_status") or "").casefold() == "rate_limited":
+                    rate_limit_index = index
+            if rate_limit_index is not None:
+                for query in queries[offset + len(batch) :]:
+                    receipts[query.casefold()] = _skipped_after_rate_limit_receipt()
+                    _emit_source_trace(
+                        "external_query_skipped",
+                        query=query,
+                        reason="provider_already_rate_limited",
+                    )
+                break
+    return receipts
+
+
 def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(bundle)
     raw_domains = bundle.get("domains")
@@ -546,7 +616,6 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
     # Never silently starve later requirements because an unrelated global cap was hit.
     selected_order = list(dict.fromkeys(planned))
     selected = {query.casefold() for query in selected_order}
-    provider_rate_limited = False
     _emit_source_trace(
         "external_query_plan",
         selection_origin=selection_origin,
@@ -555,6 +624,7 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
         selected_count=len(selected),
         selected_queries=selected_order,
     )
+    retrieval_receipts = _retrieve_selected_source_receipts(selected_order)
 
     augmented_domains: list[Any] = []
     for raw_domain in raw_domains:
@@ -571,25 +641,16 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
             row = dict(raw_row)
             query = _clean_query(row.get("query"))
             if query.casefold() in selected:
-                if provider_rate_limited:
+                receipt = retrieval_receipts.get(query.casefold())
+                if receipt is None:
                     receipt = {
                         "records": [],
                         "search_requests": 0,
                         "source_requests": 0,
-                        "provider_status": "rate_limited",
-                        "saturation_reason": "skipped_after_provider_rate_limit",
-                        "errors": ["github provider already reported rate limit in this pre-design pass"],
+                        "provider_status": "unavailable",
+                        "saturation_reason": "missing_parallel_retrieval_receipt",
+                        "errors": ["selected external source query has no retrieval receipt"],
                     }
-                    _emit_source_trace(
-                        "external_query_skipped",
-                        query=query,
-                        reason="provider_already_rate_limited",
-                    )
-                else:
-                    _emit_source_trace("external_query_selected", query=query, reason=selection_origin)
-                    receipt = _retrieve_github_source_body(query)
-                    if str(receipt.get("provider_status") or "").casefold() == "rate_limited":
-                        provider_rate_limited = True
                 external = row.get("external_rag")
                 external_map = dict(external) if isinstance(external, Mapping) else {}
                 existing_records_raw = external_map.get("records")
