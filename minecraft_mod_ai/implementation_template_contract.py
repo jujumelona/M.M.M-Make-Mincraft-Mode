@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Host-compiled execution contract for a small coding agent.
 
-The planner must finish architecture before coding starts. This module lowers one
-validated execution task into exact file/symbol ownership, dependency order,
-implementation obligations, protected boundaries, and verification gates. The coder may
-write code inside those boundaries; it may not redesign the task graph or invent targets.
+The planner must finish evidence-backed implementation design before coding starts. This
+module lowers one validated execution task into exact ownership, obligations, target
+constraints and verification gates. Semantic task labels are never implementation steps.
 """
 
 import hashlib
@@ -13,18 +12,13 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .target_contract import TargetContractError, target_coordinates_from_mapping
+
 SCHEMA = "mmm/coder-execution-contract-v2"
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _sha(value: Any) -> str:
@@ -61,16 +55,20 @@ def _artifact_records(task: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
 
 def _target_constraints(task: Mapping[str, Any]) -> dict[str, Any]:
     target = _mapping(task.get("target_cell"))
+    try:
+        coordinates = target_coordinates_from_mapping(target)
+    except TargetContractError as exc:
+        raise ValueError(f"coder execution target contract is invalid: {exc}") from exc
+    java_version = str(target.get("java_version") or target.get("java") or "").strip()
+    if not java_version and coordinates.minimum_java_major is not None:
+        java_version = str(coordinates.minimum_java_major)
     return {
-        "minecraft_version": str(target.get("minecraft_version") or "").strip(),
-        "loader": str(target.get("loader") or "").strip(),
-        "mappings": str(
-            target.get("mappings")
-            or target.get("mapping_namespace")
-            or target.get("source_api_family")
-            or ""
-        ).strip(),
-        "java_version": str(target.get("java_version") or target.get("java") or "").strip(),
+        "minecraft_version": coordinates.minecraft_version,
+        "loader": coordinates.loader,
+        "mappings": coordinates.mappings,
+        "mappings_applicable": coordinates.mappings_applicable,
+        "naming_regime": coordinates.naming_regime,
+        "java_version": java_version,
         "policy": "Use only the immutable host-selected target and compatible evidence.",
     }
 
@@ -87,11 +85,7 @@ def _anchor_target(anchor: Mapping[str, Any]) -> dict[str, str]:
     path, separator, symbol = locator.partition("#")
     kind = str(anchor.get("kind") or "").strip()
     status = str(anchor.get("status") or "").strip().casefold()
-    operation = "create_or_modify"
-    if status in {"existing", "reuse", "modify", "host_existing"}:
-        operation = "modify"
-    elif status in {"host_reserved", "new", "create"}:
-        operation = "create_or_modify"
+    operation = "modify" if status in {"existing", "reuse", "modify", "host_existing"} else "create_or_modify"
     return {
         "kind": kind,
         "locator": locator,
@@ -108,16 +102,15 @@ def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     public = _strings(task.get("public_acceptance"))
     runtime = _strings(task.get("runtime_acceptance"))
     acceptance = _strings(task.get("acceptance"))
-    plan: list[dict[str, Any]] = []
-    for sequence, gate in enumerate(gates):
-        plan.append(
-            {
-                "sequence": sequence,
-                "gate": gate,
-                "executor": "host_gate_runner",
-                "pass_condition": "The named host gate returns PASS for this task and immutable target.",
-            }
-        )
+    plan: list[dict[str, Any]] = [
+        {
+            "sequence": sequence,
+            "gate": gate,
+            "executor": "host_gate_runner",
+            "pass_condition": "The named host gate returns PASS for this task and immutable target.",
+        }
+        for sequence, gate in enumerate(gates)
+    ]
     if public or runtime or acceptance:
         plan.append(
             {
@@ -133,27 +126,33 @@ def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     return plan
 
 
+def _artifact_obligation_text(artifact: Mapping[str, Any]) -> str:
+    return " | ".join(
+        text
+        for text in (
+            str(artifact.get("kind") or "").strip(),
+            str(artifact.get("locator") or "").strip(),
+            str(artifact.get("purpose") or "").strip(),
+        )
+        if text
+    )
+
+
 def _implementation_steps(task: Mapping[str, Any], targets: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
     obligations = list(_strings(task.get("implementation_obligations")))
     obligations.extend(_strings(task.get("design_resolution_obligations")))
     obligations.extend(_strings(task.get("implementation_capabilities")))
-    for artifact in _artifact_records(task):
-        description = " | ".join(
-            text
-            for text in (
-                str(artifact.get("kind") or "").strip(),
-                str(artifact.get("locator") or "").strip(),
-                str(artifact.get("purpose") or "").strip(),
-            )
-            if text
-        )
-        if description:
-            obligations.append(description)
+    obligations.extend(
+        description
+        for artifact in _artifact_records(task)
+        if (description := _artifact_obligation_text(artifact))
+    )
     obligations = list(dict.fromkeys(item for item in obligations if item))
     if not obligations:
-        semantic = str(task.get("semantic_outcome") or task.get("task_id") or "").strip()
-        if semantic:
-            obligations.append(semantic)
+        task_id = str(task.get("task_id") or "").strip()
+        raise ValueError(
+            f"coder execution contract {task_id!r} is semantic-only: concrete researched implementation obligations are required"
+        )
     target_refs = [item["locator"] for item in targets if item.get("locator")]
     return [
         {
@@ -173,6 +172,13 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
     task_ref = str(contract.get("task_ref") or "").strip()
     if not task_ref:
         raise ValueError("coder execution contract requires task_ref")
+    target_constraints = contract.get("target_constraints")
+    if not isinstance(target_constraints, Mapping):
+        raise ValueError(f"coder execution contract {task_ref!r} has no target contract")
+    try:
+        target_coordinates_from_mapping(target_constraints)
+    except TargetContractError as exc:
+        raise ValueError(f"coder execution contract {task_ref!r} target is invalid: {exc}") from exc
     targets = contract.get("targets")
     if not isinstance(targets, list) or not targets:
         raise ValueError(f"coder execution contract {task_ref!r} has no exact target")
