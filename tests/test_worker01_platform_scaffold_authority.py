@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from minecraft_mod_ai.platform_catalog import PlatformAdapter
 from minecraft_mod_ai import verified_scaffold_registry as scaffold
+from minecraft_mod_ai.platform_catalog import PlatformAdapter
+from minecraft_mod_ai.target_profile_semantics import minimum_java_major
 
 
 def _adapter(
@@ -22,12 +23,13 @@ def _adapter(
     native_names = major.isdigit() and int(major) >= 26
     resolved_mappings_kind = "" if native_names else mappings_kind
     resolved_mappings_version = "" if native_names else mappings_version
+    java_floor = minimum_java_major(version) or 21
     return PlatformAdapter(
         adapter_id=f"{loader}-{version}-receipt",
         edition="java",
         loader=loader,
         minecraft_version=version,
-        java_version="21",
+        java_version=str(max(21, java_floor)),
         yarn_mappings=resolved_mappings_version,
         mappings_kind=resolved_mappings_kind,
         mappings_version=resolved_mappings_version,
