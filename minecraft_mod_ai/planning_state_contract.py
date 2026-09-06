@@ -8,8 +8,10 @@ readiness. The model may describe an unknown; it may not choose a route that byp
 kind of evidence the unknown requires.
 """
 
+import difflib
 import hashlib
 import json
+import unicodedata
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -134,13 +136,94 @@ def _strings(value: Any) -> list[str]:
     return list(dict.fromkeys(_text(item) for item in value if _text(item)))
 
 
-def _quote_receipt(prompt: str, quote: Any) -> dict[str, Any]:
-    text = str(quote or "").strip()
-    if not text:
-        raise ValueError("PROMPT_STATE_SOURCE: source_quote must not be empty")
+def _codepoints(value: str, *, limit: int = 96) -> list[str]:
+    prefix = [f"U+{ord(char):04X}:{unicodedata.name(char, 'UNKNOWN')}" for char in value[:limit]]
+    if len(value) > limit:
+        prefix.append(f"...(+{len(value) - limit} codepoints)")
+    return prefix
+
+
+def _quote_diagnostics(
+    prompt: str,
+    quote: str,
+    *,
+    field_path: str,
+    model_output: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    matcher = difflib.SequenceMatcher(None, quote, prompt, autojunk=False)
+    match = matcher.find_longest_match(0, len(quote), 0, len(prompt))
+    context_start = max(0, match.b - 120)
+    context_end = min(len(prompt), match.b + max(match.size, 1) + 120)
+    stripped = quote.strip()
+    compact_quote = _text(quote)
+    compact_prompt = _text(prompt)
+    nfc_quote = unicodedata.normalize("NFC", quote)
+    nfc_prompt = unicodedata.normalize("NFC", prompt)
+    nfkc_quote = unicodedata.normalize("NFKC", quote)
+    nfkc_prompt = unicodedata.normalize("NFKC", prompt)
+    return {
+        "failure_type": "source_quote_exact_span_mismatch",
+        "field_path": field_path,
+        "raw_source_quote": quote,
+        "source_quote_repr": repr(quote),
+        "source_quote_sha256": _sha(quote),
+        "prompt": prompt,
+        "prompt_sha256": _sha(prompt),
+        "model_output": deepcopy(dict(model_output)) if isinstance(model_output, Mapping) else None,
+        "nearest_prompt_context": prompt[context_start:context_end],
+        "nearest_prompt_context_repr": repr(prompt[context_start:context_end]),
+        "nearest_prompt_context_range": [context_start, context_end],
+        "longest_common_span": {
+            "quote_start": match.a,
+            "prompt_start": match.b,
+            "length": match.size,
+        },
+        "whitespace_diagnostics": {
+            "leading_or_trailing_whitespace_present": quote != stripped,
+            "collapsed_whitespace_match": bool(compact_quote) and compact_quote in compact_prompt,
+            "raw_length": len(quote),
+            "stripped_length": len(stripped),
+        },
+        "unicode_diagnostics": {
+            "nfc_match": bool(nfc_quote) and nfc_quote in nfc_prompt,
+            "nfkc_match": bool(nfkc_quote) and nfkc_quote in nfkc_prompt,
+            "quote_codepoints": _codepoints(quote),
+            "nearest_context_codepoints": _codepoints(prompt[context_start:context_end]),
+        },
+    }
+
+
+def _quote_receipt(
+    prompt: str,
+    quote: Any,
+    *,
+    field_path: str,
+    model_output: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    text = str(quote or "")
+    if not text.strip():
+        diagnostics = _quote_diagnostics(
+            prompt,
+            text,
+            field_path=field_path,
+            model_output=model_output,
+        )
+        raise ValueError(
+            "PROMPT_STATE_SOURCE: source_quote must not be empty; "
+            f"diagnostics={_canonical(diagnostics)}"
+        )
     start = prompt.find(text)
     if start < 0:
-        raise ValueError(f"PROMPT_STATE_SOURCE: source_quote is not an exact authored span: {text!r}")
+        diagnostics = _quote_diagnostics(
+            prompt,
+            text,
+            field_path=field_path,
+            model_output=model_output,
+        )
+        raise ValueError(
+            f"PROMPT_STATE_SOURCE: {field_path} is not an exact authored span; "
+            f"diagnostics={_canonical(diagnostics)}"
+        )
     return {
         "source_id": "requested_prompt",
         "char_start": start,
@@ -150,14 +233,26 @@ def _quote_receipt(prompt: str, quote: Any) -> dict[str, Any]:
     }
 
 
-def _host_item(prompt: str, raw: Mapping[str, Any], *, prefix: str, index: int) -> dict[str, Any]:
+def _host_item(
+    prompt: str,
+    raw: Mapping[str, Any],
+    *,
+    prefix: str,
+    index: int,
+    model_output: Mapping[str, Any],
+) -> dict[str, Any]:
     statement = _text(raw.get("statement"))
     if not statement:
         raise ValueError(f"PROMPT_STATE_{prefix.upper()}: statement must not be empty")
     return {
         f"{prefix}_id": f"{prefix}_{index + 1:03d}",
         "statement": statement,
-        "source": _quote_receipt(prompt, raw.get("source_quote")),
+        "source": _quote_receipt(
+            prompt,
+            raw.get("source_quote"),
+            field_path=f"{prefix}[{index}].source_quote",
+            model_output=model_output,
+        ),
     }
 
 
@@ -196,7 +291,13 @@ def _research_item(raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
     }
 
 
-def _reference_item(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
+def _reference_item(
+    prompt: str,
+    raw: Mapping[str, Any],
+    *,
+    index: int,
+    model_output: Mapping[str, Any],
+) -> dict[str, Any]:
     name = _text(raw.get("name"))
     needed = _text(raw.get("what_must_be_learned"))
     if not name or not needed:
@@ -204,7 +305,12 @@ def _reference_item(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[
     return {
         "reference_id": f"ref_{index + 1:03d}",
         "name": name,
-        "source": _quote_receipt(prompt, raw.get("source_quote")),
+        "source": _quote_receipt(
+            prompt,
+            raw.get("source_quote"),
+            field_path=f"references[{index}].source_quote",
+            model_output=model_output,
+        ),
         "what_must_be_learned": needed,
     }
 
@@ -292,7 +398,7 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
     if not isinstance(known_raw, list) or not isinstance(references_raw, list) or not isinstance(unresolved_raw, list):
         raise ValueError("PROMPT_STATE_SHAPE: known/references/unresolved must be arrays")
     references = [
-        _reference_item(prompt, item, index=i)
+        _reference_item(prompt, item, index=i, model_output=model_value)
         for i, item in enumerate(references_raw)
         if isinstance(item, Mapping)
     ]
@@ -311,9 +417,24 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
         "prompt_sha256": _sha(prompt),
         "goal": {
             "statement": _text(goal_raw.get("statement")),
-            "source": _quote_receipt(prompt, goal_raw.get("source_quote")),
+            "source": _quote_receipt(
+                prompt,
+                goal_raw.get("source_quote"),
+                field_path="goal.source_quote",
+                model_output=model_value,
+            ),
         },
-        "known": [_host_item(prompt, item, prefix="known", index=i) for i, item in enumerate(known_raw) if isinstance(item, Mapping)],
+        "known": [
+            _host_item(
+                prompt,
+                item,
+                prefix="known",
+                index=i,
+                model_output=model_value,
+            )
+            for i, item in enumerate(known_raw)
+            if isinstance(item, Mapping)
+        ],
         "references": references,
         "scope_status": scope_status,
         "unresolved": unresolved,
@@ -418,6 +539,10 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
             "content": (
                 "Fill only the prompt-understanding template. Do not design a Minecraft implementation. "
                 "Do not invent APIs, files, systems, features, mechanics, or facts absent from the prompt. "
+                "Every source_quote MUST be copied verbatim from USER REQUEST as exactly one contiguous "
+                "substring. Preserve every Unicode code point, whitespace character, punctuation mark, "
+                "capitalization choice, typo, and line break exactly as authored. Never paraphrase, trim, "
+                "normalize Unicode, correct spelling, or join separate spans in source_quote. "
                 "KNOWN entries require exact source_quote support. Named games/products/styles/works/concepts "
                 "whose meaning must be learned belong in references and unresolved(reference_semantics). "
                 "If scope is not authored, mark it partial or unspecified instead of guessing. Route each "
