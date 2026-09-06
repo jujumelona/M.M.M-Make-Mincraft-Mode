@@ -13,13 +13,16 @@ from dataclasses import dataclass, replace
 from copy import deepcopy
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from . import central_research
 from .model_router import ModelRouter
 from .planner import _proposal_from_model_data
 from .platform_resolver import retarget_proposal
+from .root_cause_trace import traced_callable
 from .spec import Proposal, SpecValidationError
+
+_T = TypeVar("_T")
 
 
 class PlanningStage(str, Enum):
@@ -54,6 +57,12 @@ class PlanningArtifacts:
     technical_evidence: dict[str, Any]
 
 
+def _host_operation(operation: str, callback: Callable[[], _T]) -> _T:
+    """Route every major planning host boundary through one trace implementation."""
+
+    return traced_callable(callback, stage="planning", operation=operation)()
+
+
 class PlanningPipeline:
     """Compile an authored request into an implementation-ready grounded contract."""
 
@@ -84,8 +93,14 @@ class PlanningPipeline:
                 checkpoint(deepcopy(value))
 
         try:
-            planning_state = prepare_planning_state(
-                self.router, prompt, existing_state=existing_state, checkpoint=save_state
+            planning_state = _host_operation(
+                "prepare_planning_state",
+                lambda: prepare_planning_state(
+                    self.router,
+                    prompt,
+                    existing_state=existing_state,
+                    checkpoint=save_state,
+                ),
             )
         except Exception as exc:
             raise PlanningStageError(
@@ -94,17 +109,38 @@ class PlanningPipeline:
                 cause=exc,
             ) from exc
 
-        game_design, base_proposal = self._semantic_design(
-            prompt,
-            planning_state=planning_state,
-            media_paths=media_paths,
+        try:
+            game_design, base_proposal = _host_operation(
+                "semantic_design",
+                lambda: self._semantic_design(
+                    prompt,
+                    planning_state=planning_state,
+                    media_paths=media_paths,
+                ),
+            )
+        except Exception as exc:
+            raise PlanningStageError(
+                PlanningStage.DESIGN,
+                "researched state could not be lowered into the semantic design",
+                cause=exc,
+            ) from exc
+
+        try:
+            game_design, base_proposal, research_brief, platform_evidence = _host_operation(
+                "bind_target_contract",
+                lambda: self._bind_platform(prompt, game_design, base_proposal),
+            )
+        except Exception as exc:
+            raise PlanningStageError(
+                PlanningStage.PLATFORM,
+                "canonical target contract could not be bound",
+                cause=exc,
+            ) from exc
+
+        technical_evidence = _host_operation(
+            "validate_technical_evidence",
+            lambda: self._validated_evidence(platform_evidence),
         )
-        game_design, base_proposal, research_brief, platform_evidence = self._bind_platform(
-            prompt,
-            game_design,
-            base_proposal,
-        )
-        technical_evidence = self._validated_evidence(platform_evidence)
         return PlanningArtifacts(
             planning_state=planning_state,
             game_design=game_design,
@@ -154,8 +190,6 @@ class PlanningPipeline:
                 "_evidence_request_catalog": request_catalog,
                 "_planning_state": dict(planning_state),
             }
-            # This reuse plan is now compiled only after two research passes and the
-            # detailed-plan coverage gate. It is no longer a raw-prompt pre-research plan.
             pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
             design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
             research_brief = central_research.normalize_research_brief(prompt, design)
