@@ -34,21 +34,34 @@ def _semantic_leaf(
     given: str = "the authored precondition holds",
     when: str = "the authored action occurs",
     then: str = "the authored outcome is observed",
-) -> dict[str, Any]:
-    return {
-        "requirements": [
-            {
-                "source_clause_index": source_clause_index,
-                "capability_id": capability,
-                "source_anchor": anchor,
-                "semantic_statement": anchor,
-                "given": given,
-                "when": when,
-                "then": then,
-                "semantic_type": "gameplay_mechanic",
-            }
-        ]
-    }
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return (
+        {
+            "leaves": [
+                {
+                    "source_clause_index": source_clause_index,
+                    "source_anchor": anchor,
+                    "semantic_statement": anchor,
+                    "given": given,
+                    "when": when,
+                    "then": then,
+                    "semantic_type": "gameplay_mechanic",
+                }
+            ]
+        },
+        {
+            "classifications": [
+                {
+                    "leaf_index": 0,
+                    "capability_id": capability,
+                }
+            ]
+        },
+    )
+
+
+def _queue(*pairs: tuple[dict[str, Any], dict[str, Any]]) -> list[dict[str, Any]]:
+    return [payload for pair in pairs for payload in pair]
 
 
 def _step_names(capability: str) -> tuple[str, ...]:
@@ -120,7 +133,7 @@ def test_production_semantic_catalog_binds_resource_and_economy_to_spacecraft() 
         "Construct spacecraft components."
     )
     router = _SemanticQueueRouter(
-        [
+        _queue(
             _semantic_leaf(0, "resource.farming", "Gather farm resources"),
             _semantic_leaf(1, "economy.currency", "Earn credits"),
             _semantic_leaf(2, "economy.trade", "Trade with merchants"),
@@ -129,11 +142,11 @@ def test_production_semantic_catalog_binds_resource_and_economy_to_spacecraft() 
                 "spacecraft.component_construction",
                 "Construct spacecraft components",
             ),
-        ]
+        )
     )
 
     catalog = build_bounded_requirement_catalog(prompt, router=router)
-    assert router.calls == 4
+    assert router.calls == 8
     requirements = {
         str(item["capability"]): item
         for item in catalog["requirements"]
@@ -186,7 +199,7 @@ def test_component_crafting_alias_feeds_upgrade_and_launch_progression() -> None
 def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
     prompt = "Launch the ship into space.\nTravel to the selected destination."
     router = _SemanticQueueRouter(
-        [
+        _queue(
             _semantic_leaf(
                 0,
                 "space.launch",
@@ -203,10 +216,11 @@ def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
                 when="the player selects a destination",
                 then="the player arrives at the destination",
             ),
-        ]
+        )
     )
 
     catalog = build_bounded_requirement_catalog(prompt, router=router)
+    assert router.calls == 4
     requirements = [
         item for item in catalog["requirements"] if isinstance(item, Mapping)
     ]
@@ -228,7 +242,7 @@ def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
 def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> None:
     prompt = "Travel to another planet."
     router = _SemanticQueueRouter(
-        [
+        _queue(
             _semantic_leaf(
                 0,
                 "space.travel",
@@ -237,9 +251,10 @@ def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> N
                 when="the player launches",
                 then="the player arrives at the destination",
             )
-        ]
+        )
     )
     catalog = build_bounded_requirement_catalog(prompt, router=router)
+    assert router.calls == 2
     game_design = {
         "mod_id": "template_regression",
         "_evidence_request_catalog": catalog,
