@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.generator import GenerationError
 from minecraft_mod_ai.importer import inspect_existing_project_archive
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.spec import SpecValidationError
@@ -110,7 +111,7 @@ def test_existing_project_supported_version_is_preserved_without_silent_migratio
     assert proposal.imported_source_snapshot_hash.startswith("sha256:")
 
 
-def test_revision_candidate_release_contains_import_inventory(
+def test_revision_generation_fails_closed_without_reviewed_templates(
     tmp_path: Path,
 ) -> None:
     archive = _source_zip(tmp_path / "existing.zip")
@@ -119,29 +120,20 @@ def test_revision_candidate_release_contains_import_inventory(
         "Add a frost item and block",
         existing_input=archive,
     )
+    output_root = tmp_path / "output"
 
-    result = pipeline.execute(
-        proposal,
-        approval_hash=proposal.approval_hash,
-        output_root=tmp_path / "output",
-        build=False,
-        existing_input=archive,
-    )
-
-    report_path = (
-        Path(result.release_dir)
-        / "evidence"
-        / "imported-project-inventory.json"
-    )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert result.existing_input_kind == "source_project"
-    assert (
-        result.imported_source_snapshot_hash
-        == proposal.imported_source_snapshot_hash
-        == report["source_snapshot_hash"]
-    )
-    assert report["mod_id"] == "existing_mod"
-    assert report["trusted_generated_source"] is False
+    with pytest.raises(
+        GenerationError,
+        match="no reviewed deterministic module templates",
+    ):
+        pipeline.execute(
+            proposal,
+            approval_hash=proposal.approval_hash,
+            output_root=output_root,
+            build=False,
+            existing_input=archive,
+        )
+    assert not output_root.exists()
 
 
 def test_generated_release_bundle_recovers_nested_editable_source_inventory(
