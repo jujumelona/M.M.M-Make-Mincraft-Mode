@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Host-grounded pre-design research projection.
 
-Retrieval and source materialization remain host-owned.  Pre-design no longer asks the
-planner model to summarize those pages: the design compiler already has authoritative
-requirements, while exact source excerpts are sufficient provenance for later target and
-implementation work.  This removes the long research-synthesis generation from the
-planning critical path without discarding retrieved evidence.
+Retrieval and source materialization remain host-owned. Pre-design no longer asks the
+planner model to summarize those pages: exact source excerpts are sufficient provenance
+for later target and implementation work. A domain is sufficient only when at least one
+claim-bearing materialized source excerpt exists.
 """
 
 import json
@@ -140,7 +139,7 @@ def _grounded_evidence_cards(
 def _claims_from_grounded_cards(
     cards: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Expose host exact excerpts through the legacy claim/ref transport contract."""
+    """Expose host exact excerpts through the claim/ref transport contract."""
     claims: list[dict[str, Any]] = []
     for card in cards:
         page_ref = str(card.get("page_ref") or "").strip()
@@ -179,20 +178,28 @@ def research_document_domain(
         pages = ()
     source_body_count = sum(
         1
-        for page in pages if isinstance(page, Mapping) and str(page.get("content") or "").strip()
+        for page in pages
+        if isinstance(page, Mapping) and str(page.get("content") or "").strip()
     )
-    status = "supported" if cards else "no_relevant_external_evidence"
+    sufficient = bool(claims)
+    status = "supported" if sufficient else "no_relevant_external_evidence"
+    failure_reason = "" if sufficient else "no_claim_bearing_source_body"
     note = {
         "domain_id": str(domain.get("domain_id") or "unknown"),
         "research_mode": "advisory_predesign",
         "claims": claims,
-        "gaps": [],
+        "gaps": [] if sufficient else [
+            "No claim-bearing materialized source body was available for this required research domain."
+        ],
         "next_queries": [],
         "procedures": [],
-        "sufficient": True,
+        "sufficient": sufficient,
         "fixed_point": False,
-        "checkpoint": {"status": "complete"},
-        "research_failures": [],
+        "checkpoint": {
+            "status": "complete" if sufficient else "blocked",
+            "reason": failure_reason,
+        },
+        "research_failures": [] if sufficient else [failure_reason],
         "source_body_count": source_body_count,
         "model_called": False,
         "model_grounded_claim_count": 0,
@@ -200,9 +207,11 @@ def research_document_domain(
         "grounded_evidence_cards": cards,
         "research_evidence_status": status,
         "evidence_extraction_status": (
-            "host_exact_evidence_available" if cards else "no_claim_bearing_source_body"
+            "host_exact_evidence_available" if sufficient else failure_reason
         ),
-        "page_local_diagnostics": ["model_synthesis_skipped_host_evidence_preserved"],
+        "page_local_diagnostics": [
+            "model_synthesis_skipped_host_evidence_preserved"
+        ],
     }
     record_grounded_evidence(
         prompt,
