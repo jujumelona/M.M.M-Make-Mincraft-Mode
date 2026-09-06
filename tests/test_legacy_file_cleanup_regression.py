@@ -3,12 +3,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_obsolete_and_duplicate_legacy_files_are_absent() -> None:
     """Ensure retired/dead files and duplicate broken scripts stay deleted."""
     retired_paths = (
+        ROOT / "minecraft_mod_ai" / "temporary_skill_compatibility.py",
         ROOT / "tests" / "test_colab_gpu_handoff_contract.py",
         ROOT / "tests" / "test_complete_technology_integration.py",
         ROOT / "tests" / "test_mcp_technology_tools.py",
@@ -16,6 +19,19 @@ def test_obsolete_and_duplicate_legacy_files_are_absent() -> None:
     )
     for path in retired_paths:
         assert not path.exists(), f"Retired legacy file should not exist: {path.name}"
+
+
+def test_retired_slice_cli_contract_stays_absent() -> None:
+    """CLI must expose only the complete-proposal planning/execution contract."""
+    from minecraft_mod_ai.cli import _build_parser, _proposal_validation_result
+
+    parser = _build_parser()
+    for command in ("plan-slice", "execute-slice"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([command])
+
+    with pytest.raises(ValueError, match="complete proposal"):
+        _proposal_validation_result({"items": [], "blocks": []})
 
 
 def test_every_test_file_contains_executable_tests() -> None:
