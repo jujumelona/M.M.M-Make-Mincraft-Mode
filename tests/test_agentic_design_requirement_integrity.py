@@ -24,13 +24,6 @@ def _ledger():
     )
 
 
-class _GameDesignModule:
-    @staticmethod
-    def _validate_design(value):
-        assert value["modules"]
-        assert value["acceptance_tests"]
-
-
 class _NoModelRouter:
     def generate_text(self, *_args, **_kwargs):
         pytest.fail("Host-owned game design must not call the model")
@@ -65,7 +58,6 @@ def test_host_design_binds_exact_requirement_without_model_prompt(monkeypatch):
     monkeypatch.setattr(design, "_active_requirement_ledger", lambda _prompt: ledger)
 
     result = design.generate_sectioned_game_design(
-        _GameDesignModule,
         _NoModelRouter(),
         "space trading",
         research={},
