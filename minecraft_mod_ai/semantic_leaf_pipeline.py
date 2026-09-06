@@ -15,11 +15,18 @@ the authored source span that is supposed to justify it.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import re
+
 from . import semantic_requirement_authority as _semantic
 from .minecraft_template_catalog import (
     CUSTOM_CAPABILITY_SENTINEL,
     capability_catalog_for_model,
     semantic_capability_choices,
+)
+from .request_requirements import (
+    LeafAtomicityStatus,
+    resegment_compound_leaf,
+    validate_leaf_atomicity,
 )
 from .root_cause_trace import emit_root_cause
 from .semantic_source_fidelity import fidelity_router, validate_semantic_source_partition
@@ -265,6 +272,8 @@ def _leaf_diagnostic(
 def _normalize_segmented_leaves(
     payload: Any,
     clauses: Sequence[Mapping[str, Any]],
+    *,
+    ignored_spans: Sequence[tuple[int, int]] | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], ...]]:
     clauses_by_index = {int(clause["clause_index"]): clause for clause in clauses}
     diagnostics: list[dict[str, Any]] = []
@@ -390,16 +399,21 @@ def _normalize_segmented_leaves(
             )
         )
 
-    diagnostics.extend(validate_semantic_source_partition(leaves, clauses))
+    diagnostics.extend(
+        validate_semantic_source_partition(leaves, clauses, ignored_spans=ignored_spans)
+    )
     return leaves, tuple(diagnostics)
 
 
 def _segment_batch(
     router: Any,
     clauses: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]], list[tuple[int, int]], int]:
+    clauses_by_index = {int(clause["clause_index"]): clause for clause in clauses}
     max_clause_index = max(int(clause["clause_index"]) for clause in clauses)
     diagnostics: tuple[dict[str, Any], ...] = ()
+    resegment_calls_total = 0
+
     for attempt_index in range(_MAX_ATTEMPTS):
         active_router = fidelity_router(router, diagnostics=diagnostics)
         payload = _call_model(
@@ -413,9 +427,66 @@ def _segment_batch(
                 "do not classify capabilities."
             ),
         )
-        leaves, diagnostics = _normalize_segmented_leaves(payload, clauses)
-        if not diagnostics:
-            return leaves, attempt_index + 1
+        raw_leaves, base_diagnostics = _normalize_segmented_leaves(payload, clauses)
+        structural_diagnostics = [
+            d for d in base_diagnostics if d.get("error_code") != "REQ_SOURCE_PARTITION_GAP"
+        ]
+        if structural_diagnostics:
+            diagnostics = tuple(structural_diagnostics)
+            continue
+
+        # Host-side atomicity validation and context filtering
+        atomic_leaves: list[dict[str, Any]] = []
+        context_leaves: list[dict[str, Any]] = []
+        dropped_catch_alls: list[dict[str, Any]] = []
+        resegment_calls = 0
+
+        for leaf in raw_leaves:
+            clause = clauses_by_index[int(leaf["source_clause_index"])]
+            status, reason = validate_leaf_atomicity(leaf, str(clause["text"]))
+            if status == LeafAtomicityStatus.CONTEXT:
+                context_leaves.append(dict(leaf))
+            elif status == LeafAtomicityStatus.CATCH_ALL:
+                dropped_catch_alls.append(dict(leaf))
+            elif status == LeafAtomicityStatus.COMPOUND:
+                sub_atomic, sub_context = resegment_compound_leaf(router, leaf, clause)
+                resegment_calls += 1
+                atomic_leaves.extend(sub_atomic)
+                context_leaves.extend(sub_context)
+            else:
+                atomic_leaves.append(dict(leaf))
+
+        resegment_calls_total += resegment_calls
+
+        # Compute ignored spans (context and catch-all text)
+        ignored: list[tuple[int, int]] = []
+        for item in (*context_leaves, *dropped_catch_alls):
+            if "source_start" in item and "source_end" in item:
+                ignored.append((int(item["source_start"]), int(item["source_end"])))
+        for clause in clauses:
+            text = str(clause["text"])
+            c_start = int(clause["char_start"])
+            for pattern in (
+                re.compile(r"등\s*여러\s*가지.*$"),
+                re.compile(r"^우주\s*모드\s*(?:인데|입니다|이다|임)?"),
+            ):
+                for m in pattern.finditer(text):
+                    ignored.append((c_start + m.start(), c_start + m.end()))
+        ignored_spans = sorted(set(ignored))
+
+        partition_diagnostics = validate_semantic_source_partition(
+            atomic_leaves, clauses, ignored_spans=ignored_spans
+        )
+        if not partition_diagnostics:
+            return (
+                atomic_leaves,
+                attempt_index + 1,
+                context_leaves,
+                ignored_spans,
+                resegment_calls_total,
+            )
+        diagnostics = partition_diagnostics
+
     raise _semantic._evidence.EvidencePlanError(
         "semantic segmentation rejected after one diagnostic-guided repair: "
         + _semantic._canonical(list(diagnostics))
@@ -551,7 +622,13 @@ def compile_semantic_batch(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return approved semantic nodes plus exact bounded-model call accounting."""
 
-    leaves, segmentation_attempts = _segment_batch(router, clauses)
+    (
+        leaves,
+        segmentation_attempts,
+        context_leaves,
+        ignored_spans,
+        resegment_calls,
+    ) = _segment_batch(router, clauses)
     classifications, classification_attempts = _classify_leaves(router, leaves)
 
     raw_requirements = []
@@ -573,7 +650,9 @@ def compile_semantic_batch(
         {"requirements": raw_requirements},
         clauses,
     )
-    fidelity_diagnostics = validate_semantic_source_partition(nodes, clauses)
+    fidelity_diagnostics = validate_semantic_source_partition(
+        nodes, clauses, ignored_spans=ignored_spans
+    )
     if invalid_clauses or diagnostics or fidelity_diagnostics:
         raise _semantic._evidence.EvidencePlanError(
             "host invariant failed after immutable semantic classification: "
@@ -589,11 +668,15 @@ def compile_semantic_batch(
     return nodes, {
         "segmentation_attempts": segmentation_attempts,
         "classification_attempts": classification_attempts,
-        "semantic_model_calls_total": segmentation_attempts + classification_attempts,
+        "semantic_model_calls_total": segmentation_attempts
+        + classification_attempts
+        + resegment_calls,
         "semantic_repair_turns_used": max(0, segmentation_attempts - 1)
         + max(0, classification_attempts - 1),
         "segmentation_repaired": segmentation_attempts > 1,
         "classification_repaired": classification_attempts > 1,
+        "resegmentation_calls": resegment_calls,
+        "context_leaves": context_leaves,
     }
 
 

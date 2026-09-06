@@ -87,6 +87,8 @@ def _diagnostic(
 def validate_semantic_source_partition(
     nodes: Sequence[Mapping[str, Any]],
     clauses: Sequence[Mapping[str, Any]],
+    *,
+    ignored_spans: Sequence[tuple[int, int]] | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Return diagnostics when semantic source spans drop or double-own authored text."""
 
@@ -128,7 +130,13 @@ def validate_semantic_source_partition(
                 if 0 <= local < len(text) and _authored_character(text[local]):
                     ownership.setdefault(position, []).append(node_index)
 
-        uncovered = sorted(authored_positions - set(ownership))
+        ignored_positions: set[int] = set()
+        if ignored_spans:
+            for span_start, span_end in ignored_spans:
+                for pos in range(span_start, span_end):
+                    ignored_positions.add(pos)
+
+        uncovered = sorted(authored_positions - set(ownership) - ignored_positions)
         if uncovered:
             diagnostics.append(
                 _diagnostic(

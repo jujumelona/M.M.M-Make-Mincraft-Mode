@@ -16,7 +16,7 @@ from .complete_spec import (
 from .evidence_execution_contract import task_batches
 from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
-from .planner_hole_filling import fill_evidence_page
+from .planner_hole_filling import fill_evidence_page, fill_evidence_pages
 from .planner_template_schema import build_batch_skeleton
 from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .planner_trace_artifacts import repository_revision
@@ -204,89 +204,123 @@ class CompleteGameDesignPlanner:
         known_module_ids: set[str] = set()
         exports_by_batch: dict[str, tuple[str, ...]] = {}
 
-        for batch in batches:
-            dependency_ids = tuple(
-                module_id
-                for dependency in batch.depends_on_batches
-                for module_id in exports_by_batch.get(dependency, ())
-            )
-            skeleton = build_batch_skeleton(
-                batch_id=batch.batch_id,
-                scope=batch.scope,
-                deliverables=batch.deliverables,
-                exports=batch.exports,
-                depends_on_batches=dependency_ids,
-                known_module_ids=tuple(known_module_ids),
-                host_module_contracts=(
-                    {
-                        module_id: {
-                            **dict(batch.task_contract or {}),
-                            "evidence_plan_sha256": batch.evidence_plan_sha256,
-                            "evidence_task": dict(batch.task_contract or {}),
+        pending_batches = list(batches)
+        completed_batch_ids: set[str] = set()
+
+        while pending_batches:
+            ready_batches = [
+                b for b in pending_batches
+                if set(b.depends_on_batches).issubset(completed_batch_ids)
+            ]
+            if not ready_batches:
+                ready_batches = [pending_batches[0]]
+
+            batch_skeletons: list[dict[str, Any]] = []
+            expected_ids_by_batch: dict[str, set[str]] = {}
+            for batch in ready_batches:
+                dependency_ids = tuple(
+                    module_id
+                    for dependency in batch.depends_on_batches
+                    for module_id in exports_by_batch.get(dependency, ())
+                )
+                skeleton = build_batch_skeleton(
+                    batch_id=batch.batch_id,
+                    scope=batch.scope,
+                    deliverables=batch.deliverables,
+                    exports=batch.exports,
+                    depends_on_batches=dependency_ids,
+                    known_module_ids=tuple(known_module_ids),
+                    host_module_contracts=(
+                        {
+                            module_id: {
+                                **dict(batch.task_contract or {}),
+                                "evidence_plan_sha256": batch.evidence_plan_sha256,
+                                "evidence_task": dict(batch.task_contract or {}),
+                            }
+                            for module_id in batch.exports
                         }
-                        for module_id in batch.exports
-                    }
-                    if batch.task_contract is not None
-                    else None
-                ),
-                acceptance_tests=batch.acceptance_tests,
-            )
-            expected_ids = {
-                str(item["module_id"])
-                for item in skeleton["modules"]
-                if isinstance(item, dict) and item.get("module_id")
-            }
-            if evidence_mode and batch.task_contract is not None:
+                        if batch.task_contract is not None
+                        else None
+                    ),
+                    acceptance_tests=batch.acceptance_tests,
+                )
+                batch_skeletons.append(skeleton)
+                expected_ids_by_batch[batch.batch_id] = {
+                    str(item["module_id"])
+                    for item in skeleton["modules"]
+                    if isinstance(item, dict) and item.get("module_id")
+                }
+
+            filled_pages: dict[str, dict[str, Any]] = {}
+            skeletons_to_fill = [
+                (batch, skel)
+                for batch, skel in zip(ready_batches, batch_skeletons)
+                if evidence_mode and batch.task_contract is not None
+            ]
+            if skeletons_to_fill:
+                all_expected: set[str] = set().union(
+                    *(expected_ids_by_batch[b.batch_id] for b, _ in skeletons_to_fill)
+                )
+                valid_catalog = {*known_module_ids, *all_expected}
                 try:
-                    page = fill_evidence_page(
+                    filled_results = fill_evidence_pages(
                         self.router,
-                        skeleton,
-                        valid_module_catalog={*known_module_ids, *expected_ids},
+                        [skel for _, skel in skeletons_to_fill],
+                        valid_module_catalog=valid_catalog,
                     )
+                    for (batch, _), filled in zip(skeletons_to_fill, filled_results):
+                        filled_pages[batch.batch_id] = filled
                 except Exception as exc:
                     raise PlanningStageError(
                         PlanningStage.EVIDENCE,
-                        f"production batch {batch.batch_id!r} implementation-hole filling failed",
+                        "production batch implementation-hole filling failed",
                         cause=exc,
                     ) from exc
-            else:
-                page = skeleton
-            accepted_modules = [
-                _module(raw)
-                for raw in page["modules"]
-                if isinstance(raw, dict)
-                and str(raw.get("module_id") or "") in expected_ids
-                and str(raw.get("module_id") or "") not in known_module_ids
-            ]
-            if not accepted_modules:
-                raise PlanningStageError(
-                    PlanningStage.EVIDENCE,
-                    f"production batch {batch.batch_id!r} produced no valid modules",
+
+            for batch, skeleton in zip(ready_batches, batch_skeletons):
+                page = filled_pages.get(batch.batch_id)
+                if page is None:
+                    page = skeleton
+                expected_ids = expected_ids_by_batch[batch.batch_id]
+
+                accepted_modules = [
+                    _module(raw)
+                    for raw in page["modules"]
+                    if isinstance(raw, dict)
+                    and str(raw.get("module_id") or "") in expected_ids
+                    and str(raw.get("module_id") or "") not in known_module_ids
+                ]
+                if not accepted_modules:
+                    raise PlanningStageError(
+                        PlanningStage.EVIDENCE,
+                        f"production batch {batch.batch_id!r} produced no valid modules",
+                    )
+
+                for module in accepted_modules:
+                    modules.append(module)
+                    known_module_ids.add(module.module_id)
+
+                known_asset_ids = {item.asset_id for item in assets}
+                known_asset_paths = {item.target_path for item in assets}
+                for raw in page["assets"]:
+                    if not isinstance(raw, dict):
+                        continue
+                    asset = _asset(raw)
+                    if (
+                        asset.asset_id in known_asset_ids
+                        or asset.target_path in known_asset_paths
+                    ):
+                        continue
+                    assets.append(asset)
+                    known_asset_ids.add(asset.asset_id)
+                    known_asset_paths.add(asset.target_path)
+
+                tests.extend(_unique_strings(page.get("acceptance_tests")))
+                exports_by_batch[batch.batch_id] = tuple(
+                    module.module_id for module in accepted_modules
                 )
-
-            for module in accepted_modules:
-                modules.append(module)
-                known_module_ids.add(module.module_id)
-
-            known_asset_ids = {item.asset_id for item in assets}
-            known_asset_paths = {item.target_path for item in assets}
-            for raw in page["assets"]:
-                if not isinstance(raw, dict):
-                    continue
-                asset = _asset(raw)
-                if (
-                    asset.asset_id in known_asset_ids
-                    or asset.target_path in known_asset_paths
-                ):
-                    continue
-                assets.append(asset)
-                known_asset_ids.add(asset.asset_id)
-                known_asset_paths.add(asset.target_path)
-
-            tests.extend(_unique_strings(page.get("acceptance_tests")))
-            exports_by_batch[batch.batch_id] = tuple(
-                module.module_id for module in accepted_modules
-            )
+                completed_batch_ids.add(batch.batch_id)
+                pending_batches.remove(batch)
 
         if not modules and not evidence_mode:
             raise PlanningStageError(

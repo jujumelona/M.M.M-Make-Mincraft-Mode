@@ -137,7 +137,13 @@ class ProductionToolService:
         actual_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
         expected_sha256 = str(authorized.get("sha256") or "")
         if expected_sha256 and actual_sha256 != expected_sha256:
-            raise SpecValidationError("Reuse source file no longer matches its pinned manifest hash.")
+            if b"\r\n" in raw:
+                raw_lf = raw.replace(b"\r\n", b"\n")
+                if "sha256:" + hashlib.sha256(raw_lf).hexdigest() == expected_sha256:
+                    raw = raw_lf
+                    actual_sha256 = expected_sha256
+            if expected_sha256 and actual_sha256 != expected_sha256:
+                raise SpecValidationError("Reuse source file no longer matches its pinned manifest hash.")
         start = min(offset_bytes, len(raw))
         end = min(len(raw), start + limit_bytes)
         chunk = raw[start:end]
