@@ -36,8 +36,12 @@ def worksheet(prefix="Concrete requirement"):
 
 
 def test_user_only_never_bypasses_requirement_gate():
-    with pytest.raises(ValueError, match="PLANNING_REQUIREMENTS_BLOCKED"):
-        compile_researched_requirements(None, "Build my favorite game", initial())
+    state = compile_researched_requirements(None, "Build my favorite game", initial())
+    assert state["plan_ready"] is False
+    assert state["unresolved"][0]["status"] == "open"
+    assert state["unresolved"][0]["resolution_route"] == "user_only"
+    assert not state["research_queue"]
+    assert any(item.get("stage") == "requirement_selection" for item in state["blockers"])
 
 
 def test_user_only_never_bypasses_ready_gate():
@@ -47,16 +51,18 @@ def test_user_only_never_bypasses_ready_gate():
         validate_planning_state(rehash(state))
 
 
-def test_contradiction_cannot_be_closed_by_scope_default():
-    with pytest.raises(ValueError, match="PROMPT_STATE_ROUTE"):
-        initial("contradiction", "default_policy")
+def test_contradiction_route_is_owned_by_host_not_model_payload():
+    state = initial("contradiction", "default_policy")
+    assert state["unresolved"][0]["resolution_route"] == "user_only"
+    assert state["unresolved"][0]["source_kinds"] == []
+    assert not state["research_queue"]
 
 
 def test_restored_state_cannot_lose_information_need():
     state = initial("external_fact", "external_research")
     state["research_queue"][0]["information_needed"] = ""
     state["research_queue"][0]["queries"] = ["guess"]
-    with pytest.raises(ValueError, match="PROMPT_STATE_INFORMATION"):
+    with pytest.raises(ValueError, match="PROMPT_STATE_RESEARCH"):
         validate_planning_state(rehash(state))
 
 
@@ -111,7 +117,7 @@ def test_grounded_detail_survives_handoff_and_resume_without_model_calls():
             return self.answer
 
     state = compile_researched_requirements(Router({"requirements": [{
-        "statement": prompt, "prompt_quote": prompt, "evidence_refs": [], "acceptance": ["Block can be placed"]
+        "statement": prompt, "prompt_refs": ["goal"], "evidence_refs": [], "acceptance": ["Block can be placed"]
     }]}), prompt, state)
     research = state["research_queue"][0]
     research.update(status="complete", queries=["block registration source"])
