@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.spec import SpecValidationError, canonical_json
 from minecraft_mod_ai.technology_radar import (
     _assess_technology_candidate_with_receipt_key,
@@ -16,15 +17,22 @@ from minecraft_mod_ai.technology_radar import (
 )
 
 _RECEIPT_KEY = b"mmm-test-receipt-key-32-bytes-minimum"
-_TARGET = {
-    "edition": "java",
-    "minecraft_version": "1.20.1",
-    "loader": "fabric",
-    "mappings": "mojang",
-    "java_version": "17",
-    "fabric_loader": "0.15.11",
-    "fabric_api": "0.92.11+1.20.1",
-}
+
+
+def _provider_target() -> dict[str, str]:
+    adapter = adapter_for_target("1.20.1", "fabric")
+    return {
+        "edition": adapter.edition,
+        "minecraft_version": adapter.minecraft_version,
+        "loader": adapter.loader,
+        "mappings": adapter.yarn_mappings,
+        "java_version": adapter.java_version,
+        "fabric_loader": adapter.fabric_loader,
+        "fabric_api": adapter.fabric_api,
+    }
+
+
+_TARGET = _provider_target()
 
 
 def _radar(
@@ -145,7 +153,7 @@ def _official_target_evidence(target: dict[str, object]) -> dict[str, object]:
             {
                 "source_url": (
                     "https://maven.fabricmc.net/net/fabricmc/fabric-api/"
-                    "fabric-api/0.92.11%2B1.20.1/"
+                    "fabric-api/maven-metadata.xml"
                 ),
                 "observed_at": "2026-08-01T00:00:00Z",
                 "content_sha256": "sha256:" + "f" * 64,
