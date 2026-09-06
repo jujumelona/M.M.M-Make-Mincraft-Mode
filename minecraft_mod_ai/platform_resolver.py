@@ -12,7 +12,6 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .platform_catalog import (
-    PlatformAdapter,
     adapter_for_target,
     adapters_for_version,
     discover_target_keys,
@@ -21,6 +20,7 @@ from .platform_catalog import (
 )
 from .platform_evidence_pipeline import PlatformOptimization, TargetResearchFn
 from .spec import PlatformLock, Proposal, SpecValidationError, platform_receipt_sha256
+from .target_contract import TargetContract
 
 _VERSION_RE = re.compile(r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2,4}\.\d+(?:\.\d+)?)(?!\d)")
 _ASCII_WORD = r"A-Za-z0-9_"
@@ -36,7 +36,7 @@ _MIGRATION_RE = re.compile(
 
 @dataclass(frozen=True)
 class PlatformSelection:
-    adapter: PlatformAdapter
+    adapter: TargetContract
     source: str
     reason: str
     explicit_version: bool
@@ -86,7 +86,7 @@ class PlatformSelection:
         return payload
 
 
-def lock_from_adapter(adapter: PlatformAdapter) -> PlatformLock:
+def lock_from_adapter(adapter: TargetContract) -> PlatformLock:
     """Copy the already-validated provider receipt without re-resolving it.
 
     PlatformLock is the immutable execution boundary.  Dropping the extended receipt
@@ -175,14 +175,14 @@ def _optimized_selection(
     )
 
 
-def _exact_adapter(version: str, loader: str) -> PlatformAdapter:
+def _exact_adapter(version: str, loader: str) -> TargetContract:
     try:
         return adapter_for_target(version, loader)
     except ValueError as exc:
         raise SpecValidationError(str(exc)) from exc
 
 
-def _existing_adapter(version: str, loader: str | None) -> PlatformAdapter:
+def _existing_adapter(version: str, loader: str | None) -> TargetContract:
     if loader and str(loader).strip():
         return _exact_adapter(str(version), str(loader))
     candidates = adapters_for_version(str(version))
@@ -267,7 +267,7 @@ def _explicit_loader(prompt: str) -> str | None:
 
 
 def _require_supported_kinds(
-    adapter: PlatformAdapter,
+    adapter: TargetContract,
     module_kinds: Iterable[str],
     *,
     explicit: bool,
