@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .ecosystem_discovery import EcosystemDiscoveryClient
-from .platform_catalog import TargetContract, adapter_for_target
+from .platform_catalog import adapter_for_target
 from .research_reuse_candidates import planning_state_repository_cards
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
 from .source_transplant import (
@@ -27,6 +27,7 @@ from .source_transplant import (
     inspect_repository_slice,
     validated_reuse_donor,
 )
+from .target_contract import TargetContract
 
 _SCHEMA = "mmm/grounded-repository-reuse-plan-v2"
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[가-힣]{2,}", re.IGNORECASE)
