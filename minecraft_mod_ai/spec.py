@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .json_stream import canonical_json_sha256
-from .target_profile_semantics import minimum_java_major, uses_native_names
+from .target_contract import minimum_java_major, uses_native_names
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
