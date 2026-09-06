@@ -3,15 +3,14 @@ from __future__ import annotations
 """ResearchCodeContext extension that adds exact-version external exemplars."""
 
 import os
-
 from typing import Any
 
 from .research_code_context import (
     Evidence,
     PlanStep,
-    QualityVector,
     ResearchCodeContext,
     _code_plan,
+    _quality,
     _sha,
 )
 from .versioned_reference_catalog import VersionedReferenceCatalog
@@ -41,7 +40,7 @@ class VersionedResearchCodeContext(ResearchCodeContext):
         *,
         plan_step: PlanStep | None,
     ) -> list[Evidence]:
-        # The generated workspace stays first.  External repositories supplement rather
+        # The generated workspace stays first. External repositories supplement rather
         # than replace the current-project call graph, RAG and quality-aware retrieval.
         local = super()._retrieve_repo_examples(query, plan_step=plan_step)
         capability = plan_step.capability if plan_step is not None else ""
@@ -68,7 +67,7 @@ class VersionedResearchCodeContext(ResearchCodeContext):
                 byte_budget=external_budget,
             )
         except Exception as exc:
-            # External exemplars are evidence, never an availability dependency.  A
+            # External exemplars are evidence, never an availability dependency. A
             # network/provider failure leaves the existing local+official retrieval path
             # intact and records why the optional lane contributed nothing.
             self.rounds.append(
@@ -87,21 +86,16 @@ class VersionedResearchCodeContext(ResearchCodeContext):
 
         external: list[Evidence] = []
         for excerpt in excerpts:
-            quality = QualityVector(
-                correctness=0.94,
-                efficiency=0.86,
-                security=0.88,
-                maintainability=0.92,
-                complexity_fit=0.90,
-                readability=0.88,
-                stepwise_clarity=0.86,
-            )
+            quality = _quality(excerpt.text, path=excerpt.path)
             metrics = {
                 "retrieval_score": excerpt.score,
                 "external_reference": 1.0,
-                "target_exact": 1.0,
+                "minecraft_loader_exact": 1.0,
                 "immutable_commit": 1.0,
                 "license_admitted": 1.0,
+                "java_compatible": 1.0
+                if excerpt.compatibility.get("java_compatible")
+                else 0.0,
                 "fabric_api_exact": 1.0
                 if excerpt.compatibility.get("fabric_api_exact")
                 else 0.0,
@@ -127,6 +121,7 @@ class VersionedResearchCodeContext(ResearchCodeContext):
                     f"license={excerpt.license_id} "
                     f"minecraft={excerpt.minecraft_version} "
                     f"loader={excerpt.loader} "
+                    f"source_sha256={excerpt.sha256} "
                     f"compatibility_sha256={_sha(dict(excerpt.compatibility))}\n"
                     + excerpt.text
                 ),
@@ -168,6 +163,23 @@ class VersionedResearchCodeContext(ResearchCodeContext):
                 }
             )
         return [*local, *external]
+
+    def receipt(self) -> dict[str, Any]:
+        result = super().receipt()
+        result["versioned_reference_context"] = {
+            "schema_version": "mmm/versioned-reference-context-v1",
+            "target": {
+                "minecraft_version": self.minecraft_version,
+                "loader": self.loader,
+                "mappings": self.mappings,
+            },
+            "query_budget": self._versioned_reference_query_budget,
+            "query_count": len(self._versioned_reference_queries),
+            "query_set_sha256": _sha(sorted(self._versioned_reference_queries)),
+            "fail_closed": True,
+            "external_examples_are_evidence_only": True,
+        }
+        return result
 
 
 __all__ = ["VersionedResearchCodeContext"]
