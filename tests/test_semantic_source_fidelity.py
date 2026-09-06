@@ -3,9 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 
+from minecraft_mod_ai import request_requirements
 from minecraft_mod_ai import semantic_batching_contract as batching
 from minecraft_mod_ai import semantic_requirement_authority as semantic
-from minecraft_mod_ai import request_requirements
 
 
 def _clause(text: str, index: int = 0) -> dict[str, object]:
@@ -109,12 +109,54 @@ def test_malformed_semantic_output_keeps_host_clause_default() -> None:
     assert receipts[0]["host_fallback_count"] == 1
 
 
-def test_production_semantic_modules_contain_no_example_specific_mapping() -> None:
+def test_compound_space_prompt_survives_old_resegment_shaped_output() -> None:
+    prompt = (
+        "우주모드 인데 자원파밍 돈모으기 거래 등으로 우주선을 부위마다 만들어서 만들수있고 "
+        "무기 선원 우주선 성능을 거래 구매 등으로 업그레이드 확장 할 수 있고 그렇게해서 "
+        "우주로 나갈수있고 우주로 나가면 다른행성의 특수 광물 외게인과 싸움 식민지화등 "
+        "여러가지가 가능한 모드"
+    )
+
+    class OldShapeRouter:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names: list[str] = []
+
+        def generate_tool_decision(self, role, messages, **kwargs):  # noqa: ANN001, ANN003
+            del role, messages
+            self.calls += 1
+            self.tool_names.append(str(kwargs.get("tool_name") or ""))
+            return {
+                "groups": [
+                    {
+                        "group_id": "compound_0",
+                        "parent_semantic_statement": "resource, money and trade bundle",
+                    }
+                ]
+            }
+
+    router = OldShapeRouter()
+    catalog = batching.build_bounded_requirement_catalog(prompt, router=router)
+    requirements = catalog["requirements"]
+    receipt = catalog["semantic_audit"]["semantic_batches"][0]
+
+    assert router.calls == 1
+    assert router.tool_names == ["compile_semantic_requirements"]
+    assert requirements
+    assert requirements[0]["template_profile"]["model_capability_choice"] == "custom.semantic"
+    assert receipt["semantic_model_calls_total"] == 1
+    assert receipt["semantic_repair_turns_used"] == 0
+    assert receipt["host_fallback_count"] == 1
+
+
+def test_production_semantic_modules_have_no_resegmentation_path_or_example_mapping() -> None:
     source = (
         inspect.getsource(batching)
         + inspect.getsource(semantic)
         + inspect.getsource(request_requirements)
     ).casefold()
+    assert "semantic_leaf_pipeline" not in source
+    assert "resegment_compound_requirements" not in source
     assert "alien.entity" not in source
     assert "alien.combat" not in source
     assert "외게인" not in source
