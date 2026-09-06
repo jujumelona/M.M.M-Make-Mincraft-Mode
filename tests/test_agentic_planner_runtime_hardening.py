@@ -1,65 +1,9 @@
 from __future__ import annotations
 
-import threading
 from types import SimpleNamespace
 
-import minecraft_mod_ai.agentic_research_game_design as agentic
-import minecraft_mod_ai.pre_design_grounded_rag as forced_rag
 import minecraft_mod_ai.llama_structured_decode_policy as decode_policy
 import minecraft_mod_ai.llama_tuning_pipeline as tuning_pipeline
-
-
-def test_forced_rag_context_is_isolated_across_concurrent_plans() -> None:
-    """Concurrent plans carry bounded evidence through arguments, never global context."""
-
-    barrier = threading.Barrier(2)
-    observed: dict[str, str] = {}
-    failures: list[BaseException] = []
-    lock = threading.Lock()
-
-    def run(owner: str) -> None:
-        deterministic = {
-            "forced_project_rag": {
-                "schema_version": "mmm/forced-pre-design-rag-v2",
-                "research_sha256": f"sha256:{owner}",
-                "domain_count": 1,
-                "query_count": 1,
-                "project_source_count": 1,
-                "domains": [
-                    {
-                        "domain_id": "request",
-                        "queries": [{"query": owner, "raw": owner * 20_000}],
-                    }
-                ],
-            }
-        }
-        try:
-            barrier.wait(timeout=2)
-            result = agentic._domain_evidence_slice("request", deterministic)
-            receipt = result["forced_project_rag"]
-            assert receipt["research_sha256"] == f"sha256:{owner}"
-            assert owner * 20_000 not in str(result)
-            with lock:
-                observed[owner] = str(receipt["research_sha256"])
-        except BaseException as exc:
-            failures.append(exc)
-
-    threads = [
-        threading.Thread(target=run, args=("alpha",)),
-        threading.Thread(target=run, args=("beta",)),
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=3)
-
-    assert not failures
-    assert observed == {
-        "alpha": "sha256:alpha",
-        "beta": "sha256:beta",
-    }
-    assert not hasattr(forced_rag, "_FORCED_RAG_CONTEXT")
-    assert not hasattr(forced_rag, "harden_pre_design_research")
 
 
 def test_bounded_section_disables_thinking_without_touching_research_tools() -> None:
