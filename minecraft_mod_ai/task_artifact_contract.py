@@ -13,7 +13,7 @@ from functools import wraps
 from typing import Any
 
 from . import evidence_first_planning as _planning
-from . import target_grounding_contract as _target_contract
+from .module_identity import logical_module_id
 
 _INSTALLED = False
 
@@ -27,12 +27,12 @@ def _normalize_ownership(
     value["gradle_project_path"] = (
         raw_module if raw_module == ":" or raw_module.startswith(":") else ""
     )
-    value["module_id"] = _target_contract._logical_module_id(raw_module, {})
+    value["module_id"] = logical_module_id(raw_module)
     raw_topology = value.get("topology_module_ids")
     if isinstance(raw_topology, list):
         value["topology_module_ids"] = list(
             dict.fromkeys(
-                _target_contract._logical_module_id(str(item), {})
+                logical_module_id(str(item))
                 for item in raw_topology
                 if str(item).strip()
             )
