@@ -18,16 +18,23 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 
 
-def test_evidence_task_projection_preserves_task_and_adds_only_host_template() -> None:
+def test_evidence_task_projection_preserves_task_and_adds_only_host_execution_contract() -> None:
     task = {
         "task_id": "task_example",
         "semantic_outcome": "Implement one independently verifiable outcome",
         "requirement_refs": ["req_example"],
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "yarn",
+            "java_version": "21",
+        },
         "owned_anchors": [{"kind": "symbol", "locator": "src/main/java/X.java#X"}],
         "reuse_refs": [],
         "consumes": ["root:example"],
         "provides": ["example"],
         "depends_on": [],
+        "implementation_obligations": ["Implement the exact approved example behavior."],
         "acceptance": ["task_example: all declared provides exist"],
         "required_gates": ["source"],
         "impact_probes": ["changed_symbols"],
@@ -45,12 +52,17 @@ def test_evidence_task_projection_preserves_task_and_adds_only_host_template() -
     projected = _task_local_module_contract(module)
     projected_task = projected["evidence_task"]
     for key, value in task.items():
-        assert projected_task[key] == value
-    template = projected_task["implementation_template"]
-    assert template["completion_policy"]["required_hole_ids"]
-    assert {hole["hole_id"] for hole in template["holes"]} == set(
-        template["completion_policy"]["required_hole_ids"]
+        if key in projected_task:
+            assert projected_task[key] == value
+    contract = projected_task["coder_execution_contract"]
+    assert contract["schema_version"] == "mmm/coder-execution-contract-v2"
+    assert contract["task_ref"] == "task_example"
+    assert contract["target_constraints"]["minecraft_version"] == "1.21.1"
+    assert contract["implementation_steps"][0]["obligation"] == (
+        "Implement the exact approved example behavior."
     )
+    assert "implementation_template" not in projected_task
+    assert "holes" not in contract
     assert "config" not in projected
     assert "unrelated_global_design" not in repr(projected)
 
