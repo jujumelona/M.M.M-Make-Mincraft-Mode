@@ -3,12 +3,13 @@ from __future__ import annotations
 """One evidence-bound engineering worksheet shared by planning and coding.
 
 The worksheet deliberately keeps a compact, stable wire shape for small models while
-making the meaning of every slot explicit. The model fills exactly ten sections, each as
-one grounded specification plus evidence references; host code owns the section list and
-rejects omissions, placeholders, duplicated section answers, and invented evidence IDs.
+making the meaning of every slot explicit. Host code owns the canonical section list and
+may narrow it only through an explicit trusted selection. With no selection, the legacy
+fail-safe remains in force: all ten sections are required. The model never decides which
+sections apply.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -136,6 +137,8 @@ DETAIL_FIELDS = {
     "verification": "Freeze executable/observable proof obligations for success, failure and boundaries.",
 }
 
+WORKSHEET_SECTIONS: tuple[str, ...] = tuple(DETAIL_FIELDS)
+
 WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
     "Read all supplied evidence before filling any section and cite only allowed evidence refs.",
@@ -152,61 +155,116 @@ WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
 _MIN_SPECIFICATION_CHARS = 24
 
 
+def normalize_required_sections(
+    required_sections: Iterable[str] | None = None,
+) -> tuple[str, ...]:
+    """Return a validated host-owned section selection in canonical order.
+
+    ``None`` is deliberately fail-safe and means every canonical section. An explicit
+    selection must be non-empty, duplicate-free and contain only canonical section names.
+    Model output must never be used as ``required_sections``.
+    """
+
+    if required_sections is None:
+        return WORKSHEET_SECTIONS
+    if isinstance(required_sections, (str, bytes)):
+        raise ValueError("DETAILED_PLAN_SECTIONS: selection must be an iterable of section names")
+
+    requested = list(required_sections)
+    if not requested:
+        raise ValueError("DETAILED_PLAN_SECTIONS: explicit selection cannot be empty")
+    if any(not isinstance(key, str) or not key for key in requested):
+        raise ValueError("DETAILED_PLAN_SECTIONS: every selected section must be a non-empty string")
+    if len(set(requested)) != len(requested):
+        raise ValueError("DETAILED_PLAN_SECTIONS: duplicate section selection")
+
+    unknown = set(requested) - set(WORKSHEET_SECTIONS)
+    if unknown:
+        raise ValueError(
+            "DETAILED_PLAN_SECTIONS: unknown section(s): " + ", ".join(sorted(unknown))
+        )
+    requested_set = set(requested)
+    return tuple(key for key in WORKSHEET_SECTIONS if key in requested_set)
+
+
 def _section_description(key: str) -> str:
     checklist = "; ".join(DETAIL_SLOT_GUIDANCE[key])
     return f"{DETAIL_FIELDS[key]} Explicitly cover: {checklist}."
 
 
-def worksheet_prompt() -> str:
-    """Return the canonical small-model instructions for filling the worksheet."""
+def _instructions_for_sections(selected: tuple[str, ...]) -> tuple[str, ...]:
+    if selected == WORKSHEET_SECTIONS:
+        return WORKSHEET_INSTRUCTIONS
 
+    instructions = list(WORKSHEET_INSTRUCTIONS)
+    instructions[2] = (
+        f"Fill exactly the {len(selected)} host-required sections shown below and do not add omitted sections. "
+        "Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder."
+    )
+    return tuple(instructions)
+
+
+def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
+    """Return canonical instructions for only the host-required worksheet sections."""
+
+    selected = normalize_required_sections(required_sections)
     rows = ["ENGINEERING WORKSHEET — mandatory completion protocol:"]
     rows.extend(
         f"{index}. {rule}"
-        for index, rule in enumerate(WORKSHEET_INSTRUCTIONS, start=1)
+        for index, rule in enumerate(_instructions_for_sections(selected), start=1)
     )
-    rows.append("Section checklists:")
-    for key in DETAIL_FIELDS:
+    rows.append("Host-required section checklists:")
+    for key in selected:
         rows.append(f"- {key}: " + "; ".join(DETAIL_SLOT_GUIDANCE[key]))
     return "\n".join(rows)
 
 
-WORKSHEET_SCHEMA = {
-    "type": "object",
-    "description": (
-        "Complete evidence-bound engineering worksheet. Every section is mandatory; "
-        "each specification must explicitly address that section's checklist rather than "
-        "summarizing the requirement in one vague sentence. Section answers must be distinct."
-    ),
-    "properties": {
-        key: {
-            "type": "object",
-            "description": _section_description(key),
-            "properties": {
-                "specification": {
-                    "type": "string",
-                    "minLength": _MIN_SPECIFICATION_CHARS,
-                    "description": (
-                        _section_description(key)
-                        + " Write a self-contained, section-specific implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
-                    ),
-                },
-                "evidence_refs": {
-                    "type": "array",
-                    "minItems": 1,
-                    "uniqueItems": True,
-                    "description": "Only evidence references supplied by the host for this requirement.",
-                    "items": {"type": "string", "minLength": 1},
-                },
+def _worksheet_section_schema(key: str) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": _section_description(key),
+        "properties": {
+            "specification": {
+                "type": "string",
+                "minLength": _MIN_SPECIFICATION_CHARS,
+                "description": (
+                    _section_description(key)
+                    + " Write a self-contained, section-specific implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
+                ),
             },
-            "required": ["specification", "evidence_refs"],
-            "additionalProperties": False,
-        }
-        for key in DETAIL_FIELDS
-    },
-    "required": list(DETAIL_FIELDS),
-    "additionalProperties": False,
-}
+            "evidence_refs": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "description": "Only evidence references supplied by the host for this requirement.",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+        "required": ["specification", "evidence_refs"],
+        "additionalProperties": False,
+    }
+
+
+def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str, Any]:
+    """Build the response schema for an explicit host-owned section selection."""
+
+    selected = normalize_required_sections(required_sections)
+    return {
+        "type": "object",
+        "description": (
+            "Complete evidence-bound engineering worksheet for exactly the host-required sections. "
+            "Each specification must explicitly address that section's checklist rather than "
+            "summarizing the requirement in one vague sentence. Section answers must be distinct."
+        ),
+        "properties": {key: _worksheet_section_schema(key) for key in selected},
+        "required": list(selected),
+        "additionalProperties": False,
+    }
+
+
+# Backwards-compatible full worksheet schema. Existing callers remain fail-safe until they
+# are explicitly wired to a trusted host-owned section selection.
+WORKSHEET_SCHEMA = worksheet_schema()
 
 _PLACEHOLDERS = {
     "n/a",
@@ -222,14 +280,20 @@ _PLACEHOLDERS = {
 }
 
 
-def validate_worksheet(value: Any, allowed_refs: set[str]) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != set(DETAIL_FIELDS):
+def validate_worksheet(
+    value: Any,
+    allowed_refs: set[str],
+    required_sections: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    selected = normalize_required_sections(required_sections)
+    if not isinstance(value, Mapping) or set(value) != set(selected):
         raise ValueError(
-            "DETAILED_PLAN_WORKSHEET: every engineering section must be filled"
+            "DETAILED_PLAN_WORKSHEET: exactly the host-required engineering sections must be filled"
         )
 
     seen_specifications: dict[str, str] = {}
-    for key, row in value.items():
+    for key in selected:
+        row = value[key]
         if not isinstance(row, Mapping):
             raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} is not an object")
         specification = " ".join(str(row.get("specification") or "").split()).strip()
@@ -266,6 +330,9 @@ __all__ = [
     "DETAIL_SLOT_GUIDANCE",
     "WORKSHEET_INSTRUCTIONS",
     "WORKSHEET_SCHEMA",
+    "WORKSHEET_SECTIONS",
+    "normalize_required_sections",
     "validate_worksheet",
     "worksheet_prompt",
+    "worksheet_schema",
 ]
