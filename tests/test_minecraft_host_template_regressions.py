@@ -20,7 +20,8 @@ class _SemanticQueueRouter:
         self.outputs = list(outputs)
         self.calls = 0
 
-    def generate_tool_decision(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    def generate_tool_decision(self, *_args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs.get("tool_name") == "compile_semantic_requirements"
         self.calls += 1
         if not self.outputs:
             raise AssertionError("semantic router was called more times than expected")
@@ -35,34 +36,25 @@ def _semantic_leaf(
     given: str = "the authored precondition holds",
     when: str = "the authored action occurs",
     then: str = "the authored outcome is observed",
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    return (
-        {
-            "leaves": [
-                {
-                    "source_clause_index": source_clause_index,
-                    "source_anchor": anchor,
-                    "semantic_statement": anchor,
-                    "given": given,
-                    "when": when,
-                    "then": then,
-                    "semantic_type": "gameplay_mechanic",
-                }
-            ]
-        },
-        {
-            "classifications": [
-                {
-                    "leaf_index": 0,
-                    "capability_id": capability,
-                }
-            ]
-        },
-    )
+) -> dict[str, Any]:
+    return {
+        "requirements": [
+            {
+                "source_clause_index": source_clause_index,
+                "capability_id": capability,
+                "source_anchor": anchor,
+                "semantic_statement": anchor,
+                "given": given,
+                "when": when,
+                "then": then,
+                "semantic_type": "gameplay_mechanic",
+            }
+        ]
+    }
 
 
-def _queue(*pairs: tuple[dict[str, Any], dict[str, Any]]) -> list[dict[str, Any]]:
-    return [payload for pair in pairs for payload in pair]
+def _queue(*outputs: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(outputs)
 
 
 def _step_names(capability: str) -> tuple[str, ...]:
@@ -147,7 +139,7 @@ def test_production_semantic_catalog_binds_resource_and_economy_to_spacecraft() 
     )
 
     catalog = build_bounded_requirement_catalog(prompt, router=router)
-    assert router.calls == 8
+    assert router.calls == 4
     requirements = {
         str(item["capability"]): item
         for item in catalog["requirements"]
@@ -223,7 +215,7 @@ def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
     )
 
     catalog = build_bounded_requirement_catalog(prompt, router=router)
-    assert router.calls == 4
+    assert router.calls == 2
     requirements = [
         item for item in catalog["requirements"] if isinstance(item, Mapping)
     ]
@@ -282,7 +274,7 @@ def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> N
         )
     )
     catalog = build_bounded_requirement_catalog(prompt, router=router)
-    assert router.calls == 2
+    assert router.calls == 1
     game_design = {
         "mod_id": "template_regression",
         "_evidence_request_catalog": catalog,
