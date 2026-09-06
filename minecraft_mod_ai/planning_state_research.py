@@ -8,6 +8,7 @@ fallback paths. Reference/world knowledge is target-neutral; Minecraft implement
 research uses catalog-first mod discovery followed by exact source/API/project evidence.
 """
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -20,6 +21,7 @@ from .research_reuse_candidates import (
     merge_repository_candidates,
     project_repository_candidates,
 )
+from .spec import canonical_json
 
 _DEFAULT_SCOPE_POLICY = (
     "When authored scope is unspecified, select only an externally evidenced, coherent "
@@ -103,9 +105,6 @@ def _providers_for(source_kinds: Sequence[str]) -> list[str]:
 
     providers: list[str] = []
     if kinds & {"repository", "existing_mods"}:
-        # Real mod discovery belongs to Minecraft catalogs. The catalog policy follows an
-        # exact catalog source URL to GitHub or falls back to broad GitHub only after an
-        # empty catalog result; GitHub is not a peer catalog provider here.
         providers.extend(["curseforge", "modrinth"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
         providers.extend(["official_docs", "project_rag"])
@@ -126,6 +125,34 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
     if "project_rag" in kinds:
         output.append("local_project")
     return list(dict.fromkeys(output)) or ["scholarly_reference"]
+
+
+def _planning_provider_roles(brief: dict[str, Any]) -> dict[str, Any]:
+    """Undo generic GitHub augmentation for catalog-backed planning domains.
+
+    ``central_research`` is shared by unrelated research flows and may add GitHub for
+    dependency/source-code evidence. In this planning state machine, catalog-backed
+    Minecraft domains own GitHub only inside ``catalog_first_grounded_rag`` as an exact
+    source-link step or empty-catalog fallback. Keep that internal policy out of the
+    explicit peer-provider list and rehash the normalized brief after the policy rewrite.
+    """
+    value = deepcopy(brief)
+    for domain in value.get("domains", []):
+        if not isinstance(domain, dict):
+            continue
+        providers = domain.get("providers")
+        if not isinstance(providers, list):
+            continue
+        provider_set = {str(item) for item in providers}
+        if provider_set & {"curseforge", "modrinth"}:
+            domain["providers"] = [
+                str(item) for item in providers if str(item) != "github"
+            ]
+    value.pop("brief_sha256", None)
+    value["brief_sha256"] = "sha256:" + hashlib.sha256(
+        canonical_json(value).encode("utf-8")
+    ).hexdigest()
+    return value
 
 
 def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
@@ -178,10 +205,10 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, An
             if isinstance(item, Mapping) and item.get("status") == "open"
         ],
     }
-    return (
-        normalize_research_brief(prompt, {"title": "prompt-state research"}, candidate),
-        reference_domain_ids,
+    normalized = normalize_research_brief(
+        prompt, {"title": "prompt-state research"}, candidate
     )
+    return _planning_provider_roles(normalized), reference_domain_ids
 
 
 def _domain_note_by_id(notes: Sequence[Mapping[str, Any]], domain_id: str) -> Mapping[str, Any] | None:
