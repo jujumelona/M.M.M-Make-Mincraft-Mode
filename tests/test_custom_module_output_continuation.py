@@ -67,10 +67,32 @@ def test_output_continuation_preserves_host_grounding_receipts() -> None:
             "writes_still_require_approved_pipeline": True,
         },
     }
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/generated/generated_mod/mmmplan/TaskExample.java#TaskExample",
+        "ownership": "exclusive",
+        "status": "host_reserved",
+        "module_id": ":",
+        "source_set": "main",
+    }
+    task = {
+        "task_id": "task_example",
+        "semantic_outcome": "Implement the approved example task.",
+        "owned_anchors": [anchor],
+        "production_bindings": [
+            {
+                "task_ref": "task_example",
+                "reuse_action": "fresh",
+                "owned_anchors": [anchor],
+            }
+        ],
+        "required_gates": ["source_static_validation", "target_compile"],
+        "acceptance": ["The approved task behavior is observable."],
+    }
     module = ProductionModule(
         module_id="task_example",
         kind="custom_java",
-        config={"evidence_task": {"task_id": "task_example"}},
+        config={"evidence_task": task},
     )
 
     messages = _output_exhaustion_continuation_messages(
