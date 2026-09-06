@@ -2,21 +2,18 @@ from __future__ import annotations
 
 """Resolve planning-state unknowns with route-appropriate grounded evidence.
 
-The planning-state SSOT owns why information is needed before any retrieval query is
-compiled. Reference/world knowledge is retrieved without Minecraft filtering; Minecraft
-implementation research uses the existing mod/code/API RAG path. Model prose is never
-promoted to evidence without materialized-page grounding and validation.
+The planning-state SSOT owns why information is needed before retrieval. Query compilation
+is deterministic host work: the small model never chooses search terms, providers, or
+fallback paths. Reference/world knowledge is target-neutral; Minecraft implementation
+research uses catalog-first mod discovery followed by exact source/API/project evidence.
 """
 
-import json
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
+from .catalog_first_grounded_rag import forced_rag_bundle
 from .central_research import normalize_research_brief
-from .model_concurrency import router_native_model_parallelism
-from .planner_operation import planner_operation
 from .planning_state_contract import validate_planning_state
 from .pre_design_domain_research import research_document_domain
 from .research_reuse_candidates import (
@@ -24,20 +21,6 @@ from .research_reuse_candidates import (
     project_repository_candidates,
 )
 
-_QUERY_TOOL = "submit_research_queries"
-_QUERY_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "queries": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 4,
-            "items": {"type": "string"},
-        }
-    },
-    "required": ["queries"],
-    "additionalProperties": False,
-}
 _DEFAULT_SCOPE_POLICY = (
     "When authored scope is unspecified, select only an externally evidenced, coherent "
     "end-to-end gameplay slice that preserves the reference's distinctive loop. Never "
@@ -50,69 +33,92 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def _query_context(state: Mapping[str, Any], research: Mapping[str, Any]) -> str:
+def _query_context(state: Mapping[str, Any], research: Mapping[str, Any]) -> dict[str, Any]:
     references = state.get("references")
     reference_names = [
         _text(item.get("name"))
         for item in references
         if isinstance(item, Mapping) and _text(item.get("name"))
     ] if isinstance(references, list) else []
-    return json.dumps(
-        {
-            "objective": research.get("objective"),
-            "information_needed": research.get("information_needed"),
-            "source_kinds": research.get("source_kinds"),
-            "reference_names": reference_names,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
+    return {
+        "objective": _text(research.get("objective")),
+        "information_needed": _text(research.get("information_needed")),
+        "source_kinds": [
+            _text(item) for item in research.get("source_kinds", []) if _text(item)
+        ] if isinstance(research.get("source_kinds"), list) else [],
+        "reference_names": reference_names,
+    }
 
 
-def _compile_queries(router: Any, state: Mapping[str, Any], research: Mapping[str, Any]) -> list[str]:
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Compile retrieval queries for exactly the supplied information need. Do not design the mod, "
-                "add features, or guess implementation. Preserve named references exactly. When source_kinds "
-                "contains reference_sources or web_sources, search the referenced subject itself and documented "
-                "systems/behavior; never turn it into a '<name> Minecraft mod' query. When the need is already "
-                "Minecraft implementation research, queries may target Minecraft APIs, source, existing mods, "
-                "or code. Return 1-4 concise queries only."
-            ),
-        },
-        {"role": "user", "content": _query_context(state, research)},
-    ]
-    with planner_operation("research_query_compile", output_tokens=384):
-        raw = router.generate_tool_decision(
-            "planner",
-            messages,
-            tool_name=_QUERY_TOOL,
-            parameters=_QUERY_PARAMETERS,
-            description="Submit bounded retrieval queries for one already-defined information need.",
+def _bounded_query(value: str) -> str:
+    """Normalize a host-authored retrieval query without changing its semantics."""
+    return " ".join(str(value or "").split()).strip()[:420]
+
+
+def _compile_queries(
+    _router: Any,
+    state: Mapping[str, Any],
+    research: Mapping[str, Any],
+) -> list[str]:
+    """Derive bounded queries from SSOT information needs; never ask a model to invent them."""
+    context = _query_context(state, research)
+    objective = context["objective"]
+    needed = context["information_needed"]
+    source_kinds = set(context["source_kinds"])
+    reference_names = context["reference_names"]
+    candidates: list[str] = []
+
+    if source_kinds & _REFERENCE_SOURCE_KINDS and reference_names:
+        # Preserve authored names exactly. Reference research asks about the referenced
+        # subject itself, never an invented "<name> Minecraft mod" surrogate.
+        for name in reference_names:
+            candidates.append(f"{name} {needed or objective}")
+            candidates.append(f"{name} documented systems behavior rules")
+    else:
+        # Implementation research is already attached to one concrete requirement. Use
+        # that host-owned need directly; provider policy decides whether this goes to mod
+        # catalogs, official sources, project RAG, or repository fallback.
+        if objective:
+            candidates.append(objective)
+        if needed and needed != objective:
+            candidates.append(needed)
+        if source_kinds & {"minecraft_docs", "minecraft_source"}:
+            basis = objective or needed
+            if basis:
+                candidates.append(f"Minecraft Fabric API source {basis}")
+        if source_kinds & {"repository", "existing_mods"}:
+            basis = objective or needed
+            if basis:
+                candidates.append(f"Minecraft mod {basis}")
+
+    queries = list(
+        dict.fromkeys(
+            query
+            for candidate in candidates
+            if (query := _bounded_query(candidate))
         )
-    values = raw.get("queries") if isinstance(raw, Mapping) else None
-    if not isinstance(values, list):
-        raise ValueError("PLANNING_RESEARCH_QUERY: query compiler returned no query list")
-    queries = list(dict.fromkeys(_text(item) for item in values if _text(item)))
+    )
     if not queries:
-        raise ValueError("PLANNING_RESEARCH_QUERY: query compiler returned only empty queries")
+        raise ValueError("PLANNING_RESEARCH_QUERY: host information need produced no query")
     return queries[:4]
 
 
 def _providers_for(source_kinds: Sequence[str]) -> list[str]:
+    """Return provider roles in authority order, not network-completion order."""
     kinds = set(source_kinds)
     if kinds & _REFERENCE_SOURCE_KINDS:
-        return ["wikipedia", "github"]
+        return ["wikipedia"]
+
     providers: list[str] = []
     if kinds & {"repository", "existing_mods"}:
-        providers.extend(["github", "modrinth", "curseforge"])
+        # Actual Minecraft mod catalogs discover candidates. GitHub is source validation
+        # or an empty-catalog fallback, never the first ecosystem discovery source.
+        providers.extend(["curseforge", "modrinth", "github"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
-        providers.extend(["official_docs", "github"])
+        providers.extend(["official_docs", "project_rag", "github"])
     if "project_rag" in kinds:
         providers.append("project_rag")
-    return list(dict.fromkeys(providers)) or ["github", "project_rag"]
+    return list(dict.fromkeys(providers)) or ["project_rag", "official_docs", "github"]
 
 
 def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
@@ -121,7 +127,7 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
     if kinds & _REFERENCE_SOURCE_KINDS:
         output.append("gameplay_reference")
     if kinds & {"repository", "existing_mods"}:
-        output.append("source_code")
+        output.extend(["mod_catalog", "source_code"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
         output.append("minecraft_api")
     if "project_rag" in kinds:
@@ -130,32 +136,17 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
 
 
 def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
-    """Persist every generated query in the SSOT before retrieval starts."""
-    pending: list[dict[str, Any]] = []
+    """Persist deterministic HOST queries in SSOT before retrieval starts."""
     for research in state.get("research_queue", []):
         if not isinstance(research, dict) or str(research.get("status") or "") != "pending":
             continue
         existing = research.get("queries")
         if isinstance(existing, list) and any(_text(item) for item in existing):
-            research["queries"] = list(dict.fromkeys(_text(item) for item in existing if _text(item)))[:4]
+            research["queries"] = list(
+                dict.fromkeys(_text(item) for item in existing if _text(item))
+            )[:4]
             continue
-        pending.append(research)
-
-    if not pending:
-        return
-    workers = min(len(pending), router_native_model_parallelism(router))
-    if workers <= 1:
-        for research in pending:
-            research["queries"] = _compile_queries(router, state, research)
-        return
-
-    # Query compilation is independent per research item. Use only model-native slots
-    # proved by the router/runtime, then merge results back in SSOT order so planning
-    # remains deterministic while the model critical path is no longer N-way serial.
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-query") as pool:
-        futures = [pool.submit(_compile_queries, router, state, research) for research in pending]
-        for research, future in zip(pending, futures, strict=True):
-            research["queries"] = future.result()
+        research["queries"] = _compile_queries(router, state, research)
 
 
 def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, Any], set[str]]:
@@ -261,8 +252,6 @@ def collect_planning_state_research(
 
     validate_planning_state(state, prompt=prompt)
     value = deepcopy(dict(state))
-    # Candidate receipts are host-derived only. Initial model output has no schema field
-    # that can author these, and resumed states are re-sanitized before merge.
     value["repository_candidates"] = merge_repository_candidates(
         value.get("repository_candidates") if isinstance(value.get("repository_candidates"), list) else [],
         [],
@@ -276,8 +265,6 @@ def collect_planning_state_research(
         if unresolved.get("status") == "open" and unresolved.get("resolution_route") == "default_policy":
             _apply_scope_policy(value, unresolved)
 
-    # A caller resuming a blocked state retries only unresolved retrievals; completed
-    # research and its receipts remain intact.
     for research in value.get("research_queue", []):
         if research.get("status") == "blocked":
             research["status"] = "pending"
@@ -294,7 +281,8 @@ def collect_planning_state_research(
     ]
     minecraft_bundle: dict[str, Any] | None = None
     if minecraft_domains:
-        minecraft_bundle = project_rag._forced_rag_bundle(
+        minecraft_bundle = forced_rag_bundle(
+            project_rag,
             router,
             {**brief, "domains": minecraft_domains},
         )
