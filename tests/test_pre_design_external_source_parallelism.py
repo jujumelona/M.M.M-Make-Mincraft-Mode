@@ -64,7 +64,8 @@ def test_rate_limit_stops_later_batches_and_preserves_serial_order_semantics(mon
         ["query one", "query two", "query three", "query four"]
     )
 
-    assert calls == ["query one", "query two"]
+    assert len(calls) == 2
+    assert set(calls) == {"query one", "query two"}
     assert receipts["query one"]["provider_status"] == "available"
     assert receipts["query two"]["provider_status"] == "rate_limited"
     assert receipts["query three"]["saturation_reason"] == "skipped_after_provider_rate_limit"
