@@ -47,6 +47,6 @@ def test_catalog_exposes_target_contract_field_shape() -> None:
 
 def test_small_agent_context_contains_the_same_contract_manifest() -> None:
     context = _decode_context(build_agent_capability_context("research", ()))
-    assert context["schema_version"] == "mmm/agent-capability-context-v6"
+    assert context["schema_version"] == "mmm/agent-capability-context-v7"
     assert context["type_contracts"] == json.loads(json.dumps(contract_schema_manifest()))
     assert "obey type_contracts exactly" in str(context["routing_policy"])
