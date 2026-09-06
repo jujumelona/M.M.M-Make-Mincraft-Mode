@@ -151,7 +151,7 @@ def test_evidence_page_contains_complete_host_coder_contract() -> None:
     page = _evidence_skeleton()
     module = page["modules"][0]
     config = module["config"]
-    contract = config["implementation_template"]
+    contract = config["coder_execution_contract"]
 
     assert contract["schema_version"] == CODER_SCHEMA
     assert contract["task_ref"] == "core_runtime_api"
@@ -184,7 +184,7 @@ def test_model_cannot_widen_evidence_owned_contract_or_acceptance() -> None:
                     "kind": "boss",
                     "config": {
                         "evidence_task": {"task_id": "invented"},
-                        "implementation_template": {"targets": [{"path": "../escape"}]},
+                        "coder_execution_contract": {"targets": [{"path": "../escape"}]},
                         "implementation_notes": "non-authoritative note",
                     },
                     "depends_on": ["invented_module"],
@@ -211,7 +211,7 @@ def test_model_cannot_widen_evidence_owned_contract_or_acceptance() -> None:
     assert module["depends_on"] == []
     assert module["required_gates"] == ["source_static_validation", "target_compile"]
     assert config["evidence_task"] == original_config["evidence_task"]
-    assert config["implementation_template"] == original_config["implementation_template"]
+    assert config["coder_execution_contract"] == original_config["coder_execution_contract"]
     assert config["model_fill"] == {"implementation_notes": "non-authoritative note"}
     assert page["assets"] == []
     assert page["acceptance_tests"] == ["The runtime behavior is observable."]
