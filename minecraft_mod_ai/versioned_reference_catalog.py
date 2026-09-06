@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Exact-target external code exemplars for the coder research hot path.
 
-The generated project remains the primary repository context.  This module adds a
+The generated project remains the primary repository context. This module adds a
 separate, fail-closed lane of curated public repositories whose branch/commit is
 resolved against the host-selected Minecraft target before any source excerpt can
 enter the model context.
@@ -42,7 +42,6 @@ _METHOD = re.compile(
     r"\b(?:public|protected|private|static|final|abstract|synchronized|default|native|\s)+"
     r"[A-Za-z_$][A-Za-z0-9_$<>?,.\[\]\s]*\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\("
 )
-_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:+/-]{1,127}|[가-힣]{2,}")
 
 _REFERENCE_LOCK = RLock()
 _RESOLUTION_CACHE: dict[tuple[str, str, str], "_ResolvedReference"] = {}
@@ -105,31 +104,41 @@ class _ResolvedReference:
     compatibility: Mapping[str, Any]
 
 
-# Curated families are intentionally few. Exact target resolution happens at runtime,
-# so a family contributes only when that repository exposes a branch/ref whose own
-# metadata proves the selected Minecraft/loader target.
+# Families are deliberately curated rather than discovered from arbitrary search results.
+# Each family is still admitted per target only after its exact ref metadata and reusable
+# source license pass the fail-closed resolver below.
 _BUILTIN_REFERENCE_FAMILIES: tuple[ReferenceFamily, ...] = (
     ReferenceFamily(
         repository="FabricMC/fabric-api",
         capabilities=(
             "fabric api events registry networking packets lifecycle worldgen world generation rendering "
-            "resources datagen data commands blocks items entities server client"
+            "resources datagen data commands blocks items entities server client "
+            "이벤트 레지스트리 네트워킹 패킷 월드젠 월드 생성 렌더링 데이터 블록 아이템 엔티티 서버 클라이언트"
         ).split(),
         priority=100,
         ref_strategy="exact_version",
     ),
     ReferenceFamily(
+        repository="TechReborn/TechReborn",
+        capabilities=(
+            "machine machines automation industrial processing energy inventory recipe storage fluids cables "
+            "block entity persistence crafting power transfer 기계 자동화 산업 처리 에너지 인벤토리 레시피 저장 유체 케이블 전력"
+        ).split(),
+        priority=96,
+    ),
+    ReferenceFamily(
         repository="shedaniel/RoughlyEnoughItems",
         capabilities=(
-            "gui screen inventory recipe rendering networking client search widgets "
-            "configuration serialization"
+            "gui screen inventory recipe rendering networking client search widgets configuration serialization "
+            "화면 인벤토리 레시피 렌더링 검색 위젯 설정 직렬화"
         ).split(),
         priority=92,
     ),
     ReferenceFamily(
         repository="TerraformersMC/ModMenu",
         capabilities=(
-            "gui screen configuration client rendering integration metadata widgets"
+            "gui screen configuration client rendering integration metadata widgets "
+            "화면 설정 메뉴 클라이언트 렌더링 통합 메타데이터 위젯"
         ).split(),
         priority=84,
     ),
@@ -272,14 +281,26 @@ def _metadata_compatibility(
         or ""
     )
     if java_value and java_value.isdigit() and str(adapter.java_version).isdigit():
-        if int(java_value) < int(adapter.java_version):
+        # A donor compiled for an older Java language level is usable from the newer
+        # target. The unsafe direction is donor source requiring a newer Java than the
+        # host-selected target can compile.
+        if int(java_value) > int(adapter.java_version):
             return None
 
-    yarn_value = properties.get("yarn_mappings", "")
+    raw_yarn = (
+        properties.get("yarn_mappings")
+        or properties.get("yarn_version")
+        or ""
+    )
+    yarn_value = (
+        adapter.minecraft_version + raw_yarn
+        if raw_yarn.startswith("+")
+        else raw_yarn
+    )
     if adapter.mappings_applicable and yarn_value:
-        # Mapping build numbers may differ, but a donor mapping must be anchored to
-        # the exact same Minecraft version. This rejects cross-version names while
-        # allowing compatible Yarn build revisions.
+        # Mapping build numbers may differ, but a donor mapping must be anchored to the
+        # exact same Minecraft version. This rejects cross-version names while allowing
+        # compatible Yarn build revisions.
         if not (
             yarn_value == adapter.yarn_mappings
             or yarn_value.startswith(adapter.minecraft_version + "+")
@@ -290,11 +311,14 @@ def _metadata_compatibility(
         properties.get("fabric_version")
         or properties.get("fabric_api_version")
         or properties.get("fabric-api.version")
+        or properties.get("fabric_api")
+        or properties.get("fapi_version")
         or ""
     )
     loader_version = (
         properties.get("loader_version")
         or properties.get("fabric_loader_version")
+        or properties.get("fabricloader_version")
         or ""
     )
     return {
@@ -304,9 +328,16 @@ def _metadata_compatibility(
         "target_java_version": adapter.java_version,
         "target_fabric_loader": adapter.fabric_loader,
         "target_fabric_api": adapter.fabric_api,
+        "donor_java_version": java_value,
         "donor_yarn_mappings": yarn_value,
         "donor_loader_version": loader_version,
         "donor_fabric_api": fabric_api,
+        "java_compatible": bool(
+            not java_value
+            or not java_value.isdigit()
+            or not str(adapter.java_version).isdigit()
+            or int(java_value) <= int(adapter.java_version)
+        ),
         "fabric_api_exact": bool(fabric_api and fabric_api == adapter.fabric_api),
         "loader_version_exact": bool(
             loader_version and loader_version == adapter.fabric_loader
