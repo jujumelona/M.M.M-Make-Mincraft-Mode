@@ -16,8 +16,9 @@ from .planner_operation import planner_operation
 from .planner_stage_trace import PlannerStageTrace
 from .planner_template_schema import merge_model_output_into_skeleton
 
-# Keep the page cardinality consistent with the output budget. At 256 tokens per
-# hole plus a 128-token envelope, twelve holes remain below the 4096-token ceiling.
+# At 256 output tokens per hole plus a 128-token envelope, twelve holes remain
+# comfortably below the 4096-token operation ceiling. Character budgeting is enforced
+# independently because evidence-rich holes can vary greatly in prompt size.
 _MAX_PAGE_HOLES = 12
 _MAX_BUNDLE_CHARS = 24_000
 _MAX_OUTPUT_TOKENS = 4_096
@@ -100,16 +101,17 @@ def _messages(module: Mapping[str, Any], *, error: str = "") -> list[dict[str, s
 def _page_prompt_packet(
     page: Mapping[str, Any], holes: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    """Return one non-duplicated model-visible page while preserving module context."""
+    """Expose one page once: shared module context plus its host-owned holes."""
     base_module = dict(page.get("module") or {})
     template = dict(base_module.get("implementation_template") or {})
-    template["holes"] = [dict(hole) for hole in holes]
+    template.pop("holes", None)
     base_module["module_id"] = str(
         page.get("module_id") or base_module.get("module_id") or ""
     )
     base_module["implementation_template"] = template
     return {
         "page_id": str(page["page_id"]),
+        "holes": [dict(hole) for hole in holes],
         "module": base_module,
     }
 
@@ -162,6 +164,110 @@ def _multi_page_messages(
     ]
 
 
+def _bundle_prompt_size(pages: Sequence[Mapping[str, Any]]) -> int:
+    payload = {
+        "pages": [
+            _page_prompt_packet(page, page.get("holes") or ())
+            for page in pages
+        ]
+    }
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+
+def _single_prompt_size(module: Mapping[str, Any]) -> int:
+    return len(
+        json.dumps(
+            {"modules": [module]}, ensure_ascii=False, separators=(",", ":")
+        )
+    )
+
+
+def _page_entry(
+    module: Mapping[str, Any],
+    *,
+    skeleton_index: int,
+    page_id: str,
+    holes: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    template = _mapping(module.get("implementation_template"))
+    return {
+        "page_id": page_id,
+        "module_id": str(module.get("module_id") or ""),
+        "scope": str(module.get("scope") or ""),
+        "skeleton_index": skeleton_index,
+        "holes": [dict(hole) for hole in holes],
+        "completion_policy": _mapping(template.get("completion_policy")),
+        "module": dict(module),
+    }
+
+
+def _split_module_pages(
+    module: Mapping[str, Any], *, skeleton_index: int
+) -> list[dict[str, Any]]:
+    """Greedily split a module by both output-hole and serialized-prompt budgets."""
+    template = _mapping(module.get("implementation_template"))
+    holes = [dict(hole) for hole in template.get("holes", []) if isinstance(hole, Mapping)]
+    if not holes:
+        return []
+    module_id = str(module.get("module_id") or "")
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+
+    for hole in holes:
+        candidate = [*current, hole]
+        provisional = _page_entry(
+            module,
+            skeleton_index=skeleton_index,
+            page_id=f"{module_id}_p{len(chunks)}",
+            holes=candidate,
+        )
+        exceeds = (
+            len(candidate) > _MAX_PAGE_HOLES
+            or _bundle_prompt_size([provisional]) > _MAX_BUNDLE_CHARS
+        )
+        if current and exceeds:
+            chunks.append(current)
+            current = [hole]
+            single = _page_entry(
+                module,
+                skeleton_index=skeleton_index,
+                page_id=f"{module_id}_p{len(chunks)}",
+                holes=current,
+            )
+            if _bundle_prompt_size([single]) > _MAX_BUNDLE_CHARS:
+                raise PlanningHoleFillError(
+                    f"implementation hole exceeds bounded prompt budget for {module_id}: "
+                    f"{hole.get('hole_id', '<unknown>')}"
+                )
+        else:
+            current = candidate
+            if not chunks and len(current) == 1 and exceeds:
+                raise PlanningHoleFillError(
+                    f"implementation hole exceeds bounded prompt budget for {module_id}: "
+                    f"{hole.get('hole_id', '<unknown>')}"
+                )
+
+    if current:
+        chunks.append(current)
+
+    multiple = len(chunks) > 1
+    pages = [
+        _page_entry(
+            module,
+            skeleton_index=skeleton_index,
+            page_id=f"{module_id}_p{index}" if multiple else module_id,
+            holes=chunk,
+        )
+        for index, chunk in enumerate(chunks)
+    ]
+    for page in pages:
+        if _bundle_prompt_size([page]) > _MAX_BUNDLE_CHARS:
+            raise PlanningHoleFillError(
+                f"implementation page exceeds bounded prompt budget: {page['page_id']}"
+            )
+    return pages
+
+
 def _fill_page(
     router: Any, module: dict[str, Any], trace: PlannerStageTrace
 ) -> list[dict[str, Any]]:
@@ -170,6 +276,9 @@ def _fill_page(
         raise PlanningHoleFillError(
             f"single implementation page exceeds bounded hole limit: {len(holes)} > {_MAX_PAGE_HOLES}"
         )
+    if _single_prompt_size(module) > _MAX_BUNDLE_CHARS:
+        raise PlanningHoleFillError("single implementation page exceeds bounded prompt budget")
+
     remaining = list(holes)
     accepted: dict[str, dict[str, Any]] = {}
     error = ""
@@ -187,9 +296,7 @@ def _fill_page(
                 _MAX_OUTPUT_TOKENS,
                 max(128, 128 + 256 * len(remaining)),
             )
-            with planner_operation(
-                "implementation_holes", output_tokens=output_tokens
-            ):
+            with planner_operation("implementation_holes", output_tokens=output_tokens):
                 raw = router.generate_text(
                     "planner",
                     _messages(packet, error=error),
@@ -253,7 +360,6 @@ def _fill_bundle(
             original = pages_by_id[page_id]
             active = dict(original)
             active["holes"] = remaining
-            active["module"] = _page_prompt_packet(original, remaining)["module"]
             active_pages.append(active)
         if not active_pages:
             break
@@ -263,6 +369,8 @@ def _fill_bundle(
             raise PlanningHoleFillError(
                 f"implementation bundle exceeds bounded hole limit: {total_holes} > {_MAX_PAGE_HOLES}"
             )
+        if _bundle_prompt_size(active_pages) > _MAX_BUNDLE_CHARS:
+            raise PlanningHoleFillError("implementation bundle exceeds bounded prompt budget")
         output_tokens = min(
             _MAX_OUTPUT_TOKENS,
             max(128, 128 + 256 * total_holes),
@@ -363,14 +471,27 @@ def _fill_bundle(
     return result
 
 
-def _bundle_prompt_size(pages: Sequence[Mapping[str, Any]]) -> int:
-    payload = {
-        "pages": [
-            _page_prompt_packet(page, page.get("holes") or ())
-            for page in pages
-        ]
-    }
-    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+def _pack_pages(pages: Sequence[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
+    """Deterministic first-fit packing reduces model calls without exceeding either budget."""
+    bundles: list[list[Mapping[str, Any]]] = []
+    for page in pages:
+        placed = False
+        for bundle in bundles:
+            candidate = [*bundle, page]
+            if (
+                sum(len(item["holes"]) for item in candidate) <= _MAX_PAGE_HOLES
+                and _bundle_prompt_size(candidate) <= _MAX_BUNDLE_CHARS
+            ):
+                bundle.append(page)
+                placed = True
+                break
+        if not placed:
+            if _bundle_prompt_size([page]) > _MAX_BUNDLE_CHARS:
+                raise PlanningHoleFillError(
+                    f"implementation page exceeds bounded prompt budget: {page['page_id']}"
+                )
+            bundles.append([page])
+    return bundles
 
 
 def fill_evidence_pages(
@@ -381,6 +502,7 @@ def fill_evidence_pages(
 ) -> list[dict[str, Any]]:
     """Fill bounded implementation-hole pages across dependency-ready skeletons."""
     all_pages: list[dict[str, Any]] = []
+    page_ids_by_module: dict[str, list[str]] = {}
     traces_by_module: dict[str, PlannerStageTrace] = {}
 
     for skeleton_index, skeleton in enumerate(skeletons):
@@ -389,8 +511,7 @@ def fill_evidence_pages(
                 continue
             module = _module_packet(raw_module)
             template = module["implementation_template"]
-            holes = template["holes"]
-            if not holes:
+            if not template["holes"]:
                 continue
             module_id = module["module_id"]
             if module_id not in traces_by_module:
@@ -399,25 +520,9 @@ def fill_evidence_pages(
                     prompt=module["scope"],
                     metadata={"module_id": module_id},
                 )
-            for offset in range(0, len(holes), _MAX_PAGE_HOLES):
-                page_slice = holes[offset : offset + _MAX_PAGE_HOLES]
-                page_index = offset // _MAX_PAGE_HOLES
-                page_id = (
-                    f"{module_id}_p{page_index}"
-                    if len(holes) > _MAX_PAGE_HOLES
-                    else module_id
-                )
-                all_pages.append(
-                    {
-                        "page_id": page_id,
-                        "module_id": module_id,
-                        "scope": module["scope"],
-                        "skeleton_index": skeleton_index,
-                        "holes": page_slice,
-                        "completion_policy": template["completion_policy"],
-                        "module": module,
-                    }
-                )
+            pages = _split_module_pages(module, skeleton_index=skeleton_index)
+            all_pages.extend(pages)
+            page_ids_by_module[module_id] = [str(page["page_id"]) for page in pages]
 
     if not all_pages:
         return [
@@ -429,37 +534,17 @@ def fill_evidence_pages(
 
     if len(all_pages) == 1:
         single_page = all_pages[0]
-        module_id = single_page["module_id"]
+        module_id = str(single_page["module_id"])
         trace = traces_by_module[module_id]
-        page_module = _page_prompt_packet(
-            single_page, single_page["holes"]
-        )["module"]
+        page_module = dict(single_page["module"])
+        template = dict(page_module["implementation_template"])
+        template["holes"] = list(single_page["holes"])
+        page_module["implementation_template"] = template
         fills = _fill_page(router, page_module, trace)
-        all_fills_by_page = {single_page["page_id"]: fills}
+        all_fills_by_page = {str(single_page["page_id"]): fills}
     else:
-        bundles: list[list[dict[str, Any]]] = []
-        current_bundle: list[dict[str, Any]] = []
-        current_holes = 0
-
-        for page in all_pages:
-            page_holes = len(page["holes"])
-            candidate = [*current_bundle, page]
-            if current_bundle and (
-                current_holes + page_holes > _MAX_PAGE_HOLES
-                or _bundle_prompt_size(candidate) > _MAX_BUNDLE_CHARS
-            ):
-                bundles.append(current_bundle)
-                current_bundle = [page]
-                current_holes = page_holes
-            else:
-                current_bundle.append(page)
-                current_holes += page_holes
-
-        if current_bundle:
-            bundles.append(current_bundle)
-
         all_fills_by_page: dict[str, list[dict[str, Any]]] = {}
-        for bundle in bundles:
+        for bundle in _pack_pages(all_pages):
             bundle_fills = _fill_bundle(router, bundle, traces_by_module)
             all_fills_by_page.update(bundle_fills)
 
@@ -475,15 +560,11 @@ def fill_evidence_pages(
             if not holes:
                 continue
             module_id = module["module_id"]
-            module_fills: list[dict[str, Any]] = []
-            for offset in range(0, len(holes), _MAX_PAGE_HOLES):
-                page_index = offset // _MAX_PAGE_HOLES
-                page_id = (
-                    f"{module_id}_p{page_index}"
-                    if len(holes) > _MAX_PAGE_HOLES
-                    else module_id
-                )
-                module_fills.extend(all_fills_by_page.get(page_id, []))
+            module_fills = [
+                fill
+                for page_id in page_ids_by_module.get(module_id, ())
+                for fill in all_fills_by_page.get(page_id, ())
+            ]
 
             required = set(template["completion_policy"].get("required_hole_ids", []))
             filled_ids = {fill["hole_id"] for fill in module_fills}
