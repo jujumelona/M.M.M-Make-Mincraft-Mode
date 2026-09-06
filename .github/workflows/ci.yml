@@ -127,7 +127,12 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: python -m pytest -q tests/test_planner_template_schema.py
+      - run: >-
+          python -m pytest -q
+          tests/test_planner_template_schema.py
+          tests/test_planning_detail_selection.py
+          tests/test_planning_detail_runtime_selection.py
+          tests/test_planning_detail_applicability.py
 
   ui-contract:
     needs: audit
@@ -199,6 +204,9 @@ jobs:
               "test_external_mcp_role_scope.py",
               "test_research_coordinator.py",
               "test_planner_template_schema.py",
+              "test_planning_detail_selection.py",
+              "test_planning_detail_runtime_selection.py",
+              "test_planning_detail_applicability.py",
               "test_conversational_ui.py",
               "test_agentic_search_efficiency_contract.py",
               "test_repair_candidate_purity_contract.py",
