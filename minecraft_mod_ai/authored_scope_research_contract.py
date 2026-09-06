@@ -2,13 +2,13 @@ from __future__ import annotations
 
 """Bind the approved authored requirement graph to research without reinterpreting raw text.
 
-The authoritative semantic catalog owns user-intent decomposition.  This module enriches
-that frozen catalog with two things the retrieval layer actually needs:
+The authoritative semantic catalog owns user-intent decomposition. This module enriches
+that frozen catalog with only what the retrieval layer needs:
 
 * authored/logically-required dependency edges between approved requirements;
-* English multi-query retrieval plans per requirement.
+* bounded English retrieval queries per requirement.
 
-The raw user prompt remains provenance.  It is never used as an external search query.
+The raw user prompt remains provenance. It is never used as an external search query.
 """
 
 import re
@@ -19,6 +19,7 @@ from typing import Any
 _INSTALLED = False
 _MARKER = "_mmm_approved_scope_downstream_authority_v2"
 _RETRIEVAL_MARKER = "_mmm_requirement_retrieval_plan_v1"
+_MAX_QUERIES_PER_REQUIREMENT = 2
 _SPACE = re.compile(r"\s+")
 _ASCII_WORD = re.compile(r"[A-Za-z]")
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
@@ -52,15 +53,48 @@ def _is_english_retrieval_query(value: str) -> bool:
     return 2 <= len(words) <= 24
 
 
+def _bounded_queries(capability: str, semantic_statement: str) -> list[str]:
+    """Return two deterministic, deduplicated implementation-oriented search queries."""
+
+    from .canonical_capability_ontology import search_queries_for_capability
+
+    candidates = list(search_queries_for_capability(capability)) if capability else []
+    concept = re.sub(r"[^A-Za-z0-9]+", " ", capability.replace("_", " ")).strip()
+    if not concept:
+        concept = " ".join(_QUERY_WORD.findall(semantic_statement))[:120].strip()
+    if not concept:
+        concept = "requested minecraft mechanic"
+    candidates.extend(
+        (
+            f"minecraft mod {concept} implementation",
+            f"minecraft fabric {concept} source",
+        )
+    )
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw_query in candidates:
+        query = _query_text(raw_query)
+        if query and "minecraft" not in query.casefold():
+            query = f"minecraft {query}"
+        key = query.casefold()
+        if not _is_english_retrieval_query(query) or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(query)
+        if len(cleaned) >= _MAX_QUERIES_PER_REQUIREMENT:
+            break
+    return cleaned
+
+
 def _call_retrieval_planner(
     router: Any,
     prompt: str,
     requirements: Sequence[Mapping[str, Any]],
 ) -> Any:
     """Build query structure deterministically; the small model owns no JSON protocol."""
-    del router, prompt
-    from .canonical_capability_ontology import search_queries_for_capability
 
+    del router, prompt
     rows: list[dict[str, Any]] = []
     for item in requirements:
         rid = str(item.get("requirement_id") or "").strip()
@@ -69,37 +103,27 @@ def _call_retrieval_planner(
             continue
         raw_deps = item.get("depends_on")
         deps = (
-            [str(dep).strip() for dep in raw_deps if str(dep).strip() and str(dep).strip() != rid]
+            [
+                str(dep).strip()
+                for dep in raw_deps
+                if str(dep).strip() and str(dep).strip() != rid
+            ]
             if isinstance(raw_deps, list)
             else []
         )
-        queries = list(search_queries_for_capability(capability)) if capability else []
-        concept = re.sub(r"[^A-Za-z0-9]+", " ", capability.replace("_", " ")).strip()
-        if not concept:
-            semantic = str(item.get("semantic_statement") or "")
-            concept = " ".join(_QUERY_WORD.findall(semantic))[:120].strip()
-        if not concept:
-            concept = "requested minecraft mechanic"
-        queries.extend((
-            f"minecraft mod {concept} implementation",
-            f"minecraft fabric {concept} source",
-        ))
-        cleaned: list[str] = []
-        for query in queries:
-            value = _query_text(query)
-            if value and "minecraft" not in value.casefold():
-                value = f"minecraft {value}"
-            if _is_english_retrieval_query(value) and value.casefold() not in {q.casefold() for q in cleaned}:
-                cleaned.append(value)
-            if len(cleaned) >= 5:
-                break
-        if len(cleaned) < 2:
+        queries = _bounded_queries(
+            capability,
+            str(item.get("semantic_statement") or ""),
+        )
+        if len(queries) < _MAX_QUERIES_PER_REQUIREMENT:
             raise ValueError(f"host retrieval planner could not build two queries for {rid}")
-        rows.append({
-            "requirement_id": rid,
-            "depends_on": list(dict.fromkeys(deps)),
-            "search_queries": cleaned,
-        })
+        rows.append(
+            {
+                "requirement_id": rid,
+                "depends_on": list(dict.fromkeys(deps)),
+                "search_queries": queries,
+            }
+        )
     return {"requirements": rows}
 
 
@@ -177,17 +201,20 @@ def _normalize_retrieval_plan(
         if not isinstance(raw_queries, list):
             raise ValueError(f"search_queries must be a list for {rid}")
         queries: list[str] = []
+        seen: set[str] = set()
         source_key = source_text_by_id.get(rid, "").casefold()
         for raw_query in raw_queries:
             query = _query_text(raw_query)
             key = query.casefold()
             if not query or key in {prompt_key, source_key}:
                 continue
-            if not _is_english_retrieval_query(query):
+            if not _is_english_retrieval_query(query) or key in seen:
                 continue
-            if key not in {item.casefold() for item in queries}:
-                queries.append(query)
-        if len(queries) < 2:
+            seen.add(key)
+            queries.append(query)
+            if len(queries) >= _MAX_QUERIES_PER_REQUIREMENT:
+                break
+        if len(queries) < _MAX_QUERIES_PER_REQUIREMENT:
             raise ValueError(
                 f"retrieval query planner produced fewer than two English queries for {rid}"
             )
@@ -232,13 +259,16 @@ def _enrich_catalog_with_retrieval_plan(
         enriched_requirements.append(item)
     enriched["requirements"] = enriched_requirements
     enriched["requirement_graph"] = {
-        "node_ids": [str(item.get("requirement_id") or "") for item in enriched_requirements],
+        "node_ids": [
+            str(item.get("requirement_id") or "") for item in enriched_requirements
+        ],
         "edges": edges,
     }
     audit = dict(enriched.get("semantic_audit") or {})
     audit["normal_model_turns"] = int(audit.get("normal_model_turns") or 1)
     audit["retrieval_model_turns"] = 0
-    audit["retrieval_query_planning"] = "host_deterministic_all_requirements"
+    audit["retrieval_query_planning"] = "host_deterministic_bounded_per_requirement"
+    audit["retrieval_queries_per_requirement"] = _MAX_QUERIES_PER_REQUIREMENT
     audit["dependency_edge_count"] = len(edges)
     enriched["semantic_audit"] = audit
     enriched["catalog_sha256"] = ""
@@ -376,7 +406,9 @@ def _compile_knowledge_plan_with_active_catalog(
                 if isinstance(planned, list)
                 else []
             )
-            ontology_queries = list(search_queries_for_capability(capability)) if capability else []
+            ontology_queries = (
+                list(search_queries_for_capability(capability)) if capability else []
+            )
             selected_queries = rewritten if rewritten else ontology_queries
             queries = list(
                 dict.fromkeys(
@@ -384,7 +416,7 @@ def _compile_knowledge_plan_with_active_catalog(
                     for query in selected_queries
                     if query and _is_english_retrieval_query(query)
                 )
-            )
+            )[:_MAX_QUERIES_PER_REQUIREMENT]
             routes.append(
                 {
                     "requirement_id": str(raw.get("requirement_id") or ""),
@@ -408,6 +440,7 @@ def _compile_knowledge_plan_with_active_catalog(
             "catalog_rebuild_after_freeze": False,
             "pre_design_query_owner": "approved_requirement_retrieval_plan",
             "raw_prompt_is_search_query": False,
+            "retrieval_queries_per_requirement": _MAX_QUERIES_PER_REQUIREMENT,
         }
     )
     plan["policy"] = policy
@@ -415,21 +448,6 @@ def _compile_knowledge_plan_with_active_catalog(
     plan["plan_sha256"] = knowledge_module._nodes._sha({**plan, "plan_sha256": ""})
     knowledge_module.validate_plan(plan)
     return plan
-
-
-def _approved_pre_design_brief(prompt: str) -> dict[str, Any]:
-    """Legacy helper retained for compatibility; the pipeline owns the live phase."""
-
-    from . import minecraft_knowledge_contract as knowledge
-    from . import pre_design_research_pipeline as pipeline
-
-    plan = knowledge.compile_minecraft_knowledge_plan(prompt)
-    routes = plan.get("authored_capability_routes")
-    if not isinstance(routes, list) or not routes:
-        return pipeline._pre_design_brief(prompt)
-
-    candidate = pipeline._pre_design_brief(prompt)
-    return _rewrite_pre_design_candidate(prompt, candidate)
 
 
 def install() -> None:
@@ -449,6 +467,7 @@ def install() -> None:
 
     current_builder = guard.build_authoritative_request_catalog
     if not getattr(current_builder, _RETRIEVAL_MARKER, False):
+
         def build_catalog(prompt: str, router: Any | None = None) -> dict[str, Any]:
             catalog = current_builder(prompt, router=router)
             if (
@@ -467,6 +486,7 @@ def install() -> None:
 
     current_normalize = central.normalize_research_brief
     if not getattr(current_normalize, _MARKER, False):
+
         def normalize(
             prompt: str,
             game_design: dict[str, Any],
@@ -488,6 +508,7 @@ def install() -> None:
 
     current_compile = knowledge.compile_minecraft_knowledge_plan
     if not getattr(current_compile, _MARKER, False):
+
         def compile_plan(
             prompt: str,
             game_design: Mapping[str, Any] | None = None,
@@ -509,7 +530,6 @@ def install() -> None:
 
 __all__ = [
     "_active_catalog",
-    "_approved_pre_design_brief",
     "_approved_research_normalize",
     "_compile_knowledge_plan_with_active_catalog",
     "_enrich_catalog_with_retrieval_plan",
