@@ -5,70 +5,95 @@ from types import SimpleNamespace
 from minecraft_mod_ai import reuse_discovery
 from minecraft_mod_ai.evidence_first_planning import build_request_catalog
 from minecraft_mod_ai.reuse_planner import decompose_capability_graph
+from tests.planning_authority_fixtures import request_catalog
 
 
-def test_prompt_feature_decomposition_multi_capability() -> None:
+def _grounded_catalog(prompt: str, *capabilities: str) -> dict:
+    return request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": f"req_{index:03d}",
+                "capability": capability,
+                "statement": f"Implement {capability} as part of the authored request.",
+                "source_text": prompt,
+                "implementation_capabilities": [capability],
+                "search_queries": [capability.replace(".", " ")],
+            }
+            for index, capability in enumerate(capabilities, start=1)
+        ],
+    )
+
+
+def test_grounded_feature_decomposition_preserves_multi_capability_authority() -> None:
     prompt = (
         "MapleStory-style mod -> mobs -> bosses -> items -> "
         "level progression -> upgrade system"
     )
-    catalog = build_request_catalog(prompt, {})
+    expected = (
+        "entity.mob",
+        "entity.boss",
+        "item.equipment",
+        "progression.level",
+        "progression.upgrade",
+    )
+    frozen = _grounded_catalog(prompt, *expected)
+    catalog = build_request_catalog(
+        prompt,
+        {"_evidence_request_catalog": frozen},
+    )
     requirements = catalog.get("requirements", [])
 
-    assert len(requirements) >= 4
-    capabilities = [req["capability"] for req in requirements]
-
-    # Must not collapse into a single generic semantic capability.
-    assert "semantic" not in capabilities
-    assert any("mob" in cap or "entity" in cap for cap in capabilities)
-    assert any("boss" in cap for cap in capabilities)
-    assert any("item" in cap or "equipment" in cap for cap in capabilities)
-    assert any("level" in cap or "progression" in cap for cap in capabilities)
-    assert any("upgrade" in cap for cap in capabilities)
+    assert [req["capability"] for req in requirements] == list(expected)
+    assert catalog["catalog_sha256"] == frozen["catalog_sha256"]
 
 
-def test_capability_graph_decomposition_and_search_terms() -> None:
+def test_capability_graph_decomposition_and_search_terms_use_frozen_catalog() -> None:
     prompt = (
         "MapleStory-style mod -> mobs -> bosses -> items -> "
         "level progression -> upgrade system"
     )
-    catalog = build_request_catalog(prompt, {})
+    expected = (
+        "entity.mob",
+        "entity.boss",
+        "item.equipment",
+        "progression.level",
+        "progression.upgrade",
+    )
+    catalog = _grounded_catalog(prompt, *expected)
     graph = decompose_capability_graph(
         prompt,
         design={"_evidence_request_catalog": catalog},
     )
 
-    assert len(graph.nodes) >= 4
-    node_set = set(graph.nodes)
-    assert "semantic" not in node_set
-
-    assert any("boss" in node for node in graph.nodes)
-    assert any("mob" in node or "entity" in node for node in graph.nodes)
-    assert any("upgrade" in node or "level" in node for node in graph.nodes)
+    assert graph.nodes == expected
+    assert "semantic" not in set(graph.nodes)
 
     search_dict = dict(graph.search_terms)
-    for cap in graph.nodes:
-        assert cap in search_dict
-        terms = search_dict[cap]
-        assert len(terms) >= 1
+    for capability in expected:
+        assert capability in search_dict
+        terms = search_dict[capability]
+        assert terms
         assert any(len(term.strip()) > 2 for term in terms)
 
 
-def test_arbitrary_unseen_prompt_decomposition_uses_stable_identifiers() -> None:
-    prompt = (
-        "warp drive • fusion generator • cybernetic arm • dimension gate"
+def test_unseen_grounded_capabilities_keep_stable_ascii_identifiers() -> None:
+    prompt = "warp drive • fusion generator • cybernetic arm • dimension gate"
+    expected = (
+        "warp.drive",
+        "fusion.generator",
+        "cybernetic.arm",
+        "dimension.gate",
     )
-    catalog = build_request_catalog(prompt, {})
-    requirements = catalog.get("requirements", [])
+    catalog = build_request_catalog(
+        prompt,
+        {"_evidence_request_catalog": _grounded_catalog(prompt, *expected)},
+    )
+    capabilities = [req["capability"] for req in catalog["requirements"]]
 
-    assert len(requirements) >= 3
-    capabilities = [req["capability"] for req in requirements]
-
-    assert "semantic" not in capabilities
-    assert len(set(capabilities)) >= 3
-    for capability in capabilities:
-        assert capability.isascii()
-        assert len(capability) > 2
+    assert capabilities == list(expected)
+    assert len(set(capabilities)) == len(expected)
+    assert all(capability.isascii() and len(capability) > 2 for capability in capabilities)
 
 
 def test_curseforge_search_query_sanitization_and_isolation(monkeypatch) -> None:
