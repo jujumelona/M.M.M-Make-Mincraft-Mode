@@ -72,6 +72,6 @@ def test_canonical_requirement_acceptance_remains_fail_closed() -> None:
 
     with pytest.raises(
         production.ProductionContractError,
-        match="approved public acceptance contains internal task/integrity language",
+        match="has no safe public acceptance projection",
     ):
         _approved_acceptance(dirty_requirement)
