@@ -59,10 +59,10 @@ def test_automatic_discovery_is_bounded_and_filters_unresolvable_targets(
     def discover_versions(limit: int) -> tuple[str, ...]:
         calls.append(limit)
         # Deliberately return more than requested to verify the registry enforces its bound.
-        return ("new-bad", "new-good", "old-good", "ancient-good")
+        return ("1.21.5", "1.21.4", "1.21.1", "1.20.6")
 
     def resolve(version: str) -> catalog.PlatformAdapter:
-        if version == "new-bad":
+        if version == "1.21.5":
             raise ValueError("incomplete toolchain")
         return _adapter("test-bounded", version)
 
@@ -79,10 +79,10 @@ def test_automatic_discovery_is_bounded_and_filters_unresolvable_targets(
         loader="test-bounded",
         limit_per_loader=2,
         diagnostics=diagnostics,
-    ) == (("test-bounded", "new-good"),)
+    ) == (("test-bounded", "1.21.4"),)
     assert calls == [2]
-    assert any("new-bad" in message for message in diagnostics)
-    assert all("old-good" not in message for message in diagnostics)
+    assert any("1.21.5" in message for message in diagnostics)
+    assert all("1.21.1" not in message for message in diagnostics)
 
 
 def test_expected_target_failure_has_no_traceback_log(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,7 +91,7 @@ def test_expected_target_failure_has_no_traceback_log(monkeypatch: pytest.Monkey
     provider = catalog.PlatformProvider(
         loader="test-log",
         provider_id="test",
-        discover_versions=lambda limit: ("bad",)[:limit],
+        discover_versions=lambda limit: ("1.21.1",)[:limit],
         resolve=lambda _version: (_ for _ in ()).throw(ValueError("not executable")),
     )
     _install_provider(monkeypatch, provider)
@@ -102,7 +102,7 @@ def test_expected_target_failure_has_no_traceback_log(monkeypatch: pytest.Monkey
     )
 
     with pytest.raises(ValueError, match="not executable"):
-        catalog.adapter_for_target("bad", "test-log")
+        catalog.adapter_for_target("1.21.1", "test-log")
 
     assert emitted
     assert all(not kwargs.get("exc_info") for _message, kwargs in emitted)
@@ -110,17 +110,17 @@ def test_expected_target_failure_has_no_traceback_log(monkeypatch: pytest.Monkey
 
 def test_newest_adapter_skips_incomplete_newest_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     def resolve(version: str) -> catalog.PlatformAdapter:
-        if version == "broken-newest":
+        if version == "1.21.5":
             raise ValueError("missing dependency")
         return _adapter("test-newest", version)
 
     provider = catalog.PlatformProvider(
         loader="test-newest",
         provider_id="test",
-        discover_versions=lambda limit: ("broken-newest", "working-next")[:limit],
+        discover_versions=lambda limit: ("1.21.5", "1.21.4")[:limit],
         resolve=resolve,
     )
     _install_provider(monkeypatch, provider)
 
     adapter = catalog.newest_adapter(loader="test-newest")
-    assert adapter.minecraft_version == "working-next"
+    assert adapter.minecraft_version == "1.21.4"
