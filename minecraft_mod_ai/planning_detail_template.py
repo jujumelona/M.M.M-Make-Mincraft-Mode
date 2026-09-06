@@ -138,6 +138,20 @@ DETAIL_FIELDS = {
 }
 
 WORKSHEET_SECTIONS: tuple[str, ...] = tuple(DETAIL_FIELDS)
+CORE_WORKSHEET_SECTIONS: tuple[str, ...] = (
+    "behavior_contract",
+    "state_model",
+    "algorithm",
+    "integration",
+    "failure_and_limits",
+    "reuse_assessment",
+    "verification",
+)
+CONDITIONAL_WORKSHEET_SECTIONS: tuple[str, ...] = (
+    "authority_and_network",
+    "persistence",
+    "resources_and_ui",
+)
 
 WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
@@ -161,8 +175,9 @@ def normalize_required_sections(
     """Return a validated host-owned section selection in canonical order.
 
     ``None`` is deliberately fail-safe and means every canonical section. An explicit
-    selection must be non-empty, duplicate-free and contain only canonical section names.
-    Model output must never be used as ``required_sections``.
+    selection may omit only host-proven inapplicable conditional branches. Core sections
+    are mandatory for every detailed plan. Model output must never be used as
+    ``required_sections``.
     """
 
     if required_sections is None:
@@ -182,6 +197,12 @@ def normalize_required_sections(
     if unknown:
         raise ValueError(
             "DETAILED_PLAN_SECTIONS: unknown section(s): " + ", ".join(sorted(unknown))
+        )
+    missing_core = set(CORE_WORKSHEET_SECTIONS) - set(requested)
+    if missing_core:
+        raise ValueError(
+            "DETAILED_PLAN_SECTIONS: core section(s) cannot be omitted: "
+            + ", ".join(key for key in CORE_WORKSHEET_SECTIONS if key in missing_core)
         )
     requested_set = set(requested)
     return tuple(key for key in WORKSHEET_SECTIONS if key in requested_set)
@@ -326,6 +347,8 @@ def validate_worksheet(
 
 
 __all__ = [
+    "CONDITIONAL_WORKSHEET_SECTIONS",
+    "CORE_WORKSHEET_SECTIONS",
     "DETAIL_FIELDS",
     "DETAIL_SLOT_GUIDANCE",
     "WORKSHEET_INSTRUCTIONS",
