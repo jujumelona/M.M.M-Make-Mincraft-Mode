@@ -10,14 +10,18 @@ requirement IDs must exist before optional model work can run.
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import Any
 
 from . import evidence_first_planning as _evidence
-from . import evidence_request_guard as _guard
 from .minecraft_template_catalog import selected_predecessor_capabilities
 from .root_cause_trace import emit_root_cause, trace_scope
 
+_ACTIVE_REQUEST_CATALOG: ContextVar[tuple[str, dict[str, Any]] | None] = ContextVar(
+    "mmm_active_authoritative_request_catalog",
+    default=None,
+)
 _STATE_TOKEN = re.compile(r"[A-Za-z0-9_]+|[가-힣]+", re.UNICODE)
 _STATE_STOP = frozenset({
     "a", "an", "the", "and", "or", "to", "from", "of", "in", "on", "at",
@@ -176,7 +180,7 @@ def _research_queries(requirement: Mapping[str, Any]) -> list[str]:
 
 
 def _compile_host_catalog(prompt: str) -> dict[str, Any]:
-    catalog = dict(_guard._ORIGINAL_BUILD_REQUEST_CATALOG(prompt, {}, router=None))
+    catalog = dict(_evidence.build_request_catalog(prompt, {}, router=None))
     raw_requirements = catalog.get("requirements")
     requirements = [dict(item) for item in raw_requirements if isinstance(item, Mapping)] if isinstance(raw_requirements, list) else []
     if not requirements:
@@ -222,7 +226,7 @@ def _compile_host_catalog(prompt: str) -> dict[str, Any]:
     return catalog
 
 
-def build_authoritative_request_catalog(prompt: str, router: Any | None) -> dict[str, Any]:
+def build_authoritative_request_catalog(prompt: str, router: Any | None = None) -> dict[str, Any]:
     """Compile request meaning, dependencies and research intent without model calls."""
     del router
     with trace_scope("planner"):
@@ -246,13 +250,25 @@ def build_authoritative_request_catalog(prompt: str, router: Any | None) -> dict
         return catalog
 
 
+def active_authoritative_request_catalog(prompt: str) -> dict[str, Any] | None:
+    """Return only the currently frozen catalog; never rebuild authority implicitly."""
+    active = _ACTIVE_REQUEST_CATALOG.get()
+    if active is None or active[0] != prompt:
+        return None
+    return deepcopy(active[1])
+
+
 @contextmanager
 def authoritative_request_scope(prompt: str, catalog: Mapping[str, Any]) -> Iterator[None]:
-    token = _guard._ACTIVE_REQUEST_CATALOG.set((prompt, deepcopy(dict(catalog))))
+    token = _ACTIVE_REQUEST_CATALOG.set((prompt, deepcopy(dict(catalog))))
     try:
         yield
     finally:
-        _guard._ACTIVE_REQUEST_CATALOG.reset(token)
+        _ACTIVE_REQUEST_CATALOG.reset(token)
 
 
-__all__ = ["authoritative_request_scope", "build_authoritative_request_catalog"]
+__all__ = [
+    "active_authoritative_request_catalog",
+    "authoritative_request_scope",
+    "build_authoritative_request_catalog",
+]
