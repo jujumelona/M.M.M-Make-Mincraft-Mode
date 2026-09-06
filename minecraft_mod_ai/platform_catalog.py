@@ -25,6 +25,11 @@ from .target_contract import (
     uses_native_names,
 )
 
+# Platform evidence uses adapter as domain vocabulary, but the executable receipt has
+# one canonical runtime representation: TargetContract. Keep the exported name as a
+# type synonym rather than reintroducing a second adapter class or conversion layer.
+PlatformAdapter = TargetContract
+
 
 @dataclass(frozen=True)
 class PlatformProvider:
