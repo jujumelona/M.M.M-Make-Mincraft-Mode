@@ -8,9 +8,11 @@ state. Host code owns readiness and refuses semantic-only or evidence-free hando
 """
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
+from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_detail_template import WORKSHEET_SCHEMA, validate_worksheet, worksheet_prompt
 from .planning_state_contract import validate_planning_state
@@ -211,6 +213,140 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def _compile_requirement_plan(
+    router: Any,
+    state: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compile and validate one independent requirement without mutating shared state."""
+
+    requirement_ref = str(requirement.get("requirement_id") or "")
+    evidence = _implementation_evidence(state, requirement_ref)
+    allowed = _allowed_refs(evidence)
+    if not evidence or not allowed:
+        raise ValueError(
+            f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
+        )
+    context = {
+        "requirement": deepcopy(dict(requirement)),
+        "implementation_research": deepcopy(evidence),
+        "allowed_evidence_refs": sorted(allowed),
+        "engineering_worksheet_contract": worksheet_prompt(),
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                _SMALL_MODEL_PLAN_PROTOCOL
+                + "\n"
+                + worksheet_prompt()
+                + "\nGROUNDING RULES:\n"
+                "- This is a fill-and-verify task, not a redesign task.\n"
+                "- Never invent API names, files, symbols, dependencies, versions, identifiers or implementation mechanisms absent from evidence.\n"
+                "- Every implementation capability and implementation obligation must cite one or more supplied allowed evidence refs.\n"
+                "- Artifact entries must state a concrete artifact purpose supported by evidence; omit artifacts that are not required.\n"
+                "- Reuse mode must reflect what the cited source really supports; a retrieved pattern is not proof that it can be copied unchanged.\n"
+                "- Verification checks must prove the user-visible requirement or an evidence-backed invariant; compilation alone never proves behavior.\n"
+                "- An inapplicable worksheet section must explain why using cited evidence; never silently omit it.\n"
+                "- New algorithms and proposed identifiers are design decisions, not retrieved facts.\n"
+                "- Keep unverified target-specific bindings explicitly separate from source examples.\n"
+                "- Prefer explicit numbers, units, state owners, branch conditions and expected outcomes over vague quality adjectives."
+            ),
+        },
+        {"role": "user", "content": str(context)},
+    ]
+    with planner_operation("detailed_implementation_plan", output_tokens=6144):
+        raw = router.generate_tool_decision(
+            "planner",
+            messages,
+            tool_name=_TOOL,
+            parameters=_PARAMETERS,
+            description=(
+                "Fill the complete grounded engineering worksheet and concrete implementation, artifact, reuse and verification obligations for exactly one requirement."
+            ),
+        )
+    if not isinstance(raw, Mapping):
+        raise ValueError("DETAILED_PLAN_MODEL: planner returned a non-object")
+
+    worksheet = validate_worksheet(raw.get("engineering_worksheet"), allowed)
+    capabilities: list[dict[str, Any]] = []
+    for item in raw.get("implementation_capabilities", []):
+        if not isinstance(item, Mapping) or not _text(item.get("capability")):
+            raise ValueError("DETAILED_PLAN_CAPABILITY: invalid capability item")
+        capabilities.append(
+            {
+                "capability": _text(item.get("capability")),
+                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="capability"),
+            }
+        )
+    obligations: list[dict[str, Any]] = []
+    for item in raw.get("implementation_obligations", []):
+        if not isinstance(item, Mapping) or not _text(item.get("obligation")):
+            raise ValueError("DETAILED_PLAN_OBLIGATION: invalid obligation item")
+        obligations.append(
+            {
+                "obligation": _text(item.get("obligation")),
+                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="obligation"),
+            }
+        )
+    if not capabilities or not obligations:
+        raise ValueError(
+            f"DETAILED_PLAN_EMPTY: {requirement_ref} lacks concrete capabilities/obligations"
+        )
+
+    artifacts: list[dict[str, Any]] = []
+    for item in raw.get("artifact_obligations", []):
+        if not isinstance(item, Mapping):
+            continue
+        kind, purpose = _text(item.get("kind")), _text(item.get("purpose"))
+        if not kind or not purpose:
+            raise ValueError("DETAILED_PLAN_ARTIFACT: kind and purpose are required")
+        artifacts.append(
+            {
+                "kind": kind,
+                "purpose": purpose,
+                "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="artifact"),
+            }
+        )
+
+    reuse: list[dict[str, Any]] = []
+    for item in raw.get("reuse_candidates", []):
+        if not isinstance(item, Mapping):
+            continue
+        ref = _text(item.get("evidence_ref"))
+        mode = _text(item.get("mode"))
+        reason = _text(item.get("reason"))
+        if mode not in {"reuse", "adapt", "reference_only", "new_required"} or not reason:
+            raise ValueError("DETAILED_PLAN_REUSE: invalid reuse verdict or missing rationale")
+        _validate_refs([ref], allowed, field="reuse")
+        reuse.append({"evidence_ref": ref, "mode": mode, "reason": reason})
+
+    checks: list[dict[str, Any]] = []
+    for item in raw.get("verification_obligations", []):
+        if not isinstance(item, Mapping) or not _text(item.get("check")):
+            raise ValueError("DETAILED_PLAN_VERIFICATION: invalid verification item")
+        checks.append(
+            {
+                "check": _text(item.get("check")),
+                "evidence_refs": _validate_refs(
+                    item.get("evidence_refs"), allowed, field="verification", require=False
+                ),
+            }
+        )
+    if not checks:
+        raise ValueError(f"DETAILED_PLAN_VERIFICATION: {requirement_ref} has no verification plan")
+
+    return {
+        "requirement_ref": requirement_ref,
+        "engineering_worksheet": worksheet,
+        "implementation_capabilities": capabilities,
+        "implementation_obligations": obligations,
+        "artifact_obligations": artifacts,
+        "reuse_candidates": reuse,
+        "verification_obligations": checks,
+    }
+
+
 def compile_detailed_implementation_plans(
     router: Any,
     prompt: str,
@@ -224,143 +360,36 @@ def compile_detailed_implementation_plans(
     if not requirements:
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: no researched requirements exist")
 
+    workers = min(len(requirements), router_native_model_parallelism(router))
+    if workers <= 1:
+        compiled = [_compile_requirement_plan(router, value, requirement) for requirement in requirements]
+    else:
+        # Each requirement is evidence-isolated. Run only as many generations as the
+        # active native backend proves it can serve concurrently, then consume futures
+        # in authored order so decision IDs and coverage remain deterministic.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
+            futures = [
+                pool.submit(_compile_requirement_plan, router, value, requirement)
+                for requirement in requirements
+            ]
+            compiled = [future.result() for future in futures]
+
     detailed: list[dict[str, Any]] = []
     coverage: list[dict[str, Any]] = []
-    for requirement in requirements:
-        requirement_ref = str(requirement.get("requirement_id") or "")
-        evidence = _implementation_evidence(value, requirement_ref)
-        allowed = _allowed_refs(evidence)
-        if not evidence or not allowed:
-            raise ValueError(
-                f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
-            )
-        context = {
-            "requirement": deepcopy(dict(requirement)),
-            "implementation_research": deepcopy(evidence),
-            "allowed_evidence_refs": sorted(allowed),
-            "engineering_worksheet_contract": worksheet_prompt(),
-        }
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    _SMALL_MODEL_PLAN_PROTOCOL
-                    + "\n"
-                    + worksheet_prompt()
-                    + "\nGROUNDING RULES:\n"
-                    "- This is a fill-and-verify task, not a redesign task.\n"
-                    "- Never invent API names, files, symbols, dependencies, versions, identifiers or implementation mechanisms absent from evidence.\n"
-                    "- Every implementation capability and implementation obligation must cite one or more supplied allowed evidence refs.\n"
-                    "- Artifact entries must state a concrete artifact purpose supported by evidence; omit artifacts that are not required.\n"
-                    "- Reuse mode must reflect what the cited source really supports; a retrieved pattern is not proof that it can be copied unchanged.\n"
-                    "- Verification checks must prove the user-visible requirement or an evidence-backed invariant; compilation alone never proves behavior.\n"
-                    "- An inapplicable worksheet section must explain why using cited evidence; never silently omit it.\n"
-                    "- New algorithms and proposed identifiers are design decisions, not retrieved facts.\n"
-                    "- Keep unverified target-specific bindings explicitly separate from source examples.\n"
-                    "- Prefer explicit numbers, units, state owners, branch conditions and expected outcomes over vague quality adjectives."
-                ),
-            },
-            {"role": "user", "content": str(context)},
-        ]
-        with planner_operation("detailed_implementation_plan", output_tokens=6144):
-            raw = router.generate_tool_decision(
-                "planner",
-                messages,
-                tool_name=_TOOL,
-                parameters=_PARAMETERS,
-                description=(
-                    "Fill the complete grounded engineering worksheet and concrete implementation, artifact, reuse and verification obligations for exactly one requirement."
-                ),
-            )
-        if not isinstance(raw, Mapping):
-            raise ValueError("DETAILED_PLAN_MODEL: planner returned a non-object")
-
-        worksheet = validate_worksheet(raw.get("engineering_worksheet"), allowed)
-        capabilities: list[dict[str, Any]] = []
-        for item in raw.get("implementation_capabilities", []):
-            if not isinstance(item, Mapping) or not _text(item.get("capability")):
-                raise ValueError("DETAILED_PLAN_CAPABILITY: invalid capability item")
-            capabilities.append(
-                {
-                    "capability": _text(item.get("capability")),
-                    "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="capability"),
-                }
-            )
-        obligations: list[dict[str, Any]] = []
-        for item in raw.get("implementation_obligations", []):
-            if not isinstance(item, Mapping) or not _text(item.get("obligation")):
-                raise ValueError("DETAILED_PLAN_OBLIGATION: invalid obligation item")
-            obligations.append(
-                {
-                    "obligation": _text(item.get("obligation")),
-                    "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="obligation"),
-                }
-            )
-        if not capabilities or not obligations:
-            raise ValueError(
-                f"DETAILED_PLAN_EMPTY: {requirement_ref} lacks concrete capabilities/obligations"
-            )
-
-        artifacts: list[dict[str, Any]] = []
-        for item in raw.get("artifact_obligations", []):
-            if not isinstance(item, Mapping):
-                continue
-            kind, purpose = _text(item.get("kind")), _text(item.get("purpose"))
-            if not kind or not purpose:
-                raise ValueError("DETAILED_PLAN_ARTIFACT: kind and purpose are required")
-            artifacts.append(
-                {
-                    "kind": kind,
-                    "purpose": purpose,
-                    "evidence_refs": _validate_refs(item.get("evidence_refs"), allowed, field="artifact"),
-                }
-            )
-
-        reuse: list[dict[str, Any]] = []
-        for item in raw.get("reuse_candidates", []):
-            if not isinstance(item, Mapping):
-                continue
-            ref = _text(item.get("evidence_ref"))
-            mode = _text(item.get("mode"))
-            reason = _text(item.get("reason"))
-            if mode not in {"reuse", "adapt", "reference_only", "new_required"} or not reason:
-                raise ValueError("DETAILED_PLAN_REUSE: invalid reuse verdict or missing rationale")
-            _validate_refs([ref], allowed, field="reuse")
-            reuse.append({"evidence_ref": ref, "mode": mode, "reason": reason})
-
-        checks: list[dict[str, Any]] = []
-        for item in raw.get("verification_obligations", []):
-            if not isinstance(item, Mapping) or not _text(item.get("check")):
-                raise ValueError("DETAILED_PLAN_VERIFICATION: invalid verification item")
-            checks.append(
-                {
-                    "check": _text(item.get("check")),
-                    "evidence_refs": _validate_refs(
-                        item.get("evidence_refs"), allowed, field="verification", require=False
-                    ),
-                }
-            )
-        if not checks:
-            raise ValueError(f"DETAILED_PLAN_VERIFICATION: {requirement_ref} has no verification plan")
-
+    for index, plan in enumerate(compiled, start=1):
+        decision_id = f"detail_{index:03d}"
         detailed.append(
             {
-                "decision_id": f"detail_{len(detailed) + 1:03d}",
+                "decision_id": decision_id,
                 "decision_type": "detailed_implementation_plan",
-                "requirement_ref": requirement_ref,
-                "engineering_worksheet": worksheet,
-                "implementation_capabilities": capabilities,
-                "implementation_obligations": obligations,
-                "artifact_obligations": artifacts,
-                "reuse_candidates": reuse,
-                "verification_obligations": checks,
+                **plan,
             }
         )
         coverage.append(
             {
-                "requirement_ref": requirement_ref,
+                "requirement_ref": plan["requirement_ref"],
                 "status": "covered",
-                "detailed_plan_ref": detailed[-1]["decision_id"],
+                "detailed_plan_ref": decision_id,
             }
         )
 

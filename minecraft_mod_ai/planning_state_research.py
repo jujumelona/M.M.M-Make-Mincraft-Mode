@@ -10,10 +10,12 @@ promoted to evidence without materialized-page grounding and validation.
 
 import json
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
 from .central_research import normalize_research_brief
+from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_state_contract import validate_planning_state
 from .pre_design_domain_research import research_document_domain
@@ -125,6 +127,7 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
 
 def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
     """Persist every generated query in the SSOT before retrieval starts."""
+    pending: list[dict[str, Any]] = []
     for research in state.get("research_queue", []):
         if not isinstance(research, dict) or str(research.get("status") or "") != "pending":
             continue
@@ -132,7 +135,23 @@ def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
         if isinstance(existing, list) and any(_text(item) for item in existing):
             research["queries"] = list(dict.fromkeys(_text(item) for item in existing if _text(item)))[:4]
             continue
-        research["queries"] = _compile_queries(router, state, research)
+        pending.append(research)
+
+    if not pending:
+        return
+    workers = min(len(pending), router_native_model_parallelism(router))
+    if workers <= 1:
+        for research in pending:
+            research["queries"] = _compile_queries(router, state, research)
+        return
+
+    # Query compilation is independent per research item. Use only model-native slots
+    # proved by the router/runtime, then merge results back in SSOT order so planning
+    # remains deterministic while the model critical path is no longer N-way serial.
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-query") as pool:
+        futures = [pool.submit(_compile_queries, router, state, research) for research in pending]
+        for research, future in zip(pending, futures, strict=True):
+            research["queries"] = future.result()
 
 
 def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, Any], set[str]]:
