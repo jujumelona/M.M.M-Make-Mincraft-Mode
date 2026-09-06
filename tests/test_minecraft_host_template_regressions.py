@@ -6,6 +6,7 @@ from typing import Any
 from minecraft_mod_ai import authored_scope_research_contract as retrieval
 from minecraft_mod_ai import evidence_first_planning as planning
 from minecraft_mod_ai import planning_authority as authority
+from minecraft_mod_ai import platform_catalog
 from minecraft_mod_ai.minecraft_template_catalog import (
     profile_for_capability,
     selected_predecessor_capabilities,
@@ -239,6 +240,31 @@ def test_launch_and_travel_progression_cannot_form_requirement_cycle() -> None:
     )
 
 
+def _target_decision() -> dict[str, Any]:
+    adapter = platform_catalog.adapter_for_target("1.21.1", "fabric")
+    return {
+        "target": {
+            "minecraft_version": adapter.minecraft_version,
+            "loader": adapter.loader,
+            "java_version": adapter.java_version,
+            "source_api_family": adapter.source_api_family,
+            "fabric_loader": adapter.fabric_loader,
+            "fabric_api": adapter.fabric_api,
+            "fabric_loom": adapter.fabric_loom,
+            "gradle": adapter.gradle,
+            "gradle_sha256": adapter.gradle_sha256,
+            "data_pack_version": adapter.data_pack_version,
+            "resource_pack_version": adapter.resource_pack_version,
+            "resource_pack_format": adapter.resource_pack_format,
+            "release_metadata_url": adapter.release_metadata_url,
+            "yarn_mappings": adapter.yarn_mappings,
+            "mappings_kind": adapter.mappings_kind,
+            "mappings_version": adapter.mappings_version,
+        },
+        "reason": "host regression fixture",
+    }
+
+
 def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> None:
     prompt = "Travel to another planet."
     router = _SemanticQueueRouter(
@@ -259,19 +285,10 @@ def test_validation_recompiles_templates_with_tracing_disabled(monkeypatch) -> N
         "mod_id": "template_regression",
         "_evidence_request_catalog": catalog,
     }
-    target = {
-        "target": {
-            "minecraft_version": "1.21.8",
-            "loader": "fabric",
-            "java_version": 21,
-            "source_api_family": "fabric",
-        },
-        "reason": "host regression fixture",
-    }
     plan = planning.compile_evidence_first_plan(
         prompt,
         game_design,
-        target_decision=target,
+        target_decision=_target_decision(),
     )
 
     original_compile_tasks = planning._compile_tasks
