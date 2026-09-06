@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-"""One evidence-bound engineering worksheet shared by planning and coding.
+"""One engineering worksheet shared by planning and coding.
 
 The worksheet deliberately keeps a compact, stable wire shape for small models while
 making the meaning of every slot explicit. Host code owns the canonical section list and
-may narrow it only through an explicit trusted selection. With no selection, the legacy
-fail-safe remains in force: all ten sections are required. The model never decides which
-sections apply.
+may narrow it only through an explicit trusted selection. With no selection, all ten
+sections are required. The model never decides which sections apply.
+
+A worksheet specification is an authored design contract, not a retrieved fact. Evidence
+references are therefore optional constraints on that design. Target/API/version/source
+facts are represented separately by the detailed-plan grounded-binding contract.
 """
 
 from collections.abc import Iterable, Mapping
@@ -64,7 +67,7 @@ DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
         "state synchronization recipients and trigger",
         "join/reconnect/resync behavior",
         "disconnect, stale packet and malformed payload behavior",
-        "explicit evidence-backed reason when networking is inapplicable",
+        "explicit reason when networking is inapplicable",
     ),
     "persistence": (
         "which state persists and its storage owner/scope",
@@ -75,7 +78,7 @@ DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
         "schema/version migration policy",
         "malformed, stale or partially missing data behavior",
         "copy/clone/death/dimension-transfer semantics when relevant",
-        "explicit evidence-backed reason when persistence is inapplicable",
+        "explicit reason when persistence is inapplicable",
     ),
     "resources_and_ui": (
         "all required registries, identifiers and data resources",
@@ -86,7 +89,7 @@ DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
         "resource paths or path-binding requirements without inventing unsupported names",
         "missing-resource fallback and validation",
         "accessibility/localization or tooltip feedback required by observable behavior",
-        "explicit evidence-backed reason for inapplicable resource/UI branches",
+        "explicit reason for inapplicable resource/UI branches",
     ),
     "failure_and_limits": (
         "invalid user/input states and rejection result",
@@ -155,13 +158,13 @@ CONDITIONAL_WORKSHEET_SECTIONS: tuple[str, ...] = (
 
 WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
-    "Read all supplied evidence before filling any section and cite only allowed evidence refs.",
+    "Read all supplied evidence before filling any section. Use constraint_evidence_refs only when retrieved evidence actually constrains the authored design; an empty list is valid.",
     "Fill all ten sections. Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
     "Write a distinct section-specific specification for every section; copying one generic answer across multiple sections is invalid.",
-    "For an inapplicable concern, state the concrete reason it is inapplicable and cite evidence that supports that conclusion.",
-    "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, APIs, constants or bindings are not facts unless evidence proves them.",
+    "For an inapplicable concern, state the concrete design reason it is inapplicable. Cite evidence only when that conclusion depends on an external fact.",
+    "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, constants or behavior rules are authored design, not evidence-backed facts.",
     "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of adjectives such as robust, proper, appropriate or handle correctly.",
-    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or be a necessary dependency stated by evidence.",
+    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or be a necessary dependency established by the planning state.",
     "Treat compile/static checks as necessary but insufficient: verification must also prove the user-visible runtime behavior and relevant failure paths.",
     "Before submission, cross-check that state, algorithm, integration, persistence/network branches and verification describe one internally consistent design.",
 )
@@ -250,18 +253,20 @@ def _worksheet_section_schema(key: str) -> dict[str, Any]:
                 "minLength": _MIN_SPECIFICATION_CHARS,
                 "description": (
                     _section_description(key)
-                    + " Write a self-contained, section-specific implementation contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
+                    + " Write a self-contained, section-specific authored design contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
                 ),
             },
-            "evidence_refs": {
+            "constraint_evidence_refs": {
                 "type": "array",
-                "minItems": 1,
                 "uniqueItems": True,
-                "description": "Only evidence references supplied by the host for this requirement.",
+                "description": (
+                    "Evidence references supplied by the host that constrain this authored design section. "
+                    "Use an empty array when the section is a design decision rather than an external fact."
+                ),
                 "items": {"type": "string", "minLength": 1},
             },
         },
-        "required": ["specification", "evidence_refs"],
+        "required": ["specification", "constraint_evidence_refs"],
         "additionalProperties": False,
     }
 
@@ -273,9 +278,9 @@ def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str
     return {
         "type": "object",
         "description": (
-            "Complete evidence-bound engineering worksheet for exactly the host-required sections. "
-            "Each specification must explicitly address that section's checklist rather than "
-            "summarizing the requirement in one vague sentence. Section answers must be distinct."
+            "Complete engineering worksheet for exactly the host-required sections. "
+            "Specifications are authored design contracts; constraint_evidence_refs only record "
+            "external evidence that actually constrains those designs. Section answers must be distinct."
         ),
         "properties": {key: _worksheet_section_schema(key) for key in selected},
         "required": list(selected),
@@ -283,8 +288,6 @@ def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str
     }
 
 
-# Backwards-compatible full worksheet schema. Existing callers remain fail-safe until they
-# are explicitly wired to a trusted host-owned section selection.
 WORKSHEET_SCHEMA = worksheet_schema()
 
 _PLACEHOLDERS = {
@@ -313,6 +316,7 @@ def validate_worksheet(
         )
 
     seen_specifications: dict[str, str] = {}
+    normalized: dict[str, Any] = {}
     for key in selected:
         row = value[key]
         if not isinstance(row, Mapping):
@@ -333,17 +337,25 @@ def validate_worksheet(
             )
         seen_specifications[normalized_specification] = key
 
-        refs = row.get("evidence_refs")
+        refs = row.get("constraint_evidence_refs")
+        if not isinstance(refs, list):
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET: {key} constraint_evidence_refs must be an array"
+            )
+        ref_values = [str(ref).strip() for ref in refs if str(ref).strip()]
         if (
-            not isinstance(refs, list)
-            or not refs
-            or len(set(str(ref) for ref in refs)) != len(refs)
-            or any(ref not in allowed_refs for ref in refs)
+            len(ref_values) != len(refs)
+            or len(set(ref_values)) != len(ref_values)
+            or any(ref not in allowed_refs for ref in ref_values)
         ):
             raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET: {key} lacks grounded evidence"
+                f"DETAILED_PLAN_WORKSHEET: {key} has invalid constraint evidence"
             )
-    return deepcopy(dict(value))
+        normalized[key] = {
+            "specification": specification,
+            "constraint_evidence_refs": ref_values,
+        }
+    return deepcopy(normalized)
 
 
 __all__ = [
