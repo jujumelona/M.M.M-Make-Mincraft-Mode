@@ -219,13 +219,16 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
     assert performance["artifact_task_ids"]
     assert performance["artifact_obligations"]
     assert performance["runtime_acceptance"]
-    assert any("thrust/speed" in item for item in performance["design_resolution_obligations"])
+    assert any(
+        "authored spacecraft stat dimensions" in item
+        for item in performance["design_resolution_obligations"]
+    )
     assert any(
         "buy/sell prices" in item
         for item in by_capability["economy.trade"]["design_resolution_obligations"]
     )
     assert any(
-        "death/dismissal" in item
+        "removal/death behavior" in item
         for item in by_capability["crew.recruitment"]["design_resolution_obligations"]
     )
     assert any(
