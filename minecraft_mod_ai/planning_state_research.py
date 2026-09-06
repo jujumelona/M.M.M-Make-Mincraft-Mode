@@ -19,6 +19,10 @@ from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_state_contract import validate_planning_state
 from .pre_design_domain_research import research_document_domain
+from .research_reuse_candidates import (
+    merge_repository_candidates,
+    project_repository_candidates,
+)
 
 _QUERY_TOOL = "submit_research_queries"
 _QUERY_PARAMETERS: dict[str, Any] = {
@@ -257,6 +261,12 @@ def collect_planning_state_research(
 
     validate_planning_state(state, prompt=prompt)
     value = deepcopy(dict(state))
+    # Candidate receipts are host-derived only. Initial model output has no schema field
+    # that can author these, and resumed states are re-sanitized before merge.
+    value["repository_candidates"] = merge_repository_candidates(
+        value.get("repository_candidates") if isinstance(value.get("repository_candidates"), list) else [],
+        [],
+    )
     unresolved_by_id = {
         str(item.get("unresolved_id") or ""): item
         for item in value.get("unresolved", [])
@@ -300,6 +310,10 @@ def collect_planning_state_research(
             if minecraft_bundle is None:
                 raise ValueError("PLANNING_RESEARCH_ROUTE: Minecraft RAG bundle is unexpectedly absent")
             grounded = _grounded_domain_evidence(domain_id, minecraft_bundle)
+            value["repository_candidates"] = merge_repository_candidates(
+                value.get("repository_candidates", []),
+                project_repository_candidates(domain, grounded),
+            )
         document = project_rag._materialize_domain_evidence_document(
             domain_id,
             {"grounded_rag": grounded},
