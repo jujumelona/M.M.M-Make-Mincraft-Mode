@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
+from minecraft_mod_ai.evidence_first_planning import (
+    _hash_without,
+    _sha,
+    compile_evidence_first_plan,
+)
 from minecraft_mod_ai.production_contract import (
     ProductionContractError,
     compile_production_contract,
@@ -31,6 +35,86 @@ def _target() -> dict[str, object]:
     }
 
 
+def _request_catalog(prompt: str, public_acceptance: str) -> dict[str, object]:
+    capability = 'researched.weather_compass'
+    requirement = {
+        'requirement_id': 'req_weather_compass',
+        'capability': capability,
+        'statement': prompt,
+        'semantic_statement': prompt,
+        'mandatory': True,
+        'provenance_role': 'authored',
+        'source_span': {
+            'source_id': 'requested_prompt',
+            'char_start': 0,
+            'char_end': len(prompt),
+            'text': prompt,
+            'text_sha256': _sha(prompt),
+        },
+        'evidence_refs': [],
+        'derived_from': [],
+        'depends_on': [],
+        'provides': [f'capability:{capability}'],
+        'gameplay_capabilities': [capability],
+        'implementation_capabilities': ['weather compass item behavior'],
+        'implementation_obligations': [
+            'Implement the weather compass item and expose only player-observable behavior.'
+        ],
+        'artifact_task_ids': [],
+        'semantic_type': 'researched_gameplay_requirement',
+        'unlock_policy': {
+            'required_capabilities': [],
+            'required_requirement_refs': [],
+            'optional_capabilities': [],
+            'optional_requirement_refs': [],
+            'policy': 'grounded_planning_state_only',
+        },
+        'artifact_obligations': [],
+        'design_resolution_obligations': [
+            'Keep source-span trace metadata internal to planning.'
+        ],
+        'runtime_acceptance': [public_acceptance],
+        'semantic_status': 'RESOLVED',
+        'unresolved_spans': [],
+        'acceptance': [public_acceptance],
+        'observable_behavior': {
+            'given': 'the weather compass exists',
+            'when': 'the player uses the weather compass',
+            'then': public_acceptance,
+        },
+        'template_profile': {
+            'template_id': 'grounded_researched_requirement',
+            'architecture_owner': 'planning_state',
+        },
+        'search_queries': [],
+        'reuse_candidates': [],
+        'detailed_plan_ref': 'detail_weather_compass',
+        'engineering_worksheet': None,
+    }
+    catalog: dict[str, object] = {
+        'prompt_sha256': _sha(prompt),
+        'prompt_char_length': len(prompt),
+        'purpose': prompt,
+        'requirements': [requirement],
+        'constraints': [],
+        'non_goals': [],
+        'deployment_expectations': [],
+        'requirement_graph': {
+            'node_ids': ['req_weather_compass'],
+            'edges': [],
+        },
+        'dependency_provenance': [],
+        'semantic_audit': {
+            'status': 'APPROVED',
+            'generation_policy': 'explicit_test_authority',
+        },
+        'planning_state_sha256': 'test-fixture',
+        'catalog_sha256': '',
+    }
+    catalog['catalog_sha256'] = _hash_without(catalog, 'catalog_sha256')
+    return catalog
+
+
 def _task_modules(plan: dict[str, object]) -> list[dict[str, object]]:
     return [
         {
@@ -50,6 +134,7 @@ def test_evidence_public_acceptance_does_not_republish_internal_source_span() ->
     design = {
         'title': 'Weather compass',
         'acceptance_tests': [public_acceptance],
+        '_evidence_request_catalog': _request_catalog(prompt, public_acceptance),
     }
     plan = compile_evidence_first_plan(
         prompt,
