@@ -9,6 +9,8 @@ prompt language or require literal quote equality.
 from collections.abc import Mapping
 from typing import Any
 
+from .planning_detail_contract import validate_detailed_plan_grounding
+
 
 def _records(
     state: Mapping[str, Any],
@@ -206,16 +208,7 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
                     raise ValueError(
                         "PROMPT_STATE_DECISION: implementation detail is empty"
                     )
-                for obligation in obligations:
-                    if not isinstance(obligation, Mapping):
-                        raise ValueError(
-                            "PROMPT_STATE_DECISION: implementation obligation must be an object"
-                        )
-                    cited = obligation.get("evidence_refs", [])
-                    if not cited or not set(cited).issubset(sufficient_refs):
-                        raise ValueError(
-                            "PROMPT_STATE_DECISION: implementation lacks real evidence"
-                        )
+            validate_detailed_plan_grounding(row, sufficient_refs)
         else:
             raise ValueError(
                 f"PROMPT_STATE_DECISION: unsupported decision type for {decision_id}"
