@@ -7,6 +7,7 @@ from typing import Any
 
 from .planner_stage_trace import PlannerStageTrace
 from .spec import SpecValidationError
+from .planner_operation import planner_operation
 
 
 def generate_field(
@@ -23,15 +24,13 @@ def generate_field(
     for attempt in (1, 2):
         raw = ""
         try:
-            raw = router.generate_text(
-                "planner",
-                history,
-                media_paths=media_paths,
-                response_format="text",
-                response_schema=None,
-                tool_stage="game_design",
-                enable_tools=False,
-            )
+            limit = 256 if field in {"title", "pitch", "art_style"} else 1024
+            with planner_operation(f"design.{field}", output_tokens=limit):
+                raw = router.generate_text(
+                    "planner", history, media_paths=media_paths,
+                    response_format="text", response_schema=None,
+                    tool_stage="game_design", enable_tools=False,
+                )
             value = parse(str(raw or ""))
         except (SpecValidationError, ValueError, TypeError, KeyError) as exc:
             trace.record_attempt(

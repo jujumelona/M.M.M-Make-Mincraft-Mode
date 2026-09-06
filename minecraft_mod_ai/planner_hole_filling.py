@@ -1,44 +1,34 @@
 from __future__ import annotations
 
-"""Bounded small-model filling for host-owned Minecraft implementation templates.
+"""Fill immutable implementation holes using bounded, host-numbered text pages.
 
-The planner model never invents modules, target coordinates, dependencies, artifacts, gates,
-or hole identities. It receives the host sketch and fills only the declared holes. One
-missing-hole repair pass is allowed; a second omission fails closed instead of silently
-shipping an incomplete plan.
+The host owns JSON assembly and identities. Valid blocks survive a local repair; a
+malformed or missing block never becomes an accepted implementation by fallback.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
-from .planner_structured_router import structured_planner_router
+from .planner_hole_text import parse_hole_text
+from .planner_operation import planner_operation
+from .planner_stage_trace import PlannerStageTrace
 from .planner_template_schema import merge_model_output_into_skeleton
 
-_SCHEMA = "mmm/planner-hole-fill-packet-v1"
+_MAX_PAGE_HOLES = 16
 
 
 class PlanningHoleFillError(RuntimeError):
-    """The bounded planner could not fill the complete host-owned implementation sketch."""
+    """A mandatory host-owned implementation hole remains unresolved."""
 
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _strings(value: Any) -> list[str]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return []
-    return list(
-        dict.fromkeys(
-            text
-            for item in value
-            if (text := str(item or "").strip())
-        )
-    )
-
-
-def _module_packet(module: Mapping[str, Any], only_holes: set[str] | None = None) -> dict[str, Any]:
+def _module_packet(
+    module: Mapping[str, Any], only_holes: set[str] | None = None
+) -> dict[str, Any]:
     config = _mapping(module.get("config"))
     task = _mapping(config.get("evidence_task"))
     template = _mapping(config.get("implementation_template"))
@@ -46,10 +36,7 @@ def _module_packet(module: Mapping[str, Any], only_holes: set[str] | None = None
         dict(hole)
         for hole in template.get("holes", [])
         if isinstance(hole, Mapping)
-        and (
-            only_holes is None
-            or str(hole.get("hole_id") or "") in only_holes
-        )
+        and (only_holes is None or str(hole.get("hole_id") or "") in only_holes)
     ]
     return {
         "module_id": str(module.get("module_id") or ""),
@@ -71,188 +58,95 @@ def _module_packet(module: Mapping[str, Any], only_holes: set[str] | None = None
     }
 
 
-def _packet(
-    skeleton: Mapping[str, Any],
-    missing: Mapping[str, set[str]] | None = None,
-) -> dict[str, Any]:
-    modules = [
-        _module_packet(
-            module,
-            None if missing is None else missing.get(str(module.get("module_id") or ""), set()),
-        )
-        for module in skeleton.get("modules", [])
-        if isinstance(module, Mapping)
-        and isinstance(_mapping(module.get("config")).get("implementation_template"), Mapping)
-        and (
-            missing is None
-            or missing.get(str(module.get("module_id") or ""), set())
-        )
-    ]
-    return {
-        "schema_version": _SCHEMA,
-        "phase": "fill_host_owned_minecraft_implementation_holes",
-        "modules": modules,
-        "rules": [
-            "Return one fill for every supplied hole_id and do not invent hole_ids.",
-            "Do not invent or change Minecraft version, loader, mappings, Java version, module identity, dependency edges, artifacts, gates, or target paths.",
-            "Use implementation_decision for the concrete design choice inside the hole.",
-            "Use local_steps for ordered implementation actions at method/class/resource granularity when known; do not use arbitrary fixed step counts.",
-            "Use code_bindings only for symbols/resources implied by host-owned anchors or artifacts; never fabricate an API merely to make the plan look complete.",
-            "Use reference_uses only for references actually present in the hole evidence/reference fields. If reference contents are unavailable, state that in uncertainties instead of guessing.",
-            "Use verification_intent to bind the hole to compile/static/resource/GameTest/runtime evidence appropriate to the supplied gates and Minecraft checklist.",
-            "If a detail cannot be grounded, record it in uncertainties while still giving the most concrete safe plan supported by the host contract.",
-        ],
-        "response_contract": {
-            "modules": [
-                {
-                    "module_id": "<exact supplied module_id>",
-                    "config": {
-                        "implementation_notes": "<short cross-hole integration note>",
-                        "hole_fills": [
-                            {
-                                "hole_id": "<exact supplied hole_id>",
-                                "implementation_decision": "<concrete local choice>",
-                                "local_steps": ["<ordered step>", "..."],
-                                "code_bindings": [],
-                                "reference_uses": [],
-                                "verification_intent": "<how host will prove this hole>",
-                                "uncertainties": [],
-                            }
-                        ],
-                    },
-                }
-            ]
-        },
-    }
-
-
-def _messages(packet: Mapping[str, Any], *, repair: bool) -> list[dict[str, str]]:
-    system = (
-        "You are the bounded implementation planner inside a Minecraft mod compiler. "
-        "The host has already decided what must exist. Your job is not to redesign the mod; "
-        "fill every supplied implementation hole with concrete, internally consistent coding "
-        "steps that a small coding model can follow. Respect exact Minecraft target constraints, "
-        "server/client authority, registration lifecycle, resources, persistence, networking, "
-        "and executable validation. Output JSON only and exactly the response shape described "
-        "by response_contract. Never add modules, holes, dependencies, gates, or paths."
-    )
-    user_prefix = (
-        "The first pass omitted these holes. Fill every supplied missing hole now."
-        if repair
-        else "Fill every host-owned hole in this packet."
-    )
+def _messages(module: Mapping[str, Any], *, error: str = "") -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": system},
+        {
+            "role": "system",
+            "content": (
+                "Fill only the supplied Minecraft implementation holes. Do not redesign gameplay "
+                "or change target coordinates, module identities, dependencies, gates or paths. "
+                "Use only supplied evidence references; record unavailable API facts as uncertainties. "
+                "Return plain text, no JSON and no code fences. Number supplied holes in order, "
+                "starting at 1. Each block must have this exact form:\n"
+                "### Hole 1\nDecision: concrete local choice\nSteps:\n- ordered coding action\n"
+                "Bindings:\n- supplied symbol or resource (or none)\n"
+                "References:\n- supplied evidence reference (or none)\n"
+                "Verification: executable proof of this hole\nUncertainties:\n- unresolved fact (or none)\n"
+                "Use short complete blocks. Quotes and code fragments need no JSON escaping."
+            ),
+        },
         {
             "role": "user",
-            "content": user_prefix
-            + "\n"
-            + json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            "content": (
+                (
+                    "Repair only these unresolved holes. " + error
+                    if error
+                    else "Fill these host-owned holes."
+                )
+                + "\n"
+                + json.dumps(
+                    {"modules": [module]}, ensure_ascii=False, separators=(",", ":")
+                )
+            ),
         },
     ]
 
 
-def _decode(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    text = str(raw or "").strip()
-    if not text:
-        raise PlanningHoleFillError("planner returned an empty hole-fill response")
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise PlanningHoleFillError(
-            "planner hole-fill response was not valid JSON"
-        ) from exc
-    if not isinstance(value, Mapping):
-        raise PlanningHoleFillError("planner hole-fill response must be a JSON object")
-    return dict(value)
-
-
-def _expected_holes(page: Mapping[str, Any]) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
-    for module in page.get("modules", []):
-        if not isinstance(module, Mapping):
-            continue
-        module_id = str(module.get("module_id") or "")
-        config = _mapping(module.get("config"))
-        template = _mapping(config.get("implementation_template"))
-        policy = _mapping(template.get("completion_policy"))
-        required = set(_strings(policy.get("required_hole_ids")))
-        if required:
-            result[module_id] = required
-    return result
-
-
-def _filled_holes(page: Mapping[str, Any]) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
-    for module in page.get("modules", []):
-        if not isinstance(module, Mapping):
-            continue
-        module_id = str(module.get("module_id") or "")
-        config = _mapping(module.get("config"))
-        model_fill = _mapping(config.get("model_fill"))
-        fills = model_fill.get("hole_fills")
-        result[module_id] = {
-            str(fill.get("hole_id") or "")
-            for fill in fills if isinstance(fill, Mapping) and len(fill) > 1
-        } if isinstance(fills, list) else set()
-    return result
-
-
-def _missing_holes(page: Mapping[str, Any]) -> dict[str, set[str]]:
-    expected = _expected_holes(page)
-    filled = _filled_holes(page)
-    return {
-        module_id: required - filled.get(module_id, set())
-        for module_id, required in expected.items()
-        if required - filled.get(module_id, set())
-    }
-
-
-def _raw_fills(value: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    modules = value.get("modules")
-    for module in modules if isinstance(modules, list) else []:
-        if not isinstance(module, Mapping):
-            continue
-        module_id = str(module.get("module_id") or "").strip()
-        config = _mapping(module.get("config"))
-        fills = config.get("hole_fills")
-        if not module_id or not isinstance(fills, list):
-            continue
-        result[module_id] = [dict(item) for item in fills if isinstance(item, Mapping)]
-    return result
-
-
-def _combined_output(
-    first_page: Mapping[str, Any],
-    repair_output: Mapping[str, Any],
-) -> dict[str, Any]:
-    repair = _raw_fills(repair_output)
-    modules: list[dict[str, Any]] = []
-    for module in first_page.get("modules", []):
-        if not isinstance(module, Mapping):
-            continue
-        module_id = str(module.get("module_id") or "")
-        config = _mapping(module.get("config"))
-        model_fill = _mapping(config.get("model_fill"))
-        existing = model_fill.get("hole_fills")
-        existing_fills = [
-            dict(item) for item in existing if isinstance(item, Mapping)
-        ] if isinstance(existing, list) else []
-        modules.append(
-            {
-                "module_id": module_id,
-                "config": {
-                    "implementation_notes": str(
-                        model_fill.get("implementation_notes") or ""
-                    ),
-                    "hole_fills": [*existing_fills, *repair.get(module_id, [])],
-                },
-            }
+def _fill_page(
+    router: Any, module: dict[str, Any], trace: PlannerStageTrace
+) -> list[dict[str, Any]]:
+    holes = module["implementation_template"]["holes"]
+    remaining = list(holes)
+    accepted: dict[str, dict[str, Any]] = {}
+    error = ""
+    for attempt in (1, 2):
+        packet = {
+            **module,
+            "implementation_template": {
+                **module["implementation_template"],
+                "holes": remaining,
+            },
+        }
+        raw = ""
+        try:
+            with planner_operation(
+                "implementation_holes", output_tokens=128 + 256 * len(remaining)
+            ):
+                raw = router.generate_text(
+                    "planner",
+                    _messages(packet, error=error),
+                    response_format="text",
+                    enable_tools=False,
+                )
+            fills = parse_hole_text(str(raw or ""), remaining)
+            accepted.update((fill["hole_id"], fill) for fill in fills)
+            remaining = [hole for hole in holes if hole["hole_id"] not in accepted]
+            error = "Missing complete Decision, Steps or Verification blocks."
+        except (ValueError, TypeError) as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        except Exception as exc:
+            trace.record_attempt(
+                raw_output=str(raw), validation_error=f"{type(exc).__name__}: {exc}"
+            )
+            raise
+        trace.record_attempt(
+            raw_output=str(raw),
+            validation_error=error if remaining else None,
+            accepted={"hole_fills": list(accepted.values())},
+            context={
+                "attempt": attempt,
+                "module_id": module["module_id"],
+                "remaining_hole_ids": [hole["hole_id"] for hole in remaining],
+            },
         )
-    return {"modules": modules}
+        if not remaining:
+            return [accepted[hole["hole_id"]] for hole in holes]
+    raise PlanningHoleFillError(
+        "Unresolved implementation holes after bounded repair: "
+        + ", ".join(str(hole["hole_id"]) for hole in remaining)
+        + "; "
+        + error
+    )
 
 
 def fill_evidence_page(
@@ -261,46 +155,41 @@ def fill_evidence_page(
     *,
     valid_module_catalog: set[str],
 ) -> dict[str, Any]:
-    """Fill every host hole with at most one missing-hole repair pass."""
-    expected = _expected_holes(skeleton)
-    if not expected:
-        return dict(skeleton)
-
-    bounded_router = structured_planner_router(router)
-    first_raw = bounded_router.generate_text(
-        "planner",
-        _messages(_packet(skeleton), repair=False),
-        response_format="json",
-    )
-    first_output = _decode(first_raw)
-    page = merge_model_output_into_skeleton(
-        skeleton,
-        first_output,
-        valid_module_catalog,
-    )
-    missing = _missing_holes(page)
-    if not missing:
-        return page
-
-    repair_raw = bounded_router.generate_text(
-        "planner",
-        _messages(_packet(skeleton, missing), repair=True),
-        response_format="json",
-    )
-    repair_output = _decode(repair_raw)
-    page = merge_model_output_into_skeleton(
-        skeleton,
-        _combined_output(page, repair_output),
-        valid_module_catalog,
-    )
-    missing = _missing_holes(page)
-    if missing:
-        compact = {key: sorted(value) for key, value in missing.items()}
-        raise PlanningHoleFillError(
-            "planner omitted mandatory host-owned implementation holes after bounded repair: "
-            + json.dumps(compact, sort_keys=True, separators=(",", ":"))
+    modules = []
+    for raw_module in skeleton.get("modules", []):
+        if not isinstance(raw_module, Mapping):
+            continue
+        module = _module_packet(raw_module)
+        template = module["implementation_template"]
+        holes = template["holes"]
+        if not holes:
+            continue
+        trace = PlannerStageTrace(
+            stage="implementation_holes",
+            prompt=module["scope"],
+            metadata={"module_id": module["module_id"]},
         )
-    return page
+        fills = []
+        for offset in range(0, len(holes), _MAX_PAGE_HOLES):
+            page = {
+                **module,
+                "implementation_template": {
+                    **template,
+                    "holes": holes[offset : offset + _MAX_PAGE_HOLES],
+                },
+            }
+            fills.extend(_fill_page(router, page, trace))
+        required = set(template["completion_policy"].get("required_hole_ids", []))
+        if not required <= {fill["hole_id"] for fill in fills}:
+            raise PlanningHoleFillError(
+                "Host template references unknown mandatory holes"
+            )
+        modules.append(
+            {"module_id": module["module_id"], "config": {"hole_fills": fills}}
+        )
+    return merge_model_output_into_skeleton(
+        skeleton, {"modules": modules}, valid_module_catalog
+    )
 
 
 __all__ = ["PlanningHoleFillError", "fill_evidence_page"]

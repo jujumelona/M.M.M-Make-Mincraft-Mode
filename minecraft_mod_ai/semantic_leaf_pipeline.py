@@ -182,7 +182,14 @@ def _classification_messages(
     ]
 
 
-def _call_model(
+def _call_model(router: Any, *, output_tokens: int, **kwargs: Any) -> Any:
+    from .planner_operation import planner_operation
+
+    with planner_operation(kwargs["operation"], output_tokens=output_tokens):
+        return _call_model_unbounded(router, **kwargs)
+
+
+def _call_model_unbounded(
     router: Any,
     *,
     operation: str,
@@ -398,6 +405,7 @@ def _segment_batch(
         payload = _call_model(
             active_router,
             operation="segment_semantic_requirements",
+            output_tokens=512 + 12 * sum(len(str(clause["text"])) for clause in clauses),
             messages=_segmentation_messages(clauses),
             parameters=_segmentation_schema(max_clause_index),
             description=(
@@ -520,6 +528,7 @@ def _classify_leaves(
         payload = _call_model(
             router,
             operation="classify_semantic_requirements",
+            output_tokens=128 + 96 * len(leaves),
             messages=_classification_messages(leaves, diagnostics),
             parameters=_classification_schema(len(leaves) - 1),
             description=(

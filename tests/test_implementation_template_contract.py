@@ -116,40 +116,20 @@ class _HoleRouter:
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "planner"
-        assert kwargs.get("response_format") == "json"
+        assert kwargs.get("response_format") == "text"
         self.enable_tools.append(kwargs.get("enable_tools"))
         self.calls += 1
         packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-        modules = []
-        for module in packet["modules"]:
-            holes = list(module["implementation_template"]["holes"])
-            if self.omit_once and self.calls == 1 and holes:
-                holes = holes[:-1]
-            modules.append(
-                {
-                    "module_id": module["module_id"],
-                    "config": {
-                        "implementation_notes": "Implement the host sketch without changing authority.",
-                        "hole_fills": [
-                            {
-                                "hole_id": hole["hole_id"],
-                                "implementation_decision": f"Implement {hole['subject']}",
-                                "local_steps": [
-                                    "Read the host-owned anchors and constraints.",
-                                    "Implement the bounded obligation.",
-                                    "Run the declared verification gate.",
-                                ],
-                                "code_bindings": [],
-                                "reference_uses": [],
-                                "verification_intent": "Produce host-verifiable evidence.",
-                                "uncertainties": [],
-                            }
-                            for hole in holes
-                        ],
-                    },
-                }
-            )
-        return json.dumps({"modules": modules})
+        holes = packet["modules"][0]["implementation_template"]["holes"]
+        if self.omit_once and self.calls == 1:
+            holes = holes[:-1]
+        return "\n".join(
+            f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
+            "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
+            "Bindings: none\nReferences: none\n"
+            "Verification: Check the declared observable result.\nUncertainties: none"
+            for index, hole in enumerate(holes, 1)
+        )
 
 
 def test_template_is_dynamic_detailed_and_stable() -> None:

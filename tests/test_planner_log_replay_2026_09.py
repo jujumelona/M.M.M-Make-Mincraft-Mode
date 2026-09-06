@@ -252,36 +252,16 @@ def test_derived_obligation_is_bound_to_exactly_one_valid_parent_task():
 class _ImplementationFixtureRouter:
     """Controlled model output exercises the real hole merger and production boundary."""
 
-    def generate_text(self, _role, messages, **_kwargs):
+    def generate_text(self, role, messages, **kwargs):
+        assert kwargs.get("response_format") == "text"
         packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-        return json.dumps(
-            {
-                "modules": [
-                    {
-                        "module_id": module["module_id"],
-                        "config": {
-                            "implementation_notes": "Implement the supplied immutable host sketch.",
-                            "hole_fills": [
-                                {
-                                    "hole_id": hole["hole_id"],
-                                    "implementation_decision": "Implement "
-                                    + hole["subject"],
-                                    "local_steps": [
-                                        "Read the declared state.",
-                                        "Apply the declared transition.",
-                                    ],
-                                    "code_bindings": [],
-                                    "reference_uses": [],
-                                    "verification_intent": "Check the declared observable result.",
-                                    "uncertainties": [],
-                                }
-                                for hole in module["implementation_template"]["holes"]
-                            ],
-                        },
-                    }
-                    for module in packet["modules"]
-                ]
-            }
+        holes = packet["modules"][0]["implementation_template"]["holes"]
+        return "\n".join(
+            f"### Hole {index}\nDecision: Implement {hole['subject']}\n"
+            "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
+            "Bindings: none\nReferences: none\n"
+            "Verification: Check the declared observable result.\nUncertainties: none"
+            for index, hole in enumerate(holes, 1)
         )
 
 

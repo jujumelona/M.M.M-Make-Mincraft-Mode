@@ -237,6 +237,12 @@ def generation_output_token_budget(
     if tools and not tools_require_expansive_output(tools):
         budget = min(budget, tool_action_token_budget(config))
 
+    from .planner_operation import current_output_limit
+
+    operation_limit = current_output_limit()
+    if operation_limit is not None:
+        budget = min(budget, operation_limit)
+
     _assert_structural_budget_viable(
         config,
         tools,

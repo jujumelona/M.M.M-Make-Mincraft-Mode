@@ -230,13 +230,16 @@ def _model_facet_augmentation(
                     }
                 )
             try:
-                raw = router.generate_text(
-                    "planner",
-                    messages,
-                    response_format="json",
-                    response_schema=FACET_AUGMENTATION_RESPONSE_SCHEMA,
-                    enable_tools=False,
-                )
+                from .planner_operation import planner_operation
+
+                with planner_operation("research.facet_decision", output_tokens=768):
+                    raw = router.generate_text(
+                        "planner",
+                        messages,
+                        response_format="json",
+                        response_schema=FACET_AUGMENTATION_RESPONSE_SCHEMA,
+                        enable_tools=False,
+                    )
             except StructuredOutputValidationError as exc:
                 raw = exc.output
             decoded = decode_facet_response(raw)
