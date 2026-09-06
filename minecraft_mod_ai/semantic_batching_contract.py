@@ -26,7 +26,7 @@ from .request_requirements import LeafAtomicityStatus, validate_leaf_atomicity
 _INSTALLED = False
 _RECEIPT_ATTRIBUTE = "semantic_extraction_batch_receipt"
 _MEASURED_STATUS = "MEASURED"
-_FALLBACK_BATCH_SIZE = 1
+_DEFAULT_BATCH_SIZE = 4
 _SHA256_RECEIPT = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -43,8 +43,8 @@ def _resolve_batch_contract(router: Any) -> dict[str, Any]:
     raw = getattr(router, _RECEIPT_ATTRIBUTE, None)
     if raw is None:
         return {
-            "max_clauses_per_turn": _FALLBACK_BATCH_SIZE,
-            "source": "unmeasured_conservative_single_clause",
+            "max_clauses_per_turn": _DEFAULT_BATCH_SIZE,
+            "source": "deterministic_host_safe_default",
             "measured": False,
             "model_identity_sha256": "",
             "runtime_profile_sha256": "",
@@ -223,8 +223,6 @@ def _compile_bounded_batch(
     for clause_index in sorted(fallback_indices):
         approved.append(defaults[clause_index])
 
-    # Deduplicate a fallback that was added because another leaf from the same clause was
-    # invalid while a valid leaf also survived. Valid authored leaves take precedence.
     if valid_clause_indices:
         approved = [
             node
@@ -236,8 +234,6 @@ def _compile_bounded_batch(
         ]
 
     if not approved:
-        # This can only happen if the host itself supplied an empty batch, which callers
-        # must never do.
         raise _semantic._evidence.EvidencePlanError(
             "REQ_SCALE_BATCH_EMPTY: host semantic batch contained no authored clause."
         )
