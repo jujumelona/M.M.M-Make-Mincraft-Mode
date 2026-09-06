@@ -9,9 +9,18 @@ from minecraft_mod_ai.api import _attach_existing_target
 from minecraft_mod_ai.complete_orchestrator import _semantic_execution_observation
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
+from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_inventory import inspect_project_inventory
 from tests.planning_authority_fixtures import request_catalog
+
+
+def _platform_selection(*, preserved_existing_target: bool) -> dict:
+    return {
+        "target": adapter_for_target("1.21.1", "fabric").public_dict(),
+        "preserved_existing_target": preserved_existing_target,
+        "migration_requested": False,
+    }
 
 
 def _existing_weather_project(root: Path) -> None:
@@ -50,14 +59,7 @@ def _design_with_inventory(root: Path) -> dict:
         "acceptance_tests": ["The requested behavior is observable in Minecraft."],
         "_existing_project_inventory": inventory,
         "_existing_snapshot": inventory,
-        "_platform_selection": {
-            "target": {
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
-            },
-            "preserved_existing_target": True,
-            "migration_requested": False,
-        },
+        "_platform_selection": _platform_selection(preserved_existing_target=True),
     }
 
 
@@ -158,15 +160,7 @@ def test_existing_zip_preserves_inventory_but_only_verified_semantics_can_retain
         ],
         "_existing_project_inventory": payload,
         "_existing_snapshot": payload,
-        "_platform_selection": {
-            "target": {
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
-                "source_api_family": "fabric_live_ai",
-            },
-            "preserved_existing_target": True,
-            "migration_requested": False,
-        },
+        "_platform_selection": _platform_selection(preserved_existing_target=True),
     }
     design["_evidence_request_catalog"] = request_catalog(
         prompt,
@@ -203,15 +197,7 @@ def test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap() -
     prompt = "Add a persistent networked machine with a GUI and generated resources."
     design = {
         "acceptance_tests": ["The complete machine vertical slice works."],
-        "_platform_selection": {
-            "target": {
-                "minecraft_version": "1.21.1",
-                "loader": "fabric",
-                "source_api_family": "fabric_live_ai",
-            },
-            "preserved_existing_target": False,
-            "migration_requested": False,
-        },
+        "_platform_selection": _platform_selection(preserved_existing_target=False),
     }
     design["_evidence_request_catalog"] = request_catalog(
         prompt,
