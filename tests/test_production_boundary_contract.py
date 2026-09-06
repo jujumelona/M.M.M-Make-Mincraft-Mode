@@ -63,7 +63,10 @@ def test_internal_task_language_is_rejected_from_public_acceptance():
             "task_bad: all declared provides exist and owned anchors pass integrity checks"
         ],
     }
-    with pytest.raises(ProductionContractError, match="internal"):
+    with pytest.raises(
+        ProductionContractError,
+        match="has no safe public acceptance projection",
+    ):
         boundary._approved_acceptance(requirement)
 
 
@@ -93,7 +96,10 @@ def test_requirements_keep_single_authoritative_ids():
 
 
 def test_canonical_public_acceptance_must_be_one_per_requirement():
-    with pytest.raises(ProductionContractError, match="exactly one"):
+    with pytest.raises(
+        ProductionContractError,
+        match="exposes multiple public acceptance contracts",
+    ):
         boundary._approved_acceptance(
             {
                 "requirement_id": "req_many",
