@@ -3,9 +3,10 @@ from __future__ import annotations
 """Canonical research-evidence handoff for coding and repair.
 
 This contract keeps the existing research/reuse engines as the single owners of
-retrieval.  It only makes their authority explicit at the coder boundary and ensures
-that a novel repair diagnostic triggers a fresh, narrow official-API lookup instead
-of relying exclusively on stale planning evidence.
+retrieval. It makes their authority explicit at the coder boundary and lets a host-owned
+repair router decide whether a novel diagnostic needs fresh official target evidence.
+Small coding models receive compact evidence packets and never choose their own evidence
+authority or broad research strategy.
 """
 
 import copy
@@ -16,6 +17,8 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from pathlib import Path
 from typing import Any
+
+from .repair_evidence_router import classify_repair_evidence_route, official_query_prefix
 
 _MARKER = "_mmm_research_evidence_handoff_v1"
 _DEFAULT_RESEARCH_CONTEXT_BYTES = 8 * 1024
@@ -126,8 +129,6 @@ def _reference_only_context(value: Mapping[str, Any], *, byte_budget: int) -> di
     )
     result["policy"] = policy
 
-    # The original selector guarantees a byte-bounded page.  Preserve that contract
-    # after adding the authority marker by dropping only the lowest-ranked tail records.
     budget = max(1024, int(byte_budget))
     if _json_size(result) <= budget:
         return result
@@ -170,11 +171,13 @@ def _install_research_selector(research_ledger_module: Any, custom_module_genera
         wrapped.__wrapped__ = current  # type: ignore[attr-defined]
         research_ledger_module.select_module_research_context = wrapped
 
-    # custom_module_generator imported the selector by value, so update that live alias.
     custom_module_generator_module.select_module_research_context = wrapped
 
 
-def _diagnostic_queries(diagnostic: Mapping[str, Any]) -> tuple[str, ...]:
+def _diagnostic_queries(
+    diagnostic: Mapping[str, Any],
+    route: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
     symbols = [str(value) for value in diagnostic.get("symbols", ()) if str(value)]
     exceptions = [str(value) for value in diagnostic.get("exceptions", ()) if str(value)]
     files = [Path(str(value)).name for value in diagnostic.get("files", ()) if str(value)]
@@ -184,10 +187,11 @@ def _diagnostic_queries(diagnostic: Mapping[str, Any]) -> tuple[str, ...]:
         for value in diagnostic.get("messages", ())
         if str(value).strip()
     ]
+    prefix = official_query_prefix(route or {"route": "official_api"})
     queries = [
         " ".join(
             [
-                "exact Minecraft loader API signature compile repair",
+                prefix,
                 *symbols[:12],
                 *exceptions[:6],
                 *messages[-2:],
@@ -195,7 +199,7 @@ def _diagnostic_queries(diagnostic: Mapping[str, Any]) -> tuple[str, ...]:
         ).strip(),
         " ".join(
             [
-                "Minecraft build diagnostic dependency contract repair",
+                "exact target build diagnostic dependency contract",
                 *files[:8],
                 *tasks[:6],
                 *symbols[:8],
@@ -210,17 +214,20 @@ def _diagnostic_queries(diagnostic: Mapping[str, Any]) -> tuple[str, ...]:
 def _fresh_official_repair_evidence(
     root: Path,
     diagnostic: Mapping[str, Any],
+    route: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .platform_catalog import adapter_from_project
     from .retrieval import retrieve_official_evidence
 
-    queries = _diagnostic_queries(diagnostic)
+    route_payload = dict(route or {"route": "official_api", "fresh_official_required": True})
+    queries = _diagnostic_queries(diagnostic, route_payload)
     try:
         adapter = adapter_from_project(root)
     except Exception as exc:
         return {
-            "schema_version": "mmm/fresh-repair-research-v1",
+            "schema_version": "mmm/fresh-repair-research-v2",
             "status": "TARGET_UNAVAILABLE",
+            "route": route_payload,
             "queries_sha256": _sha(queries),
             "hits": [],
             "error": f"{type(exc).__name__}: {exc}"[:512],
@@ -271,8 +278,9 @@ def _fresh_official_repair_evidence(
             break
 
     return {
-        "schema_version": "mmm/fresh-repair-research-v1",
+        "schema_version": "mmm/fresh-repair-research-v2",
         "status": "EVIDENCE_FOUND" if hits else "NO_EVIDENCE",
+        "route": route_payload,
         "target": {
             "minecraft_version": adapter.minecraft_version,
             "loader": adapter.loader,
@@ -286,9 +294,25 @@ def _fresh_official_repair_evidence(
         "hits": hits,
         "errors": errors,
         "policy": {
-            "novel_diagnostic_requires_fresh_targeted_lookup": True,
-            "official_api_evidence_precedes_guessing": True,
+            "novel_diagnostic_requires_route_appropriate_lookup": True,
+            "official_api_evidence_precedes_guessing_when_required": True,
             "full_project_reresearch": False,
+        },
+    }
+
+
+def _not_required_repair_evidence(route: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/fresh-repair-research-v2",
+        "status": "NOT_REQUIRED",
+        "route": dict(route),
+        "query_count": 0,
+        "hit_count": 0,
+        "hits": [],
+        "policy": {
+            "project_rag_is_primary": True,
+            "fresh_official_lookup_skipped": True,
+            "reason": "host route found no unresolved external target contract",
         },
     }
 
@@ -304,24 +328,33 @@ def _install_repair_retrieval(repair_module: Any, diagnostic_payload_fn: Any) ->
         normalized_root = root.expanduser().resolve()
         base = dict(current(self, normalized_root, evidence))
         diagnostic = diagnostic_payload_fn(evidence)
-        cache_key = f"{normalized_root}:{_sha(diagnostic)}"
-        cache = getattr(self, "_mmm_fresh_repair_research_cache", None)
-        if not isinstance(cache, dict):
-            cache = {}
-            self._mmm_fresh_repair_research_cache = cache
-        fresh = cache.get(cache_key)
-        if not isinstance(fresh, Mapping):
-            fresh = _fresh_official_repair_evidence(normalized_root, diagnostic)
-            cache[cache_key] = copy.deepcopy(fresh)
-            while len(cache) > 16:
-                cache.pop(next(iter(cache)))
+        route = classify_repair_evidence_route(diagnostic, base)
+        if bool(route.get("fresh_official_required")):
+            cache_key = f"{normalized_root}:{_sha({'diagnostic': diagnostic, 'route': route})}"
+            cache = getattr(self, "_mmm_fresh_repair_research_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._mmm_fresh_repair_research_cache = cache
+            fresh = cache.get(cache_key)
+            if not isinstance(fresh, Mapping):
+                fresh = _fresh_official_repair_evidence(normalized_root, diagnostic, route)
+                cache[cache_key] = copy.deepcopy(fresh)
+                while len(cache) > 16:
+                    cache.pop(next(iter(cache)))
+        else:
+            fresh = _not_required_repair_evidence(route)
+
+        base["repair_evidence_route"] = copy.deepcopy(dict(route))
         base["fresh_repair_research"] = copy.deepcopy(dict(fresh))
         retrieval_policy = dict(base.get("retrieval_policy") or {})
         retrieval_policy.update(
             {
-                "fresh_targeted_official_retrieval": True,
+                "host_owned_route_selection": True,
                 "diagnostic_specific_retrieval": True,
+                "project_rag_primary": True,
+                "fresh_targeted_official_retrieval": bool(route.get("fresh_official_required")),
                 "research_before_repair_guess": True,
+                "small_model_must_not_select_retriever": True,
             }
         )
         base["retrieval_policy"] = retrieval_policy
@@ -342,8 +375,6 @@ def install(
 
     from . import research_coder_repair_reuse as reuse_hardener
 
-    # The existing hardener owns dependency-neighborhood retrieval and prior-evidence
-    # reuse.  Replace only its lossy receipt projection before installing it.
     reuse_hardener._reusable_evidence = _full_reusable_evidence
     reuse_hardener.harden()
 
