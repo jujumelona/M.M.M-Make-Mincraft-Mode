@@ -129,6 +129,12 @@ def test_unbalanced_think_marker_still_fails_closed_at_runtime_boundary() -> Non
         _parse_runtime_field("<think>I need to hide this\n- Gather ore", "core_loop")
 
 
+def _assert_mapping_lock(payload: dict, adapter: PlatformAdapter) -> None:
+    assert payload["yarn_mappings"] == adapter.yarn_mappings
+    assert payload["mappings_kind"] == adapter.mappings_kind
+    assert payload["mappings_version"] == adapter.mappings_version
+
+
 def test_official_bootstrap_writer_preserves_full_immutable_receipt(tmp_path) -> None:
     adapter = _adapter()
     adapter.validate()
@@ -145,9 +151,7 @@ def test_official_bootstrap_writer_preserves_full_immutable_receipt(tmp_path) ->
     )
     assert payload["schema_version"] == "mmm/generated-platform-lock-v4"
     assert payload["adapter_id"] == adapter.adapter_id
-    assert "yarn_mappings" not in payload
-    assert "mappings_kind" not in payload
-    assert "mappings_version" not in payload
+    _assert_mapping_lock(payload, adapter)
     assert payload["gradle_sha256"] == adapter.gradle_sha256
     assert payload["gradle_distribution_url"].endswith("gradle-9.1.0-bin.zip")
     assert payload["data_pack_version"] == adapter.data_pack_version
@@ -177,9 +181,7 @@ def test_final_rebind_writer_cannot_downgrade_complete_lock(tmp_path) -> None:
         (tmp_path / ".minecraft_ai" / "platform-lock.json").read_text(encoding="utf-8")
     )
     assert payload["schema_version"] == "mmm/generated-platform-lock-v4"
-    assert "yarn_mappings" not in payload
-    assert "mappings_kind" not in payload
-    assert "mappings_version" not in payload
+    _assert_mapping_lock(payload, adapter)
     assert payload["data_pack_version"] == adapter.data_pack_version
     assert payload["resource_pack_version"] == adapter.resource_pack_version
     assert payload["resource_pack_format"] == adapter.resource_pack_format
