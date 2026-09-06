@@ -93,6 +93,27 @@ def compile_minecraft_knowledge_plan(
     return plan
 
 
+def _valid_request_completeness_authority(policy: Mapping[str, Any]) -> bool:
+    """Validate either legacy local compilation or the frozen host planning authority.
+
+    ``evidence_request_catalog`` remains valid for the standalone compiler.  When an
+    already-grounded catalog is injected by ``planning_authority`` we require the full
+    freeze/ownership markers so a random policy string cannot bypass the authority gate.
+    """
+
+    owner = policy.get("request_completeness_owner")
+    if owner == "evidence_request_catalog":
+        return True
+    if owner != "planning_authority":
+        return False
+    return (
+        policy.get("authored_requirement_routing_owner") == "planning_authority"
+        and policy.get("pre_design_query_owner") == "planning_authority"
+        and policy.get("catalog_rebuild_after_freeze") is False
+        and policy.get("raw_prompt_is_search_query") is False
+    )
+
+
 def validate_plan(plan: Mapping[str, Any]) -> None:
     """Validate both technical routes and the immutable authored-scope ledger."""
 
@@ -132,7 +153,7 @@ def validate_plan(plan: Mapping[str, Any]) -> None:
         raise ValueError("Minecraft authored requirement lifecycle has invalid state.")
     if not isinstance(policy, Mapping):
         raise ValueError("Minecraft knowledge policy is missing.")
-    if policy.get("request_completeness_owner") != "evidence_request_catalog":
+    if not _valid_request_completeness_authority(policy):
         raise ValueError("Minecraft request completeness authority is invalid.")
     if policy.get("feature_detection_role") != "routing_hint_only":
         raise ValueError("Minecraft feature detection must remain routing-only.")
