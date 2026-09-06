@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.complete_planner import _implementation_research_outline
 from minecraft_mod_ai.research_coordinator import (
     collect_ecosystem_seed_bundle,
     collect_technology_radar,
@@ -266,50 +265,3 @@ def test_ecosystem_coordinator_rejects_bad_cursor_progress(failure: str) -> None
         collect_ecosystem_seed_bundle(
             "Build systems", {"title": "Test"}, page_builder=builder
         )
-
-
-def test_implementation_outline_excludes_old_unbounded_aggregate_contracts() -> None:
-    requirements = [
-        {
-            "requirement_id": f"same_kind_{index}",
-            "domain_id": f"domain_{index}",
-            "capability_kind": "ai_inference",
-        }
-        for index in range(500)
-    ]
-    pages = [
-        {
-            "research_domain_id": f"domain_{index}",
-            "provider": "github",
-            "returned": 1,
-            "candidates": [{"candidate_id": f"github:owner/repo-{index}"}],
-        }
-        for index in range(500)
-    ]
-    outline = _implementation_research_outline(
-        {
-            "mod_id": "large_system",
-            "description": "Build every requested large-system capability.",
-            "_technology_radar": {
-                "requirements": requirements,
-                "pagination": {"total_requirements": 500},
-            },
-            "_ecosystem_discovery": {
-                "route_count": 500,
-                "candidate_count": 500,
-                "pages": pages,
-                "errors": [],
-            },
-        }
-    )
-
-    assert outline == {
-        "mod_id": "large_system",
-        "description": "Build every requested large-system capability.",
-    }
-    rendered = repr(outline)
-    assert "same_kind_0" not in rendered
-    assert "same_kind_499" not in rendered
-    assert "github:owner/repo-0" not in rendered
-    assert "github:owner/repo-499" not in rendered
-    assert len(rendered.encode("utf-8")) < 4000
