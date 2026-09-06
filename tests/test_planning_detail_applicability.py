@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import minecraft_mod_ai.planning_state_pipeline as planning_state_pipeline
 from minecraft_mod_ai.planning_detail_applicability import (
     APPLICABILITY_FIELD,
     normalize_detail_section_applicability,
@@ -108,6 +109,81 @@ def test_state_projection_uses_each_requirement_owned_applicability() -> None:
         "REQ-1": CORE_WORKSHEET_SECTIONS,
         "REQ-2": WORKSHEET_SECTIONS,
     }
+
+
+def test_pipeline_passes_requirement_owned_selection_to_detailed_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {
+        "plan_ready": False,
+        "decisions": [
+            _requirement(
+                "REQ-1",
+                applicability={
+                    "authority_and_network": "not_applicable",
+                    "persistence": "not_applicable",
+                    "resources_and_ui": "not_applicable",
+                },
+            ),
+            _requirement("REQ-2"),
+        ],
+        "unresolved": [],
+        "research_queue": [],
+        "blockers": [],
+        "evidence": [],
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        planning_state_pipeline,
+        "_transition",
+        lambda _operation, callback: callback(),
+    )
+    monkeypatch.setattr(
+        planning_state_pipeline,
+        "validate_planning_state",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        planning_state_pipeline,
+        "ensure_host_detail_section_applicability",
+        lambda value: value,
+    )
+    monkeypatch.setattr(
+        planning_state_pipeline,
+        "collect_planning_state_research",
+        lambda _router, _prompt, value, **_kwargs: value,
+    )
+
+    def _compile(
+        _router: object,
+        _prompt: str,
+        value: dict[str, object],
+        *,
+        required_sections_by_requirement: dict[str, tuple[str, ...]],
+    ) -> dict[str, object]:
+        captured["selection"] = required_sections_by_requirement
+        result = dict(value)
+        result["plan_ready"] = True
+        return result
+
+    monkeypatch.setattr(
+        planning_state_pipeline,
+        "compile_detailed_implementation_plans",
+        _compile,
+    )
+
+    result = planning_state_pipeline.prepare_planning_state(
+        object(),
+        "bounded prompt",
+        existing_state=state,
+    )
+
+    assert captured["selection"] == {
+        "REQ-1": CORE_WORKSHEET_SECTIONS,
+        "REQ-2": WORKSHEET_SECTIONS,
+    }
+    assert result["plan_ready"] is True
 
 
 def test_missing_status_keys_fail_closed_to_unknown() -> None:
