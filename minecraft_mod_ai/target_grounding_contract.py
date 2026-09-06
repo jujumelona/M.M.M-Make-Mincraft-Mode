@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Fail-closed target grounding and unambiguous project-module identity.
 
-Planning may not pass the target barrier with only a Minecraft version and loader. The
-selected executable provider receipt must be semantically complete for the selected target.
-Target-version semantics come exclusively from ``target_profile_semantics``.
+Provider-specific completeness (Fabric/Gradle/pack receipts) is checked here. Minecraft
+version/loader/mapping applicability and naming-regime semantics are owned only by
+``target_contract`` and are consumed, never redefined, by this boundary.
 """
 
 import re
@@ -13,7 +13,11 @@ from functools import wraps
 from typing import Any
 
 from . import evidence_first_planning as _planning
-from .target_profile_semantics import uses_native_names
+from .target_contract import (
+    TargetContractError,
+    mappings_applicable,
+    target_coordinates_from_mapping,
+)
 
 _INSTALLED = False
 _BASE_REQUIRED_TARGET_FIELDS = (
@@ -43,18 +47,13 @@ def _is_unresolved(value: Any) -> bool:
 
 def _required_target_fields(coordinates: Mapping[str, Any]) -> tuple[str, ...]:
     version = coordinates.get("minecraft_version")
-    if _is_unresolved(version) or uses_native_names(version):
+    if _is_unresolved(version):
         return _BASE_REQUIRED_TARGET_FIELDS
-    return _BASE_REQUIRED_TARGET_FIELDS + _LEGACY_MAPPING_FIELDS
-
-
-def _legacy_mapping_claims(coordinates: Mapping[str, Any]) -> dict[str, str]:
-    claims: dict[str, str] = {}
-    for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings"):
-        value = _text(coordinates.get(field))
-        if value and value.casefold() != "unresolved":
-            claims[field] = value
-    return claims
+    try:
+        mapping_required = mappings_applicable(version)
+    except TargetContractError as exc:
+        raise _planning.EvidencePlanError(str(exc)) from exc
+    return _BASE_REQUIRED_TARGET_FIELDS + (_LEGACY_MAPPING_FIELDS if mapping_required else ())
 
 
 def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
@@ -66,48 +65,24 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
             + ", ".join(missing)
         )
 
-    minecraft_version = _text(coordinates.get("minecraft_version"))
     try:
-        native_names = uses_native_names(minecraft_version)
-    except ValueError as exc:
+        canonical = target_coordinates_from_mapping(coordinates)
+    except TargetContractError as exc:
         raise _planning.EvidencePlanError(str(exc)) from exc
 
     mappings_receipt: dict[str, str] | None = None
-    if native_names:
-        legacy_claims = _legacy_mapping_claims(coordinates)
-        if legacy_claims:
-            raise _planning.EvidencePlanError(
-                "TARGET_MAPPINGS_INAPPLICABLE: Minecraft 26.1+ uses the native/unobfuscated "
-                "naming regime; legacy mapping coordinates must not be fabricated or accepted "
-                f"for this target ({', '.join(sorted(legacy_claims))})."
-            )
-        naming_regime = {
-            "kind": "native_unobfuscated",
-            "mappings_applicable": False,
-            "minecraft_version": minecraft_version,
-        }
-    else:
+    if canonical.mappings_applicable:
         mappings_kind = _text(coordinates.get("mappings_kind")).casefold()
         mappings_version = _text(coordinates.get("mappings_version"))
         if mappings_kind not in {"mojang", "yarn"}:
             raise _planning.EvidencePlanError(
                 f"TARGET_MAPPINGS_KIND: unsupported mappings kind {mappings_kind!r}."
             )
-        legacy_mapping = _text(coordinates.get("yarn_mappings"))
-        if (
-            legacy_mapping
-            and legacy_mapping.casefold() != "unresolved"
-            and legacy_mapping != mappings_version
-        ):
+        if canonical.mappings != mappings_version:
             raise _planning.EvidencePlanError(
-                "TARGET_MAPPINGS_ALIAS: legacy yarn_mappings disagrees with mappings_version."
+                "TARGET_MAPPINGS_ALIAS: canonical mapping coordinate disagrees with mappings_version."
             )
-        mappings_receipt = {"kind": mappings_kind, "version": mappings_version}
-        naming_regime = {
-            "kind": "mapped_obfuscated",
-            "mappings_applicable": True,
-            "minecraft_version": minecraft_version,
-        }
+        mappings_receipt = {"kind": mappings_kind, "version": canonical.mappings}
 
     gradle_sha = _text(coordinates.get("gradle_sha256")).casefold()
     if not re.fullmatch(r"[0-9a-f]{64}", gradle_sha):
@@ -149,11 +124,15 @@ def _validate_complete_target(coordinates: Mapping[str, Any]) -> dict[str, Any]:
 
     result = dict(coordinates)
     if mappings_receipt is None:
-        for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings"):
+        for field in (*_LEGACY_MAPPING_FIELDS, "yarn_mappings", "mappings"):
             result.pop(field, None)
     else:
         result["mappings"] = mappings_receipt
-    result["naming_regime"] = naming_regime
+    result["naming_regime"] = {
+        "kind": canonical.naming_regime,
+        "mappings_applicable": canonical.mappings_applicable,
+        "minecraft_version": canonical.minecraft_version,
+    }
     result["pack_versions"] = {
         "data": data_pack,
         "resource": resource_pack,
@@ -267,10 +246,7 @@ def _harden_target_decision(original: Any, game_design: Mapping[str, Any], targe
     materially_selected = (
         version and version.casefold() != "unresolved" and loader and loader.casefold() != "unresolved"
     )
-    try:
-        required_fields = list(_required_target_fields(coordinates))
-    except ValueError as exc:
-        raise _planning.EvidencePlanError(str(exc)) from exc
+    required_fields = list(_required_target_fields(coordinates))
     if materially_selected:
         coordinates = _validate_complete_target(coordinates)
         result["coordinates"] = coordinates
