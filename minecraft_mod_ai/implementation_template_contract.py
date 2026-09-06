@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Dynamic implementation sketches for small-model Minecraft coding.
+"""Host-compiled execution contract for a small coding agent.
 
-The host owns task decomposition, target compatibility, artifacts, dependencies, retrieval
-references, and verification obligations. This module compiles those facts into a detailed,
-stable template. The model may fill only named holes; it may not invent or remove holes,
-change target coordinates, or rewrite host-owned dependency/artifact contracts.
+The planner must finish architecture before coding starts. This module lowers one
+validated execution task into exact file/symbol ownership, dependency order,
+implementation obligations, protected boundaries, and verification gates. The coder may
+write code inside those boundaries; it may not redesign the task graph or invent targets.
 """
 
 import hashlib
@@ -13,17 +13,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-SCHEMA = "mmm/implementation-template-v1"
-MODEL_FILL_FIELDS = frozenset(
-    {
-        "implementation_decision",
-        "local_steps",
-        "code_bindings",
-        "reference_uses",
-        "verification_intent",
-        "uncertainties",
-    }
-)
+SCHEMA = "mmm/coder-execution-contract-v2"
 
 
 def _canonical(value: Any) -> str:
@@ -33,6 +23,7 @@ def _canonical(value: Any) -> str:
         allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
+        default=str,
     )
 
 
@@ -54,31 +45,11 @@ def _strings(value: Any) -> tuple[str, ...]:
         raw = value
     else:
         return ()
-    return tuple(
-        dict.fromkeys(
-            text
-            for item in raw
-            if (text := str(item or "").strip())
-        )
-    )
+    return tuple(dict.fromkeys(text for item in raw if (text := str(item or "").strip())))
 
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _stable_hole_id(task_id: str, kind: str, subject: str, ordinal: int) -> str:
-    digest = hashlib.sha256(
-        _canonical(
-            {
-                "task_id": task_id,
-                "kind": kind,
-                "subject": subject,
-                "ordinal": ordinal,
-            }
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-    return f"hole_{kind}_{digest}"[:63]
 
 
 def _artifact_records(task: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -99,374 +70,179 @@ def _target_constraints(task: Mapping[str, Any]) -> dict[str, Any]:
             or target.get("source_api_family")
             or ""
         ).strip(),
-        "java_version": str(
-            target.get("java_version") or target.get("java") or ""
-        ).strip(),
-        "policy": (
-            "Use only APIs compatible with this exact host-selected target. "
-            "Reference code from another target is architectural evidence only until the host "
-            "provides an exact compatibility receipt."
-        ),
+        "java_version": str(target.get("java_version") or target.get("java") or "").strip(),
+        "policy": "Use only the immutable host-selected target and compatible evidence.",
     }
 
 
-def _minecraft_checklist(task: Mapping[str, Any]) -> list[dict[str, Any]]:
-    artifacts = _artifact_records(task)
-    artifact_kinds = {
-        str(item.get("kind") or "").strip().casefold() for item in artifacts
-    }
-    capabilities = {
-        item.casefold() for item in _strings(task.get("implementation_capabilities"))
-    }
-    gates = {item.casefold() for item in _strings(task.get("required_gates"))}
-    predicates = {
-        item.casefold() for item in _strings(task.get("conditional_predicates"))
-    }
-    checks: list[dict[str, Any]] = []
+def _owned_anchors(task: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = task.get("owned_anchors")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, Mapping)]
 
-    def add(check_id: str, instruction: str, evidence: Sequence[str]) -> None:
-        if any(item["check_id"] == check_id for item in checks):
-            return
-        checks.append(
+
+def _anchor_target(anchor: Mapping[str, Any]) -> dict[str, str]:
+    locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
+    path, separator, symbol = locator.partition("#")
+    kind = str(anchor.get("kind") or "").strip()
+    status = str(anchor.get("status") or "").strip().casefold()
+    operation = "create_or_modify"
+    if status in {"existing", "reuse", "modify", "host_existing"}:
+        operation = "modify"
+    elif status in {"host_reserved", "new", "create"}:
+        operation = "create_or_modify"
+    return {
+        "kind": kind,
+        "locator": locator,
+        "path": path,
+        "symbol": symbol if separator else "",
+        "operation": operation,
+        "module_id": str(anchor.get("module_id") or "").strip(),
+        "source_set": str(anchor.get("source_set") or "").strip(),
+    }
+
+
+def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
+    gates = _strings(task.get("required_gates"))
+    public = _strings(task.get("public_acceptance"))
+    runtime = _strings(task.get("runtime_acceptance"))
+    acceptance = _strings(task.get("acceptance"))
+    plan: list[dict[str, Any]] = []
+    for sequence, gate in enumerate(gates):
+        plan.append(
             {
-                "check_id": check_id,
-                "instruction": instruction,
-                "activated_by": list(dict.fromkeys(str(item) for item in evidence if item)),
+                "sequence": sequence,
+                "gate": gate,
+                "executor": "host_gate_runner",
+                "pass_condition": "The named host gate returns PASS for this task and immutable target.",
             }
         )
-
-    if "source_code" in artifact_kinds:
-        add(
-            "source_ownership",
-            "Implement only inside host-owned source anchors; preserve package, source-set, and side boundaries.",
-            ("artifact:source_code",),
+    if public or runtime or acceptance:
+        plan.append(
+            {
+                "sequence": len(plan),
+                "gate": "observable_acceptance",
+                "executor": "host_acceptance_runner",
+                "public_acceptance": list(public),
+                "runtime_acceptance": list(runtime),
+                "acceptance": list(acceptance),
+                "pass_condition": "Every declared observable acceptance statement is proven; compile success alone is insufficient.",
+            }
         )
-    if "registry_entry" in artifact_kinds or any("registry" in item for item in capabilities):
-        add(
-            "registry_lifecycle",
-            "Use stable namespaced identifiers, register in the target loader lifecycle, and keep every code/resource reference consistent with the same identifier.",
-            ("artifact:registry_entry", *sorted(capabilities)),
-        )
-    if "persistence_schema" in artifact_kinds or "needs_persistence" in predicates:
-        add(
-            "persistent_state_round_trip",
-            "Define authoritative state ownership, encode/decode every persisted field, mark mutations dirty when required by the target API, and verify save/reload round trips.",
-            ("artifact:persistence_schema", "predicate:needs_persistence"),
-        )
-    if "network_protocol" in artifact_kinds or "needs_network" in predicates:
-        add(
-            "server_authority",
-            "Treat client input as a request only: decode symmetrically, validate on the server, mutate authoritative server state, then synchronize the observable result.",
-            ("artifact:network_protocol", "predicate:needs_network"),
-        )
-        add(
-            "network_side_safety",
-            "Keep client-only classes out of common/server class-loading paths and register handlers/codecs on the correct side for the selected loader.",
-            ("artifact:network_protocol",),
-        )
-    if (
-        "data_or_client_resource" in artifact_kinds
-        or "client_visual_or_ui_resource" in artifact_kinds
-        or "needs_client_render" in predicates
-    ):
-        add(
-            "resource_reference_closure",
-            "Resolve namespace/path chains across models, textures, language keys, menus/screens, and code identifiers; no dangling resource identifier is allowed.",
-            ("artifact:client_or_data_resource",),
-        )
-    if "generated_data_resource" in artifact_kinds or "generated_resource_validation" in gates:
-        add(
-            "datagen_reference_closure",
-            "Generated recipes/tags/loot/models must resolve against registered identifiers and pass the host generated-resource validator.",
-            ("artifact:generated_data_resource", "gate:generated_resource_validation"),
-        )
-    if "worldgen_data" in artifact_kinds or "needs_worldgen" in predicates:
-        add(
-            "worldgen_binding",
-            "Keep configured/placed/biome-or-dimension bindings complete and verify target-version data/resource schemas before runtime validation.",
-            ("artifact:worldgen_data", "predicate:needs_worldgen"),
-        )
-    if "loader_module_binding" in artifact_kinds or "needs_loader_leaf" in predicates:
-        add(
-            "loader_boundary",
-            "Keep common gameplay contracts loader-neutral and place loader-specific registration/API glue only in the approved loader leaf.",
-            ("artifact:loader_module_binding", "predicate:needs_loader_leaf"),
-        )
-    if "verification_artifact" in artifact_kinds or gates:
-        add(
-            "verification_from_behavior",
-            "Verify the declared observable behavior plus failure/negative paths; compile success alone cannot satisfy player-facing acceptance.",
-            tuple(f"gate:{item}" for item in sorted(gates)) or ("artifact:verification_artifact",),
-        )
-    if _strings(task.get("runtime_acceptance")) or _strings(task.get("public_acceptance")):
-        add(
-            "runtime_acceptance",
-            "Bind implementation steps to the exact public/runtime acceptance statements and record how each is observable in-game or by an executable test.",
-            ("public_acceptance", "runtime_acceptance"),
-        )
-    return checks
+    return plan
 
 
-def _retrieval_fingerprint(task: Mapping[str, Any], kind: str, subject: str) -> dict[str, Any]:
-    target = _target_constraints(task)
-    semantic_terms = list(
-        dict.fromkeys(
-            [
-                subject,
-                str(task.get("semantic_outcome") or "").strip(),
-                *_strings(task.get("implementation_capabilities")),
-            ]
+def _implementation_steps(task: Mapping[str, Any], targets: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
+    obligations = list(_strings(task.get("implementation_obligations")))
+    obligations.extend(_strings(task.get("design_resolution_obligations")))
+    obligations.extend(_strings(task.get("implementation_capabilities")))
+    for artifact in _artifact_records(task):
+        description = " | ".join(
+            text
+            for text in (
+                str(artifact.get("kind") or "").strip(),
+                str(artifact.get("locator") or "").strip(),
+                str(artifact.get("purpose") or "").strip(),
+            )
+            if text
         )
-    )
-    artifact_terms = [
-        str(item.get("kind") or "").strip()
-        for item in _artifact_records(task)
-        if str(item.get("kind") or "").strip()
+        if description:
+            obligations.append(description)
+    obligations = list(dict.fromkeys(item for item in obligations if item))
+    if not obligations:
+        semantic = str(task.get("semantic_outcome") or task.get("task_id") or "").strip()
+        if semantic:
+            obligations.append(semantic)
+    target_refs = [item["locator"] for item in targets if item.get("locator")]
+    return [
+        {
+            "sequence": index,
+            "obligation": obligation,
+            "target_refs": target_refs,
+            "consumes": list(_strings(task.get("consumes"))),
+            "must_provide": list(_strings(task.get("provides"))),
+        }
+        for index, obligation in enumerate(obligations)
     ]
-    api_constraints = [
-        value
-        for value in (
-            target["minecraft_version"],
-            target["loader"],
-            target["mappings"],
-            target["java_version"],
-        )
-        if value
-    ]
-    return {
-        "kind": kind,
-        "semantic_terms": semantic_terms,
-        "artifact_terms": list(dict.fromkeys(artifact_terms)),
-        "required_gate_terms": list(_strings(task.get("required_gates"))),
-        "target_terms": api_constraints,
-        "selection_policy": (
-            "Host retrieval selects compatible method/class/resource/test slices. "
-            "Never send an entire reference repository to the small model when a bounded slice suffices."
-        ),
-    }
 
 
-def _hole(
-    task: Mapping[str, Any],
-    *,
-    kind: str,
-    subject: str,
-    ordinal: int,
-    host_state: str,
-    artifact_refs: Sequence[str] = (),
-    acceptance_refs: Sequence[str] = (),
-    evidence_refs: Sequence[str] = (),
-) -> dict[str, Any]:
-    task_id = str(task.get("task_id") or "").strip()
-    return {
-        "hole_id": _stable_hole_id(task_id, kind, subject, ordinal),
-        "kind": kind,
-        "subject": subject,
-        "task_ref": task_id,
-        "requirement_refs": list(_strings(task.get("requirement_refs"))),
-        "host_state": host_state,
-        "target_constraints": _target_constraints(task),
-        "consumes": list(_strings(task.get("consumes"))),
-        "provides": list(_strings(task.get("provides"))),
-        "artifact_refs": list(dict.fromkeys(artifact_refs)),
-        "acceptance_refs": list(dict.fromkeys(acceptance_refs)),
-        "evidence_refs": list(
-            dict.fromkeys([*_strings(task.get("reuse_refs")), *evidence_refs])
-        ),
-        "reference_slice_refs": [],
-        "retrieval_fingerprint": _retrieval_fingerprint(task, kind, subject),
-        "model_contract": {
-            "allowed_fields": sorted(MODEL_FILL_FIELDS),
-            "forbidden_authority": [
-                "target_coordinates",
-                "hole_identity_or_count",
-                "dependency_edges",
-                "owned_artifacts",
-                "required_gates",
-                "reference_compatibility",
-            ],
-            "instruction": (
-                "Fill only this hole. Reuse host-provided references as implementation evidence; "
-                "do not copy foreign names/constants/architecture that are not required by the MMM task."
-            ),
-        },
-        "model_fill": {},
-    }
+def _validate_contract(contract: Mapping[str, Any]) -> None:
+    if contract.get("schema_version") != SCHEMA:
+        raise ValueError("coder execution contract schema mismatch")
+    task_ref = str(contract.get("task_ref") or "").strip()
+    if not task_ref:
+        raise ValueError("coder execution contract requires task_ref")
+    targets = contract.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError(f"coder execution contract {task_ref!r} has no exact target")
+    for index, target in enumerate(targets):
+        if not isinstance(target, Mapping):
+            raise ValueError(f"coder target {index} is not an object")
+        if not str(target.get("locator") or "").strip() or not str(target.get("path") or "").strip():
+            raise ValueError(f"coder target {index} has no exact locator/path")
+        if str(target.get("kind") or "") == "symbol" and not str(target.get("symbol") or "").strip():
+            raise ValueError(f"coder symbol target {index} has no exact symbol")
+    steps = contract.get("implementation_steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError(f"coder execution contract {task_ref!r} has no implementation steps")
+    if [item.get("sequence") for item in steps if isinstance(item, Mapping)] != list(range(len(steps))):
+        raise ValueError(f"coder execution contract {task_ref!r} has unstable step ordering")
+    if contract.get("contract_sha256") != _hash_without(contract, "contract_sha256"):
+        raise ValueError(f"coder execution contract {task_ref!r} hash mismatch")
 
 
 def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
-    """Compile every host-known coding obligation into stable small-model holes."""
+    """Compile one task into a complete, non-redesignable coder handoff."""
     task_id = str(task.get("task_id") or "").strip()
     if not task_id:
-        raise ValueError("implementation template requires task_id")
+        raise ValueError("coder execution contract requires task_id")
+    targets = [_anchor_target(anchor) for anchor in _owned_anchors(task)]
+    targets = [target for target in targets if target["locator"] and target["path"]]
+    if not targets:
+        raise ValueError(f"coder execution contract {task_id!r} has no owned target anchor")
 
-    holes: list[dict[str, Any]] = []
-    ordinal = 0
-
-    def add(kind: str, subject: str, state: str = "MODEL_FILL_REQUIRED", **kwargs: Any) -> None:
-        nonlocal ordinal
-        text = str(subject or "").strip()
-        if not text:
-            return
-        holes.append(
-            _hole(
-                task,
-                kind=kind,
-                subject=text,
-                ordinal=ordinal,
-                host_state=state,
-                **kwargs,
-            )
-        )
-        ordinal += 1
-
-    for capability in _strings(task.get("implementation_capabilities")):
-        add("implementation_capability", capability)
-
-    for obligation in _strings(task.get("design_resolution_obligations")):
-        add("design_resolution", obligation)
-
-    for artifact in _artifact_records(task):
-        artifact_id = str(artifact.get("artifact_id") or "").strip()
-        kind = str(artifact.get("kind") or "implementation_artifact").strip()
-        locator = str(artifact.get("locator") or "").strip()
-        purpose = str(artifact.get("purpose") or "").strip()
-        subject = " | ".join(item for item in (kind, locator, purpose) if item)
-        add(
-            "artifact_implementation",
-            subject,
-            artifact_refs=(artifact_id,) if artifact_id else (),
-        )
-
-    for consumed in _strings(task.get("consumes")):
-        add(
-            "dataflow_input",
-            consumed,
-            state="HOST_BOUND_MODEL_REALIZATION_REQUIRED",
-        )
-    for provided in _strings(task.get("provides")):
-        add(
-            "dataflow_output",
-            provided,
-            state="HOST_BOUND_MODEL_REALIZATION_REQUIRED",
-        )
-
-    for gate in _strings(task.get("required_gates")):
-        add(
-            "verification_gate",
-            gate,
-            state="HOST_BOUND_MODEL_REALIZATION_REQUIRED",
-        )
-
-    public_acceptance = _strings(task.get("public_acceptance"))
-    runtime_acceptance = _strings(task.get("runtime_acceptance"))
-    for acceptance in public_acceptance:
-        add(
-            "public_acceptance",
-            acceptance,
-            acceptance_refs=(acceptance,),
-        )
-    for acceptance in runtime_acceptance:
-        add(
-            "runtime_acceptance",
-            acceptance,
-            acceptance_refs=(acceptance,),
-        )
-
-    for reuse_ref in _strings(task.get("reuse_refs")):
-        add(
-            "reference_adaptation",
-            reuse_ref,
-            evidence_refs=(reuse_ref,),
-        )
-
-    if not holes:
-        add(
-            "semantic_implementation",
-            str(task.get("semantic_outcome") or task_id),
-        )
-
-    template: dict[str, Any] = {
+    target_paths = list(dict.fromkeys(target["path"] for target in targets))
+    contract: dict[str, Any] = {
         "schema_version": SCHEMA,
         "task_ref": task_id,
         "task_sha256_input": str(task.get("task_sha256") or ""),
+        "sequence": int(task.get("sequence") or 0),
+        "execution_role": str(task.get("execution_role") or "").strip(),
         "semantic_outcome": str(task.get("semantic_outcome") or "").strip(),
         "requirement_refs": list(_strings(task.get("requirement_refs"))),
+        "depends_on": list(_strings(task.get("depends_on"))),
         "target_constraints": _target_constraints(task),
-        "host_owned": {
-            "owned_anchors": [
-                dict(item)
-                for item in task.get("owned_anchors", [])
-                if isinstance(item, Mapping)
-            ]
-            if isinstance(task.get("owned_anchors"), list)
-            else [],
-            "depends_on": list(_strings(task.get("depends_on"))),
+        "targets": targets,
+        "implementation_steps": _implementation_steps(task, targets),
+        "dataflow": {
             "consumes": list(_strings(task.get("consumes"))),
             "provides": list(_strings(task.get("provides"))),
-            "required_gates": list(_strings(task.get("required_gates"))),
-            "artifact_obligations": list(_artifact_records(task)),
-            "reuse_refs": list(_strings(task.get("reuse_refs"))),
         },
-        "minecraft_checklist": _minecraft_checklist(task),
-        "holes": holes,
-        "completion_policy": {
+        "artifacts": list(_artifact_records(task)),
+        "reuse_refs": list(_strings(task.get("reuse_refs"))),
+        "protected_boundaries": {
+            "writable_paths": target_paths,
+            "rule": "Do not create, edit, rename, or delete files outside writable_paths unless a later host task explicitly owns them.",
+            "dependency_rule": "Do not implement this task before every depends_on task has completed and exported its declared provides.",
+            "architecture_rule": "Do not change task IDs, dependency edges, target coordinates, public acceptance, or artifact ownership.",
+        },
+        "verification_plan": _verification_plan(task),
+        "completion_predicate": {
             "operator": "all",
-            "required_hole_ids": [item["hole_id"] for item in holes],
-            "rule": (
-                "No hole may be silently dropped because of token budget. If a model cannot fill a hole, "
-                "it must leave it unresolved; the host schedules another bounded pass."
-            ),
-            "verification": (
-                "Host compile/static/resource/GameTest/runtime gates are authoritative. Model self-rating "
-                "or prose confidence cannot complete a hole."
-            ),
+            "conditions": [
+                "every implementation_step is realized in its owned target",
+                "every declared provides value is produced",
+                "every verification_plan entry passes",
+                "no protected boundary is violated",
+            ],
+            "model_self_report_is_authoritative": False,
         },
-        "template_sha256": "",
+        "contract_sha256": "",
     }
-    template["template_sha256"] = _hash_without(template, "template_sha256")
-    return template
+    contract["contract_sha256"] = _hash_without(contract, "contract_sha256")
+    _validate_contract(contract)
+    return contract
 
 
-def sanitize_hole_fills(
-    implementation_template: Mapping[str, Any],
-    value: Any,
-) -> list[dict[str, Any]]:
-    """Accept only model fields for host-created hole IDs; preserve host ordering."""
-    holes = implementation_template.get("holes")
-    if not isinstance(holes, list):
-        return []
-    known = [
-        str(item.get("hole_id") or "")
-        for item in holes
-        if isinstance(item, Mapping) and str(item.get("hole_id") or "")
-    ]
-    raw_items = value if isinstance(value, list) else []
-    by_id: dict[str, Mapping[str, Any]] = {}
-    for raw in raw_items:
-        if not isinstance(raw, Mapping):
-            continue
-        hole_id = str(raw.get("hole_id") or "").strip()
-        if hole_id in known and hole_id not in by_id:
-            by_id[hole_id] = raw
-
-    result: list[dict[str, Any]] = []
-    for hole_id in known:
-        raw = by_id.get(hole_id)
-        if raw is None:
-            continue
-        fill = {
-            key: raw[key]
-            for key in MODEL_FILL_FIELDS
-            if key in raw
-        }
-        result.append({"hole_id": hole_id, **fill})
-    return result
-
-
-__all__ = [
-    "MODEL_FILL_FIELDS",
-    "SCHEMA",
-    "build_implementation_template",
-    "sanitize_hole_fills",
-]
+__all__ = ["SCHEMA", "build_implementation_template"]
