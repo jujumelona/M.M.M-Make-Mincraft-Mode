@@ -23,14 +23,12 @@ def install(model_router_module: Any) -> None:
     from .hybrid_route_hardening import harden_code_search_routes
     from .inference_time_scaling import harden_runtime
     from .runtime_composer_hardening import harden_runtime_composer_identity
-    from .temporary_skill_compatibility import harden_temporary_skill_transport
 
     _install_repository_grounding()
     harden_runtime()
     harden_code_search_routes()
     harden_runtime_composer_identity()
     harden_agent_tool_allowlist()
-    harden_temporary_skill_transport()
     _expose_composed_repair_contracts()
 
 
