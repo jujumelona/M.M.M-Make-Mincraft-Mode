@@ -118,15 +118,32 @@ def test_old_gates_and_runtime_with_test_only_binding_still_fail_closed():
     tasks, handoff = _lower_and_link(
         fixture["recorded_tasks"], fixture["compiler"]["ownership"]
     )
-    assert collect_plan_link_issues({"tasks": tasks}, handoff) == ()
-    issues = collect_plan_link_issues({"tasks": fixture["recorded_tasks"]}, {})
     gates = {
         task["task_id"]
         for task in tasks
         if any(value.startswith("requirement_ready:") for value in task["provides"])
     }
     assert len(gates) == 7
-    assert gates <= {issue.task_ref for issue in issues if issue.code == "TASK_RUNTIME_TEST_ONLY"}
+
+    # The retired prerequisite-gate tasks are deliberately not promoted into fake Java
+    # runtime tasks. Even after execution lowering they therefore remain unbound and the
+    # deterministic linker rejects all seven instead of manufacturing source ownership.
+    lowered_issues = collect_plan_link_issues({"tasks": tasks}, handoff)
+    missing_bindings = {
+        issue.task_ref
+        for issue in lowered_issues
+        if issue.code == "TASK_EXECUTABLE_BINDING_MISSING"
+    }
+    assert gates <= missing_bindings
+
+    raw_issues = collect_plan_link_issues({"tasks": fixture["recorded_tasks"]}, {})
+    raw_missing = {
+        issue.task_ref
+        for issue in raw_issues
+        if issue.code == "TASK_EXECUTABLE_BINDING_MISSING"
+    }
+    assert gates <= raw_missing
+
     runtime = copy.deepcopy(
         next(
             task
@@ -268,34 +285,6 @@ def test_derived_obligation_is_bound_to_exactly_one_valid_parent_task():
         _validate_derived_owners(plan, [task, sibling])
 
 
-class _ImplementationFixtureRouter:
-    """Controlled model output exercises the real hole merger and production boundary."""
-
-    def generate_text(self, role, messages, **kwargs):
-        assert kwargs.get("response_format") == "text"
-        packet = json.loads(messages[-1]["content"].split("\n", 1)[1])
-        if isinstance(packet.get("modules"), list):
-            holes = packet["modules"][0]["implementation_template"]["holes"]
-            return "\n".join(
-                f"### Hole {index}\nDecision: Implement {hole.get('subject') or hole['hole_id']}\n"
-                "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
-                "Bindings: none\nReferences: none\n"
-                "Verification: Check the declared observable result.\nUncertainties: none"
-                for index, hole in enumerate(holes, 1)
-            )
-        pages = packet["pages"]
-        return "\n".join(
-            f"BEGIN PAGE {page['page_id']}\nBEGIN {hole['hole_id']}\n"
-            f"Decision: Implement {hole.get('subject') or hole['hole_id']}\n"
-            "Steps:\n- Read the declared state.\n- Apply the declared transition.\n"
-            "Bindings: none\nReferences: none\n"
-            "Verification: Check the declared observable result.\nUncertainties: none\n"
-            f"END {hole['hole_id']}\nEND PAGE {page['page_id']}"
-            for page in pages
-            for hole in page["holes"]
-        )
-
-
 def test_real_host_batches_compile_production_contract_without_rewriting_semantics(
     synthetic_platform_lock,
 ):
@@ -322,11 +311,9 @@ def test_real_host_batches_compile_production_contract_without_rewriting_semanti
     )
     plan = compile_evidence_first_plan(prompt, design)
     original = copy.deepcopy(plan)
-    planner = complete_planner.CompleteGameDesignPlanner(_ImplementationFixtureRouter())
+    planner = complete_planner.CompleteGameDesignPlanner(_NoModel())
     modules, assets, checks = planner._expand_batches(
         complete_planner._evidence_host_batches(plan),
-        prompt=prompt,
-        game_design=design,
         evidence_mode=True,
         evidence_acceptance_tests=[
             check
