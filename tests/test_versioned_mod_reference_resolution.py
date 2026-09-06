@@ -10,6 +10,10 @@ from minecraft_mod_ai.versioned_mod_reference_catalog import (
     task_families,
 )
 from minecraft_mod_ai.versioned_mod_reference_resolver import ExactReferenceResolver
+from minecraft_mod_ai.versioned_mod_reference_retriever import (
+    ReferenceExcerpt,
+    VersionedModReferenceRetriever,
+)
 from minecraft_mod_ai.versioned_reference_context_installation import install
 from minecraft_mod_ai.versioned_research_context import VersionedResearchCodeContext
 
@@ -40,6 +44,47 @@ def _not_found(url: str) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("not found", request=request, response=response)
 
 
+class _SelectionResolver:
+    loader = "fabric"
+
+    @staticmethod
+    def resolve(family: ReferenceFamily) -> ReferenceFamily:
+        return family
+
+
+class _SelectionRetriever(VersionedModReferenceRetriever):
+    def _source_excerpts(
+        self, resolved: ReferenceFamily, query: str, *, role: str
+    ) -> list[ReferenceExcerpt]:
+        del query
+        if role == "baseline":
+            size = 150
+            score = 0.50
+        elif resolved.repository == "TerraformersMC/ModMenu":
+            size = 180
+            score = 0.90
+        else:
+            size = 110
+            score = 0.70
+        slug = resolved.repository.replace("/", "-")
+        return [
+            ReferenceExcerpt(
+                repository=resolved.repository,
+                role=role,
+                ref_name="1.20.1",
+                commit_sha=f"commit-{slug}",
+                license_spdx="MIT",
+                path=f"src/main/java/{slug}.java",
+                source_sha=f"blob-{slug}",
+                text="x" * size,
+                start_line=1,
+                end_line=1,
+                score=score,
+                metadata_sha256="sha256:metadata",
+            )
+        ]
+
+
 def test_version_boundary_accepts_mc_branch_and_rejects_neighbor() -> None:
     assert exact_version_in_text("mc1.20.1/fabric/dev", "1.20.1")
     assert exact_version_in_text("release-1.20.1", "1.20.1")
@@ -62,6 +107,21 @@ def test_catalog_keeps_baseline_and_task_donor_selection_separate() -> None:
     assert donors
     assert all(family.repository not in excluded for family in donors)
     assert any("gui" in family.capabilities for family in donors)
+
+
+def test_retriever_preserves_task_and_baseline_when_a_pair_fits_budget() -> None:
+    retriever = _SelectionRetriever(_SelectionResolver())  # type: ignore[arg-type]
+    retriever.baseline_family_limit = 3
+    retriever.task_family_limit = 2
+    retriever.max_excerpts = 4
+    retriever.byte_budget = 300
+
+    selected = retriever.retrieve("GUI 설정 registry render")
+
+    assert {item.role for item in selected} == {"task", "baseline"}
+    assert selected[0].role == "task"
+    assert sum(len(item.text.encode("utf-8")) for item in selected) <= retriever.byte_budget
+    assert all(item.repository != "TerraformersMC/ModMenu" for item in selected)
 
 
 def test_ref_listing_is_bounded_paginated_deduplicated_and_cached() -> None:
