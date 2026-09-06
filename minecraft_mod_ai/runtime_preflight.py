@@ -3,11 +3,9 @@ from __future__ import annotations
 """Fast structural runtime checks that run before any production model decode.
 
 These checks deliberately use synthetic tool schemas and fake adapters. They catch
-Python/runtime composition regressions (bad wrapper replacement, request-field loss,
-unsafe shared state, schema-boundary regressions) before a Colab user spends time
-loading multi-gigabyte models. Tool routing itself is owned by the small-model selector
-and the normal model tool/observation loop; preflight must not require a second causal
-or forced-routing stack.
+Python/runtime composition regressions before a Colab user spends time loading
+multi-gigabyte models. Mandatory planning is compiler-owned and is verified directly;
+preflight must never depend on a runtime planning monkey-patch.
 """
 
 import json
@@ -38,7 +36,6 @@ def _large_implementation_messages() -> tuple[dict[str, str], ...]:
     payload = {
         "phase": "implement_module",
         "task": "Implement the approved Minecraft/Fabric feature in the current project.",
-        # Deliberately larger than the historical 12 KiB tail routing window.
         "research_context": "e" * 20_000,
     }
     return ({"role": "user", "content": json.dumps(payload)},)
@@ -61,86 +58,33 @@ def _assert_wrapper_chain() -> None:
         current = getattr(current, "__wrapped__", None)
 
 
-def _resolves_to_canonical_callable(target: Any, canonical: Any) -> bool:
-    """Return whether one finite transparent wrapper chain reaches ``canonical``.
-
-    Runtime authority must be established by callable identity, not by copying a marker
-    attribute onto an unrelated replacement. Malformed or excessively deep wrapper
-    chains fail closed instead of raising into callers that are performing a predicate
-    check.
-    """
-
-    if not callable(canonical):
-        return False
-    current = target
-    seen: set[int] = set()
-    depth = 0
-    while callable(current):
-        if current is canonical:
-            return True
-        identity = id(current)
-        if identity in seen:
-            return False
-        seen.add(identity)
-        depth += 1
-        if depth > 64:
-            return False
-        current = getattr(current, "__wrapped__", None)
-    return False
-
-
-def _wrapper_chain_has_marker(target: Any, marker_name: str) -> bool:
-    """Require a marked canonical owner somewhere in one finite wrapper chain.
-
-    Downstream decorators may add retrieval or evidence views around the bounded semantic
-    owner. They are acceptable only when they preserve ``__wrapped__`` back to that exact
-    owner; a replacement that severs the chain still fails closed.
-    """
-
-    current = target
-    seen: set[int] = set()
-    depth = 0
-    while callable(current):
-        identity = id(current)
-        if identity in seen:
-            raise RuntimePreflightError(
-                "authoritative requirement wrapper chain contains a cycle"
-            )
-        seen.add(identity)
-        if getattr(current, marker_name, False) is True:
-            return True
-        depth += 1
-        if depth > 64:
-            raise RuntimePreflightError(
-                "authoritative requirement wrapper chain is unexpectedly deep"
-            )
-        current = getattr(current, "__wrapped__", None)
-    return False
-
-
 def _assert_authoritative_requirement_path() -> None:
-    """Require the sole host-owned bounded semantic request path before decode."""
+    """Require the single compiler-owned semantic/design path before decode."""
 
-    from . import evidence_request_guard, planning_authority
-    from .game_design import GameDesignPlanner
-    from .semantic_batching_contract import build_bounded_requirement_catalog
+    from . import agentic_research_game_design, planning_authority
+    from .planning_pipeline import PlanningPipeline
 
-    marker = "__mmm_bounded_semantic_batching__"
     failures: list[str] = []
-    if getattr(GameDesignPlanner.plan, "__mmm_request_contract_guard__", False) is not True:
-        failures.append("GameDesignPlanner request freeze/guard")
-    if not _wrapper_chain_has_marker(build_bounded_requirement_catalog, marker):
-        failures.append("bounded semantic catalog builder")
-    if not _wrapper_chain_has_marker(
-        evidence_request_guard.build_authoritative_request_catalog,
-        marker,
+    if planning_authority.build_authoritative_request_catalog.__module__ != planning_authority.__name__:
+        failures.append("request catalog owner")
+    if planning_authority.authoritative_request_scope.__module__ != planning_authority.__name__:
+        failures.append("request authority state owner")
+    if agentic_research_game_design.generate_sectioned_game_design.__module__ != agentic_research_game_design.__name__:
+        failures.append("host game-design compiler")
+    if agentic_research_game_design.validate_ready_design.__module__ != agentic_research_game_design.__name__:
+        failures.append("host design readiness validator")
+    if PlanningPipeline._semantic_design.__module__ != "minecraft_mod_ai.planning_pipeline":
+        failures.append("canonical planning pipeline")
+    for target, label in (
+        (planning_authority.build_authoritative_request_catalog, "request catalog owner"),
+        (agentic_research_game_design.generate_sectioned_game_design, "host game-design compiler"),
+        (PlanningPipeline._semantic_design, "canonical planning pipeline"),
     ):
-        failures.append("bounded request catalog owner")
-    if not _wrapper_chain_has_marker(planning_authority._compile_semantic_catalog, marker):
-        failures.append("bounded planning semantic compiler")
+        if getattr(target, "__wrapped__", None) is not None:
+            failures.append(label + " is runtime wrapped")
     if failures:
         raise RuntimePreflightError(
-            "authoritative semantic requirement path is incomplete: " + ", ".join(failures)
+            "compiler-owned planning authority is incomplete: " + ", ".join(failures)
         )
 
 
@@ -300,8 +244,6 @@ def run_runtime_preflight() -> None:
                     f"runtime preflight {name!r} crashed: {type(exc).__name__}: {exc}"
                 ) from exc
         _PREFLIGHT_DONE = True
-        # MCP stdio reserves stdout for JSON-RPC frames. Diagnostics must never
-        # write there, including package-import preflight success messages.
         print("runtime preflight: PASS", file=sys.stderr, flush=True)
 
 
