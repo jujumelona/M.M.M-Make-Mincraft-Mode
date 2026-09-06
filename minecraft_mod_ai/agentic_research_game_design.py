@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-"""Deterministic host-owned game-design projection.
+"""Deterministic host-owned game-design compiler.
 
-The authoritative requirement catalog already owns request semantics, capability IDs,
-observable behavior, acceptance, dependencies, and implementation obligations.  Game
-design is therefore a projection of that frozen catalog, not another model-generation
-stage.  This keeps small-model meta output, retries, and per-field serial calls off the
-critical path.
+The authoritative requirement catalog owns request semantics, capability IDs,
+observable behavior, acceptance, dependencies, and implementation obligations. Game
+design is only a validated projection of that frozen catalog. No language-model call,
+model-generated JSON, retry loop, or model-owned identifier is permitted here.
 """
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -17,10 +17,26 @@ from .design_requirement_contract import (
     _active_requirement_ledger,
     _validate_requirement_coverage,
 )
+from .model_meta_output_contract import assert_design_field_clean
+from .planner import HeuristicPlanner
+from .spec import SpecValidationError
+
+_GAME_DESIGN_FIELDS = (
+    "title",
+    "pitch",
+    "core_loop",
+    "progression",
+    "combat",
+    "mod_context",
+    "modules",
+    "assets",
+    "acceptance_tests",
+)
+_OPTIONAL_GAME_DESIGN_FIELDS = ("art_direction",)
 
 
 def supports_agentic_research_router(router: Any) -> bool:
-    """Use the host-owned design path for the normal ModelRouter runtime."""
+    """Return whether the normal runtime router can use this host compiler."""
     from .model_router import ModelRouter
 
     return isinstance(router, ModelRouter)
@@ -92,8 +108,92 @@ def _combat_context(ledger: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]
     return {"authored_combat": values} if values else {}
 
 
+def _validate_design(design: Mapping[str, Any]) -> None:
+    for field in ("title", "pitch"):
+        value = design.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise SpecValidationError(f"game_design.{field} must be a non-empty string")
+    for field in ("core_loop", "progression", "acceptance_tests", "modules", "assets"):
+        if not isinstance(design.get(field), list):
+            raise SpecValidationError(f"game_design.{field} must be a list")
+    for field in ("combat", "mod_context"):
+        if not isinstance(design.get(field), dict):
+            raise SpecValidationError(f"game_design.{field} must be an object")
+    for field in (*_GAME_DESIGN_FIELDS, *_OPTIONAL_GAME_DESIGN_FIELDS):
+        if field not in design:
+            continue
+        try:
+            assert_design_field_clean(field, design[field])
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
+
+
+def canonical_game_design(design: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop private/non-schema fields and validate the host-owned design payload."""
+    result = {field: design[field] for field in _GAME_DESIGN_FIELDS if field in design}
+    for field in _OPTIONAL_GAME_DESIGN_FIELDS:
+        if field in design:
+            result[field] = design[field]
+    _validate_design(result)
+    return result
+
+
+def validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
+    """Fail closed before retrieval when the host projection is incomplete."""
+    result = canonical_game_design(design)
+    for field in ("core_loop", "progression", "acceptance_tests"):
+        value = result.get(field)
+        if not isinstance(value, list) or not any(_text(item) for item in value):
+            raise SpecValidationError(f"design readiness failed: {field} is empty")
+    modules = result.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise SpecValidationError("design readiness failed: modules are empty")
+
+    ledger = _active_requirement_ledger(prompt)
+    if ledger:
+        result = _validate_requirement_coverage(result, ledger)
+    return result
+
+
+def deterministic_bootstrap(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the Proposal bootstrap deterministically; no model planning is involved."""
+    proposal = HeuristicPlanner().plan(prompt)
+    spec = proposal.spec
+    title = _text(design.get("title")) or spec.mod_name
+    pitch = _text(design.get("pitch")) or spec.summary
+    normalized = "".join(
+        character if character.isascii() and character.isalnum() else "_"
+        for character in title.lower()
+    )
+    stem = "_".join(part for part in normalized.split("_") if part)
+    if not stem:
+        stem = f"mmm_{hashlib.sha256(title.encode('utf-8')).hexdigest()[:10]}"
+    if not stem[0].isalpha():
+        stem = f"mmm_{stem}"
+    mod_id = f"{stem[:55].rstrip('_')}_mod"
+    return {
+        "mod_id": mod_id,
+        "mod_name": title,
+        "package_name": f"ai.minecraft.generated.{mod_id}",
+        "summary": pitch,
+        "contents": [
+            {
+                "content_id": content.content_id,
+                "kind": content.kind.value,
+                "display_name_en": content.display_name_en,
+                "display_name_ko": content.display_name_ko,
+                "color": content.color,
+                "recipe": content.recipe,
+            }
+            for content in spec.contents
+        ],
+        "deferred_capabilities": [
+            deferred.capability for deferred in proposal.deferred_requests
+        ],
+    }
+
+
 def generate_sectioned_game_design(
-    game_design_module: Any,
     router: Any,
     prompt: str,
     *,
@@ -103,13 +203,13 @@ def generate_sectioned_game_design(
 ) -> dict[str, Any]:
     """Project the frozen requirement ledger into the complete design schema.
 
-    No model call occurs here.  Research stays available to downstream implementation
-    planning but does not get a second chance to rewrite authored game design.
+    The arguments carrying runtime/research context are accepted only because this
+    compiler sits at that pipeline boundary. They cannot alter authored semantics.
     """
     del router, media_paths, research, trace_metadata
     ledger = _active_requirement_ledger(prompt)
     if not ledger:
-        raise ValueError("Host-owned game design requires an active requirement ledger.")
+        raise SpecValidationError("Host-owned game design requires an active requirement ledger.")
 
     statements = [_statement(requirement) for requirement in ledger]
     authored = [
@@ -117,7 +217,6 @@ def generate_sectioned_game_design(
         for requirement in ledger
         if _text(requirement.get("authored_text"))
     ]
-    acceptance_tests = _acceptance_tests(ledger)
     design: dict[str, Any] = {
         "title": "Requested Minecraft Mod",
         "pitch": "Implement the authored Minecraft behaviors without expanding their scope.",
@@ -127,10 +226,15 @@ def generate_sectioned_game_design(
         "mod_context": {"authored_scope": list(dict.fromkeys(authored))} if authored else {},
         "modules": [_module(requirement) for requirement in ledger],
         "assets": [],
-        "acceptance_tests": acceptance_tests,
+        "acceptance_tests": _acceptance_tests(ledger),
     }
-    game_design_module._validate_design(design)
-    return _validate_requirement_coverage(design, ledger)
+    return validate_ready_design(prompt, design)
 
 
-__all__ = ["generate_sectioned_game_design", "supports_agentic_research_router"]
+__all__ = [
+    "canonical_game_design",
+    "deterministic_bootstrap",
+    "generate_sectioned_game_design",
+    "supports_agentic_research_router",
+    "validate_ready_design",
+]
