@@ -231,7 +231,7 @@ def test_research_derivation_requires_traceable_evidence_and_bounded_facet_turns
         game_design=_game_design(),
     )
     decisions = ledger["facet_decisions"]
-    assert router.calls == ledger["model_call_policy"]["actual_calls"]
+    assert router.calls == ledger["model_call_policy"]["actual_calls_including_retries"]
     assert router.calls >= 1
     assert len(decisions) == len(derivation.FACETS)
     derived = [item for item in decisions if item["disposition"] == "derived"]
@@ -257,7 +257,7 @@ def test_generic_unbound_evidence_does_not_manufacture_unresolved_facets(monkeyp
         technical_evidence={},
         game_design=_game_design(),
     )
-    assert ledger["model_call_policy"]["actual_calls"] == 0
+    assert ledger["model_call_policy"]["actual_calls_including_retries"] == 0
     assert all(
         item["disposition"] != "unresolved"
         for item in ledger["facet_decisions"]
