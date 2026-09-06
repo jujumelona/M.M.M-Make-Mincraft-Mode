@@ -5,6 +5,7 @@ import pytest
 from minecraft_mod_ai import evidence_first_planning as evidence
 from minecraft_mod_ai import production_contract as production
 from minecraft_mod_ai.production_boundary_contract import install_production_boundary_contract
+from tests.planning_authority_fixtures import request_catalog
 
 
 PROMPT = "Add a weather compass and keep task_internal trace metadata private."
@@ -51,9 +52,23 @@ def _task_modules(plan: dict) -> list[dict[str, object]]:
 
 def _clean_plan() -> tuple[dict, dict[str, object]]:
     install_production_boundary_contract()
+    catalog = request_catalog(
+        PROMPT,
+        [
+            {
+                "requirement_id": "req_weather_compass",
+                "capability": "item.weather_compass",
+                "statement": "Add a weather compass while keeping internal trace metadata private.",
+                "source_text": PROMPT,
+                "implementation_capabilities": ["item.registration", "ui.hud"],
+                "acceptance": [PUBLIC_ACCEPTANCE],
+            }
+        ],
+    )
     design: dict[str, object] = {
         "title": "Weather compass",
         "acceptance_tests": [PUBLIC_ACCEPTANCE],
+        "_evidence_request_catalog": catalog,
     }
     plan = evidence.compile_evidence_first_plan(
         PROMPT,
