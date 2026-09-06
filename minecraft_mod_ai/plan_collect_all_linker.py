@@ -7,22 +7,23 @@ request is allowed, reports every deterministic defect in one exception, and tre
 semantic locators, test artifacts, and executable production paths as distinct types.
 """
 
+import json
 from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any
 
 from .root_cause_trace import emit_root_cause
+from .task_execution_classification import (
+    SOURCE_ROOTS as _SOURCE_ROOTS,
+    TEST_ROOTS as _TEST_ROOTS,
+    anchor_locator,
+    claims_runtime,
+    is_source_symbol,
+    is_test_anchor,
+    path_from_locator,
+)
 
-_SOURCE_ROOTS = (
-    "src/main/java/",
-    "src/client/java/",
-)
-_TEST_ROOTS = (
-    "src/test/",
-    "src/gametest/",
-)
 _COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
 
 
@@ -43,14 +44,31 @@ class PlanLinkIssue:
 
 
 class PlanCollectAllLinkError(RuntimeError):
-    def __init__(self, issues: Sequence[PlanLinkIssue]) -> None:
+    def __init__(
+        self,
+        issues: Sequence[PlanLinkIssue],
+        *,
+        diagnostics: Mapping[str, Any] | None = None,
+    ) -> None:
         self.issues = tuple(issues)
+        self.diagnostics = dict(diagnostics or {})
         summary = "; ".join(
-            f"{item.code}[{item.task_ref or '-'}]: {item.message}"
+            (
+                f"{item.code}[{item.task_ref or '-'}]: {item.message} "
+                f"details={json.dumps(dict(item.details), ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)}"
+            )
             for item in self.issues
         )
+        diagnostics_text = json.dumps(
+            self.diagnostics,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        suffix = f"; diagnostics={diagnostics_text}" if self.diagnostics else ""
         super().__init__(
-            f"PLAN_COLLECT_ALL_PREFLIGHT_FAILED ({len(self.issues)} issue(s)): {summary}"
+            f"PLAN_COLLECT_ALL_PREFLIGHT_FAILED ({len(self.issues)} issue(s)): {summary}{suffix}"
         )
 
 
@@ -76,42 +94,23 @@ def _anchors(task: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
 
 
 def _locator(anchor: Mapping[str, Any]) -> str:
-    return str(anchor.get("locator") or "").replace("\\", "/").strip()
+    return anchor_locator(anchor)
 
 
 def _path_from_locator(locator: str) -> str:
-    raw = str(locator or "").replace("\\", "/").strip()
-    if not raw or raw.startswith("/") or ":" in raw.split("#", 1)[0]:
-        return ""
-    path = raw.split("#", 1)[0]
-    while path.startswith("./"):
-        path = path[2:]
-    parts = PurePosixPath(path).parts
-    if not parts or any(part in {"", ".", ".."} for part in parts):
-        return ""
-    return PurePosixPath(path).as_posix()
+    return path_from_locator(locator)
 
 
 def _is_source_symbol(anchor: Mapping[str, Any]) -> bool:
-    if str(anchor.get("kind") or "") != "symbol":
-        return False
-    path = _path_from_locator(_locator(anchor))
-    return bool(path and path.endswith(".java") and path.startswith(_SOURCE_ROOTS))
+    return is_source_symbol(anchor)
 
 
 def _is_test_path(anchor: Mapping[str, Any]) -> bool:
-    path = _path_from_locator(_locator(anchor))
-    return bool(path and path.startswith(_TEST_ROOTS))
+    return is_test_anchor(anchor)
 
 
 def _claims_runtime(task: Mapping[str, Any]) -> bool:
-    provides = _strings(task.get("provides"))
-    if any(value.startswith("capability:") for value in provides):
-        return True
-    semantic = str(task.get("semantic_outcome") or "").casefold()
-    if semantic and semantic not in {"test", "verification", "resource", "asset"}:
-        return True
-    return False
+    return claims_runtime(task)
 
 
 def _cycle_nodes(task_ids: Sequence[str], edges: Sequence[tuple[str, str]]) -> tuple[str, ...]:
@@ -420,6 +419,86 @@ def collect_plan_link_issues(
     return tuple(issues)
 
 
+def _anchor_debug(anchor: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": str(anchor.get("kind") or ""),
+        "locator": _locator(anchor),
+        "status": str(anchor.get("status") or ""),
+        "module_id": str(anchor.get("module_id") or ""),
+        "source_set": str(anchor.get("source_set") or ""),
+    }
+
+
+def _failure_diagnostics(
+    plan: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    issues: Sequence[PlanLinkIssue],
+) -> dict[str, Any]:
+    """Return bounded lowering/link snapshots for every task implicated in a failure."""
+
+    raw_tasks = plan.get("tasks")
+    tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    task_by_id = {
+        str(task.get("task_id") or "").strip(): task
+        for task in tasks
+        if isinstance(task, Mapping) and str(task.get("task_id") or "").strip()
+    }
+    affected = {item.task_ref for item in issues if item.task_ref}
+
+    raw_modules = handoff.get("production_modules")
+    modules = raw_modules if isinstance(raw_modules, list) else []
+    raw_assets = handoff.get("asset_requests")
+    assets = raw_assets if isinstance(raw_assets, list) else []
+
+    diagnostics: dict[str, Any] = {}
+    for task_ref in sorted(affected):
+        task = _mapping(task_by_id.get(task_ref))
+        task_modules = [
+            item
+            for item in modules
+            if isinstance(item, Mapping) and str(item.get("task_ref") or "") == task_ref
+        ]
+        task_assets = [
+            item
+            for item in assets
+            if isinstance(item, Mapping) and str(item.get("task_ref") or "") == task_ref
+        ]
+        diagnostics[task_ref] = {
+            "task_present": bool(task),
+            "task_sha256": str(task.get("task_sha256") or ""),
+            "execution_role": str(task.get("execution_role") or ""),
+            "semantic_outcome": str(task.get("semantic_outcome") or ""),
+            "provides": list(_strings(task.get("provides"))),
+            "required_gates": list(_strings(task.get("required_gates"))),
+            "requirement_refs": list(_strings(task.get("requirement_refs"))),
+            "gap_refs": list(_strings(task.get("gap_refs"))),
+            "reuse_refs": list(_strings(task.get("reuse_refs"))),
+            "owned_anchors": [_anchor_debug(item) for item in _anchors(task)],
+            "production_bindings": [
+                {
+                    "production_module_id": str(item.get("production_module_id") or ""),
+                    "module_id": str(item.get("module_id") or ""),
+                    "source_set": str(item.get("source_set") or ""),
+                    "reuse_action": str(item.get("reuse_action") or ""),
+                    "owned_anchors": [
+                        _anchor_debug(anchor)
+                        for anchor in item.get("owned_anchors", ())
+                        if isinstance(anchor, Mapping)
+                    ],
+                }
+                for item in task_modules
+            ],
+            "asset_bindings": [
+                {
+                    "asset_request_id": str(item.get("asset_request_id") or ""),
+                    "reuse_action": str(item.get("reuse_action") or ""),
+                }
+                for item in task_assets
+            ],
+        }
+    return diagnostics
+
+
 def validate_plan_collect_all(
     plan: Mapping[str, Any],
     handoff: Mapping[str, Any],
@@ -438,7 +517,8 @@ def validate_plan_collect_all(
             },
         )
         return
-    error = PlanCollectAllLinkError(issues)
+    diagnostics = _failure_diagnostics(plan, handoff, issues)
+    error = PlanCollectAllLinkError(issues, diagnostics=diagnostics)
     emit_root_cause(
         "plan_collect_all_preflight",
         stage="planning",
@@ -450,6 +530,7 @@ def validate_plan_collect_all(
             "task_count": len(plan.get("tasks") or ()),
             "issue_count": len(issues),
             "issues": [item.to_dict() for item in issues],
+            "diagnostics": diagnostics,
         },
         exc=error,
     )

@@ -15,10 +15,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .evidence_first_planning import validate_evidence_first_plan
+from .task_execution_classification import claims_runtime, is_source_symbol, is_test_anchor
 
 _PRODUCTION_KINDS = frozenset({"symbol", "registry_id", "build_config", "loader_module"})
 _RESOURCE_KINDS = frozenset({"resource"})
-_TEST_KIND = "test"
 _SOURCE_COMPILE_GATES = frozenset({"source_static_validation", "target_compile"})
 
 
@@ -61,7 +61,9 @@ def _anchors(task: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _runtime_capability(task: Mapping[str, Any]) -> bool:
-    return any(value.startswith("capability:") for value in _strings(task.get("provides")))
+    """Compatibility wrapper around the canonical execution classifier."""
+
+    return claims_runtime(task)
 
 
 def _source_anchor(task_id: str, ownership: Mapping[str, Any]) -> dict[str, Any]:
@@ -103,16 +105,25 @@ def _execution_task(plan: Mapping[str, Any], raw_task: Mapping[str, Any]) -> dic
     task_id = str(task.get("task_id") or "")
     ownership = _mapping(plan.get("ownership_context"))
     anchors = _anchors(task)
-    kinds = {str(item.get("kind") or "") for item in anchors}
-    has_production_binding = bool(kinds & _PRODUCTION_KINDS)
-    has_source = "symbol" in kinds
-    has_resource = bool(kinds & _RESOURCE_KINDS)
-    has_test = _TEST_KIND in kinds
+    production_anchors = [
+        item
+        for item in anchors
+        if str(item.get("kind") or "") in _PRODUCTION_KINDS and not is_test_anchor(item)
+    ]
+    resource_anchors = [
+        item
+        for item in anchors
+        if str(item.get("kind") or "") in _RESOURCE_KINDS and not is_test_anchor(item)
+    ]
+    has_production_binding = bool(production_anchors)
+    has_source = any(is_source_symbol(item) for item in anchors)
+    has_resource = bool(resource_anchors)
+    has_test = any(is_test_anchor(item) for item in anchors)
 
     # A final runtime capability cannot be handed to a small coder as a test-only
     # implementation. Give that task one concrete source owner while retaining its
-    # GameTest. Registry/resource-only planning steps are not source files and must not
-    # receive fabricated Java classes merely to satisfy a validator.
+    # GameTest. Runtime classification and test-path classification are canonical and
+    # shared with the preflight linker, so the two stages cannot disagree on ownership.
     if (
         _runtime_capability(task)
         and has_test
@@ -225,7 +236,10 @@ def execution_handoff(
         action = next(iter(actions)) if len(actions) == 1 else "fresh"
         reuse_refs = list(_strings(task.get("reuse_refs")))
         for anchor in _anchors(task):
-            if str(anchor.get("kind") or "") not in _PRODUCTION_KINDS:
+            if (
+                str(anchor.get("kind") or "") not in _PRODUCTION_KINDS
+                or is_test_anchor(anchor)
+            ):
                 continue
             key = (task_ref, str(anchor.get("locator") or ""))
             if key in bound:
