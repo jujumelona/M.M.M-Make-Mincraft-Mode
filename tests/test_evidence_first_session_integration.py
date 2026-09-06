@@ -11,6 +11,7 @@ from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.evidence_first_planning import compile_evidence_first_plan
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_inventory import inspect_project_inventory
+from tests.planning_authority_fixtures import request_catalog
 
 
 def _existing_weather_project(root: Path) -> None:
@@ -73,6 +74,17 @@ def test_existing_inventory_name_alias_cannot_silently_close_semantic_gap(
 ) -> None:
     prompt = "Keep the weather compass."
     design = _design_with_inventory(tmp_path / "existing")
+    design["_evidence_request_catalog"] = request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_keep_weather_behavior",
+                "capability": "weather_compass.preserve_behavior",
+                "statement": "Preserve the authored weather-compass behavior, not merely its name.",
+                "implementation_capabilities": ["weather_compass.preserve_behavior"],
+            }
+        ],
+    )
     plan = compile_evidence_first_plan(prompt, design)
 
     assert "capability:weather_compass" in {
@@ -156,6 +168,25 @@ def test_existing_zip_preserves_inventory_but_only_verified_semantics_can_retain
             "migration_requested": False,
         },
     }
+    design["_evidence_request_catalog"] = request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_preserve_weather",
+                "capability": "weather_compass.preserve_behavior",
+                "statement": "Preserve the existing weather-compass behavior.",
+                "source_text": "Keep the existing weather compass",
+                "implementation_capabilities": ["weather_compass.preserve_behavior"],
+            },
+            {
+                "requirement_id": "req_quests",
+                "capability": "quest.progression",
+                "statement": "Add quests.",
+                "source_text": "add quests",
+                "implementation_capabilities": ["quest.state", "quest.progression", "quest.reward"],
+            },
+        ],
+    )
     plan = compile_evidence_first_plan(prompt, design)
 
     assert plan["component_catalog"]
@@ -182,6 +213,23 @@ def test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap() -
             "migration_requested": False,
         },
     }
+    design["_evidence_request_catalog"] = request_catalog(
+        prompt,
+        [
+            {
+                "requirement_id": "req_machine",
+                "capability": "automation.machine",
+                "statement": prompt,
+                "implementation_capabilities": [
+                    "automation.machine",
+                    "persistence.state_store",
+                    "network.action_sync",
+                    "ui.container",
+                ],
+                "acceptance": ["The complete machine vertical slice works."],
+            }
+        ],
+    )
     plan = compile_evidence_first_plan(prompt, design)
     modules = tuple(
         ProductionModule(
