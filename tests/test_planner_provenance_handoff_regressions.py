@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.implementation_template_contract import build_implementation_template
 from minecraft_mod_ai.research_requirement_evidence import facet_relevant_refs
 from minecraft_mod_ai.research_requirement_schema import FACETS, FACET_HINTS
 from minecraft_mod_ai.small_model_task_capsule_contract import (
@@ -43,7 +42,7 @@ def test_facet_evidence_requires_requirement_provenance() -> None:
     }
 
 
-def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
+def test_coder_capsule_uses_only_host_compiled_execution_authority() -> None:
     anchor = {
         "kind": "symbol",
         "locator": "src/main/java/generated/mod/AlphaService.java#AlphaService",
@@ -57,6 +56,9 @@ def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
         "semantic_outcome": "Implement alpha gameplay behavior",
         "requirement_refs": ["req_alpha_123"],
         "implementation_capabilities": ["gameplay.alpha.service"],
+        "implementation_obligations": [
+            "Implement the host-owned alpha service behavior at the reserved symbol."
+        ],
         "owned_anchors": [anchor],
         "production_bindings": [
             {
@@ -68,10 +70,10 @@ def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
         "target_cell": {
             "minecraft_version": "1.21.1",
             "loader": "fabric",
+            "mappings": "mojang",
+            "java_version": "21",
         },
     }
-    template = build_implementation_template(task)
-    hole_id = template["holes"][0]["hole_id"]
     module = SimpleNamespace(
         module_id="task_alpha",
         kind="custom_java",
@@ -80,15 +82,10 @@ def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
             "model_fill": {
                 "hole_fills": [
                     {
-                        "hole_id": hole_id,
-                        "implementation_decision": "Use the host-owned alpha service contract.",
-                        "local_steps": ["Implement the bounded task-local behavior."],
-                        "required_gates": ["model_must_not_author_this"],
-                    },
-                    {
-                        "hole_id": "hole_fake_not_host_owned",
+                        "hole_id": "retired_model_owned_hole",
                         "implementation_decision": "unauthorized",
-                    },
+                        "required_gates": ["model_must_not_author_this"],
+                    }
                 ]
             },
         },
@@ -98,12 +95,15 @@ def test_coder_capsule_preserves_only_sanitized_planner_hole_fills() -> None:
 
     contract = compact_task_local_module_contract(module)
     compact = contract["evidence_task"]
+    execution = compact["coder_execution_contract"]
 
-    assert compact["implementation_template"]["template_sha256"] == template["template_sha256"]
-    assert compact["planner_fill"]["hole_fills"] == [
-        {
-            "hole_id": hole_id,
-            "implementation_decision": "Use the host-owned alpha service contract.",
-            "local_steps": ["Implement the bounded task-local behavior."],
-        }
-    ]
+    assert execution["schema_version"] == "mmm/coder-execution-contract-v2"
+    assert execution["task_ref"] == "task_alpha"
+    assert execution["target_constraints"]["minecraft_version"] == "1.21.1"
+    assert execution["target_constraints"]["mappings"] == "mojang"
+    assert execution["targets"][0]["locator"] == anchor["locator"]
+    assert execution["implementation_steps"][0]["obligation"] == task["implementation_obligations"][0]
+    assert "planner_fill" not in compact
+    assert "implementation_template" not in compact
+    assert "model_fill" not in contract
+    assert "model_fill" not in compact
