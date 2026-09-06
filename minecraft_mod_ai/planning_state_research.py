@@ -127,7 +127,7 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
     if kinds & _REFERENCE_SOURCE_KINDS:
         output.append("gameplay_reference")
     if kinds & {"repository", "existing_mods"}:
-        output.extend(["mod_catalog", "source_code"])
+        output.extend(["dependency", "source_code"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
         output.append("minecraft_api")
     if "project_rag" in kinds:
