@@ -77,7 +77,7 @@ def test_design_modules_are_bounded_template_fill_evidence() -> None:
     assert not any("task_id" in item or "depends_on" in item for item in context)
 
 
-def test_concrete_module_facets_replace_duplicate_narrative_coder_facets() -> None:
+def test_explicit_narrative_retrieval_facet_is_preserved_without_becoming_authority() -> None:
     design = _design()
     design["_pre_retrieval_plan"]["design_retrieval_facets"] = [
         {
@@ -105,11 +105,14 @@ def test_concrete_module_facets_replace_duplicate_narrative_coder_facets() -> No
     context = deep._execution_context(design, reuse_plan)
 
     assert [item["design_leaf_capability"] for item in context] == [
-        "design.module.alien_encounter"
+        "design.module.alien_encounter",
+        "design.core_loop.visit_planet",
     ]
-    assert context[0]["parent_capability"] == "alien_planet_interaction"
+    assert all(item["parent_capability"] == "alien_planet_interaction" for item in context)
     assert context[0]["reuse_refs"] == ["github:alien-encounter-source"]
-    assert context[0]["authority"] == "template_fill_evidence_only"
+    assert context[1]["reuse_mode"] == "fresh"
+    assert all(item["authority"] == "template_fill_evidence_only" for item in context)
+    assert not any("task_id" in item or "depends_on" in item for item in context)
 
 
 def test_sharded_request_completes_all_research_before_any_design(monkeypatch) -> None:
