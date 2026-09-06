@@ -258,9 +258,9 @@ def _isolate_test_runtime_state(
         generate_with_explicit_test_target,
     )
 
-    # Direct evidence-planning tests predate the complete target receipt barrier and
-    # bypass the host platform resolver entirely. Complete only those legacy fixtures;
-    # dedicated target-grounding tests continue to exercise the strict production gate.
+    # A few direct evidence-planning unit tests still bypass live provider resolution.
+    # Complete their synthetic provider receipt immediately before the canonical target
+    # compiler; do not recreate the retired evidence-planner target decision owner.
     legacy_partial_target_modules = {
         "test_evidence_first_planning",
         "test_evidence_first_session_integration",
@@ -271,28 +271,29 @@ def _isolate_test_runtime_state(
     if request.module.__name__ in legacy_partial_target_modules:
         from minecraft_mod_ai import evidence_first_planning as planning
 
-        original_target_decision = planning._target_decision
+        original_compile_target_decision = planning.compile_target_decision
 
-        def target_decision_with_synthetic_receipt(game_design, target_decision=None):
-            design = dict(game_design) if isinstance(game_design, dict) else game_design
-            decision = dict(target_decision) if isinstance(target_decision, dict) else target_decision
-            if isinstance(decision, dict):
-                if isinstance(decision.get("coordinates"), dict):
-                    decision["coordinates"] = _complete_partial_test_target(decision["coordinates"])
-                elif isinstance(decision.get("target"), dict):
-                    decision["target"] = _complete_partial_test_target(decision["target"])
-                elif "minecraft_version" in decision or "loader" in decision:
-                    decision = _complete_partial_test_target(decision)
-            elif isinstance(design, dict):
-                selection = design.get("_platform_selection")
-                if isinstance(selection, dict):
-                    selection_copy = dict(selection)
-                    target = selection_copy.get("target")
-                    if isinstance(target, dict):
-                        selection_copy["target"] = _complete_partial_test_target(target)
-                        design["_platform_selection"] = selection_copy
-            return original_target_decision(design, target_decision=decision)
+        def compile_target_decision_with_synthetic_receipt(
+            selection_payload,
+            *,
+            existing_inventory=None,
+        ):
+            selection = (
+                dict(selection_payload)
+                if isinstance(selection_payload, dict)
+                else selection_payload
+            )
+            if isinstance(selection, dict) and isinstance(selection.get("target"), dict):
+                selection["target"] = _complete_partial_test_target(selection["target"])
+            return original_compile_target_decision(
+                selection,
+                existing_inventory=existing_inventory,
+            )
 
-        monkeypatch.setattr(planning, "_target_decision", target_decision_with_synthetic_receipt)
+        monkeypatch.setattr(
+            planning,
+            "compile_target_decision",
+            compile_target_decision_with_synthetic_receipt,
+        )
 
     yield
