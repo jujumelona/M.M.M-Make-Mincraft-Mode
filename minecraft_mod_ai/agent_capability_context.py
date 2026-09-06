@@ -128,6 +128,78 @@ def _manifest_router() -> ExternalMCPRouter:
     return ExternalMCPRouter()
 
 
+@lru_cache(maxsize=1)
+def _compact_type_contracts() -> tuple[tuple[Any, ...], ...]:
+    """Encode canonical type shapes without repeating verbose JSON field labels.
+
+    Each module becomes ``(path, types, aliases)``. A type is
+    ``(name, bases, fields)`` and each field is ``name:type!`` when required or
+    ``name:type?`` when optional. Aliases are encoded as ``name=type``. The model keeps
+    the exact names, annotations, and optionality it needs while the host retains the
+    full source-derived manifest as the authority.
+    """
+
+    modules: list[tuple[Any, ...]] = []
+    for module in contract_schema_manifest():
+        raw_types = module.get("types", ())
+        types: list[tuple[Any, ...]] = []
+        if isinstance(raw_types, Sequence) and not isinstance(
+            raw_types, (str, bytes, bytearray)
+        ):
+            for contract_type in raw_types:
+                if not isinstance(contract_type, Mapping):
+                    continue
+                fields: list[str] = []
+                raw_fields = contract_type.get("fields", ())
+                if isinstance(raw_fields, Sequence) and not isinstance(
+                    raw_fields, (str, bytes, bytearray)
+                ):
+                    for field in raw_fields:
+                        if not isinstance(field, Mapping):
+                            continue
+                        name = str(field.get("name") or "").strip()
+                        annotation = str(field.get("type") or "").strip()
+                        if not name:
+                            continue
+                        marker = "!" if str(field.get("required")) == "true" else "?"
+                        fields.append(f"{name}:{annotation}{marker}")
+                name = str(contract_type.get("name") or "").strip()
+                if not name:
+                    continue
+                raw_bases = contract_type.get("bases", ())
+                bases = tuple(
+                    str(base)
+                    for base in raw_bases
+                    if str(base)
+                ) if isinstance(raw_bases, Sequence) and not isinstance(
+                    raw_bases, (str, bytes, bytearray)
+                ) else ()
+                types.append((name, bases, tuple(fields)))
+
+        aliases: list[str] = []
+        raw_aliases = module.get("aliases", ())
+        if isinstance(raw_aliases, Sequence) and not isinstance(
+            raw_aliases, (str, bytes, bytearray)
+        ):
+            for alias in raw_aliases:
+                if not isinstance(alias, Mapping):
+                    continue
+                name = str(alias.get("name") or "").strip()
+                annotation = str(alias.get("type") or "").strip()
+                if name:
+                    aliases.append(f"{name}={annotation}")
+
+        if types or aliases:
+            modules.append(
+                (
+                    str(module.get("path") or ""),
+                    tuple(types),
+                    tuple(aliases),
+                )
+            )
+    return tuple(modules)
+
+
 def _request_contracts_from_policy(
     stage: str,
     policy: _RolePolicySnapshot,
@@ -355,14 +427,15 @@ def _build_agent_capability_context_with_policy(
             }
 
     payload = {
-        "schema_version": "mmm/agent-capability-context-v6",
+        "schema_version": "mmm/agent-capability-context-v7",
         "stage": selected,
         "model_role": policy.model_role,
         "execution_model_role": model_role,
         "agent_roles": [route.name for route in policy.routes],
         "reviewed_mcp_servers": sorted(policy.mcp_servers),
         "eligible_skills": skills,
-        "type_contracts": contract_schema_manifest(),
+        "type_contract_encoding": "module=(path,types,aliases); type=(name,bases,fields); field=name:type(! required|? optional); alias=name=type",
+        "type_contracts": _compact_type_contracts(),
         "external_minecraft_mcp_capabilities": external_capabilities,
         "external_minecraft_mcp_access": external_access,
         "external_minecraft_mcp_manifest": external_manifest_status,
