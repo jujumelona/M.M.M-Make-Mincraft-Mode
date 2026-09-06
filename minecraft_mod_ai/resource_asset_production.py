@@ -89,23 +89,32 @@ def _bind_evidence_reuse_plan(
     proposal: CompleteProposal,
     evidence_plan: Mapping[str, Any],
 ) -> CompleteProposal:
-    """Bind reuse through the validated semantic DAG, without similarity routing.
-
-    Evidence-mode ownership is derived only from exact host-owned identifiers.  The
-    final task that provides a requirement's canonical capability owns its reuse
-    decision.  Intermediate tasks retain their exact task-level reference contract,
-    but never acquire a capability through token overlap or a first-module fallback.
-    """
+    """Bind reuse through the validated semantic DAG, without similarity routing."""
     try:
         from .evidence_first_planning import validate_evidence_first_plan
+        from .evidence_task_receipt_contract import build_execution_receipt_bundle
 
         validate_evidence_first_plan(evidence_plan, prompt=proposal.requested_prompt)
+        receipt_bundle = build_execution_receipt_bundle(evidence_plan)
     except (ImportError, ValueError, TypeError, RecursionError) as exc:
         raise SpecValidationError(
             f'Evidence-first reuse binding rejected an invalid plan: {exc}'
         ) from exc
 
     plan_sha256 = str(evidence_plan.get('plan_sha256') or '')
+    if receipt_bundle.get('plan_sha256') != plan_sha256:
+        raise SpecValidationError('Evidence execution receipt bundle is bound to a stale plan hash.')
+    raw_receipts = receipt_bundle.get('receipts')
+    if not isinstance(raw_receipts, Mapping):
+        raise SpecValidationError('Evidence execution receipt bundle has no receipt catalog.')
+    expected_receipts = {
+        str(task_id): dict(receipt)
+        for task_id, receipt in raw_receipts.items()
+        if str(task_id) and isinstance(receipt, Mapping)
+    }
+    if len(expected_receipts) != len(raw_receipts):
+        raise SpecValidationError('Evidence execution receipt catalog contains an invalid task receipt.')
+
     request_catalog = evidence_plan.get('request_catalog')
     raw_requirements = (
         request_catalog.get('requirements')
@@ -153,6 +162,8 @@ def _bind_evidence_reuse_plan(
         raise SpecValidationError('Evidence-first component catalog contains an invalid or duplicate component reference.')
     if set(decisions) != set(requirements):
         raise SpecValidationError('Evidence-first reuse decisions do not exactly cover the requirement catalog.')
+    if set(expected_receipts) != set(tasks):
+        raise SpecValidationError('Evidence execution receipts must map one-to-one to semantic task IDs.')
 
     modules = {module.module_id: module for module in proposal.modules}
     if len(modules) != len(proposal.modules) or set(modules) != set(tasks):
@@ -160,13 +171,13 @@ def _bind_evidence_reuse_plan(
             'Evidence-first production modules must map one-to-one to semantic task IDs.'
         )
 
-    for task_id, task in tasks.items():
+    for task_id, semantic_task in tasks.items():
         module = modules[task_id]
         _validate_evidence_module_binding(
             module=module,
-            task=task,
+            semantic_task=semantic_task,
+            expected_receipt=expected_receipts[task_id],
             evidence_plan_sha256=plan_sha256,
-            request_catalog=request_catalog,
             requirements=requirements,
             decisions=decisions,
             components=components,
@@ -304,11 +315,6 @@ def _refresh_evidence_production_contract(
     raw_acceptance = current.get('acceptance_catalog')
     if not isinstance(raw_acceptance, list):
         raise SpecValidationError('Evidence-first production contract has no acceptance catalog.')
-    # The authority boundary may deduplicate an input acceptance when it is
-    # byte-identical to the requirement-owned canonical public acceptance. Rebinding must
-    # therefore preserve the complete current public acceptance surface, not require a
-    # surviving origin=input row. Feeding these statements back through compilation is
-    # lossless: the authority boundary deterministically removes duplicate input rows again.
     recompilation_acceptance = tuple(
         str(item.get('statement') or '')
         for item in raw_acceptance
@@ -351,14 +357,18 @@ def _refresh_evidence_production_contract(
 def _validate_evidence_module_binding(
     *,
     module: ProductionModule,
-    task: Mapping[str, Any],
+    semantic_task: Mapping[str, Any],
+    expected_receipt: Mapping[str, Any],
     evidence_plan_sha256: str,
-    request_catalog: Mapping[str, Any],
     requirements: Mapping[str, Mapping[str, Any]],
     decisions: Mapping[str, Mapping[str, Any]],
     components: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    task_id = str(task.get('task_id') or '')
+    from .evidence_task_receipt_contract import RECEIPT_EXTENSION_FIELDS, validate_task_receipt
+
+    task_id = str(semantic_task.get('task_id') or '')
+    if str(expected_receipt.get('task_id') or '') != task_id:
+        raise SpecValidationError(f'Evidence task {task_id} execution receipt ID changed.')
     config = module.config
     if config.get('evidence_plan_sha256') != evidence_plan_sha256:
         raise SpecValidationError(
@@ -367,30 +377,16 @@ def _validate_evidence_module_binding(
     embedded = config.get('evidence_task')
     if not isinstance(embedded, Mapping):
         raise SpecValidationError(f'Evidence task {task_id} has no host-owned task receipt.')
-    extras = set(embedded) - set(task)
-    if extras - {'request_context'}:
-        raise SpecValidationError(
-            f'Evidence task {task_id} contains unrecognized receipt fields: {sorted(extras)}.'
-        )
-    for key, value in task.items():
-        if embedded.get(key) != value:
-            raise SpecValidationError(
-                f'Evidence task {task_id} changed host-owned field {key!r}.'
-            )
-    if 'request_context' in embedded:
-        requirement_refs = _strict_string_refs(
-            task.get('requirement_refs'),
-            f'task {task_id} requirement_refs',
-        )
-        expected_context = {
-            'prompt_sha256': request_catalog.get('prompt_sha256'),
-            'requirements': [dict(requirements[reference]) for reference in requirement_refs],
-        }
-        if embedded.get('request_context') != expected_context:
-            raise SpecValidationError(
-                f'Evidence task {task_id} request context is stale or references another requirement.'
-            )
+    try:
+        validate_task_receipt(embedded, expected_receipt=expected_receipt)
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
 
+    execution_task = {
+        key: value
+        for key, value in expected_receipt.items()
+        if key not in RECEIPT_EXTENSION_FIELDS
+    }
     exact_fields = (
         'requirement_refs',
         'gap_refs',
@@ -402,23 +398,23 @@ def _validate_evidence_module_binding(
         'impact_probes',
     )
     for key in exact_fields:
-        if config.get(key) != task.get(key):
+        if config.get(key) != execution_task.get(key):
             raise SpecValidationError(
-                f'Evidence task {task_id} module binding changed {key!r}.'
+                f'Evidence task {task_id} module binding changed execution field {key!r}.'
             )
     if config.get('batch_id') != task_id:
         raise SpecValidationError(f'Evidence task {task_id} module batch ID does not match.')
     if tuple(module.depends_on) != tuple(
-        _strict_string_refs(task.get('depends_on'), f'task {task_id} depends_on')
+        _strict_string_refs(execution_task.get('depends_on'), f'task {task_id} depends_on')
     ):
         raise SpecValidationError(f'Evidence task {task_id} module dependencies changed.')
     if tuple(module.required_gates) != tuple(
-        _strict_string_refs(task.get('required_gates'), f'task {task_id} required_gates')
+        _strict_string_refs(execution_task.get('required_gates'), f'task {task_id} required_gates')
     ):
         raise SpecValidationError(f'Evidence task {task_id} module gates changed.')
 
     requirement_refs = _strict_string_refs(
-        task.get('requirement_refs'),
+        semantic_task.get('requirement_refs'),
         f'task {task_id} requirement_refs',
     )
     expected_reuse_refs: list[str] = []
@@ -452,7 +448,7 @@ def _validate_evidence_module_binding(
         )
     expected_reuse_refs = list(dict.fromkeys(expected_reuse_refs))
     actual_reuse_refs = list(
-        _strict_string_refs(task.get('reuse_refs'), f'task {task_id} reuse_refs')
+        _strict_string_refs(semantic_task.get('reuse_refs'), f'task {task_id} reuse_refs')
     )
     if actual_reuse_refs != expected_reuse_refs:
         raise SpecValidationError(
@@ -625,9 +621,7 @@ def install_flux2_q4_image_adapter(image_adapter_cls: Any, model_runtime_module:
             from diffusers import BitsAndBytesConfig as DiffusersBitsAndBytesConfig
             from diffusers import Flux2KleinPipeline
             from diffusers.quantizers import PipelineQuantizationConfig
-            from transformers import (
-                BitsAndBytesConfig as TransformersBitsAndBytesConfig,
-            )
+            from transformers import BitsAndBytesConfig as TransformersBitsAndBytesConfig
             if not torch.cuda.is_available():
                 raise ModelConfigurationError('FLUX.2 Klein 9B Q4 asset production requires CUDA.')
             key = (FLUX_MODEL_ID, QUANTIZATION, PIXEL_LORA_ID, PIXEL_LORA_WEIGHT, 'float16', 'q4_auto_offload')
