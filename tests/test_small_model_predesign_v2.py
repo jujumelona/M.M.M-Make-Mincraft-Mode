@@ -1,24 +1,26 @@
 from __future__ import annotations
 
-from minecraft_mod_ai import agentic_research_game_design as design_agent
-from minecraft_mod_ai import minecraft_knowledge_nodes as knowledge
-from minecraft_mod_ai import pre_design_domain_research
-from minecraft_mod_ai import small_model_predesign_research as small
+from minecraft_mod_ai import pre_design_domain_research as research
 
 
-def test_canonical_predesign_path_bypasses_corrective_state_machine():
-    assert pre_design_domain_research.research_document_domain.__module__ == "minecraft_mod_ai.pre_design_domain_research"
-    assert callable(small.research_document_domain)
+def test_canonical_predesign_path_is_host_grounded_without_model_synthesis():
+    assert research.research_document_domain.__module__ == (
+        "minecraft_mod_ai.pre_design_domain_research"
+    )
 
 
-def test_irrelevant_page_never_becomes_blocking_gap():
+def test_irrelevant_page_fails_closed_without_spending_model_turn():
+    calls: list[object] = []
+
     class Router:
         def generate_text(self, *args, **kwargs):
-            return "NONE"
+            calls.append((args, kwargs))
+            raise AssertionError("host evidence projection must not call the model")
 
     class Project:
         @staticmethod
         def _read_evidence_pages(document):
+            del document
             return [
                 {
                     "page_ref": "host#1",
@@ -26,73 +28,68 @@ def test_irrelevant_page_never_becomes_blocking_gap():
                 }
             ]
 
-        @staticmethod
-        def _prompt_document_receipt(document):
-            return {"page_count": 1}
-
-    note = small.research_document_domain(
+    note = research.research_document_domain(
         object(),
         Project(),
         Router(),
         prompt="식민지화 우주 모드",
-        domain={"domain_id": "request", "objective": "space colonization", "queries": []},
+        domain={
+            "domain_id": "request",
+            "objective": "space colonization",
+            "queries": ["space colonization persistence"],
+        },
         document={"page_count": 1},
         trace_metadata=None,
     )
-    assert note["sufficient"] is True
+    assert calls == []
+    assert note["model_called"] is False
+    assert note["source_body_count"] == 1
+    assert note["host_grounded_evidence_card_count"] == 0
+    assert note["sufficient"] is False
     assert note["fixed_point"] is False
-    assert note["gaps"] == []
+    assert note["gaps"]
+    assert note["checkpoint"]["status"] == "blocked"
     assert note["research_evidence_status"] == "no_relevant_external_evidence"
 
 
-def test_predesign_model_uses_plain_text_and_host_exact_quote():
-    calls = []
+def test_relevant_materialized_body_becomes_exact_host_evidence_without_model_turn():
+    class Project:
+        @staticmethod
+        def _read_evidence_pages(document):
+            del document
+            return [
+                {
+                    "page_ref": "host#1",
+                    "content": (
+                        "Space colony state persists across server restarts. "
+                        "Unrelated trailing material."
+                    ),
+                }
+            ]
 
     class Router:
-        def generate_text(self, *args, **kwargs):
-            calls.append(kwargs)
-            return (
-                "EVIDENCE\thost#1\tSpace stations can orbit planets."
-                "\tUse an orbiting station abstraction."
-            )
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("host evidence projection must not call the model")
 
-    claims, diagnostics, model_calls = small._extract_batch(
+    note = research.research_document_domain(
+        object(),
+        Project(),
         Router(),
-        domain={"objective": "space station", "queries": ["minecraft space station"]},
-        pages=[
-            {
-                "page_ref": "host#1",
-                "content": "Space stations can orbit planets. Other text.",
-            }
-        ],
-    )
-    assert diagnostics == []
-    assert model_calls == 1
-    assert claims and claims[0]["evidence_refs"] == ["host#1"]
-    assert claims[0]["support_quote"] == "Space stations can orbit planets."
-    assert calls[0]["response_format"] == "text"
-    assert calls[0]["response_schema"] is None
-    assert calls[0]["enable_tools"] is False
-
-
-def test_advisory_empty_evidence_is_valid_host_state():
-    design_agent._validate_sufficient_research(
-        {
-            "sufficient": True,
-            "claims": [],
-            "research_mode": "advisory_predesign",
-            "research_evidence_status": "no_relevant_external_evidence",
+        prompt="persistent colony",
+        domain={
+            "domain_id": "request",
+            "objective": "persistent colony state",
+            "queries": ["colony state persistence"],
         },
-        allowed_refs=frozenset(),
+        document={"page_count": 1},
+        trace_metadata=None,
     )
 
-
-def test_stateful_space_request_activates_persistence_network_worldgen():
-    plan = knowledge.compile_minecraft_knowledge_plan(
-        "우주로 가서 다른 행성을 식민지화하고 특수 광물을 캐며 돈과 거래로 "
-        "우주선과 선원을 업그레이드한다"
+    assert note["model_called"] is False
+    assert note["sufficient"] is True
+    assert note["checkpoint"]["status"] == "complete"
+    assert note["claims"]
+    assert note["claims"][0]["evidence_refs"] == ["host#1"]
+    assert note["grounded_evidence_cards"][0]["verification"] == (
+        "host_exact_substring_from_materialized_source_page"
     )
-    predicates = {item["predicate_id"]: item for item in plan["branch_predicates"]}
-    assert predicates["needs_persistence"]["value"] is True
-    assert predicates["needs_network"]["value"] is True
-    assert predicates["needs_worldgen"]["value"] is True
