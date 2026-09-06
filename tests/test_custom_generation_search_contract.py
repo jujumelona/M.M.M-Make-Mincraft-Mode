@@ -71,15 +71,15 @@ def test_strategy_router_only_augments_coder_role() -> None:
     assert base.calls[1][1] == messages
 
 
-def test_custom_generation_public_target_defaults_are_disabled() -> None:
+def test_custom_generation_public_target_overrides_are_not_exposed() -> None:
     signature = inspect.signature(CustomModuleGenerator.generate)
-    assert signature.parameters["minecraft_version"].default is None
-    assert signature.parameters["loader"].default is None
-    assert signature.parameters["mappings"].default is None
+    assert "minecraft_version" not in signature.parameters
+    assert "loader" not in signature.parameters
+    assert "mappings" not in signature.parameters
 
 
 def test_target_values_fail_closed_without_complete_host_target() -> None:
-    with pytest.raises(ValueError, match="must provide minecraft_version"):
+    with pytest.raises(ValueError, match="mappings"):
         custom_search._target_values(
             {
                 "minecraft_version": "1.20.1",
