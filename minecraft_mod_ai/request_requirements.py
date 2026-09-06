@@ -152,29 +152,29 @@ def validate_leaf_atomicity(
     del clause_text
     statement = str(leaf.get("semantic_statement") or "").strip()
     anchor = str(leaf.get("source_anchor") or "").strip()
-    then = str(leaf.get("then") or "").strip()
 
-    if is_genre_context(statement, anchor):
-        return (
-            LeafAtomicityStatus.CONTEXT,
-            f"Leaf {statement!r} is request context rather than an executable behavior.",
-        )
+    # Catch-all has priority because phrases such as "등 여러가지가 가능한 모드" also
+    # lexically look like a theme description, but they carry no executable semantics.
     if is_pure_catch_all(statement, anchor):
         return (
             LeafAtomicityStatus.CATCH_ALL,
             f"Leaf {statement!r} is an unverifiable catch-all requirement.",
         )
+    if is_genre_context(statement, anchor):
+        return (
+            LeafAtomicityStatus.CONTEXT,
+            f"Leaf {statement!r} is request context rather than an executable behavior.",
+        )
 
-    # Semantic statement is the primary authority. Then is a secondary signal because a weak
-    # model sometimes hides an extra independent outcome there while keeping a short title.
+    # The semantic statement is the approved description of the behavior. Given/When/Then
+    # naturally contain prerequisite/outcome verbs (for example a trade can "change" stock),
+    # so treating those verbs as independent actions creates false compound repairs.
     statement_actions = detected_action_families(statement)
-    then_actions = detected_action_families(then)
-    combined_actions = tuple(dict.fromkeys((*statement_actions, *then_actions)))
-    if _parallel_target_signal(statement, len(statement_actions)) or len(combined_actions) >= 2:
+    if _parallel_target_signal(statement, len(statement_actions)):
         return (
             LeafAtomicityStatus.COMPOUND,
             "Leaf contains multiple independently observable action families: "
-            + ", ".join(combined_actions or statement_actions),
+            + ", ".join(statement_actions),
         )
 
     return LeafAtomicityStatus.ATOMIC, ""
