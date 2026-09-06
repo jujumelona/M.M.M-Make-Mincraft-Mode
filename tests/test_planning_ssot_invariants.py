@@ -22,6 +22,19 @@ def rehash(state):
     return state
 
 
+def worksheet(prefix="Concrete requirement"):
+    return {
+        key: {
+            "specification": (
+                f"{prefix} {key} specification defines its own owner, condition, boundary, "
+                "and observable implementation result."
+            ),
+            "evidence_refs": ["source:1"],
+        }
+        for key in DETAIL_FIELDS
+    }
+
+
 def test_user_only_never_bypasses_requirement_gate():
     with pytest.raises(ValueError, match="PLANNING_REQUIREMENTS_BLOCKED"):
         compile_researched_requirements(None, "Build my favorite game", initial())
@@ -69,7 +82,7 @@ def test_unknown_prompt_cannot_become_synthetic_resolved_semantic():
 
 
 def test_worksheet_requires_each_section_and_real_refs():
-    sheet = {key: {"specification": "A concrete requirement-specific specification", "evidence_refs": ["source:1"]} for key in DETAIL_FIELDS}
+    sheet = worksheet()
     assert validate_worksheet(sheet, {"source:1"}) == sheet
     partial = deepcopy(sheet)
     partial.pop("state_model")
@@ -108,8 +121,8 @@ def test_grounded_detail_survives_handoff_and_resume_without_model_calls():
         "evidence_refs": ["source:1"], "sufficient": True, "source": "grounded_materialized_pages"})
     state["resolved"].append({"unresolved_id": state["unresolved"][0]["unresolved_id"],
         "resolution": "Block registration", "basis": "grounded_research", "evidence_refs": ["source:1"]})
-    worksheet = {key: {"specification": "Grounded block implementation", "evidence_refs": ["source:1"]} for key in DETAIL_FIELDS}
-    answer = {"engineering_worksheet": worksheet,
+    detailed_worksheet = worksheet("Grounded block implementation")
+    answer = {"engineering_worksheet": detailed_worksheet,
         "implementation_capabilities": [{"capability": "block registration", "evidence_refs": ["source:1"]}],
         "implementation_obligations": [{"obligation": "Register the placeable block", "evidence_refs": ["source:1"]}],
         "artifact_obligations": [], "reuse_candidates": [{"evidence_ref": "source:1", "mode": "reference_only", "reason": "Pattern only"}],
@@ -117,7 +130,7 @@ def test_grounded_detail_survives_handoff_and_resume_without_model_calls():
     state = compile_detailed_implementation_plans(Router(answer), prompt, rehash(state))
     validate_planning_state(state)
     catalog = build_request_catalog_from_planning_state(prompt, state)
-    assert catalog["requirements"][0]["engineering_worksheet"] == worksheet
+    assert catalog["requirements"][0]["engineering_worksheet"] == detailed_worksheet
     assert catalog["requirements"][0]["reuse_candidates"][0]["mode"] == "reference_only"
     assert prepare_planning_state(None, prompt, existing_state=state) == state
     state["coverage"][0]["detailed_plan_ref"] = "nonexistent"
