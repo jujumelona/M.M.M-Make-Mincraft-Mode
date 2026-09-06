@@ -94,7 +94,13 @@ def _rewrite_pre_design_candidate(prompt: str, candidate: Any) -> Any:
                 and not isinstance(raw_providers, (str, bytes, bytearray))
                 else []
             )
-            domain["providers"] = list(dict.fromkeys([*providers, "github", "modrinth"]))
+            # Public planning metadata advertises actual catalogs only. GitHub source
+            # verification and broad fallback are internal to catalog_first_grounded_rag
+            # and must not reappear as a peer discovery provider.
+            providers = [provider for provider in providers if provider != "github"]
+            domain["providers"] = list(
+                dict.fromkeys([*providers, "curseforge", "modrinth"])
+            )
         domains.append(domain)
     rewritten["domains"] = domains
     return rewritten
