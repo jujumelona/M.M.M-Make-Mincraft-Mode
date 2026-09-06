@@ -18,6 +18,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .repair_approved_reuse_context import install as install_repair_approved_reuse
 from .repair_evidence_router import classify_repair_evidence_route, official_query_prefix
 
 _MARKER = "_mmm_research_evidence_handoff_v1"
@@ -383,6 +384,7 @@ def install(
         repair_module,
         reuse_hardener._diagnostic_signature_payload,
     )
+    install_repair_approved_reuse(repair_module)
 
 
 __all__ = [
