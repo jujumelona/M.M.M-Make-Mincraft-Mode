@@ -10,11 +10,17 @@ from minecraft_mod_ai.plan_collect_all_linker import (
 from minecraft_mod_ai.task_execution_classification import claims_runtime, is_test_anchor
 
 
-def _runtime_gametest_task(*, kind: str = "test") -> dict[str, object]:
+def _runtime_gametest_task(
+    *,
+    kind: str = "test",
+    runtime_capability: bool = True,
+) -> dict[str, object]:
     return {
         "task_id": "task_space_launch_prerequisite_gate_regression",
         "semantic_outcome": "Enforce the space launch prerequisite at runtime",
-        "provides": [],
+        "provides": (
+            ["capability:space_launch_prerequisite"] if runtime_capability else []
+        ),
         "required_gates": ["target_compile"],
         "requirement_refs": [],
         "gap_refs": [],
@@ -44,7 +50,13 @@ def _minimal_plan_context() -> dict[str, object]:
     }
 
 
-def test_runtime_semantic_without_capability_prefix_is_still_runtime() -> None:
+def test_runtime_semantic_without_capability_export_is_not_runtime() -> None:
+    task = _runtime_gametest_task(runtime_capability=False)
+
+    assert not claims_runtime(task)
+
+
+def test_explicit_capability_export_is_runtime_authority() -> None:
     task = _runtime_gametest_task()
 
     assert claims_runtime(task)
