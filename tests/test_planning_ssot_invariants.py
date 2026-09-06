@@ -64,7 +64,7 @@ def _worksheet():
                 f"{key} has a distinct concrete implementation contract with an owner, "
                 "condition, boundary, and observable result."
             ),
-            "evidence_refs": ["source:1"],
+            "constraint_evidence_refs": ["source:1"],
         }
         for key in WORKSHEET_SECTIONS
     }
@@ -223,6 +223,6 @@ def test_worksheet_requires_all_selected_sections_and_grounded_refs():
         validate_worksheet(partial, {"source:1"})
 
     invalid_ref = deepcopy(sheet)
-    invalid_ref["algorithm"]["evidence_refs"] = ["model:guess"]
+    invalid_ref["algorithm"]["constraint_evidence_refs"] = ["model:guess"]
     with pytest.raises(ValueError, match="WORKSHEET"):
         validate_worksheet(invalid_ref, {"source:1"})
