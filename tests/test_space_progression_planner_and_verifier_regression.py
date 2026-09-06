@@ -264,10 +264,17 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
     assert branches["needs_mixin"]["status"] == "NOT_APPLICABLE"
     steps = planning._semantic_steps("spacecraft.performance_upgrade", branches)
     assert [step.name for step in steps] == [
-        "gameplay_schema",
-        "domain_service",
-        "state_sync",
-        "resource_binding",
+        "semantic_contract",
+        "upgrade_stat_schema",
+        "upgrade_transaction_service",
+        "state_codec",
+        "persistence_binding",
+        "payload_contract",
+        "server_handler_sync",
+        "data_resource_binding",
+        "client_contract",
+        "client_surface",
+        "failure_contract",
         "runtime_scenario",
     ]
     assert not any("build_config" in step.anchor_kinds for step in steps)
