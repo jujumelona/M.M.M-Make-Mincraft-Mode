@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.planning_authority import build_authoritative_request_catalog
-from minecraft_mod_ai.planning_state_contract import build_initial_planning_state
+from minecraft_mod_ai.planning_state_contract import MODEL_PARAMETERS, build_initial_planning_state
 from minecraft_mod_ai.planning_state_research import _compile_queries, _research_brief
 from minecraft_mod_ai.reference_source_research import _wikipedia_languages
 
@@ -68,10 +68,7 @@ def test_model_cannot_author_scope_or_route_it_to_bypass_host_policy() -> None:
                     {
                         "question": "범위가 무엇인가",
                         "reason": "scope",
-                        "blocks": ["requirement_selection"],
                         "information_needed": "구현 범위",
-                        "resolution_route": "user_only",
-                        "source_kinds": [],
                     }
                 ],
             }
@@ -85,8 +82,109 @@ def test_model_cannot_author_scope_or_route_it_to_bypass_host_policy() -> None:
         build_initial_planning_state(router, prompt)
 
 
-def test_reference_query_compiler_is_explicitly_target_neutral() -> None:
-    router = _Router([{"queries": ["메이플스토리 gameplay systems"]}])
+@pytest.mark.parametrize(
+    "reason",
+    ["repository_fact", "minecraft_api", "implementation_method", "compatibility"],
+)
+def test_prompt_model_cannot_create_downstream_engineering_unknowns(reason: str) -> None:
+    prompt = "우주선을 부품별로 제작하고 업그레이드하는 우주 모드"
+    router = _Router(
+        [
+            {
+                "goal": {"statement": prompt},
+                "known": [{"statement": "우주선을 부품별로 제작하고 업그레이드한다"}],
+                "references": [],
+                "scope_status": "partial",
+                "unresolved": [
+                    {
+                        "question": "구현 세부가 무엇인가",
+                        "reason": reason,
+                        "information_needed": "구현 세부",
+                    }
+                ],
+            }
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"PROMPT_STATE_UNRESOLVED: model cannot author reason '{reason}'",
+    ):
+        build_initial_planning_state(router, prompt)
+
+
+def test_prompt_model_schema_cannot_author_blocker_topology() -> None:
+    unresolved = MODEL_PARAMETERS["properties"]["unresolved"]["items"]
+    assert "blocks" not in unresolved["properties"]
+    assert set(unresolved["properties"]["reason"]["enum"]) == {
+        "external_fact",
+        "contradiction",
+        "user_preference",
+    }
+
+
+def test_creative_unspecified_values_do_not_become_prompt_research() -> None:
+    prompt = (
+        "우주모드: 자원 파밍과 거래로 우주선 부품을 만들고 업그레이드해서 "
+        "행성 탐사, 외계인 전투, 식민지화를 할 수 있게 해줘"
+    )
+    router = _Router(
+        [
+            {
+                "goal": {"statement": "우주 진출과 행성 활동이 가능한 진행형 우주 모드"},
+                "known": [
+                    {"statement": "자원 파밍과 거래가 있다"},
+                    {"statement": "우주선을 부품별로 제작하고 업그레이드한다"},
+                    {"statement": "행성 탐사, 외계인 전투, 식민지화가 가능하다"},
+                ],
+                "references": [],
+                "scope_status": "unspecified",
+                "unresolved": [],
+            }
+        ]
+    )
+
+    state = build_initial_planning_state(router, prompt)
+
+    assert {item["reason"] for item in state["unresolved"]} == {"scope"}
+    assert not any(
+        item["reason"] in {"implementation_method", "minecraft_api", "repository_fact", "compatibility"}
+        for item in state["unresolved"]
+    )
+    assert not any(
+        item["resolution_route"] == "implementation_research"
+        for item in state["unresolved"]
+    )
+
+
+def test_nonexact_model_quote_falls_back_to_valid_full_prompt_receipt() -> None:
+    prompt = "중력이 주기적으로 뒤집히는 모드 만들어줘"
+    router = _Router(
+        [
+            {
+                "goal": {
+                    "statement": "주기적으로 중력이 반전되는 모드",
+                    "source_quote": "정확히 원문에 없는 요약",
+                },
+                "known": [],
+                "references": [],
+                "scope_status": "explicit",
+                "unresolved": [],
+            }
+        ]
+    )
+
+    state = build_initial_planning_state(router, prompt)
+    source = state["goal"]["source"]
+
+    assert source["char_start"] == 0
+    assert source["char_end"] == len(prompt)
+    assert source["text"] == prompt
+    assert source["verification"] == "full_prompt_fallback"
+
+
+def test_reference_query_compiler_is_host_owned_and_target_neutral() -> None:
+    router = _Router([])
     state = {"references": [{"name": "메이플스토리"}]}
     research = {
         "objective": "메이플스토리의 실제 시스템을 조사한다",
@@ -96,9 +194,9 @@ def test_reference_query_compiler_is_explicitly_target_neutral() -> None:
 
     queries = _compile_queries(router, state, research)
 
-    assert queries == ["메이플스토리 gameplay systems"]
-    system = router.calls[0][1][0]["content"]
-    assert "never turn it into a '<name> Minecraft mod' query" in system
+    assert queries[0] == "메이플스토리 문서화된 게임 시스템과 상호 관계"
+    assert all("Minecraft mod" not in query for query in queries)
+    assert router.calls == []
 
 
 def test_reference_wikipedia_search_uses_authored_language_before_english() -> None:
@@ -124,7 +222,7 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
     domain = reference_brief["domains"][0]
     assert reference_ids == {"r_001"}
     assert "gameplay_reference" in domain["evidence_kinds"]
-    assert "wikipedia" in domain["providers"]
+    assert domain["providers"] == ["wikipedia"]
 
     implementation_state = {
         "unresolved": [{"question": "implementation?", "status": "open"}],
@@ -148,8 +246,11 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
     implementation_brief, reference_ids = _research_brief("persistent progression", implementation_state)
     domain = implementation_brief["domains"][0]
     assert reference_ids == set()
-    assert {"source_code", "minecraft_api", "local_project"}.issubset(domain["evidence_kinds"])
-    assert {"github", "modrinth", "curseforge", "official_docs", "project_rag"}.issubset(domain["providers"])
+    assert {"mod_catalog", "source_code", "minecraft_api", "local_project"}.issubset(
+        domain["evidence_kinds"]
+    )
+    assert domain["providers"][:3] == ["curseforge", "modrinth", "github"]
+    assert {"official_docs", "project_rag"}.issubset(domain["providers"])
 
 
 def test_authoritative_catalog_has_no_raw_prompt_fallback() -> None:
