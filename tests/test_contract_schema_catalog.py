@@ -12,7 +12,7 @@ def _canonical_contract_paths() -> set[str]:
     package_root = Path(minecraft_mod_ai.__file__).resolve().parent
     return {
         path.relative_to(package_root.parent).as_posix()
-        for path in package_root.glob("*.py")
+        for path in package_root.rglob("*.py")
         if path.name == "target_contract.py"
         or path.name.endswith(("_contract.py", "_contracts.py"))
     }
