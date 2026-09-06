@@ -92,12 +92,15 @@ class VersionedModReferenceRetriever:
         seen_repo: set[str] = set()
         used = 0
 
+        def size_of(item: ReferenceExcerpt) -> int:
+            return len(item.text.encode("utf-8"))
+
         def admit(item: ReferenceExcerpt) -> bool:
             nonlocal used
             key = (item.repository, item.commit_sha, item.source_sha)
             if key in seen_source:
                 return False
-            size = len(item.text.encode("utf-8"))
+            size = size_of(item)
             if size <= 0 or used + size > self.byte_budget:
                 return False
             seen_source.add(key)
@@ -105,6 +108,32 @@ class VersionedModReferenceRetriever:
             selected.append(item)
             used += size
             return True
+
+        # Preserve the intended two-part textbook whenever the byte budget permits it:
+        # one task-specific donor plus one similarity-independent architecture baseline.
+        if self.max_excerpts >= 2:
+            task_heads = self._repo_heads(candidates, role="task")
+            baseline_heads = self._repo_heads(candidates, role="baseline")
+            feasible_pairs = [
+                (task_item, baseline_item)
+                for task_item in task_heads
+                for baseline_item in baseline_heads
+                if task_item.repository != baseline_item.repository
+                and size_of(task_item) + size_of(baseline_item) <= self.byte_budget
+            ]
+            if feasible_pairs:
+                task_item, baseline_item = max(
+                    feasible_pairs,
+                    key=lambda pair: (
+                        pair[0].score + pair[1].score,
+                        min(pair[0].score, pair[1].score),
+                        -(size_of(pair[0]) + size_of(pair[1])),
+                    ),
+                )
+                admit(task_item)
+                admit(baseline_item)
+                if len(selected) >= self.max_excerpts:
+                    return tuple(selected)
 
         for role in ("task", "baseline"):
             for item in candidates:
@@ -119,6 +148,19 @@ class VersionedModReferenceRetriever:
                 break
         return tuple(selected)
 
+    @staticmethod
+    def _repo_heads(
+        candidates: list[ReferenceExcerpt], *, role: str
+    ) -> tuple[ReferenceExcerpt, ...]:
+        result: list[ReferenceExcerpt] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if item.role != role or item.repository in seen:
+                continue
+            seen.add(item.repository)
+            result.append(item)
+        return tuple(result)
+
     def pool_receipt(self) -> dict[str, object]:
         baseline = baseline_families(self.loader, limit=self.baseline_family_limit)
         return {
@@ -131,6 +173,7 @@ class VersionedModReferenceRetriever:
             "baseline_candidates": [family.repository for family in baseline],
             "baseline_is_similarity_independent": True,
             "task_donors_are_additive": True,
+            "dual_role_pair_preferred_when_feasible": True,
             "compatibility_owner": "host",
             "model_may_not_admit_references": True,
             "immutable_commit_required": True,
