@@ -9,11 +9,11 @@ into implementation/search tasks.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from . import central_research
 from .model_router import ModelRouter
@@ -21,6 +21,9 @@ from .planner import _proposal_from_model_data
 from .platform_resolver import retarget_proposal
 from .root_cause_trace import traced_callable
 from .spec import Proposal, SpecValidationError
+
+if TYPE_CHECKING:
+    from .planning_state_pipeline import DetailSectionApplicabilityResolver
 
 _T = TypeVar("_T")
 
@@ -77,6 +80,7 @@ class PlanningPipeline:
         media_paths: Sequence[str | Path] = (),
         existing_state: Mapping[str, Any] | None = None,
         checkpoint: Callable[[dict[str, Any]], None] | None = None,
+        detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
     ) -> PlanningArtifacts:
         if not str(prompt).strip():
             raise PlanningStageError(PlanningStage.REQUEST, "prompt is empty")
@@ -100,6 +104,9 @@ class PlanningPipeline:
                     prompt,
                     existing_state=existing_state,
                     checkpoint=save_state,
+                    detail_section_applicability_resolver=(
+                        detail_section_applicability_resolver
+                    ),
                 ),
             )
         except Exception as exc:
