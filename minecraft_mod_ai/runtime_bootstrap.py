@@ -220,6 +220,7 @@ def _install_architecture_contracts() -> None:
         production_contract,
         quality_evidence,
         repair_engine,
+        research_ledger,
         validation_execution_contract,
         work_graph,
     )
@@ -233,6 +234,7 @@ def _install_architecture_contracts() -> None:
     from .custom_generation_search_contract import install as install_custom_generation_search
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
+    from .research_evidence_handoff_contract import install as install_research_evidence_handoff
     from .required_gate_compatibility_contract import install as install_gate_compatibility
     from .semantic_reviewer_role_contract import install as install_reviewer_role
     from .visual_acceptance_scope_contract import install as install_visual_scope
@@ -245,6 +247,11 @@ def _install_architecture_contracts() -> None:
     install_atomic_quality(atomic_requirement_contract, quality_evidence, complete_orchestrator)
     install_atomic_playtest(atomic_requirement_contract, quality_evidence, complete_orchestrator)
     install_repair_diagnostics(repair_engine)
+    install_research_evidence_handoff(
+        research_ledger_module=research_ledger,
+        custom_module_generator_module=custom_module_generator,
+        repair_module=repair_engine,
+    )
     install_clean_room(complete_orchestrator, quality_evidence, validation_execution_contract)
     install_work_graph_state_transitions(work_graph)
     agentic_optimization_contract.install(
