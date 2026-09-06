@@ -138,6 +138,7 @@ def test_single_slot_failure_is_not_replayed() -> None:
     assert attempts == {"mk_entity": 1, "mk_quality": 1}
     assert all(note["sufficient"] is False for note in result["domain_notes"])
     assert all(note["worker_error"] is True for note in result["domain_notes"])
+    assert all(not note.get("fixed_point", False) for note in result["domain_notes"])
     assert all(
         bool(note.get("serial_error") or note.get("parallel_error"))
         for note in result["domain_notes"]
@@ -178,7 +179,7 @@ def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> Non
             },
         },
         "deterministic": {
-            "forced_project_rag": {
+            "grounded_rag": {
                 "domains": [
                     {
                         "domain_id": domain["domain_id"],
@@ -208,5 +209,5 @@ def test_fixed_point_recovery_is_accepted_only_with_real_route_receipts() -> Non
     }
     assert evaluate_route_coverage(plan, research)["status"] == "PASS"
 
-    research["deterministic"]["forced_project_rag"]["domains"].pop()
+    research["deterministic"]["grounded_rag"]["domains"].pop()
     assert evaluate_route_coverage(plan, research)["status"] == "BLOCK"
