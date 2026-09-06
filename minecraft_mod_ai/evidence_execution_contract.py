@@ -115,6 +115,57 @@ def _derived_for_task(
     return result
 
 
+def _request_requirements(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    catalog = _mapping(plan.get("request_catalog"))
+    raw_requirements = catalog.get("requirements")
+    if not isinstance(raw_requirements, Sequence) or isinstance(
+        raw_requirements, (str, bytes, bytearray)
+    ):
+        return {}
+
+    result: dict[str, Mapping[str, Any]] = {}
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            continue
+        requirement_id = str(raw.get("requirement_id") or "")
+        if not requirement_id:
+            continue
+        if requirement_id in result:
+            raise ValueError(
+                f"Request catalog has duplicate requirement ID {requirement_id!r}"
+            )
+        result[requirement_id] = raw
+    return result
+
+
+def _completion_contract_for_task(
+    plan: Mapping[str, Any], task: Mapping[str, Any]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return planner-owned OBL/VAL only for requirements this task completes.
+
+    Ownership is structural: a task must both reference REQ-X and provide the exact
+    ``requirement_done:REQ-X`` capability. Requirement prose and prompt keywords are
+    deliberately not inspected, so intermediate tasks cannot inherit global obligations.
+    """
+
+    requirements = _request_requirements(plan)
+    if not requirements:
+        return (), ()
+
+    provides = set(_strings(task.get("provides")))
+    obligations: list[str] = []
+    acceptance: list[str] = []
+    for requirement_id in _strings(task.get("requirement_refs")):
+        if f"requirement_done:{requirement_id}" not in provides:
+            continue
+        requirement = requirements.get(requirement_id)
+        if requirement is None:
+            continue
+        obligations.extend(_strings(requirement.get("implementation_obligations")))
+        acceptance.extend(_strings(requirement.get("acceptance")))
+    return tuple(dict.fromkeys(obligations)), tuple(dict.fromkeys(acceptance))
+
+
 def _execution_task(
     plan: Mapping[str, Any], raw_task: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -173,10 +224,12 @@ def _execution_task(
     task["required_gates"] = gates
     task["owned_anchors"] = anchors
 
+    planner_obligations, planner_acceptance = _completion_contract_for_task(plan, task)
     derived = _derived_for_task(plan, task)
     task["derived_requirements"] = derived
     acceptance = list(_strings(task.get("acceptance")))
-    implementation_obligations: list[str] = []
+    acceptance.extend(planner_acceptance)
+    implementation_obligations = list(planner_obligations)
     for item in derived:
         acceptance.extend(_strings(item.get("acceptance")))
         implementation_obligations.extend(
