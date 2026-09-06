@@ -1,18 +1,10 @@
-"""Canonical contract types used across the MMM pipeline.
+"""Stable import surface for canonical MMM contract types.
 
-Small-model agents should import contracts from this package instead of
-redeclaring ad-hoc dict shapes in stage modules.
+Do not define duplicate hand-off shapes here. Contract ownership stays in the
+existing subsystem contract modules; this package exposes a predictable path
+for agents and tooling to discover those canonical definitions.
 """
 
-from .execution import ExecutionReceipt, ExecutionStatus
-from .planning import PlannerClaim, PlannerDecision, PlannerInput
 from .target import TargetContract
 
-__all__ = [
-    "ExecutionReceipt",
-    "ExecutionStatus",
-    "PlannerClaim",
-    "PlannerDecision",
-    "PlannerInput",
-    "TargetContract",
-]
+__all__ = ["TargetContract"]
