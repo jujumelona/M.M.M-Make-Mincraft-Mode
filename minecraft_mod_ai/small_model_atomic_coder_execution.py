@@ -93,7 +93,7 @@ def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str
     obligation = str(step.get("obligation") or "").strip()
     if not obligation:
         raise RuntimeError("ATOMIC_CODER_OBLIGATION_MISSING: atomic step has no obligation")
-    result: dict[str, Any] = {
+    return {
         "index": index + 1,
         "count": count,
         "sequence": step.get("sequence", index),
@@ -104,7 +104,6 @@ def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str
         "execution_checklist": _sequence_copy(step.get("execution_checklist")),
         "done_when": str(step.get("done_when") or "").strip(),
     }
-    return result
 
 
 def _atomic_contract(
@@ -117,9 +116,9 @@ def _atomic_contract(
 ) -> dict[str, Any]:
     """Build one obligation contract without discarding canonical execution authority.
 
-    Atomicization removes sibling implementation steps only. It must not remove the
-    engineering worksheet, exact targets, step checklist, boundaries, or verification
-    contract that the canonical coder hand-off explicitly requires the coder to obey.
+    Constant host-owned context is deliberately serialized before the changing step fields.
+    This keeps the large common prefix cacheable across sibling atomic calls while still
+    removing sibling obligations from the model-visible payload.
     """
 
     task_ref = _task_ref(contract, evidence_task)
@@ -132,7 +131,7 @@ def _atomic_contract(
         or evidence_task.get("task_sha256")
         or ""
     ).strip()
-    result: dict[str, Any] = {
+    return {
         "schema_version": _ATOMIC_SCHEMA,
         "task_ref": task_ref,
         "source_task_sha256": source_sha,
@@ -140,7 +139,6 @@ def _atomic_contract(
         "objective": _objective(contract),
         "execution_role": str(contract.get("execution_role") or "").strip(),
         "requirement_refs": _sequence_copy(contract.get("requirement_refs")),
-        "step": _atomic_step(step, index=index, count=count),
         "target_constraints": copy.deepcopy(_mapping(contract.get("target_constraints"))),
         "targets": _step_targets(contract, step),
         "depends_on": _sequence_copy(contract.get("depends_on")),
@@ -152,13 +150,13 @@ def _atomic_contract(
         "protected_boundaries": copy.deepcopy(_mapping(contract.get("protected_boundaries"))),
         "verification_plan": _sequence_copy(contract.get("verification_plan")),
         "completion_predicate": copy.deepcopy(_mapping(contract.get("completion_predicate"))),
+        "step": _atomic_step(step, index=index, count=count),
         "scope_policy": (
             "Execute only this obligation. Do not start, pre-implement, redesign, or summarize "
             "sibling obligations. Preserve the complete canonical execution authority carried "
             "in this atomic contract; exact writable paths are additionally enforced by host tools."
         ),
     }
-    return result
 
 
 def _implementation_request(messages: Sequence[Mapping[str, Any]]) -> tuple[int, dict[str, Any]] | None:
@@ -208,7 +206,7 @@ def atomicize_coder_messages(
     batches: list[tuple[dict[str, Any], ...]] = []
     for step_index, step in enumerate(steps):
         current = copy.deepcopy(request)
-        current_module = _mapping(current.get("module"))
+        current_module = _mapping(current.pop("module", None))
         current_evidence = {
             "task_id": _task_ref(contract, evidence_task),
             "coder_execution_contract": _atomic_contract(
@@ -227,17 +225,11 @@ def atomicize_coder_messages(
             "kind": str(current_module.get("kind") or "custom_java"),
             "evidence_task": current_evidence,
         }
-        current["module"] = current_module
-        current["task"] = (
-            f"Implement only approved atomic obligation {step_index + 1}/{len(steps)}. "
-            "Finish it in the staged workspace before any sibling obligation."
-        )
-        current["atomic_execution"] = {
-            "schema_version": _ATOMIC_SCHEMA,
-            "step_index": step_index + 1,
-            "step_count": len(steps),
-            "policy": "one_model_call_one_implementation_obligation",
-        }
+
+        # Keep all pre-module request text identical across sibling calls so llama.cpp/server
+        # prompt/KV reuse can retain the common prefix. The changing obligation lives near the
+        # end of the module contract instead of in this early task string.
+        current["task"] = "Implement only the atomic obligation declared in module.evidence_task.coder_execution_contract.step."
         rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
         current["rules"] = [
             "Work on this atomic obligation only; sibling obligations are host-scheduled later.",
@@ -253,6 +245,16 @@ def atomicize_coder_messages(
                     "the stale pre-step source page."
                 ),
             }
+
+        # Append the variable module/step fields after the stable request payload. Dict order is
+        # intentional here because the request is serialized without sort_keys below.
+        current["module"] = current_module
+        current["atomic_execution"] = {
+            "schema_version": _ATOMIC_SCHEMA,
+            "step_index": step_index + 1,
+            "step_count": len(steps),
+            "policy": "one_model_call_one_implementation_obligation",
+        }
         batch = [dict(message) for message in messages]
         batch[user_index] = {
             **batch[user_index],
