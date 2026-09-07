@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Native, bounded recovery for host-selected tool arguments.
 
-The host owns the original argument container.  When a model cannot emit the already
+The host owns the original argument container. When a model cannot emit the already
 selected tool directly, this module decomposes its object schema into small native
 function-call pages, validates each page, merges them, then validates the final object
-against the original schema.  No recovery turn asks the model to author a JSON document.
+against the original schema. No recovery turn asks the model to author a JSON document.
 """
 
 import hashlib
@@ -16,6 +16,14 @@ from typing import Any
 _ARGUMENT_PAGE_TOOL = "mmm_submit_argument_page"
 _MAX_PAGE_PROPERTIES = 4
 _MAX_REPAIR_ERROR_CHARS = 1200
+
+
+def _forced_module() -> Any:
+    # Import lazily to avoid a module cycle while forced_tool_execution_contract imports
+    # the public recovery entry points on demand.
+    from . import forced_tool_execution_contract
+
+    return forced_tool_execution_contract
 
 
 def _tool_schema(parameters: Mapping[str, Any]) -> dict[str, Any]:
@@ -96,7 +104,11 @@ def _messages(
         if isinstance(raw, Mapping)
     ]
     properties = page_schema.get("properties")
-    fields = ", ".join(str(name) for name in properties) if isinstance(properties, Mapping) else "arguments"
+    fields = (
+        ", ".join(str(name) for name in properties)
+        if isinstance(properties, Mapping)
+        else "arguments"
+    )
     instruction = (
         f"HOST ACTION IS FIXED: {action_name}. Supply argument page {page_index}/{page_count}. "
         f"Call the only available function exactly once. This page owns only these fields: {fields}. "
@@ -121,11 +133,15 @@ def _request(
     page_schema: Mapping[str, Any],
     repair_error: str = "",
 ) -> Any:
-    # Import lazily so runtime bootstrap can install the global atomicity boundary
-    # without creating a module cycle.
+    # The boundary is checked per model-authored page, never against the host-owned
+    # original container. A single oversized nested field therefore fails closed before
+    # generation rather than falling back to a large raw-JSON response.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
-    assert_atomic_model_schema(page_schema, surface=f"native argument page for {action_name!r}")
+    assert_atomic_model_schema(
+        page_schema,
+        surface=f"native argument page for {action_name!r}",
+    )
     schema = _tool_schema(page_schema)
     return replace(
         request,
@@ -149,9 +165,8 @@ def _request(
 def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
-    *,
-    forced: Any,
 ) -> tuple[dict[str, Any] | None, str, str]:
+    forced = _forced_module()
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
     if len(calls) != 1:
         reason = f"expected one native argument-page call, received {len(calls)}"
@@ -179,8 +194,6 @@ def _page_attempt(
     adapter: Any,
     request: Any,
     page_schema: Mapping[str, Any],
-    *,
-    forced: Any,
 ) -> tuple[dict[str, Any] | None, str, str]:
     try:
         turn = current(adapter, request)
@@ -189,7 +202,7 @@ def _page_attempt(
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
         fingerprint = hashlib.sha256(reason.encode()).hexdigest()
         return None, reason, fingerprint
-    return _page_result(turn, page_schema, forced=forced)
+    return _page_result(turn, page_schema)
 
 
 def host_selected_argument_turn(
@@ -198,13 +211,13 @@ def host_selected_argument_turn(
     request: Any,
     name: str,
     *,
-    forced: Any,
     prefix: str = "host_action",
 ) -> Any:
     """Recover one already-selected action through bounded native argument pages."""
 
     from .model_adapters import ModelConfigurationError
 
+    forced = _forced_module()
     parameters = forced._parameters(forced._selected_schema(request, name))
     try:
         pages = _argument_pages(parameters)
@@ -225,7 +238,6 @@ def host_selected_argument_turn(
             adapter,
             first_request,
             page_schema,
-            forced=forced,
         )
         if arguments is None:
             repair_request = _request(
@@ -241,7 +253,6 @@ def host_selected_argument_turn(
                 adapter,
                 repair_request,
                 page_schema,
-                forced=forced,
             )
             if arguments is None:
                 fixed_point = first_fingerprint == second_fingerprint
@@ -251,19 +262,21 @@ def host_selected_argument_turn(
                     else "bounded native argument-page repair exhausted"
                 )
                 raise ModelConfigurationError(
-                    f"Host-selected action {name!r} {suffix} on page {page_index}/{len(pages)}; "
-                    f"error={repair_error or error}."
+                    f"Host-selected action {name!r} {suffix} on page "
+                    f"{page_index}/{len(pages)}; error={repair_error or error}."
                 )
         overlap = set(merged).intersection(arguments)
         if overlap:
             raise ModelConfigurationError(
-                f"HOST_ARGUMENT_DECOMPOSITION: duplicate fields across pages: {', '.join(sorted(overlap))}"
+                "HOST_ARGUMENT_DECOMPOSITION: duplicate fields across pages: "
+                + ", ".join(sorted(overlap))
             )
         merged.update(arguments)
 
     if not forced._arguments_match_schema(merged, parameters):
         raise ModelConfigurationError(
-            f"HOST_ARGUMENT_DECOMPOSITION: merged native pages for {name!r} failed the original schema"
+            f"HOST_ARGUMENT_DECOMPOSITION: merged native pages for {name!r} "
+            "failed the original schema"
         )
     return forced._response_for_call(name, merged, prefix=prefix)
 
@@ -273,56 +286,17 @@ def host_selected_mutation_turn(
     adapter: Any,
     request: Any,
     name: str,
-    *,
-    forced: Any,
 ) -> Any:
     return host_selected_argument_turn(
         current,
         adapter,
         request,
         name,
-        forced=forced,
         prefix="host_mutation",
     )
-
-
-def install_into(forced: Any) -> None:
-    """Replace both legacy raw-JSON recovery entry points with native atomic recovery."""
-
-    def argument_turn(
-        current: Any,
-        adapter: Any,
-        request: Any,
-        name: str,
-        *,
-        prefix: str = "host_action",
-    ) -> Any:
-        return host_selected_argument_turn(
-            current,
-            adapter,
-            request,
-            name,
-            forced=forced,
-            prefix=prefix,
-        )
-
-    def mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-        return host_selected_mutation_turn(
-            current,
-            adapter,
-            request,
-            name,
-            forced=forced,
-        )
-
-    argument_turn.__module__ = __name__
-    mutation_turn.__module__ = __name__
-    forced.host_selected_argument_turn = argument_turn
-    forced.host_selected_mutation_turn = mutation_turn
 
 
 __all__ = [
     "host_selected_argument_turn",
     "host_selected_mutation_turn",
-    "install_into",
 ]
