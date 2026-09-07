@@ -12,14 +12,23 @@ from typing import Any
 from .planning_detail_contract import validate_detailed_plan_grounding
 
 
+def _rows(
+    state: Mapping[str, Any],
+    key: str,
+) -> list[Mapping[str, Any]]:
+    """Return validated record rows without inventing an identity namespace."""
+    rows = state.get(key)
+    if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+        raise ValueError(f"PROMPT_STATE_SHAPE: {key} must contain objects")
+    return list(rows)
+
+
 def _records(
     state: Mapping[str, Any],
     key: str,
     id_key: str,
 ) -> dict[str, Mapping[str, Any]]:
-    rows = state.get(key)
-    if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
-        raise ValueError(f"PROMPT_STATE_SHAPE: {key} must contain objects")
+    rows = _rows(state, key)
     result = {str(row.get(id_key) or ""): row for row in rows}
     if "" in result or len(result) != len(rows):
         raise ValueError(f"PROMPT_STATE_IDS: {key} IDs must be nonempty and unique")
@@ -52,7 +61,7 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
 
     unknowns = _records(state, "unresolved", "unresolved_id")
     research = _records(state, "research_queue", "research_id")
-    evidence = _records(state, "evidence", "evidence_id")
+    evidence_rows = _rows(state, "evidence")
     decisions = _records(state, "decisions", "decision_id")
     candidates = _optional_records(
         state,
@@ -100,21 +109,24 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
                     "PROMPT_STATE_ROUTE: research sources disagree with unknown"
                 )
 
-    sufficient_refs = {
-        ref
-        for row in evidence.values()
-        if row.get("sufficient") is True
-        for ref in row.get("evidence_refs", [])
-    }
-    for row in evidence.values():
+    sufficient_refs: set[str] = set()
+    for row in evidence_rows:
         if str(row.get("research_ref") or "") not in research:
             raise ValueError("PROMPT_STATE_EVIDENCE: evidence has no research owner")
-        if row.get("sufficient") is True and (
-            not row.get("claims") or not row.get("evidence_refs")
-        ):
+        refs = row.get("evidence_refs")
+        if not isinstance(refs, list):
+            raise ValueError("PROMPT_STATE_EVIDENCE: evidence_refs must be an array")
+        normalized_refs = [str(ref).strip() for ref in refs]
+        if any(not ref for ref in normalized_refs) or len(normalized_refs) != len(set(normalized_refs)):
             raise ValueError(
-                "PROMPT_STATE_EVIDENCE: sufficient evidence requires cited claims"
+                "PROMPT_STATE_EVIDENCE: evidence_refs must be nonempty and unique within a research result"
             )
+        if row.get("sufficient") is True:
+            if not row.get("claims") or not normalized_refs:
+                raise ValueError(
+                    "PROMPT_STATE_EVIDENCE: sufficient evidence requires cited claims"
+                )
+            sufficient_refs.update(normalized_refs)
 
     resolved = state.get("resolved")
     if not isinstance(resolved, list):
@@ -133,11 +145,12 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
                 )
         elif basis == "grounded_research":
             own_refs = {
-                ref
-                for evidence_row in evidence.values()
+                str(ref).strip()
+                for evidence_row in evidence_rows
                 if evidence_row.get("research_ref") == unknowns[uid].get("research_ref")
                 and evidence_row.get("sufficient") is True
                 for ref in evidence_row.get("evidence_refs", [])
+                if str(ref).strip()
             }
             cited = row.get("evidence_refs")
             if not isinstance(cited, list) or not cited or not set(cited).issubset(own_refs):
