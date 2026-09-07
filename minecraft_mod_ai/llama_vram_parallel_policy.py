@@ -130,8 +130,15 @@ def _install_resource_admission(runtime_tuning: Any) -> None:
 
 
 def _install_dense_parallel_candidates(runtime_tuning: Any) -> None:
-    """Search every feasible width so p3/p5/p6/p7 cannot be skipped."""
-    current = runtime_tuning._parallel_candidates
+    """Search every feasible width so p3/p5/p6/p7 cannot be skipped.
+
+    Some focused runtime doubles and legacy embedders expose only resource admission
+    and selection fingerprints.  Dense candidate installation is optional for those
+    partial surfaces; the authoritative managed runtime still exposes and receives it.
+    """
+    current = getattr(runtime_tuning, "_parallel_candidates", None)
+    if not callable(current):
+        return
     if getattr(current, _CANDIDATE_MARKER, False):
         return
 
