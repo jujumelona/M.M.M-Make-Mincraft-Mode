@@ -33,6 +33,18 @@ _BATCH_SECTION_RE = re.compile(
 _BATCH_TOKENS_PER_SECTION = 180
 _BATCH_MIN_TOKENS = 900
 _BATCH_MAX_TOKENS = 2200
+_META_REASONING_TAG_RE = re.compile(
+    r"^\s*<\s*think(?:ing)?\b[^>]*>.*?<\s*/\s*think(?:ing)?\s*>\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+_META_REASONING_LABEL_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:thinking\s+process|reasoning|analysis)\s*(?:\*\*|__)?\s*:\s*",
+    re.IGNORECASE,
+)
+_FINAL_OUTPUT_LABEL_RE = re.compile(
+    r"(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:final(?:\s+(?:answer|specification))?|specification|answer)\s*(?:\*\*|__)?\s*:\s*",
+    re.IGNORECASE,
+)
 
 
 def _text(value: Any) -> str:
@@ -142,8 +154,26 @@ def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
     return "\n".join(rows) or "- Grounded evidence exists, but no claim prose is available."
 
 
-def _normalize_section_text(raw: Any, section: str) -> str:
+def _strip_leading_meta_reasoning(raw: Any, section: str) -> str:
     value = str(raw or "").strip()
+    while True:
+        stripped = _META_REASONING_TAG_RE.sub("", value, count=1).strip()
+        if stripped == value:
+            break
+        value = stripped
+
+    if _META_REASONING_LABEL_RE.match(value):
+        final_output = _FINAL_OUTPUT_LABEL_RE.search(value)
+        if final_output is None:
+            raise ValueError(
+                f"DETAILED_PLAN_META_REASONING: {section} returned reasoning without an explicit final-output boundary"
+            )
+        value = value[final_output.end():].strip()
+    return value
+
+
+def _normalize_section_text(raw: Any, section: str) -> str:
+    value = _strip_leading_meta_reasoning(raw, section)
     if value.startswith("```"):
         value = value.strip("`").strip()
     if value.lstrip().startswith(("{", "[")):
@@ -154,7 +184,6 @@ def _normalize_section_text(raw: Any, section: str) -> str:
     if len(value) < 24:
         raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
     return value
-
 
 def _plain_section(
     router: Any,
