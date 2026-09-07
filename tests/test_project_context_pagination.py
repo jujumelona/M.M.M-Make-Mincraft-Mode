@@ -133,6 +133,12 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
     budget = 4096
     router = _ContextPagingRouter()
     target = adapter_for_target("1.20.1", "fabric")
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/example/GeneratedHook.java#GeneratedHook",
+        "status": "host_reserved",
+        "source_set": "main",
+    }
     result = CustomModuleGenerator(router, policy=ScalePolicy(model_context_bytes=budget)).generate(
         root,
         module=ProductionModule(
@@ -143,6 +149,14 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
                 "evidence_task": {
                     "task_id": "cross_file_feature",
                     "semantic_outcome": "Implement the approved cross-file hook from grounded source evidence.",
+                    "owned_anchors": [anchor],
+                    "production_bindings": [
+                        {
+                            "task_ref": "cross_file_feature",
+                            "reuse_action": "fresh",
+                            "owned_anchors": [anchor],
+                        }
+                    ],
                 },
             },
         ),
