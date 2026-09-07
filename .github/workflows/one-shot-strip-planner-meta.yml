@@ -26,14 +26,13 @@ jobs:
           path = Path('minecraft_mod_ai/planning_state_implementation.py')
           source = path.read_text(encoding='utf-8')
 
-          old_constants = '''_BATCH_TOKENS_PER_SECTION = 180
-          _BATCH_MIN_TOKENS = 900
-          _BATCH_MAX_TOKENS = 2200
-          '''.replace('          ', '')
-          new_constants = '''_BATCH_TOKENS_PER_SECTION = 180
-          _BATCH_MIN_TOKENS = 900
-          _BATCH_MAX_TOKENS = 2200
-          _META_REASONING_TAG_RE = re.compile(
+          constants_anchor = '_BATCH_MAX_TOKENS = 2200\n'
+          if source.count(constants_anchor) != 1:
+              raise SystemExit('batch constants anchor drifted')
+          source = source.replace(
+              constants_anchor,
+              constants_anchor
+              + '''_META_REASONING_TAG_RE = re.compile(
               r"^\\s*<\\s*think(?:ing)?\\b[^>]*>.*?<\\s*/\\s*think(?:ing)?\\s*>\\s*",
               re.IGNORECASE | re.DOTALL,
           )
@@ -45,25 +44,13 @@ jobs:
               r"(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\*\\*|__)?\\s*(?:final(?:\\s+(?:answer|specification))?|specification|answer)\\s*(?:\\*\\*|__)?\\s*:\\s*",
               re.IGNORECASE,
           )
-          '''.replace('          ', '')
-          if source.count(old_constants) != 1:
-              raise SystemExit('batch constants anchor drifted')
-          source = source.replace(old_constants, new_constants, 1)
+          '''.replace('          ', ''),
+              1,
+          )
 
-          old_normalizer = '''def _normalize_section_text(raw: Any, section: str) -> str:
-              value = str(raw or "").strip()
-              if value.startswith("```"):
-                  value = value.strip("`").strip()
-              if value.lstrip().startswith(("{", "[")):
-                  raise ValueError(
-                      f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
-                  )
-              value = _text(value)
-              if len(value) < 24:
-                  raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
-              return value
-          '''.replace('            ', '')
-          new_normalizer = '''def _strip_leading_meta_reasoning(raw: Any, section: str) -> str:
+          start = source.index('def _normalize_section_text(')
+          end = source.index('\n\ndef _plain_section(', start)
+          replacement = '''def _strip_leading_meta_reasoning(raw: Any, section: str) -> str:
               value = str(raw or "").strip()
               while True:
                   stripped = _META_REASONING_TAG_RE.sub("", value, count=1).strip()
@@ -93,10 +80,8 @@ jobs:
               if len(value) < 24:
                   raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
               return value
-          '''.replace('            ', '')
-          if source.count(old_normalizer) != 1:
-              raise SystemExit('normalizer anchor drifted')
-          source = source.replace(old_normalizer, new_normalizer, 1)
+          '''.replace('          ', '')
+          source = source[:start] + replacement + source[end:]
           path.write_text(source, encoding='utf-8')
           PY
           python -m py_compile minecraft_mod_ai/planning_state_implementation.py
