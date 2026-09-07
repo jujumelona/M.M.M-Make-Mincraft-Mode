@@ -35,11 +35,11 @@ output_schema:
   - explicit failure reason
 
 validators:
-  - every accepted technical claim has exact-version provenance matching the PlatformLock
-  - source authority and mapping/version scope are recorded rather than inferred from search rank
-  - project-specific claims are bound to project-local source or fresh receipts
-  - unresolved or conflicting evidence blocks only the dependent task and is never filled from model memory
-  - research performs no project writes, build/test execution, dependency installation, or world mutation
+  - exact_version_evidence
+  - source_provenance
+  - evidence_freshness
+  - retrieval_not_authority
+  - execution_boundary
 
 retry_policy:
   max_attempts: null
