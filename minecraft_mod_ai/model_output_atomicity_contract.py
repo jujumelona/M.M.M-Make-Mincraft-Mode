@@ -3,9 +3,10 @@ from __future__ import annotations
 """Global small-model output atomicity boundary.
 
 Machine-owned JSON remains valid for storage and transport. Model-authored structured
-payloads stay bounded. Host-selected actions are decomposed by the host and recovered
-through bounded native function calls; large original containers are never handed back
-to the model as raw JSON documents.
+payloads stay bounded. Host-selected tool containers are allowed to be large at the
+router boundary because the adapter contract decomposes them before model generation.
+Raw JSON response schemas remain bounded here, and native argument pages are bounded at
+their actual transport boundary.
 """
 
 import json
@@ -64,35 +65,23 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
         )
 
 
+def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
+    """Return whether one schema is safe to expose as one model-authored payload."""
+
+    encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    nodes, depth, properties = _schema_metrics(schema)
+    return (
+        len(encoded) <= _MAX_SCHEMA_CHARS
+        and nodes <= _MAX_SCHEMA_NODES
+        and depth <= _MAX_SCHEMA_DEPTH
+        and properties <= _MAX_SCHEMA_PROPERTIES
+    )
+
+
 def _install_router_boundary(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
-    if getattr(cls.generate_tool_decision, _MARKER, False):
+    if getattr(cls.generate_text, _MARKER, False):
         return
-
-    current_tool = cls.generate_tool_decision
-
-    @wraps(current_tool)
-    def generate_tool_decision(
-        self: Any,
-        role: str,
-        messages: Sequence[Mapping[str, Any]],
-        *,
-        tool_name: str,
-        parameters: Mapping[str, Any],
-        description: str = "",
-    ) -> dict[str, Any]:
-        assert_atomic_model_schema(parameters, surface=f"tool decision {tool_name!r}")
-        return current_tool(
-            self,
-            role,
-            messages,
-            tool_name=tool_name,
-            parameters=parameters,
-            description=description,
-        )
-
-    setattr(generate_tool_decision, _MARKER, True)
-    cls.generate_tool_decision = generate_tool_decision
 
     current_text = cls.generate_text
 
@@ -126,4 +115,4 @@ def install() -> None:
     _INSTALLED = True
 
 
-__all__ = ["assert_atomic_model_schema", "install"]
+__all__ = ["assert_atomic_model_schema", "is_atomic_model_schema", "install"]
