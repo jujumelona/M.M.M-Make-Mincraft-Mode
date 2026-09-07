@@ -172,6 +172,12 @@ WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
 _MIN_SPECIFICATION_CHARS = 24
 
 
+def _normalize_section_name(section: str) -> str:
+    if not isinstance(section, str) or not section or section not in WORKSHEET_SECTIONS:
+        raise ValueError(f"DETAILED_PLAN_SECTIONS: unknown section: {section!r}")
+    return section
+
+
 def normalize_required_sections(
     required_sections: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
@@ -243,6 +249,25 @@ def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
     return "\n".join(rows)
 
 
+def worksheet_section_prompt(section: str) -> str:
+    """Return a compact prompt for one host-selected worksheet section."""
+
+    key = _normalize_section_name(section)
+    return "\n".join(
+        (
+            "ENGINEERING WORKSHEET — single-section protocol:",
+            f"Section: {key}",
+            f"Purpose: {_section_description(key)}",
+            "Return exactly one JSON object containing only specification and constraint_evidence_refs.",
+            "Resolve one deterministic implementation contract for this section only; do not restate unrelated sections.",
+            "Treat supplied prerequisite section results as authoritative continuity constraints.",
+            "Use only host-supplied evidence identifiers; use an empty constraint_evidence_refs array for authored design decisions not constrained by evidence.",
+            "Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
+            "Do not invent target API names, symbols, versions, repository paths, external facts, or evidence identifiers.",
+        )
+    )
+
+
 def _worksheet_section_schema(key: str) -> dict[str, Any]:
     return {
         "type": "object",
@@ -269,6 +294,12 @@ def _worksheet_section_schema(key: str) -> dict[str, Any]:
         "required": ["specification", "constraint_evidence_refs"],
         "additionalProperties": False,
     }
+
+
+def worksheet_section_schema(section: str) -> dict[str, Any]:
+    """Return the strict response schema for exactly one section."""
+
+    return deepcopy(_worksheet_section_schema(_normalize_section_name(section)))
 
 
 def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str, Any]:
@@ -304,6 +335,46 @@ _PLACEHOLDERS = {
 }
 
 
+def validate_worksheet_section(
+    value: Any,
+    allowed_refs: set[str],
+    section: str,
+) -> dict[str, Any]:
+    """Validate one section without weakening the full worksheet contract."""
+
+    key = _normalize_section_name(section)
+    if not isinstance(value, Mapping) or set(value) != {
+        "specification",
+        "constraint_evidence_refs",
+    }:
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET: {key} must contain exactly specification and constraint_evidence_refs"
+        )
+
+    specification = " ".join(str(value.get("specification") or "").split()).strip()
+    normalized_specification = specification.casefold()
+    if len(specification) < _MIN_SPECIFICATION_CHARS or normalized_specification in _PLACEHOLDERS:
+        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification")
+
+    refs = value.get("constraint_evidence_refs")
+    if not isinstance(refs, list):
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET: {key} constraint_evidence_refs must be an array"
+        )
+    ref_values = [str(ref).strip() for ref in refs if str(ref).strip()]
+    if (
+        len(ref_values) != len(refs)
+        or len(set(ref_values)) != len(ref_values)
+        or any(ref not in allowed_refs for ref in ref_values)
+    ):
+        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has invalid constraint evidence")
+
+    return {
+        "specification": specification,
+        "constraint_evidence_refs": ref_values,
+    }
+
+
 def validate_worksheet(
     value: Any,
     allowed_refs: set[str],
@@ -318,43 +389,15 @@ def validate_worksheet(
     seen_specifications: dict[str, str] = {}
     normalized: dict[str, Any] = {}
     for key in selected:
-        row = value[key]
-        if not isinstance(row, Mapping):
-            raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} is not an object")
-        specification = " ".join(str(row.get("specification") or "").split()).strip()
-        normalized_specification = specification.casefold()
-        if (
-            len(specification) < _MIN_SPECIFICATION_CHARS
-            or normalized_specification in _PLACEHOLDERS
-        ):
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification"
-            )
+        row = validate_worksheet_section(value[key], allowed_refs, key)
+        normalized_specification = row["specification"].casefold()
         duplicate_of = seen_specifications.get(normalized_specification)
         if duplicate_of is not None:
             raise ValueError(
                 f"DETAILED_PLAN_WORKSHEET: {key} duplicates {duplicate_of}; every section requires a section-specific specification"
             )
         seen_specifications[normalized_specification] = key
-
-        refs = row.get("constraint_evidence_refs")
-        if not isinstance(refs, list):
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET: {key} constraint_evidence_refs must be an array"
-            )
-        ref_values = [str(ref).strip() for ref in refs if str(ref).strip()]
-        if (
-            len(ref_values) != len(refs)
-            or len(set(ref_values)) != len(ref_values)
-            or any(ref not in allowed_refs for ref in ref_values)
-        ):
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET: {key} has invalid constraint evidence"
-            )
-        normalized[key] = {
-            "specification": specification,
-            "constraint_evidence_refs": ref_values,
-        }
+        normalized[key] = row
     return deepcopy(normalized)
 
 
@@ -368,6 +411,9 @@ __all__ = [
     "WORKSHEET_SECTIONS",
     "normalize_required_sections",
     "validate_worksheet",
+    "validate_worksheet_section",
     "worksheet_prompt",
     "worksheet_schema",
+    "worksheet_section_prompt",
+    "worksheet_section_schema",
 ]
