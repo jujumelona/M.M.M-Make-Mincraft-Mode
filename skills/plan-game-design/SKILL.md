@@ -38,11 +38,11 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - every user-requested capability is represented as implemented, partial, or blocked in the proposed design
-  - every implementation-critical design claim is bound to exact-version reviewed evidence or remains explicitly unresolved
-  - PlatformLock is preserved exactly and is not mixed with another loader, mapping set, Java target, or Minecraft version
-  - acceptance criteria are observable and do not claim build/runtime success before those stages execute
-  - planning performs no project writes, builds, tests, or world mutations
+  - requirement_traceability
+  - exact_version_evidence
+  - version_lock
+  - no_self_certification
+  - execution_boundary
 
 retry_policy:
   max_attempts: null
