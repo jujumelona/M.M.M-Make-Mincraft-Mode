@@ -10,6 +10,7 @@ from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrato
 from minecraft_mod_ai.geckolib_generation_contract import (
     GeckoLibGenerationContractError,
     geckolib_entity_inputs_from_module_config,
+    validate_existing_geckolib_records,
 )
 from minecraft_mod_ai.production_generation_preflight import (
     ProductionGenerationPreflightError,
@@ -57,6 +58,30 @@ def _write_system_pack(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _legacy_entity_record(*, spawn_group: str = "monster") -> dict[str, object]:
+    return {
+        "entity_id": "existing_entity",
+        "class_name": "ExistingEntity",
+        "entity_class": "ExistingEntityEntity",
+        "max_health": 20.0,
+        "attack_damage": 4.0,
+        "movement_speed": 0.2,
+        "follow_range": 24.0,
+        "entity_width": 0.8,
+        "entity_height": 1.8,
+        "archetype": "biped",
+        "behavior": "hostile_melee",
+        "spawn_group": spawn_group,
+    }
+
+
+def _write_geckolib_manifest(root: Path, entities: list[dict[str, object]]) -> Path:
+    path = root / ".minecraft_ai/geckolib-entities.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"entities": entities}), encoding="utf-8")
+    return path
+
+
 def test_entity_module_set_is_rejected_before_any_dispatch() -> None:
     modules = (
         _module("valid_entity", "entity", {"max_health": 20}),
@@ -99,6 +124,30 @@ def test_entity_preflight_preserves_orchestrator_coercion_semantics() -> None:
             "entity",
             {"follow_range": "nan"},
         )
+
+
+def test_existing_geckolib_manifest_is_parsed_before_dispatch(tmp_path: Path) -> None:
+    manifest = _write_geckolib_manifest(tmp_path, [])
+    manifest.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(
+        GeckoLibGenerationContractError,
+        match="Existing GeckoLib entity records are invalid",
+    ):
+        validate_existing_geckolib_records(tmp_path)
+
+
+def test_existing_geckolib_registration_values_are_preflighted(tmp_path: Path) -> None:
+    _write_geckolib_manifest(
+        tmp_path,
+        [_legacy_entity_record(spawn_group="not_a_spawn_group")],
+    )
+
+    with pytest.raises(
+        GeckoLibGenerationContractError,
+        match="spawn_group is invalid",
+    ):
+        validate_existing_geckolib_records(tmp_path)
 
 
 def test_system_cross_module_contract_is_rejected_before_generation() -> None:
