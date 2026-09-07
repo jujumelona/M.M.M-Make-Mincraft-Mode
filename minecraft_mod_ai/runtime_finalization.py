@@ -81,6 +81,8 @@ def finalize_runtime() -> None:
         from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_adapters import llama_cpp_adapter
+        from .model_output_atomicity_contract import assert_installed as assert_model_output_atomicity
+        from .model_output_atomicity_contract import install as install_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planir_mutation_authority_contract import install as install_planir_mutation_authority
@@ -170,6 +172,8 @@ def finalize_runtime() -> None:
             model_router_module=model_router,
         )
 
+        install_model_output_atomicity(model_router_module=model_router)
+        assert_model_output_atomicity(model_router_module=model_router)
         assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         verify_installed_wrappers()
         run_context_budget_preflight()
