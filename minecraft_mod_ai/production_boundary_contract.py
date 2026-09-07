@@ -23,6 +23,10 @@ from .acceptance_contracts import (
     verified_legacy_acceptance_context,
 )
 
+# Compatibility name for callers/tests that historically imported the strict predicate
+# from this adapter. It is an identity alias, not a second policy implementation.
+_strict_public_acceptance = _canonical_is_public_acceptance
+
 _INSTALLED = False
 
 
