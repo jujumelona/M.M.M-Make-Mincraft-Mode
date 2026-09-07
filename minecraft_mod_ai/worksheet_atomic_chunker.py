@@ -4,9 +4,9 @@ from __future__ import annotations
 
 Small models (such as Qwen 3.5 9B) cannot reliably emit massive 4,000-character, 229-node
 schemas in a single pass without grammar stalls or schema violations. This module breaks
-down each engineering worksheet section into bounded, concern-level atomic chunks that
-strictly satisfy model output atomicity limits. The host deterministically merges the
-chunk outputs and enforces the canonical full-section specification.
+down each engineering worksheet section into bounded, concern-level atomic chunks. The
+model-facing gate intentionally checks only the stable container shape; the host then
+normalizes partial-but-usable records and enforces the canonical full-section contract.
 """
 
 from collections.abc import Mapping, Sequence
@@ -97,7 +97,13 @@ def worksheet_chunk_schema(
     *,
     include_evidence: bool = False,
 ) -> dict[str, Any]:
-    """Return a strictly closed, atomic JSON schema for a subset of concerns."""
+    """Return a closed but deliberately permissive model-facing chunk schema.
+
+    The transport boundary still forbids undeclared object keys, but semantic completeness
+    is host-owned: concern keys and record fields are optional here so a mostly-correct
+    answer can reach deterministic normalization instead of being rejected by the model
+    grammar before the host sees it.
+    """
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
 
@@ -110,10 +116,8 @@ def worksheet_chunk_schema(
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {
-                    field: {"type": "string", "minLength": 1} for field in fields
-                },
-                "required": fields,
+                "properties": {field: {"type": "string"} for field in fields},
+                "required": [],
                 "additionalProperties": False,
             },
         }
@@ -124,9 +128,9 @@ def worksheet_chunk_schema(
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(concerns)},
-                "reason": {"type": "string", "minLength": 1},
+                "reason": {"type": "string"},
             },
-            "required": ["concern", "reason"],
+            "required": [],
             "additionalProperties": False,
         },
     }
@@ -139,18 +143,14 @@ def worksheet_chunk_schema(
                 "Evidence references supplied by the host that constrain this authored design section. "
                 "Use an empty array when the section is a design decision rather than an external fact."
             ),
-            "items": {"type": "string", "minLength": 1},
+            "items": {"type": "string"},
         }
-
-    required = list(concerns) + ["inapplicable_concerns"]
-    if include_evidence:
-        required.append("constraint_evidence_refs")
 
     schema: dict[str, Any] = {
         "type": "object",
         "description": f"Atomic concern chunk for {key}: {', '.join(concerns)}",
         "properties": properties,
-        "required": required,
+        "required": [],
         "additionalProperties": False,
     }
     return schema
@@ -181,11 +181,11 @@ def worksheet_chunk_prompt(
             f"Section: {key}",
             f"Active Concerns: {', '.join(concerns)}",
             f"Purpose: {_section_description(key)}",
-            f"Fill exactly these concern arrays: {', '.join(concerns)}.{evidence_instruction}",
-            "Every concern array must contain records with non-empty strings for all required fields.",
-            "If a concern is genuinely inapplicable, leave its array empty and provide exactly one concrete reason in inapplicable_concerns.",
+            f"Fill these concern arrays when applicable: {', '.join(concerns)}.{evidence_instruction}",
+            "Prefer complete records, but do not invent facts just to fill a field; the host normalizes harmless omissions.",
+            "If a concern is genuinely inapplicable, leave its array empty and give a concrete reason in inapplicable_concerns when possible.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
-            "Fill and return only a JSON object matching this exact data template skeleton:",
+            "Return only a JSON object following this data template skeleton:",
             json.dumps(skeleton, ensure_ascii=False, indent=2),
         )
     )
@@ -196,7 +196,7 @@ def merge_worksheet_section_chunks(
     chunks: Sequence[Mapping[str, Any]],
     allowed_refs: set[str],
 ) -> dict[str, Any]:
-    """Deterministically merge atomic chunk outputs into a canonical worksheet section."""
+    """Merge model chunks permissively, then enforce the canonical host contract."""
     from .planning_contract_ssot import is_schema_definition_echo
 
     key = _normalize_section_name(section)
@@ -223,14 +223,14 @@ def merge_worksheet_section_chunks(
             if field == "constraint_evidence_refs":
                 if isinstance(value, list):
                     for ref in value:
-                        if isinstance(ref, str) and ref.strip() and ref not in evidence_refs:
+                        if isinstance(ref, str) and ref.strip() and ref.strip() not in evidence_refs:
                             evidence_refs.append(ref.strip())
             elif field == "inapplicable_concerns":
                 if isinstance(value, list):
                     for item in value:
                         if isinstance(item, Mapping):
-                            c = str(item.get("concern") or "")
-                            reason = str(item.get("reason") or "")
+                            c = str(item.get("concern") or "").strip()
+                            reason = str(item.get("reason") or "").strip()
                             if c and reason and not any(
                                 existing.get("concern") == c
                                 for existing in combined_inapplicable
@@ -239,32 +239,34 @@ def merge_worksheet_section_chunks(
                                     {"concern": c, "reason": reason}
                                 )
             elif field in records:
-                if field in merged_specification:
-                    raise ValueError(
-                        f"DETAILED_PLAN_WORKSHEET: duplicate concern {field!r} across chunks in {key}"
-                    )
-                if not isinstance(value, list):
-                    raise ValueError(
-                        f"DETAILED_PLAN_WORKSHEET: concern {field!r} must be an array of records"
-                    )
-                merged_specification[field] = deepcopy(value)
+                if isinstance(value, Mapping):
+                    candidate_items = [dict(value)]
+                elif isinstance(value, list):
+                    candidate_items = deepcopy(value)
+                else:
+                    # Wrong scalar type is treated as an omitted concern. Final host
+                    # normalization will mark it inapplicable rather than discarding
+                    # the rest of an otherwise usable chunk.
+                    candidate_items = []
+                existing = merged_specification.setdefault(field, [])
+                if isinstance(existing, list):
+                    existing.extend(candidate_items)
             else:
-                raise ValueError(
-                    f"DETAILED_PLAN_WORKSHEET: undeclared field {field!r} in chunk for {key}"
-                )
+                # Native tool-call adapters may occasionally return harmless metadata
+                # even though text generation uses a closed schema. Ignore it here;
+                # canonical validation below still sees only declared contract fields.
+                continue
 
-    # Ensure all declared concerns are present
-    missing_concerns = set(records) - set(merged_specification)
-    if missing_concerns:
-        raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET: missing concerns in merged {key}: "
-            + ", ".join(sorted(missing_concerns))
-        )
+    # Missing concern keys are recoverable. Represent them as empty arrays and let
+    # host reconciliation add an explicit inapplicable reason.
+    for field in records:
+        merged_specification.setdefault(field, [])
 
-    # Sanitize concern records: drop dummy records and fill missing string fields
+    # Sanitize concern records: drop dummy records and fill missing string fields.
     for field in records:
         raw_items = merged_specification.get(field)
         if not isinstance(raw_items, list):
+            merged_specification[field] = []
             continue
         expected_fields = records[field].split()
         cleaned_records = []
@@ -288,7 +290,7 @@ def merge_worksheet_section_chunks(
             cleaned_records.append(clean_item)
         merged_specification[field] = cleaned_records
 
-    # Host-level canonical reconciliation of inapplicable concerns:
+    # Host-level canonical reconciliation of inapplicable concerns.
     empty_concerns = {c for c in records if not merged_specification.get(c)}
 
     inapplicable_by_concern: dict[str, str] = {}
@@ -305,7 +307,7 @@ def merge_worksheet_section_chunks(
             reason = f"No {c.replace('_', ' ')} required for this {key.replace('_', ' ')}."
         final_inapplicable.append({"concern": c, "reason": reason})
 
-    # Host-level constraint evidence refs bound to allowed_refs
+    # Host-level constraint evidence refs bound to allowed_refs.
     valid_evidence_refs = [
         ref for ref in evidence_refs if ref in allowed_refs
     ]
@@ -316,7 +318,7 @@ def merge_worksheet_section_chunks(
         "constraint_evidence_refs": valid_evidence_refs,
     }
 
-    # Canonical full validation
+    # Canonical full validation remains the hard safety boundary.
     return validate_worksheet_section(assembled_section, allowed_refs, key)
 
 
