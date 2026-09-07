@@ -13,46 +13,52 @@ def _record(provider: str, query: str) -> dict[str, object]:
     }
 
 
-def test_reference_queries_overlap_and_preserve_result_order(monkeypatch) -> None:
-    barrier = Barrier(2)
+def test_reference_queries_and_providers_overlap_and_preserve_result_order(monkeypatch) -> None:
+    barrier = Barrier(4)
 
-    def wikipedia(query: str):
-        barrier.wait(timeout=5)
-        return [
-            _record("wikipedia", query)
-        ], {
-            "provider": "wikipedia",
-            "status": "available",
-            "result_count": 1,
-        }
+    def provider(name: str):
+        def retrieve(query: str):
+            barrier.wait(timeout=5)
+            return [
+                _record(name, query)
+            ], {
+                "provider": name,
+                "status": "available",
+                "result_count": 1,
+            }
 
-    def forbidden_github(_query: str):
-        raise AssertionError("GitHub fallback must not run when Wikipedia has evidence")
+        return retrieve
 
-    monkeypatch.setattr(reference_research, "_wikipedia_sources", wikipedia)
-    monkeypatch.setattr(reference_research, "_github_reference_sources", forbidden_github)
+    monkeypatch.setattr(reference_research, "_wikipedia_sources", provider("wikipedia"))
+    monkeypatch.setattr(
+        reference_research,
+        "_github_reference_sources",
+        provider("github_reference"),
+    )
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha", "beta"])
 
     assert [row["query"] for row in payload["queries"]] == ["alpha", "beta"]
     for query, row in zip(("alpha", "beta"), payload["queries"], strict=True):
         assert list(row["provider_receipts"]) == ["wikipedia", "github_reference"]
-        assert row["provider_receipts"]["github_reference"]["status"] == (
-            "skipped_wikipedia_has_evidence"
-        )
         assert [record["source_id"] for record in row["evidence_records"]] == [
             f"wikipedia:{query}",
+            f"github_reference:{query}",
         ]
-        assert row["content_record_count"] == 1
+        assert row["content_record_count"] == 2
         assert row["retrieval_errors"] == []
-        assert row["provider_policy"] == "wikipedia_then_github_empty_fallback"
+        assert row["provider_policy"] == "independent_parallel"
 
 
-def test_reference_provider_failure_is_isolated(monkeypatch) -> None:
+def test_reference_provider_failure_does_not_select_an_alternate_provider(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
     def fail_wikipedia(query: str):
+        calls.append(("wikipedia", query))
         raise RuntimeError(f"wiki failed for {query}")
 
     def github(query: str):
+        calls.append(("github_reference", query))
         return [
             _record("github_reference", query)
         ], {
@@ -67,6 +73,10 @@ def test_reference_provider_failure_is_isolated(monkeypatch) -> None:
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha"])
     row = payload["queries"][0]
 
+    assert sorted(calls) == [
+        ("github_reference", "alpha"),
+        ("wikipedia", "alpha"),
+    ]
     assert row["provider_receipts"]["wikipedia"] == {
         "provider": "wikipedia",
         "status": "error",
@@ -79,3 +89,4 @@ def test_reference_provider_failure_is_isolated(monkeypatch) -> None:
     assert row["retrieval_errors"] == [
         {"provider": "wikipedia", "error": "RuntimeError: wiki failed for alpha"}
     ]
+    assert row["provider_policy"] == "independent_parallel"
