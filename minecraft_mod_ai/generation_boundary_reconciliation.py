@@ -135,7 +135,7 @@ def _install_geckolib_project_preflight(geckolib_module: Any) -> None:
 
 
 def _install_production_generation_preflight(complete_spec_module: Any) -> None:
-    """Reject proposal-known built-in generator failures before work dispatch."""
+    """Reject proposal-known built-in generator failures before approval."""
 
     from .production_generation_preflight import (
         ProductionGenerationPreflightError,
@@ -154,6 +154,7 @@ def _install_production_generation_preflight(complete_spec_module: Any) -> None:
             validate_production_generation_modules(
                 self.modules,
                 policy=policy,
+                validate_system_packs=not bool(self.existing_input_sha256),
             )
         except ProductionGenerationPreflightError as exc:
             raise SpecValidationError(
@@ -163,6 +164,62 @@ def _install_production_generation_preflight(complete_spec_module: Any) -> None:
     validate._mmm_production_generation_preflight = True
     validate.__wrapped__ = original_validate
     complete_spec_module.CompleteProposal.validate = validate
+
+
+def _install_orchestrator_generation_preflight(orchestrator_module: Any) -> None:
+    """Merge imported project state and fail before concurrent generation dispatch."""
+
+    from .production_generation_preflight import (
+        ProductionGenerationPreflightError,
+        validate_production_generation_project,
+    )
+
+    owner = orchestrator_module.CompleteProductionOrchestrator
+    original_execute = owner._execute_generation_work
+    if getattr(original_execute, "_mmm_project_generation_preflight", False):
+        return
+
+    @wraps(original_execute)
+    def _execute_generation_work(
+        self: Any,
+        *,
+        approved: Any,
+        ordered: Any,
+        work_plan: Any,
+        ledger: Any,
+        project_root: Path,
+        run_root: Path,
+        options: Any,
+        router: Any,
+    ):
+        spec = approved.base_proposal.spec
+        try:
+            validate_production_generation_project(
+                project_root,
+                ordered,
+                mod_id=spec.mod_id,
+                package_name=spec.package_name,
+                policy=self.policy,
+            )
+        except ProductionGenerationPreflightError as exc:
+            raise orchestrator_module.CompleteProductionError(
+                f"Production generation preflight failed before dispatch: {exc}"
+            ) from exc
+        return original_execute(
+            self,
+            approved=approved,
+            ordered=ordered,
+            work_plan=work_plan,
+            ledger=ledger,
+            project_root=project_root,
+            run_root=run_root,
+            options=options,
+            router=router,
+        )
+
+    _execute_generation_work._mmm_project_generation_preflight = True
+    _execute_generation_work.__wrapped__ = original_execute
+    owner._execute_generation_work = _execute_generation_work
 
 
 def install() -> None:
@@ -180,6 +237,7 @@ def install() -> None:
     )
     _install_geckolib_project_preflight(geckolib_generator)
     _install_production_generation_preflight(complete_spec)
+    _install_orchestrator_generation_preflight(complete_orchestrator)
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):
