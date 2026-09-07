@@ -122,10 +122,19 @@ def _fit_context_to_budget(
         if len(res) > 200:
             resolved[0]["resolution"] = res[:200] + "..."
 
+    if _size() <= target_budget:
+        return fitted
+
+    # Phase 4: Bounded prompt preview if context is still constrained
+    if "original_prompt" in fitted and _size() > target_budget:
+        orig = str(fitted["original_prompt"])
+        if len(orig) > 1000:
+            fitted["original_prompt"] = orig[:1000] + "..."
+
     return fitted
 
 
-def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
+def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, Any]:
     """Give the model semantic facts, never host receipts or identity bookkeeping."""
     known = [
         {"statement": _text(item.get("statement"))}
@@ -134,6 +143,7 @@ def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
     ] if isinstance(state.get("known"), list) else []
     goal = state.get("goal")
     goal_statement = _text(goal.get("statement")) if isinstance(goal, Mapping) else ""
+    original_prompt = _text(prompt or state.get("original_prompt"))
 
     unresolved_questions: dict[str, str] = {}
     if isinstance(state.get("unresolved"), list):
@@ -176,12 +186,14 @@ def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
                     evidence_claims.append(text)
                     seen_resolutions.add(text)
 
-    return {
-        "goal": goal_statement,
-        "known": known,
-        "resolved": resolved,
-        "research_claims": list(dict.fromkeys(evidence_claims))[:8],
-    }
+    res: dict[str, Any] = {}
+    if original_prompt:
+        res["original_prompt"] = original_prompt
+    res["goal"] = goal_statement
+    res["known"] = known
+    res["resolved"] = resolved
+    res["research_claims"] = list(dict.fromkeys(evidence_claims))[:8]
+    return res
 
 
 def _next_id(items: Sequence[Mapping[str, Any]], key: str, prefix: str) -> str:
@@ -327,7 +339,7 @@ def compile_researched_requirements(
     if _blocking_unknowns(state, stage="requirement_selection"):
         return _preserve_blocked_state(state)
 
-    raw_context = _resolved_context(state)
+    raw_context = _resolved_context(state, prompt=prompt)
     budget = _planner_context_budget(router)
     system_content = (
         "Compile independently testable, player-visible requirements from the supplied "
