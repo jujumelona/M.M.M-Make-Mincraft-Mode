@@ -48,6 +48,15 @@ def test_catalog_exposes_target_contract_field_shape() -> None:
     assert fields["deterministic_module_kinds"] == "frozenset[str]"
 
 
+def test_catalog_omits_fieldless_marker_and_error_types() -> None:
+    manifest = contract_schema_manifest()
+    assert all(
+        item["fields"]
+        for module in manifest
+        for item in module.get("types", ())
+    )
+
+
 def test_small_agent_context_contains_lossless_compact_contract_encoding() -> None:
     context = _decode_context(build_agent_capability_context("research", ()))
     assert context["schema_version"] == "mmm/agent-capability-context-v7"
