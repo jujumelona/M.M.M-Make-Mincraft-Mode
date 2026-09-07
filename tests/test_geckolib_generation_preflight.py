@@ -96,6 +96,23 @@ def test_preflight_rejects_late_build_and_main_source_failures(
         contract.validate_geckolib_project_preflight(invalid_main)
 
 
+def test_preflight_accepts_already_bound_dependency_without_reinsertion_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(contract, "adapter_from_project", lambda _root: _adapter())
+    info = _project_info(
+        tmp_path,
+        build_text=(
+            "plugins {}\n"
+            "// MMM:geckolib:dependency\n"
+            'modImplementation("software.bernie.geckolib:geckolib-fabric-1.21.8:4.8.2")\n'
+        ),
+    )
+
+    assert contract.validate_geckolib_project_preflight(info) is not None
+
+
 def test_generator_preflight_fails_before_first_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
