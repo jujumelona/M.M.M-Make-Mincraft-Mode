@@ -76,13 +76,10 @@ def _install_resource_asset_preflight(
     safe_target._mmm_resource_asset_preflight = True
     resource_module._safe_target = safe_target
 
-    owners = [resource_module]
-    if orchestrator_module is not None and orchestrator_module is not resource_module:
-        owners.append(orchestrator_module)
-    for owner in owners:
+    def wrap_generate(owner: Any) -> None:
         original_generate = owner.generate_assets
         if getattr(original_generate, "_mmm_resource_asset_preflight", False):
-            continue
+            return
 
         @wraps(original_generate)
         def generate_assets(
@@ -90,7 +87,6 @@ def _install_resource_asset_preflight(
             proposal: Any,
             project_root: Path,
             run_root: Path,
-            _original: Any = original_generate,
         ):
             if hasattr(proposal, "game_design") and getattr(proposal, "assets", None):
                 try:
@@ -99,11 +95,15 @@ def _install_resource_asset_preflight(
                     raise resource_module.AssetProductionError(
                         f"Resource asset preflight failed: {exc}"
                     ) from exc
-            return _original(router, proposal, project_root, run_root)
+            return original_generate(router, proposal, project_root, run_root)
 
         generate_assets._mmm_resource_asset_preflight = True
         generate_assets.__wrapped__ = original_generate
         owner.generate_assets = generate_assets
+
+    wrap_generate(resource_module)
+    if orchestrator_module is not None and orchestrator_module is not resource_module:
+        wrap_generate(orchestrator_module)
 
 
 def install() -> None:
