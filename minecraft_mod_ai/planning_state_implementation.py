@@ -16,6 +16,7 @@ from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
+from .root_cause_trace import emit_root_cause
 from .planning_detail_contract import validate_detailed_plan_grounding, validate_evidence_refs
 from .planning_detail_template import (
     DETAIL_FIELDS,
@@ -276,7 +277,38 @@ def _plain_section(
             response_format="text",
             enable_tools=False,
         )
-    return _normalize_section_text(raw, section)
+    try:
+        return _normalize_section_text(raw, section)
+    except ValueError as exc:
+        raw_text = str(raw or "")
+        stripped = raw_text.strip()
+        emit_root_cause(
+            "detailed_section_parse_failure",
+            stage="planning_state",
+            operation=f"detailed_section:{section}",
+            gate="section_output_normalization",
+            result="FAIL",
+            reason=f"{type(exc).__name__}: {exc}",
+            details={
+                "requirement_ref": _text(requirement.get("requirement_id")),
+                "section": section,
+                "raw_output": raw_text,
+                "raw_output_chars": len(raw_text),
+                "starts_with_meta_reasoning_label": bool(
+                    _META_REASONING_LABEL_RE.match(stripped)
+                ),
+                "contains_final_output_boundary": bool(
+                    _FINAL_OUTPUT_LABEL_RE.search(stripped)
+                ),
+                "starts_with_structured_payload": stripped.startswith(("{", "[")),
+                "parser_rule": (
+                    "plain prose; leading reasoning/analysis labels require an explicit "
+                    "final/specification/answer boundary; structured payloads are rejected"
+                ),
+            },
+            exc=exc,
+        )
+        raise
 
 
 def _compile_requirement_specifications(
