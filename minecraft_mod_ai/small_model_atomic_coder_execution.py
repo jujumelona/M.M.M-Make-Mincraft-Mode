@@ -11,8 +11,9 @@ custom-module generator still owns the final transaction and gates.
 """
 
 import copy
+import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import wraps
 from typing import Any
 
@@ -77,23 +78,31 @@ def _dataflow(contract: Mapping[str, Any], name: str) -> list[str]:
 
 
 def _step_target_refs(step: Mapping[str, Any]) -> list[str]:
-    return [str(item).strip() for item in _sequence_copy(step.get("target_refs")) if str(item).strip()]
+    return [
+        str(item).strip()
+        for item in _sequence_copy(step.get("target_refs"))
+        if str(item).strip()
+    ]
 
 
-def _step_targets(contract: Mapping[str, Any], step: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _step_targets(
+    contract: Mapping[str, Any],
+    step: Mapping[str, Any],
+) -> list[dict[str, Any]]:
     raw_targets = contract.get("targets")
     if not _is_sequence(raw_targets):
         return []
-    targets = [copy.deepcopy(dict(item)) for item in raw_targets if isinstance(item, Mapping)]
+    targets = [
+        copy.deepcopy(dict(item)) for item in raw_targets if isinstance(item, Mapping)
+    ]
     refs = frozenset(_step_target_refs(step))
     if not refs:
         return targets
-    filtered = [
+    return [
         target
         for target in targets
         if str(target.get("locator") or "").strip() in refs
     ]
-    return filtered
 
 
 def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str, Any]:
@@ -199,7 +208,9 @@ def _atomic_contract(
     }
 
 
-def _implementation_request(messages: Sequence[Mapping[str, Any]]) -> tuple[int, dict[str, Any]] | None:
+def _implementation_request(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[int, dict[str, Any]] | None:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if str(message.get("role") or "").strip().casefold() != "user":
@@ -266,12 +277,17 @@ def atomicize_coder_messages(
         if task_sha:
             current_evidence["task_sha256"] = task_sha
         current_module = {
-            "module_id": str(current_module.get("module_id") or current_evidence["task_id"]),
+            "module_id": str(
+                current_module.get("module_id") or current_evidence["task_id"]
+            ),
             "kind": str(current_module.get("kind") or "custom_java"),
             "evidence_task": current_evidence,
         }
 
-        current["task"] = "Implement only the atomic obligation declared in module.evidence_task.coder_execution_contract.step."
+        current["task"] = (
+            "Implement only the atomic obligation declared in "
+            "module.evidence_task.coder_execution_contract.step."
+        )
         rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
         current["rules"] = [
             "Work on this atomic obligation only; sibling obligations are host-scheduled later.",
@@ -304,15 +320,103 @@ def atomicize_coder_messages(
     return tuple(batches)
 
 
-def _bounded_project_context_budget(
-    current: Any,
-    router: Any,
-    policy: Any,
+def _bounded_initial_observations(
+    generator_module: Any,
+    index: Any,
     *,
-    fast_mode: bool,
-) -> int:
-    budget = int(current(router, policy, fast_mode=fast_mode))
-    return max(1024, min(budget, _MAX_INITIAL_SOURCE_BYTES))
+    query: str,
+    byte_budget: int,
+    diagnostic_paths: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Capture only the strongest initial exact-source page.
+
+    The original collector walks every ProjectIndex page to build a complete ledger even
+    though generation sends only the first bounded observation page and already exposes
+    RAG/source tools for follow-up reads. That makes coder startup O(project source size).
+    For atomic coding, one relevance-ranked exact page is sufficient bootstrap evidence;
+    later source is retrieved on demand from the same indexed project.
+    """
+
+    page_budget = max(1024, min(int(byte_budget), _MAX_INITIAL_SOURCE_BYTES))
+    page = index.select_page(
+        query=query,
+        diagnostic_paths=diagnostic_paths,
+        byte_budget=page_budget,
+        cursor="",
+    )
+    if generator_module._json_size(page) > page_budget:
+        raise generator_module.CustomModuleGenerationError(
+            "Host project context page exceeded its byte budget."
+        )
+
+    project_sha256 = str(page["project_sha256"])
+    query_sha256 = str(page["query_sha256"])
+    source_page_digest = hashlib.sha256()
+    page_commitment = {
+        "page_index": page["page_index"],
+        "project_sha256": project_sha256,
+        "query_sha256": query_sha256,
+        "start_position": page["start_position"],
+        "start_offset": page["start_offset"],
+        "next_cursor": page["next_cursor"],
+        "files": [
+            {
+                "path": item["path"],
+                "sha256": item["sha256"],
+                "content_start_bytes": item["content_start_bytes"],
+                "content_end_bytes": item["content_end_bytes"],
+            }
+            for item in page["files"]
+        ],
+    }
+    generator_module._update_digest(source_page_digest, page_commitment)
+
+    records: list[dict[str, Any]] = []
+    record_keys: set[tuple[str, int, int]] = set()
+    for item in page.get("files", []):
+        if not (
+            isinstance(item, dict)
+            and "path" in item
+            and ("content" in item or "text" in item)
+        ):
+            continue
+        content_str = str(item.get("content", item.get("text", "")))
+        generator_module._append_observation(
+            records,
+            record_keys,
+            generator_module._exact_observation(
+                path=str(item["path"]),
+                sha256=str(item.get("sha256", "")),
+                start=int(item.get("content_start_bytes", 0)),
+                content=content_str.encode("utf-8"),
+                source_page=int(page.get("page_index", 0)),
+            ),
+        )
+
+    observation_digest = hashlib.sha256()
+    for record in records:
+        generator_module._update_digest(observation_digest, record)
+    receipt = {
+        "schema_version": "mmm/source-observation-receipt-v1",
+        "project_sha256": project_sha256,
+        "query_sha256": query_sha256,
+        "source_page_count": 1,
+        "observation_count": len(records),
+        "source_pages_sha256": "sha256:" + source_page_digest.hexdigest(),
+        "observations_sha256": "sha256:" + observation_digest.hexdigest(),
+        "policy": {
+            "exact_source_quotes": True,
+            "path_sha256_byte_range_bound": True,
+            "initial_page_only": True,
+            "source_page_complete": bool(page.get("complete", False)),
+            "supplemental_retrieval_available": True,
+        },
+    }
+    return {
+        "schema_version": "mmm/source-observation-ledger-v1",
+        "receipt": receipt,
+        "records": records,
+    }
 
 
 def _bounded_reuse_context(
@@ -337,11 +441,16 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         return
 
     original_generate_text = Router.generate_text
-    original_budget = custom_module_generator_module._coder_project_context_budget
     original_reuse = custom_module_generator_module._materialize_owned_reuse_context
 
     @wraps(original_generate_text)
-    def generate_text(self: Any, role: str, messages: Any, *args: Any, **kwargs: Any) -> Any:
+    def generate_text(
+        self: Any,
+        role: str,
+        messages: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         if str(role).strip().casefold() not in {"coder", "coder_safe"}:
             return original_generate_text(self, role, messages, *args, **kwargs)
         if not _is_sequence(messages):
@@ -357,25 +466,34 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         summaries: list[str] = []
         for index, batch in enumerate(batches, start=1):
             result = original_generate_text(self, role, batch, *args, **kwargs)
-            summary = json.loads(result)["summary"] if structured_summary else str(result or "").strip()
+            summary = (
+                json.loads(result)["summary"]
+                if structured_summary
+                else str(result or "").strip()
+            )
             if len(summary) > _MAX_SUMMARY_CHARS_PER_STEP:
                 summary = summary[:_MAX_SUMMARY_CHARS_PER_STEP] + "…"
             summaries.append(f"atomic step {index}/{len(batches)}: {summary}")
         combined = "\n".join(summaries)
-        return json.dumps({"summary": combined}, ensure_ascii=False) if structured_summary else combined
+        return (
+            json.dumps({"summary": combined}, ensure_ascii=False)
+            if structured_summary
+            else combined
+        )
 
-    @wraps(original_budget)
-    def coder_project_context_budget(
-        router: Any,
-        policy: Any,
+    def collect_initial_observations(
+        index: Any,
         *,
-        fast_mode: bool,
-    ) -> int:
-        return _bounded_project_context_budget(
-            original_budget,
-            router,
-            policy,
-            fast_mode=fast_mode,
+        query: str,
+        byte_budget: int,
+        diagnostic_paths: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        return _bounded_initial_observations(
+            custom_module_generator_module,
+            index,
+            query=query,
+            byte_budget=byte_budget,
+            diagnostic_paths=diagnostic_paths,
         )
 
     @wraps(original_reuse)
@@ -393,17 +511,17 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         )
 
     setattr(generate_text, _MARKER, True)
-    setattr(coder_project_context_budget, _MARKER, True)
+    setattr(collect_initial_observations, _MARKER, True)
     setattr(materialize_owned_reuse_context, _MARKER, True)
     Router.generate_text = generate_text
-    custom_module_generator_module._coder_project_context_budget = coder_project_context_budget
+    custom_module_generator_module._collect_initial_observations = collect_initial_observations
     custom_module_generator_module._materialize_owned_reuse_context = materialize_owned_reuse_context
 
 
 def assert_installed(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
     checks = (
         getattr(model_router_module.ModelRouter.generate_text, _MARKER, False),
-        getattr(custom_module_generator_module._coder_project_context_budget, _MARKER, False),
+        getattr(custom_module_generator_module._collect_initial_observations, _MARKER, False),
         getattr(custom_module_generator_module._materialize_owned_reuse_context, _MARKER, False),
     )
     if not all(checks):
