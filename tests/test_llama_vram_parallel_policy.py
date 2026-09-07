@@ -85,7 +85,7 @@ def test_selection_version_forces_reconsideration_and_install_is_idempotent():
 
     assert runtime._selection_inputs(SimpleNamespace(model_id="qwen"))[
         "vram_parallel_policy_version"
-    ] == 3
+    ] == 4
 
     policy.install(runtime)
     assert runtime._parallel_resource_feasible is first_resource
