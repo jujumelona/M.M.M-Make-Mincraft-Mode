@@ -3,8 +3,8 @@ from __future__ import annotations
 """Reconcile deterministic generation boundaries after runtime composition.
 
 Game design is host-owned and deterministic. Runtime finalization installs the final
-host-side generation wrappers here so stale imported callables cannot bypass approval
-or generation preflight contracts.
+host-side generation wrappers here so stale imported callables cannot bypass generation
+preflight contracts.
 """
 
 import json
@@ -134,40 +134,8 @@ def _install_geckolib_project_preflight(geckolib_module: Any) -> None:
     geckolib_module.inspect_fabric_project = inspect_fabric_project
 
 
-def _install_production_generation_preflight(complete_spec_module: Any) -> None:
-    """Reject proposal-known built-in generator failures before approval."""
-
-    from .production_generation_preflight import (
-        ProductionGenerationPreflightError,
-        validate_production_generation_modules,
-    )
-    from .spec import SpecValidationError
-
-    original_validate = complete_spec_module.CompleteProposal.validate
-    if getattr(original_validate, "_mmm_production_generation_preflight", False):
-        return
-
-    @wraps(original_validate)
-    def validate(self: Any, *, policy: Any = None) -> None:
-        original_validate(self, policy=policy)
-        try:
-            validate_production_generation_modules(
-                self.modules,
-                policy=policy,
-                validate_system_packs=not bool(self.existing_input_sha256),
-            )
-        except ProductionGenerationPreflightError as exc:
-            raise SpecValidationError(
-                f"Production generation preflight failed: {exc}"
-            ) from exc
-
-    validate._mmm_production_generation_preflight = True
-    validate.__wrapped__ = original_validate
-    complete_spec_module.CompleteProposal.validate = validate
-
-
 def _install_orchestrator_generation_preflight(orchestrator_module: Any) -> None:
-    """Merge imported project state and fail before concurrent generation dispatch."""
+    """Validate normalized modules plus imported state before concurrent dispatch."""
 
     from .production_generation_preflight import (
         ProductionGenerationPreflightError,
@@ -227,7 +195,7 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    from . import complete_orchestrator, complete_spec
+    from . import complete_orchestrator
     from . import fabric_official_template_provider as fabric_provider
     from . import geckolib_generator, resource_asset_production
 
@@ -236,7 +204,6 @@ def install() -> None:
         orchestrator_module=complete_orchestrator,
     )
     _install_geckolib_project_preflight(geckolib_generator)
-    _install_production_generation_preflight(complete_spec)
     _install_orchestrator_generation_preflight(complete_orchestrator)
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
