@@ -15,6 +15,11 @@ facts are represented separately by the detailed-plan grounded-binding contract.
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
+import json
+
+from jsonschema import Draft202012Validator
+
+from .planning_detail_slots import DETAIL_RECORDS, specification_schema
 
 DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
     "behavior_contract": (
@@ -169,7 +174,7 @@ WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Before submission, cross-check that state, algorithm, integration, persistence/network branches and verification describe one internally consistent design.",
 )
 
-_MIN_SPECIFICATION_CHARS = 24
+
 
 
 def _normalize_section_name(section: str) -> str:
@@ -246,6 +251,7 @@ def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
     rows.append("Host-required section checklists:")
     for key in selected:
         rows.append(f"- {key}: " + "; ".join(DETAIL_SLOT_GUIDANCE[key]))
+        rows.append(worksheet_section_prompt(key))
     return "\n".join(rows)
 
 
@@ -259,6 +265,9 @@ def worksheet_section_prompt(section: str) -> str:
             f"Section: {key}",
             f"Purpose: {_section_description(key)}",
             "Return exactly one JSON object containing only specification and constraint_evidence_refs.",
+            "specification MUST be an object with the fixed concern arrays below, never a string or an invented object layout.",
+            "Fill every record field with a string value. For an inapplicable concern, leave its array empty and add exactly one concrete reason to inapplicable_concerns. Never omit a concern key.",
+            "Exact response schema: " + json.dumps(worksheet_section_schema(key), ensure_ascii=False, separators=(",", ":")),
             "Resolve one deterministic implementation contract for this section only; do not restate unrelated sections.",
             "Treat supplied prerequisite section results as authoritative continuity constraints.",
             "Use only host-supplied evidence identifiers; use an empty constraint_evidence_refs array for authored design decisions not constrained by evidence.",
@@ -273,14 +282,7 @@ def _worksheet_section_schema(key: str) -> dict[str, Any]:
         "type": "object",
         "description": _section_description(key),
         "properties": {
-            "specification": {
-                "type": "string",
-                "minLength": _MIN_SPECIFICATION_CHARS,
-                "description": (
-                    _section_description(key)
-                    + " Write a self-contained, section-specific authored design contract. Use explicit 'inapplicable because ...' reasoning when needed; never emit a bare placeholder or reuse another section's answer."
-                ),
-            },
+            "specification": specification_schema(key),
             "constraint_evidence_refs": {
                 "type": "array",
                 "uniqueItems": True,
@@ -351,17 +353,28 @@ def validate_worksheet_section(
             f"DETAILED_PLAN_WORKSHEET: {key} must contain exactly specification and constraint_evidence_refs"
         )
 
-    specification = " ".join(str(value.get("specification") or "").split()).strip()
-    normalized_specification = specification.casefold()
-    if len(specification) < _MIN_SPECIFICATION_CHARS or normalized_specification in _PLACEHOLDERS:
-        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has no concrete specification")
+    specification = value.get("specification")
+    error = next(Draft202012Validator(specification_schema(key)).iter_errors(specification), None)
+    if error is not None:
+        path = ".".join(str(part) for part in error.absolute_path)
+        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}")
+    reasons = specification["inapplicable_concerns"]
+    excluded = [row["concern"] for row in reasons]
+    empty = {concern for concern in DETAIL_RECORDS[key] if not specification[concern]}
+    if len(excluded) != len(set(excluded)) or set(excluded) != empty:
+        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} every empty concern requires exactly one inapplicable reason")
+    for concern, records in specification.items():
+        for record in records:
+            for field, text in record.items():
+                if not text.strip() or (concern == "inapplicable_concerns" and field == "reason" and text.strip().casefold() in _PLACEHOLDERS):
+                    raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key}.{concern}.{field} has no concrete value")
 
     refs = value.get("constraint_evidence_refs")
     if not isinstance(refs, list):
         raise ValueError(
             f"DETAILED_PLAN_WORKSHEET: {key} constraint_evidence_refs must be an array"
         )
-    ref_values = [str(ref).strip() for ref in refs if str(ref).strip()]
+    ref_values = [ref for ref in refs if isinstance(ref, str) and ref.strip()]
     if (
         len(ref_values) != len(refs)
         or len(set(ref_values)) != len(ref_values)
@@ -370,7 +383,7 @@ def validate_worksheet_section(
         raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has invalid constraint evidence")
 
     return {
-        "specification": specification,
+        "specification": deepcopy(specification),
         "constraint_evidence_refs": ref_values,
     }
 
@@ -390,7 +403,7 @@ def validate_worksheet(
     normalized: dict[str, Any] = {}
     for key in selected:
         row = validate_worksheet_section(value[key], allowed_refs, key)
-        normalized_specification = row["specification"].casefold()
+        normalized_specification = json.dumps(row["specification"], sort_keys=True, ensure_ascii=False).casefold()
         duplicate_of = seen_specifications.get(normalized_specification)
         if duplicate_of is not None:
             raise ValueError(

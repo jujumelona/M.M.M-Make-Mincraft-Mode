@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from worksheet_fixtures import specification
+
 from copy import deepcopy
 
 import pytest
@@ -61,8 +63,7 @@ def _worksheet():
     return {
         key: {
             "specification": (
-                f"{key} has a distinct concrete implementation contract with an owner, "
-                "condition, boundary, and observable result."
+                specification(key)
             ),
             "constraint_evidence_refs": ["source:1"],
         }

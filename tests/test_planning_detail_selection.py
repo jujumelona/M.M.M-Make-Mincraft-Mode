@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from worksheet_fixtures import specification
+
 import pytest
 
 from minecraft_mod_ai.planning_detail_template import (
@@ -16,7 +18,7 @@ from minecraft_mod_ai.planning_detail_template import (
 
 def _row(label: str) -> dict[str, object]:
     return {
-        "specification": f"Concrete {label} contract with observable behavior and bounded outcomes.",
+        "specification": specification(label),
         "constraint_evidence_refs": ["EVD-1"],
     }
 

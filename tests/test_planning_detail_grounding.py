@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from worksheet_fixtures import specification
+
 import json
 
 import pytest
@@ -10,7 +12,7 @@ from minecraft_mod_ai.planning_detail_contract import (
 )
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet
 from minecraft_mod_ai.planning_state_implementation import (
-    _compile_requirement_plan,
+    _compile_requirement_plans_dag,
     _implementation_evidence,
     _preflight_detailed_planning,
 )
@@ -21,8 +23,7 @@ def _authored_worksheet() -> dict[str, dict[str, object]]:
     return {
         key: {
             "specification": (
-                f"{key} has a distinct authored implementation contract with an owner, "
-                "condition, boundary, and observable result."
+                specification(key)
             ),
             "constraint_evidence_refs": [],
         }
@@ -57,9 +58,10 @@ class _StructuredRouter:
     def generate_text(self, role, messages, **kwargs):
         assert kwargs["response_format"] == "json"
         assert kwargs["enable_tools"] is False
-        assert kwargs["response_schema"]["required"] == list(WORKSHEET_SECTIONS)
+        assert kwargs["response_schema"]["required"] == ["specification", "constraint_evidence_refs"]
         self.calls.append({"role": role, "messages": messages, **kwargs})
-        return json.dumps(_authored_worksheet())
+        section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
+        return json.dumps(_authored_worksheet()[section])
 
 
 def _grounded_state() -> dict[str, object]:
@@ -88,9 +90,9 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
         "acceptance": ["Given insufficient funds, a purchase is rejected without mutation."],
     }
 
-    plan = _compile_requirement_plan(router, _grounded_state(), requirement, WORKSHEET_SECTIONS)
+    plan = _compile_requirement_plans_dag(router, _grounded_state(), [requirement], {"req_001": WORKSHEET_SECTIONS}, workers=1)[0]
 
-    assert len(router.calls) == 1
+    assert len(router.calls) == len(WORKSHEET_SECTIONS)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []
@@ -157,6 +159,7 @@ def test_canonical_state_accepts_authored_rows_without_fake_evidence() -> None:
                 "decision_id": "requirement_001",
                 "decision_type": "requirement",
                 "requirement_id": "req_001",
+                "statement": "Provide a server-owned economy.",
                 "prompt_refs": ["goal"],
                 "evidence_refs": [],
             },

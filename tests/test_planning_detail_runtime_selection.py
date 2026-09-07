@@ -83,34 +83,16 @@ def test_single_requirement_uses_one_worksheet_compilation_even_with_parallel_ca
     }
     compilation_calls: list[tuple[str, ...]] = []
 
-    def fake_compile_requirement_worksheet(
-        _router,
-        *,
-        requirement,
-        selected_sections,
-        evidence,
-        allowed,
-    ):
-        del requirement, evidence
+    def fake_compile_section(_router, *, requirement, selected_sections, section, evidence, allowed, completed):
+        from worksheet_fixtures import row
         assert allowed == {"ev:1"}
-        compilation_calls.append(selected_sections)
-        return {
-            section: {
-                "specification": (
-                    f"{section} defines one concrete authoritative behavior with bounded failure "
-                    "handling and an observable verification outcome for the approved requirement."
-                ),
-                "constraint_evidence_refs": [],
-            }
-            for section in selected_sections
-        }
+        dependencies = planning_impl._section_dependencies(section, selected_sections)
+        assert set(completed) == set(dependencies)
+        compilation_calls.append(section)
+        return row(section)
 
-    monkeypatch.setattr(
-        planning_impl,
-        "_compile_requirement_worksheet",
-        fake_compile_requirement_worksheet,
-    )
-    plans = planning_impl._compile_requirement_plans_parallel(
+    monkeypatch.setattr(planning_impl, "_compile_worksheet_section", fake_compile_section)
+    plans = planning_impl._compile_requirement_plans_dag(
         object(),
         state,
         [requirement],
@@ -119,5 +101,6 @@ def test_single_requirement_uses_one_worksheet_compilation_even_with_parallel_ca
     )
 
     assert len(plans) == 1
-    assert compilation_calls == [CORE_WORKSHEET_SECTIONS]
+    assert set(compilation_calls) == set(CORE_WORKSHEET_SECTIONS)
+    assert len(compilation_calls) == len(CORE_WORKSHEET_SECTIONS)
     assert tuple(plans[0]["engineering_worksheet"]) == CORE_WORKSHEET_SECTIONS

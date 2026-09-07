@@ -53,8 +53,6 @@ SECTION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-_CONTINUITY_CONTEXT_MAX_CHARS = 12_000
-
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -179,23 +177,12 @@ def _section_dependency_context(
     if not dependencies:
         return "- none; this section has no worksheet prerequisites"
 
-    per_dependency_limit = max(512, _CONTINUITY_CONTEXT_MAX_CHARS // len(dependencies))
-    rows: list[str] = []
-    for dependency in dependencies:
-        row = completed[dependency]
-        specification = _text(row.get("specification"))
-        refs = ", ".join(
-            _text(ref)
-            for ref in row.get("constraint_evidence_refs", [])
-            if _text(ref)
-        ) or "none"
-        prefix = f"[{dependency}]\n"
-        suffix = f"\nconstraint_evidence_refs: {refs}"
-        max_spec_chars = max(256, per_dependency_limit - len(prefix) - len(suffix) - 32)
-        if len(specification) > max_spec_chars:
-            specification = specification[:max_spec_chars].rstrip() + " …[bounded]"
-        rows.append(prefix + specification + suffix)
-    return "\n\n".join(rows)
+    # Preserve JSON field boundaries and every prerequisite rule. Prompt transport
+    # owns context budgeting; slicing a serialized contract silently loses semantics.
+    return json.dumps(
+        {dependency: completed[dependency] for dependency in dependencies},
+        ensure_ascii=False, separators=(",", ":"),
+    )
 
 
 def _section_messages(
@@ -314,7 +301,7 @@ def _host_derived_capabilities(
 ) -> list[dict[str, Any]]:
     return [
         {
-            "capability": f"Preserve the {section} contract: {_text(row.get('specification'))}",
+            "capability": f"Preserve the {section} contract: {json.dumps(row['specification'], ensure_ascii=False, separators=(',', ':'))}",
             "constraint_evidence_refs": [],
         }
         for section, row in worksheet.items()
@@ -326,7 +313,7 @@ def _host_derived_obligations(
 ) -> list[dict[str, Any]]:
     return [
         {
-            "obligation": f"Implement and verify the {section} contract: {_text(row.get('specification'))}",
+            "obligation": f"Implement and verify the {section} contract: {json.dumps(row['specification'], ensure_ascii=False, separators=(',', ':'))}",
             "constraint_evidence_refs": [],
         }
         for section, row in worksheet.items()
@@ -344,9 +331,9 @@ def _host_derived_checks(
     )
     if not checks:
         verification = worksheet.get("verification", {})
-        specification = _text(verification.get("specification"))
+        specification = verification.get("specification")
         if specification:
-            checks = [specification]
+            checks = [json.dumps(specification, ensure_ascii=False, separators=(",", ":"))]
     if not checks:
         checks = [
             "Given the requirement is exercised, verify the observable behavior: "
