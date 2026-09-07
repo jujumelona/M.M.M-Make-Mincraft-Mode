@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Reconcile the official-template platform lock after runtime composition.
+"""Reconcile deterministic generation boundaries after runtime composition.
 
-Game design is now host-owned and deterministic, so model-output sanitation/parsing no
-longer belongs in runtime finalization.  This module keeps only the still-required
-platform-lock reconciliation for the official Fabric bootstrap path.
+Game design is host-owned and deterministic.  Runtime finalization therefore installs
+only host-side generation contracts: the approval-bound Fabric platform lock and the
+resource-asset preflight that must run before any prompt/image model work.
 """
 
 import json
@@ -41,6 +41,10 @@ def install() -> None:
         return
 
     from . import fabric_official_template_provider as fabric_provider
+    from . import resource_asset_production
+    from .resource_asset_preflight_contract import install as install_resource_asset_preflight
+
+    install_resource_asset_preflight(resource_asset_production)
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):
