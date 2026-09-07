@@ -64,18 +64,6 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
         )
 
 
-def _install_forced_tool_boundary(forced: Any) -> None:
-    # The original forced-tool module still owns selection, deterministic read recovery,
-    # native capability probing, and adapter wrapping. Only its argument recovery entry
-    # points are replaced. Crucially, do not reject the original large schema here: the
-    # host must be allowed to see it so it can decompose it before any model call.
-    from .native_atomic_argument_recovery import install_into
-
-    if forced.host_selected_argument_turn.__module__ == "minecraft_mod_ai.native_atomic_argument_recovery":
-        return
-    install_into(forced)
-
-
 def _install_router_boundary(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
     if getattr(cls.generate_tool_decision, _MARKER, False):
@@ -109,11 +97,19 @@ def _install_router_boundary(model_router_module: Any) -> None:
     current_text = cls.generate_text
 
     @wraps(current_text)
-    def generate_text(self: Any, role: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any) -> str:
+    def generate_text(
+        self: Any,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        **kwargs: Any,
+    ) -> str:
         response_format = str(kwargs.get("response_format", "text") or "text").strip().casefold()
         response_schema = kwargs.get("response_schema")
         if response_format == "json" and isinstance(response_schema, Mapping):
-            assert_atomic_model_schema(response_schema, surface=f"JSON response for role {role!r}")
+            assert_atomic_model_schema(
+                response_schema,
+                surface=f"JSON response for role {role!r}",
+            )
         return current_text(self, role, messages, **kwargs)
 
     setattr(generate_text, _MARKER, True)
@@ -124,9 +120,8 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    from . import forced_tool_execution_contract, model_router
+    from . import model_router
 
-    _install_forced_tool_boundary(forced_tool_execution_contract)
     _install_router_boundary(model_router)
     _INSTALLED = True
 
