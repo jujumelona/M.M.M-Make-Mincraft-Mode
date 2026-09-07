@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import complete_planner
+from minecraft_mod_ai.acceptance_contracts import is_public_acceptance
 from minecraft_mod_ai.evidence_first_planning import (
     _compile_tasks,
     compile_evidence_first_plan,
@@ -331,10 +332,8 @@ def test_real_host_batches_compile_production_contract_without_rewriting_semanti
     )
     assert compiled.contract
     assert plan == original
-    from minecraft_mod_ai.production_boundary_contract import _strict_public_acceptance
-
     assert set(compiled.acceptance_tests) == {
-        check for check in checks if _strict_public_acceptance(check)
+        check for check in checks if is_public_acceptance(check)
     }
     assert {module.module_id for module in modules} == {
         task["task_id"] for task in plan["tasks"]
