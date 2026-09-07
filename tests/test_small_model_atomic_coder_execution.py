@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
+import pytest
+
+from minecraft_mod_ai.small_model_atomic_coder_execution import (
+    AtomicCoderContractError,
+    atomicize_coder_messages,
+)
 
 
 def _messages(*, step_count: int = 3):
@@ -41,7 +46,7 @@ def _messages(*, step_count: int = 3):
                 "engineering_worksheet": {"outer_copy": "not authoritative"},
                 "research_reuse_candidates": ["host-only" * 200],
                 "coder_execution_contract": {
-                    "schema_version": "mmm/coder-execution-contract-v2",
+                    "schema_version": "mmm/coder-execution-contract",
                     "task_ref": "task_feature",
                     "task_sha256_input": "sha256:" + "a" * 64,
                     "contract_sha256": "sha256:" + "b" * 64,
@@ -103,7 +108,7 @@ def _messages(*, step_count: int = 3):
             "observations": [{"path": "Feature.java", "content": "class Feature {}"}]
         },
         "research_context": {"selected_facts": ["verified API fact"]},
-        "host_grounding": {"schema_version": "mmm/host-owned-coder-grounding-v1"},
+        "host_grounding": {"schema_version": "mmm/host-owned-coder-grounding"},
         "rules": ["Use tools."],
     }
     return (
@@ -150,6 +155,8 @@ def test_atomic_batch_removes_siblings_but_preserves_required_canonical_context(
     assert set(evidence) == {"task_id", "task_sha256", "coder_execution_contract"}
     assert "research_reuse_candidates" not in first_text
     assert "outer_copy" not in first_text
+    assert contract["schema_version"] == "mmm/atomic-coder-step"
+    assert contract["semantic_outcome"] == "Feature behaves exactly as approved."
     assert contract["engineering_worksheet"]["runtime_behavior"]["status"] == "applicable"
     assert contract["step"]["execution_checklist"] == [f"check-{index}" for index in range(8)]
     assert contract["step"]["target_refs"] == ["src/main/java/demo/Feature.java#Feature"]
@@ -196,7 +203,7 @@ def test_single_step_is_still_compacted_to_atomic_contract() -> None:
     assert len(batches) == 1
     request = _request(batches[0])
     contract = request["module"]["evidence_task"]["coder_execution_contract"]
-    assert contract["schema_version"] == "mmm/atomic-coder-step-v2"
+    assert contract["schema_version"] == "mmm/atomic-coder-step"
     assert contract["step"] == {
         "index": 1,
         "count": 1,
@@ -209,6 +216,41 @@ def test_single_step_is_still_compacted_to_atomic_contract() -> None:
         "done_when": "The isolated behavior is implemented and ready for host verification.",
     }
     assert "implementation_steps" not in contract
+
+
+def test_implementation_request_without_contract_fails_closed() -> None:
+    messages = list(_messages(step_count=1))
+    request = json.loads(messages[-1]["content"])
+    del request["module"]["evidence_task"]["coder_execution_contract"]
+    messages[-1] = {"role": "user", "content": json.dumps(request)}
+
+    with pytest.raises(AtomicCoderContractError, match="CODER_CONTRACT_LOWERING_FAILED"):
+        atomicize_coder_messages(tuple(messages))
+
+
+def test_versioned_or_stale_coder_schema_is_rejected() -> None:
+    messages = list(_messages(step_count=1))
+    request = json.loads(messages[-1]["content"])
+    request["module"]["evidence_task"]["coder_execution_contract"]["schema_version"] = (
+        "mmm/coder-execution-contract-v2"
+    )
+    messages[-1] = {"role": "user", "content": json.dumps(request)}
+
+    with pytest.raises(AtomicCoderContractError, match="non-canonical coder execution schema"):
+        atomicize_coder_messages(tuple(messages))
+
+
+def test_malformed_sibling_step_cannot_be_silently_dropped() -> None:
+    messages = list(_messages(step_count=2))
+    request = json.loads(messages[-1]["content"])
+    request["module"]["evidence_task"]["coder_execution_contract"]["implementation_steps"][1] = {
+        "sequence": 1,
+        "obligation": "",
+    }
+    messages[-1] = {"role": "user", "content": json.dumps(request)}
+
+    with pytest.raises(AtomicCoderContractError, match="CODER_CONTRACT_LOWERING_FAILED"):
+        atomicize_coder_messages(tuple(messages))
 
 
 def test_unrelated_model_request_is_not_rewritten() -> None:
