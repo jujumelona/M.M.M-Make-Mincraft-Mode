@@ -56,7 +56,7 @@ def test_host_selection_rejects_model_shaped_non_mapping_payload() -> None:
         _host_section_selection(_requirements(), [CORE_WORKSHEET_SECTIONS])
 
 
-def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capacity(
+def test_single_requirement_uses_one_requirement_compilation_even_with_parallel_capacity(
     monkeypatch,
 ) -> None:
     requirement = {
@@ -81,9 +81,9 @@ def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capaci
             }
         ],
     }
-    batch_calls: list[tuple[str, ...]] = []
+    compilation_calls: list[tuple[str, ...]] = []
 
-    def fake_batch_plain_sections(
+    def fake_compile_requirement_specifications(
         _router,
         *,
         requirement,
@@ -91,7 +91,7 @@ def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capaci
         evidence,
     ):
         del requirement, evidence
-        batch_calls.append(selected_sections)
+        compilation_calls.append(selected_sections)
         return {
             section: (
                 f"{section} defines one concrete authoritative behavior with bounded failure "
@@ -102,8 +102,8 @@ def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capaci
 
     monkeypatch.setattr(
         planning_impl,
-        "_batch_plain_sections",
-        fake_batch_plain_sections,
+        "_compile_requirement_specifications",
+        fake_compile_requirement_specifications,
     )
     plans = planning_impl._compile_requirement_plans_parallel(
         object(),
@@ -114,5 +114,5 @@ def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capaci
     )
 
     assert len(plans) == 1
-    assert batch_calls == [CORE_WORKSHEET_SECTIONS]
+    assert compilation_calls == [CORE_WORKSHEET_SECTIONS]
     assert tuple(plans[0]["engineering_worksheet"]) == CORE_WORKSHEET_SECTIONS
