@@ -48,6 +48,20 @@ def _implement_request(messages) -> dict:
     raise AssertionError("No implement_module request was found in the coder message history.")
 
 
+def _task_module(module_id: str, feature: str) -> ProductionModule:
+    return ProductionModule(
+        module_id,
+        "custom_java",
+        {
+            "feature": feature,
+            "evidence_task": {
+                "task_id": module_id,
+                "semantic_outcome": f"Implement the approved {feature} behavior.",
+            },
+        },
+    )
+
+
 class _AgenticRouter:
     def __init__(self) -> None:
         self.workspace: Path | None = None
@@ -89,7 +103,7 @@ def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path)
         policy=ScalePolicy(model_context_bytes=4096),
     ).generate(
         root,
-        module=ProductionModule("agentic_custom", "custom_java", {"feature": "shape"}),
+        module=_task_module("agentic_custom", "shape"),
         minecraft_version=target.minecraft_version,
         loader=target.loader,
         mappings=target.yarn_mappings,
@@ -134,10 +148,9 @@ def test_checkpoint_base_is_hidden_from_model_bound_workspace(tmp_path: Path) ->
     platform = adapter_for_target("1.20.1", "fabric")
     result = CustomModuleGenerator(_WorkspaceIsolationRouter()).generate(
         root,
-        module=ProductionModule(
+        module=_task_module(
             "isolated_checkpoint_workspace",
-            "custom_java",
-            {"feature": "hide host checkpoint base"},
+            "hide host checkpoint base",
         ),
         minecraft_version=platform.minecraft_version,
         loader=platform.loader,
@@ -211,7 +224,7 @@ def test_out_of_scope_agent_edit_is_discarded_without_touching_real_project(tmp_
     target = adapter_for_target("1.20.1", "fabric")
     result = CustomModuleGenerator(router, policy=ScalePolicy(model_context_bytes=4096)).generate(
         root,
-        module=ProductionModule("safe_scope", "custom_java", {"feature": "shape"}),
+        module=_task_module("safe_scope", "shape"),
         minecraft_version=target.minecraft_version,
         loader=target.loader,
         mappings=target.yarn_mappings,
@@ -252,11 +265,7 @@ def test_exhausted_causal_resync_checkpoints_staged_edit_without_touching_real_p
             policy=ScalePolicy(model_context_bytes=4096),
         ).generate(
             root,
-            module=ProductionModule(
-                "causal_retry_guard",
-                "custom_java",
-                {"feature": "shape"},
-            ),
+            module=_task_module("causal_retry_guard", "shape"),
             minecraft_version=target.minecraft_version,
             loader=target.loader,
             mappings=target.yarn_mappings,
@@ -324,11 +333,7 @@ def test_output_exhaustion_preserves_checkpoint_without_outer_state_restart(
             policy=ScalePolicy(model_context_bytes=4096),
         ).generate(
             root,
-            module=ProductionModule(
-                "chunked_output",
-                "custom_java",
-                {"feature": "large bounded source"},
-            ),
+            module=_task_module("chunked_output", "large bounded source"),
             minecraft_version=target.minecraft_version,
             loader=target.loader,
             mappings=target.yarn_mappings,
@@ -360,10 +365,9 @@ def test_context_pressure_raises_directly_without_masking(tmp_path: Path) -> Non
             policy=ScalePolicy(model_context_bytes=4096),
         ).generate(
             root,
-            module=ProductionModule(
+            module=_task_module(
                 "context_pressure_unmasked",
-                "custom_java",
-                {"feature": "no tool-disabled side channel"},
+                "no tool-disabled side channel",
             ),
             minecraft_version=platform.minecraft_version,
             loader=platform.loader,
@@ -593,11 +597,7 @@ def test_exact_input_rerun_resumes_hash_bound_checkpoint(tmp_path: Path) -> None
     root = tmp_path / "project"
     root.mkdir()
     checkpoint_root = tmp_path / "run/.minecraft_ai/.mmm-custom-checkpoints"
-    module = ProductionModule(
-        "durable_chunk",
-        "custom_java",
-        {"feature": "resume without replay"},
-    )
+    module = _task_module("durable_chunk", "resume without replay")
     platform = adapter_for_target("1.20.1", "fabric")
 
     class _InterruptedRouter(_AgenticRouter):
