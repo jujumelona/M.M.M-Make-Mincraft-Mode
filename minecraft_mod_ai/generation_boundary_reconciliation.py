@@ -148,11 +148,11 @@ def _install_production_generation_preflight(complete_spec_module: Any) -> None:
         return
 
     @wraps(original_validate)
-    def validate(proposal: Any, *, policy: Any = None) -> None:
-        original_validate(proposal, policy=policy)
+    def validate(self: Any, *, policy: Any = None) -> None:
+        original_validate(self, policy=policy)
         try:
             validate_production_generation_modules(
-                proposal.modules,
+                self.modules,
                 policy=policy,
             )
         except ProductionGenerationPreflightError as exc:
