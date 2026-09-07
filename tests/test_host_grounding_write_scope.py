@@ -3,7 +3,7 @@ from __future__ import annotations
 from minecraft_mod_ai import host_grounding
 
 
-def test_coder_grounding_publishes_source_only_outer_write_scope(monkeypatch) -> None:
+def test_coder_grounding_publishes_dynamic_coarse_write_scope(monkeypatch) -> None:
     monkeypatch.setattr(
         host_grounding,
         "skills_for_model_role",
@@ -40,15 +40,25 @@ def test_coder_grounding_publishes_source_only_outer_write_scope(monkeypatch) ->
         "src/client/resources/",
         "src/test/java/",
         "src/gametest/",
+        ".minecraft_ai/",
     ]
-    assert scope["allowed_files"] == []
-    assert scope["protected_prefixes"] == [".minecraft_ai"]
+    assert scope["allowed_files"] == [
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "gradle/libs.versions.toml",
+    ]
+    assert scope["protected_prefixes"] == [
+        ".minecraft_ai/research",
+        ".minecraft_ai/context-observations",
+    ]
     assert "README.md" in scope["examples_rejected"]
-    assert "build.gradle" in scope["examples_rejected"]
-    assert "task capsule writable_paths" in scope["policy"]
+    assert "task capsule exact writable_paths" in scope["policy"]
 
 
-def test_custom_module_path_policy_keeps_build_and_host_state_read_only() -> None:
+def test_custom_module_path_policy_allows_dynamic_metadata_but_protects_evidence_ledgers() -> None:
     for path in (
         "src/main/java/example/Feature.java",
         "src/main/resources/fabric.mod.json",
@@ -56,6 +66,13 @@ def test_custom_module_path_policy_keeps_build_and_host_state_read_only() -> Non
         "src/client/resources/assets/example/lang/en_us.json",
         "src/test/java/example/FeatureTest.java",
         "src/gametest/resources/test.snbt",
+        ".minecraft_ai/generated/receipt.json",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "gradle/libs.versions.toml",
     ):
         assert host_grounding.custom_module_path_allowed(path) is True
         assert host_grounding.custom_module_path_protected(path) is False
@@ -63,15 +80,11 @@ def test_custom_module_path_policy_keeps_build_and_host_state_read_only() -> Non
     for path in (
         ".minecraft_ai/research/ledger.json",
         ".minecraft_ai/context-observations/page.json",
-        ".minecraft_ai/generated/receipt.json",
     ):
         assert host_grounding.custom_module_path_protected(path) is True
         assert host_grounding.custom_module_path_allowed(path) is False
 
     for path in (
-        "build.gradle",
-        "gradle.properties",
-        "settings.gradle",
         "README.md",
         "LICENSE",
         "docs/design.md",
