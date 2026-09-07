@@ -2,14 +2,15 @@ from __future__ import annotations
 
 """Host-owned detailed-plan compilation from grounded research.
 
-Each requirement is authored as one schema-constrained engineering worksheet. The host
-owns requirement selection, worksheet sections, evidence identifiers, validation, and
-plan assembly. The model never chooses its own response shape and detailed planning does
-not depend on free-form section boundaries or reasoning-label parsing.
+Each requirement is decomposed into schema-constrained engineering worksheet sections.
+The host owns requirement selection, section dependencies, evidence identifiers,
+validation, scheduling, and plan assembly. The model never chooses its own response
+shape, and detailed planning never depends on free-form section boundaries or
+reasoning-label parsing.
 """
 
 from collections.abc import Iterable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from copy import deepcopy
 import json
 from typing import Any
@@ -19,12 +20,40 @@ from .planner_operation import planner_operation
 from .root_cause_trace import emit_root_cause
 from .planning_detail_contract import validate_detailed_plan_grounding
 from .planning_detail_template import (
+    WORKSHEET_SECTIONS,
     normalize_required_sections,
     validate_worksheet,
-    worksheet_prompt,
-    worksheet_schema,
+    validate_worksheet_section,
+    worksheet_section_prompt,
+    worksheet_section_schema,
 )
 from .planning_state_contract import validate_planning_state
+
+
+SECTION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "behavior_contract": (),
+    "state_model": ("behavior_contract",),
+    "integration": ("behavior_contract",),
+    "resources_and_ui": ("behavior_contract", "integration"),
+    "algorithm": ("behavior_contract", "state_model"),
+    "authority_and_network": ("behavior_contract", "state_model", "integration"),
+    "persistence": ("state_model", "integration"),
+    "reuse_assessment": ("integration",),
+    "failure_and_limits": (
+        "behavior_contract",
+        "state_model",
+        "algorithm",
+        "integration",
+    ),
+    "verification": (
+        "behavior_contract",
+        "algorithm",
+        "integration",
+        "failure_and_limits",
+    ),
+}
+
+_CONTINUITY_CONTEXT_MAX_CHARS = 12_000
 
 
 def _text(value: Any) -> str:
@@ -130,10 +159,51 @@ def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
     return "\n".join(rows)
 
 
-def _worksheet_messages(
+def _section_dependencies(
+    section: str, selected_sections: tuple[str, ...]
+) -> tuple[str, ...]:
+    selected = set(selected_sections)
+    return tuple(
+        dependency
+        for dependency in SECTION_DEPENDENCIES[section]
+        if dependency in selected
+    )
+
+
+def _section_dependency_context(
+    section: str,
+    selected_sections: tuple[str, ...],
+    completed: Mapping[str, Mapping[str, Any]],
+) -> str:
+    dependencies = _section_dependencies(section, selected_sections)
+    if not dependencies:
+        return "- none; this section has no worksheet prerequisites"
+
+    per_dependency_limit = max(512, _CONTINUITY_CONTEXT_MAX_CHARS // len(dependencies))
+    rows: list[str] = []
+    for dependency in dependencies:
+        row = completed[dependency]
+        specification = _text(row.get("specification"))
+        refs = ", ".join(
+            _text(ref)
+            for ref in row.get("constraint_evidence_refs", [])
+            if _text(ref)
+        ) or "none"
+        prefix = f"[{dependency}]\n"
+        suffix = f"\nconstraint_evidence_refs: {refs}"
+        max_spec_chars = max(256, per_dependency_limit - len(prefix) - len(suffix) - 32)
+        if len(specification) > max_spec_chars:
+            specification = specification[:max_spec_chars].rstrip() + " …[bounded]"
+        rows.append(prefix + specification + suffix)
+    return "\n\n".join(rows)
+
+
+def _section_messages(
     requirement: Mapping[str, Any],
     selected_sections: tuple[str, ...],
+    section: str,
     evidence: list[Mapping[str, Any]],
+    completed: Mapping[str, Mapping[str, Any]],
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -143,18 +213,20 @@ def _worksheet_messages(
         else []
     )
     acceptance_text = "\n".join(f"- {row}" for row in acceptance_rows) or "- none supplied"
+    prerequisite_context = _section_dependency_context(
+        section, selected_sections, completed
+    )
     return [
         {
             "role": "system",
             "content": (
-                "Complete exactly one engineering worksheet for one requirement. "
+                "Complete exactly one host-selected engineering worksheet section for one requirement. "
                 "Return only the JSON object required by the supplied response schema. "
-                "Do not emit analysis, reasoning, commentary, markdown, code fences, or keys "
-                "outside that schema. The host owns the section set and provenance. "
-                "Do not invent target API names, symbols, versions, repository paths, external "
-                "facts, or evidence identifiers. Use only evidence_refs shown in the grounded "
-                "context, and use an empty constraint_evidence_refs array when evidence does not "
-                "constrain an authored design decision."
+                "Do not emit analysis, reasoning, commentary, markdown, code fences, or keys outside "
+                "that schema. Do not invent target API names, symbols, versions, repository paths, "
+                "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded "
+                "context. Direct prerequisite section results are authoritative continuity constraints; "
+                "do not regenerate or restate unrelated worksheet sections."
             ),
         },
         {
@@ -165,8 +237,9 @@ def _worksheet_messages(
                 f"{acceptance_text}\n"
                 "Grounded implementation evidence:\n"
                 f"{_evidence_context(evidence)}\n\n"
-                f"{worksheet_prompt(selected_sections)}\n"
-                "Fill the schema once as one internally consistent worksheet."
+                "Direct prerequisite worksheet sections:\n"
+                f"{prerequisite_context}\n\n"
+                f"{worksheet_section_prompt(section)}"
             ),
         },
     ]
@@ -176,22 +249,27 @@ def _structured_output_text(exc: BaseException) -> str:
     return str(getattr(exc, "output", "") or "")
 
 
-def _compile_requirement_worksheet(
+def _compile_worksheet_section(
     router: Any,
     *,
     requirement: Mapping[str, Any],
     selected_sections: tuple[str, ...],
+    section: str,
     evidence: list[Mapping[str, Any]],
     allowed: set[str],
+    completed: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Generate and validate exactly one schema-owned worksheet for one requirement."""
+    """Generate and validate one dependency-scoped worksheet section."""
 
     requirement_ref = _text(requirement.get("requirement_id"))
-    schema = worksheet_schema(selected_sections)
-    messages = _worksheet_messages(requirement, selected_sections, evidence)
+    schema = worksheet_section_schema(section)
+    messages = _section_messages(
+        requirement, selected_sections, section, evidence, completed
+    )
     raw = ""
+    operation = f"detailed_section:{section}"
     try:
-        with planner_operation("detailed_worksheet"):
+        with planner_operation(operation):
             raw = router.generate_text(
                 "planner",
                 messages,
@@ -200,27 +278,30 @@ def _compile_requirement_worksheet(
                 enable_tools=False,
             )
         decoded = json.loads(raw)
-        return validate_worksheet(decoded, allowed, selected_sections)
+        return validate_worksheet_section(decoded, allowed, section)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
         raw_text = raw or _structured_output_text(exc)
         emit_root_cause(
-            "detailed_worksheet_failure",
+            "detailed_section_failure",
             stage="planning_state",
-            operation="detailed_worksheet",
-            gate="structured_worksheet_validation",
+            operation=operation,
+            gate="structured_section_validation",
             result="FAIL",
             reason=f"{type(exc).__name__}: {exc}",
             details={
                 "requirement_ref": requirement_ref,
-                "selected_sections": list(selected_sections),
+                "section": section,
+                "prerequisite_sections": list(
+                    _section_dependencies(section, selected_sections)
+                ),
                 "raw_output": raw_text,
                 "raw_output_chars": len(raw_text),
                 "response_format": "json",
                 "response_schema": schema,
                 "allowed_evidence_refs": sorted(allowed),
                 "parser_rule": (
-                    "one JSON worksheet matching the host-owned response schema; "
-                    "all sections and evidence refs are validated by the host"
+                    "one JSON worksheet section matching the host-owned response schema; "
+                    "evidence refs are validated by the host"
                 ),
             },
             exc=exc,
@@ -299,55 +380,6 @@ def _assemble_requirement_plan(
     return plan
 
 
-def _compile_requirement_plan(
-    router: Any,
-    state: Mapping[str, Any],
-    requirement: Mapping[str, Any],
-    required_sections: Iterable[str] | None = None,
-) -> dict[str, Any]:
-    selected_sections = normalize_required_sections(required_sections)
-    requirement_ref = _text(requirement.get("requirement_id"))
-    evidence, allowed = _requirement_grounding(state, requirement_ref)
-    worksheet = _compile_requirement_worksheet(
-        router,
-        requirement=requirement,
-        selected_sections=selected_sections,
-        evidence=evidence,
-        allowed=allowed,
-    )
-    return _assemble_requirement_plan(
-        requirement,
-        requirement_ref,
-        selected_sections,
-        worksheet,
-        allowed,
-    )
-
-
-def _compile_requirement_plans_parallel(
-    router: Any,
-    state: Mapping[str, Any],
-    requirements: list[Mapping[str, Any]],
-    section_selection: Mapping[str, tuple[str, ...]],
-    *,
-    workers: int,
-) -> list[dict[str, Any]]:
-    """Run independent requirement worksheets in parallel."""
-
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
-        futures = [
-            pool.submit(
-                _compile_requirement_plan,
-                router,
-                state,
-                requirement,
-                section_selection[_text(requirement.get("requirement_id"))],
-            )
-            for requirement in requirements
-        ]
-        return [future.result() for future in futures]
-
-
 def _host_section_selection(
     requirements: list[Mapping[str, Any]],
     required_sections_by_requirement: Mapping[str, Iterable[str]] | None,
@@ -374,6 +406,125 @@ def _host_section_selection(
     }
 
 
+def _compile_requirement_plans_dag(
+    router: Any,
+    state: Mapping[str, Any],
+    requirements: list[Mapping[str, Any]],
+    section_selection: Mapping[str, tuple[str, ...]],
+    *,
+    workers: int,
+) -> list[dict[str, Any]]:
+    """Schedule all ready ``(requirement, section)`` nodes across one global pool."""
+
+    jobs: list[dict[str, Any]] = []
+    section_rank = {section: index for index, section in enumerate(WORKSHEET_SECTIONS)}
+    for requirement in requirements:
+        requirement_ref = _text(requirement.get("requirement_id"))
+        evidence, allowed = _requirement_grounding(state, requirement_ref)
+        selected_sections = section_selection[requirement_ref]
+        jobs.append(
+            {
+                "requirement": requirement,
+                "requirement_ref": requirement_ref,
+                "selected_sections": selected_sections,
+                "evidence": evidence,
+                "allowed": allowed,
+                "completed": {},
+                "pending": set(selected_sections),
+                "submitted": set(),
+            }
+        )
+
+    def ready_nodes() -> list[tuple[int, str]]:
+        ready: list[tuple[int, str]] = []
+        for job_index, job in enumerate(jobs):
+            selected_sections = job["selected_sections"]
+            completed = job["completed"]
+            for section in selected_sections:
+                if section not in job["pending"] or section in job["submitted"]:
+                    continue
+                dependencies = _section_dependencies(section, selected_sections)
+                if all(dependency in completed for dependency in dependencies):
+                    ready.append((job_index, section))
+        return sorted(ready, key=lambda item: (section_rank[item[1]], item[0]))
+
+    max_workers = max(1, workers)
+    future_to_node: dict[Future[dict[str, Any]], tuple[int, str]] = {}
+    with ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="planning-detail"
+    ) as pool:
+        while any(job["pending"] for job in jobs) or future_to_node:
+            for job_index, section in ready_nodes():
+                if len(future_to_node) >= max_workers:
+                    break
+                job = jobs[job_index]
+                dependencies = _section_dependencies(
+                    section, job["selected_sections"]
+                )
+                prerequisite_snapshot = {
+                    dependency: deepcopy(job["completed"][dependency])
+                    for dependency in dependencies
+                }
+                future = pool.submit(
+                    _compile_worksheet_section,
+                    router,
+                    requirement=job["requirement"],
+                    selected_sections=job["selected_sections"],
+                    section=section,
+                    evidence=job["evidence"],
+                    allowed=job["allowed"],
+                    completed=prerequisite_snapshot,
+                )
+                job["submitted"].add(section)
+                future_to_node[future] = (job_index, section)
+
+            if not future_to_node:
+                pending = {
+                    job["requirement_ref"]: sorted(
+                        job["pending"], key=section_rank.__getitem__
+                    )
+                    for job in jobs
+                    if job["pending"]
+                }
+                raise RuntimeError(
+                    "DETAILED_PLAN_DAG_DEADLOCK: no ready section nodes; "
+                    + repr(pending)
+                )
+
+            done, _ = wait(tuple(future_to_node), return_when=FIRST_COMPLETED)
+            completed_futures = sorted(
+                done,
+                key=lambda future: (
+                    section_rank[future_to_node[future][1]],
+                    future_to_node[future][0],
+                ),
+            )
+            for future in completed_futures:
+                job_index, section = future_to_node.pop(future)
+                job = jobs[job_index]
+                result = future.result()
+                job["completed"][section] = result
+                job["pending"].remove(section)
+                job["submitted"].remove(section)
+
+    compiled: list[dict[str, Any]] = []
+    for job in jobs:
+        worksheet = {
+            section: job["completed"][section]
+            for section in job["selected_sections"]
+        }
+        compiled.append(
+            _assemble_requirement_plan(
+                job["requirement"],
+                job["requirement_ref"],
+                job["selected_sections"],
+                worksheet,
+                job["allowed"],
+            )
+        )
+    return compiled
+
+
 def compile_detailed_implementation_plans(
     router: Any,
     prompt: str,
@@ -389,25 +540,21 @@ def compile_detailed_implementation_plans(
 
     _preflight_detailed_planning(value, requirements)
     section_selection = _host_section_selection(requirements, required_sections_by_requirement)
-    workers = min(len(requirements), router_native_model_parallelism(router))
-    if workers <= 1:
-        compiled = [
-            _compile_requirement_plan(
-                router,
-                value,
-                requirement,
-                section_selection[str(requirement.get("requirement_id") or "")],
-            )
-            for requirement in requirements
-        ]
-    else:
-        compiled = _compile_requirement_plans_parallel(
-            router,
-            value,
-            requirements,
-            section_selection,
-            workers=workers,
-        )
+    total_section_tasks = sum(
+        len(section_selection[_text(requirement.get("requirement_id"))])
+        for requirement in requirements
+    )
+    workers = max(
+        1,
+        min(total_section_tasks, router_native_model_parallelism(router)),
+    )
+    compiled = _compile_requirement_plans_dag(
+        router,
+        value,
+        requirements,
+        section_selection,
+        workers=workers,
+    )
 
     detailed: list[dict[str, Any]] = []
     coverage: list[dict[str, Any]] = []
@@ -447,4 +594,4 @@ def compile_detailed_implementation_plans(
     return result
 
 
-__all__ = ["compile_detailed_implementation_plans"]
+__all__ = ["SECTION_DEPENDENCIES", "compile_detailed_implementation_plans"]
