@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai.generation_boundary_reconciliation import (
+    _install_resource_asset_preflight,
+)
 from minecraft_mod_ai.resource_asset_preflight_contract import (
     ResourceAssetPreflightError,
     canonical_asset_target,
-    install,
     safe_asset_target,
     validate_asset_generation_inputs,
 )
@@ -79,7 +81,7 @@ def test_installed_prompt_preflight_blocks_original_planner_call() -> None:
         AssetProductionError=RuntimeError,
         _safe_target=lambda *_args: None,
     )
-    install(fake_module)
+    _install_resource_asset_preflight(fake_module)
     proposal = _Proposal("assets/example/textures/item/test.json")
 
     with pytest.raises(SpecValidationError, match="Resource asset preflight failed"):
@@ -104,10 +106,19 @@ def test_installed_binary_preflight_blocks_original_image_generation(tmp_path: P
         AssetProductionError=RuntimeError,
         _safe_target=lambda *_args: None,
     )
-    install(fake_module)
+    _install_resource_asset_preflight(fake_module)
     proposal = _Proposal("assets/example/textures/item/test.png", pack_format=None)
 
     with pytest.raises(RuntimeError, match="Resource asset preflight failed"):
         fake_module.generate_assets(object(), proposal, tmp_path, tmp_path)
 
     assert calls["image"] == 0
+
+
+def test_live_orchestrator_entrypoint_cannot_bypass_resource_preflight() -> None:
+    import minecraft_mod_ai.complete_orchestrator as orchestrator
+    import minecraft_mod_ai.resource_asset_production as resource_module
+
+    assert getattr(resource_module.attach_generation_plan, "_mmm_resource_asset_preflight", False)
+    assert getattr(resource_module.generate_assets, "_mmm_resource_asset_preflight", False)
+    assert getattr(orchestrator.generate_assets, "_mmm_resource_asset_preflight", False)
