@@ -64,7 +64,9 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-027": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-028": RegressionExecutionRoute("tests/test_platform_lock_naming_regime.py"),
     "REG-029": RegressionExecutionRoute("tests/test_target_semantics_boundary.py"),
-    "REG-030": RegressionExecutionRoute("tests/test_worker07_target_context_hardening.py"),
+    "REG-030": RegressionExecutionRoute(
+        "tests/test_reference_target_context_hardening.py::test_fresh_task_with_reuse_refs_fails_closed_to_localization"
+    ),
     "REG-031": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-032": RegressionExecutionRoute("tests/test_project_inventory_contract.py"),
     "REG-033": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
@@ -73,7 +75,9 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     ),
     "REG-035": RegressionExecutionRoute("tests/test_final_architecture_contract.py"),
     "REG-036": RegressionExecutionRoute("tests/test_agent_security_contract.py"),
-    "REG-037": RegressionExecutionRoute("tests/test_worker09_state_provenance_contract.py"),
+    "REG-037": RegressionExecutionRoute(
+        "tests/test_custom_module_output_continuation.py::test_output_continuation_carries_preserved_source_state"
+    ),
     "REG-SEM-001": RegressionExecutionRoute(
         "tests/test_space_progression_planner_and_verifier_regression.py"
     ),
