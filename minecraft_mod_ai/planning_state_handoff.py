@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from . import evidence_first_planning as _evidence
+from .acceptance_contracts import canonical_public_acceptance
 from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
 
@@ -176,13 +177,10 @@ def build_request_catalog_from_planning_state(
         implementation_capabilities = projection["implementation_capabilities"]
         implementation_obligations = projection["implementation_obligations"]
         acceptance = list(
-            dict.fromkeys(
-                [
-                    _text(item)
-                    for item in requirement.get("acceptance", [])
-                    if _text(item)
-                ]
-                + projection["verification_checks"]
+            canonical_public_acceptance(
+                list(requirement.get("acceptance", []))
+                + list(projection["verification_checks"]),
+                reject_invalid=True,
             )
         )
         capability = "researched." + _evidence._sha(
