@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
+from minecraft_mod_ai import forced_tool_execution_contract as forced
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
+from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_output_atomicity_contract import (
     _same_tool_repair_request,
     assert_atomic_model_schema,
 )
-from minecraft_mod_ai.model_adapters.base import GenerationRequest
-from minecraft_mod_ai import forced_tool_execution_contract as forced
 
 
 def _tool_schema() -> dict[str, object]:
@@ -71,6 +69,5 @@ def test_forced_tool_repair_stays_on_native_tool_wire() -> None:
 
 
 def test_runtime_installer_replaces_free_form_argument_fallback() -> None:
-    # Package bootstrap installs the atomic boundary before public API use.
     assert forced.host_selected_argument_turn.__module__ == "minecraft_mod_ai.model_output_atomicity_contract"
     assert forced.host_selected_mutation_turn.__module__ == "minecraft_mod_ai.model_output_atomicity_contract"
