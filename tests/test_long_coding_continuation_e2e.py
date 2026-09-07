@@ -16,7 +16,13 @@ def test_output_exhaustion_continuation_messages_structure() -> None:
     module = ProductionModule(
         module_id="custom_sword",
         kind="item",
-        config={"name": "Custom Sword"},
+        config={
+            "name": "Custom Sword",
+            "evidence_task": {
+                "task_id": "custom_sword",
+                "semantic_outcome": "Implement the approved custom sword continuation contract.",
+            },
+        },
         depends_on=(),
         required_gates=(),
     )
