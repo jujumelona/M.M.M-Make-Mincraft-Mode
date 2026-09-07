@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Deterministic preflight for built-in production generation inputs.
 
-The complete orchestrator may execute independent generation nodes concurrently. Any
-configuration error knowable from the approved proposal is rejected during proposal
-validation. Imported-project state is then merged and revalidated immediately before
-the first generation node is dispatched.
+The complete orchestrator may execute independent generation nodes concurrently. The
+runtime therefore validates the normalized generation set together with persisted
+project state immediately before the first generation node is dispatched.
 """
 
 from collections.abc import Iterable
@@ -16,6 +15,7 @@ from .geckolib_generation_contract import (
     GeckoLibGenerationContractError,
     geckolib_entity_inputs_from_module_config,
     preflight_geckolib_generation_target,
+    validate_existing_geckolib_records,
 )
 from .scale_policy import ScalePolicy
 from .system_pack_validation import validate_system_modules
@@ -35,7 +35,7 @@ _SYSTEM_PACK_BY_KIND = {
 
 
 class ProductionGenerationPreflightError(ValueError):
-    """An approved module set cannot enter deterministic built-in generation."""
+    """A normalized module set cannot enter deterministic built-in generation."""
 
 
 def _is_custom(module: Any) -> bool:
@@ -81,12 +81,7 @@ def validate_production_generation_modules(
     policy: ScalePolicy | None = None,
     validate_system_packs: bool = True,
 ) -> None:
-    """Reject every proposal-known built-in generator failure before dispatch.
-
-    System-pack cross references are proposal-complete only for fresh projects. For an
-    imported project, the caller disables that portion here and the project-aware
-    preflight merges the persisted system records before validating them.
-    """
+    """Validate normalized built-in module inputs without touching project state."""
 
     policy = policy or ScalePolicy.from_environment()
     policy.validate()
@@ -125,7 +120,7 @@ def validate_production_generation_project(
     package_name: str,
     policy: ScalePolicy | None = None,
 ) -> None:
-    """Validate project-dependent generator state before concurrent dispatch begins."""
+    """Validate all deterministic state before concurrent generation dispatch begins."""
 
     policy = policy or ScalePolicy.from_environment()
     materialized = tuple(modules)
@@ -135,26 +130,29 @@ def validate_production_generation_project(
         validate_system_packs=False,
     )
 
-    if any(
+    has_entities = any(
         not _is_custom(module) and str(module.kind) in _ENTITY_KINDS
         for module in materialized
-    ):
+    )
+    if has_entities:
         try:
             preflight_geckolib_generation_target(
                 project_root,
                 mod_id=mod_id,
                 package_name=package_name,
             )
+            validate_existing_geckolib_records(project_root)
         except GeckoLibGenerationContractError as exc:
             raise ProductionGenerationPreflightError(
                 f"GeckoLib project cannot enter entity generation: {exc}"
             ) from exc
 
-    if not _system_groups(materialized):
+    system_groups = _system_groups(materialized)
+    if not system_groups:
         return
     from .system_pack_generator import iter_system_module_records
 
-    for pack_id, group in sorted(_system_groups(materialized).items()):
+    for pack_id, group in sorted(system_groups.items()):
         try:
             existing = iter_system_module_records(
                 project_root,
@@ -165,10 +163,7 @@ def validate_production_generation_project(
             raise ProductionGenerationPreflightError(
                 f"System pack {pack_id} existing records are invalid: {exc}"
             ) from exc
-        merged = {
-            str(item["module_id"]): item
-            for item in existing
-        }
+        merged = {str(item["module_id"]): item for item in existing}
         for module in group:
             item = _system_module_dict(module)
             merged[str(module.module_id)] = item
