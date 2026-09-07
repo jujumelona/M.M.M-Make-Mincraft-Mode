@@ -11,6 +11,7 @@ from .platform_catalog import PlatformAdapter, adapter_from_project
 from .project_edit import FabricProjectInfo, ProjectEditError, inspect_fabric_project
 
 _DEPENDENCIES_BLOCK = re.compile(r"\bdependencies\s*\{")
+_GECKOLIB_DEPENDENCY_MARKER = "// MMM:geckolib:dependency"
 
 
 class GeckoLibGenerationContractError(ValueError):
@@ -78,7 +79,10 @@ def validate_geckolib_project_preflight(
             "build.gradle is required before GeckoLib dependency generation."
         )
     build_text = _read_utf8(build_file, label="build.gradle")
-    if _DEPENDENCIES_BLOCK.search(build_text) is None:
+    if (
+        _GECKOLIB_DEPENDENCY_MARKER not in build_text
+        and _DEPENDENCIES_BLOCK.search(build_text) is None
+    ):
         raise GeckoLibGenerationContractError(
             "build.gradle has no dependencies block for GeckoLib insertion."
         )
