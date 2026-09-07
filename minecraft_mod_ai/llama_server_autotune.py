@@ -20,7 +20,7 @@ _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None
 _MANAGED_URL: str | None = None
 _MANAGED_KEY: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
-_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v2-compact"
+_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v3-native-fit"
 _BENCHMARK_OUTPUT_TOKENS = 96
 
 
@@ -69,6 +69,19 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     except ValueError:
         return default
     return value if value >= minimum else default
+
+
+def _env_optional_int(name: str, *, minimum: int = 1) -> int | None:
+    """Return only an explicit valid override; otherwise preserve llama.cpp auto."""
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= minimum else None
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -231,11 +244,13 @@ def _fingerprint(config: Any, binary: str, model_path: str) -> str:
         "model_size": int(stat.st_size),
         "model_mtime_ns": int(stat.st_mtime_ns),
         "max_context": int(config.max_context),
-        "kv": os.environ.get("MMM_KV_CACHE_QUANT", "q4_0").lower(),
         "server": _server_version(binary),
         "hardware": _hardware_identity(),
-        "batch": _env_int("MMM_LLAMA_BATCH", 2048),
-        "ubatch": _env_int("MMM_LLAMA_UBATCH", 512),
+        "ctx_override": os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip(),
+        "batch_override": os.environ.get("MMM_LLAMA_BATCH", "").strip(),
+        "ubatch_override": os.environ.get("MMM_LLAMA_UBATCH", "").strip(),
+        "kv_override": os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower(),
+        "parallel_override": os.environ.get("MMM_LLAMA_PARALLEL", "").strip(),
         "probe_tokens": _env_int(
             "MMM_LLAMA_AUTOTUNE_TOKENS", _BENCHMARK_OUTPUT_TOKENS
         ),
@@ -328,19 +343,18 @@ def _free_port(preferred: int) -> int:
 
 
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
-    raw_context = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
-    context = 0
-    if raw_context:
-        try:
-            value = int(raw_context)
-        except ValueError:
-            value = 0
-        if value >= 0:
-            context = value
-    batch = _env_int("MMM_LLAMA_BATCH", 2048)
-    ubatch = min(batch, _env_int("MMM_LLAMA_UBATCH", 512))
-    kv = os.environ.get("MMM_KV_CACHE_QUANT", "q4_0").strip().lower() or "q4_0"
-    return [
+    del config
+
+    parallel = _env_optional_int("MMM_LLAMA_PARALLEL")
+    context = _env_optional_int("MMM_LLAMA_SERVER_CTX")
+    batch = _env_optional_int("MMM_LLAMA_BATCH")
+    ubatch = _env_optional_int("MMM_LLAMA_UBATCH")
+    kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()
+
+    # Resource ownership belongs to llama.cpp.  -1 selects native automatic slot
+    # sizing and --fit lets llama-server fit model/context placement to live device
+    # memory.  MMM adds resource flags only when the user explicitly overrides them.
+    args = [
         binary,
         "-m",
         model_path,
@@ -348,20 +362,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         "127.0.0.1",
         "--port",
         str(port),
-        "--ctx-size",
-        str(context),
-        "--batch-size",
-        str(batch),
-        "--ubatch-size",
-        str(ubatch),
-        "--gpu-layers",
-        "all",
-        "--flash-attn",
+        "--parallel",
+        str(parallel if parallel is not None else -1),
+        "--fit",
         "on",
-        "--cache-type-k",
-        kv,
-        "--cache-type-v",
-        kv,
         "--load-mode",
         "none",
         # Tool-capable OpenAI chat requests require the Jinja chat engine.
@@ -379,6 +383,15 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         "--no-ui",
         "--log-disable",
     ]
+    if context is not None:
+        args.extend(("--ctx-size", str(context)))
+    if batch is not None:
+        args.extend(("--batch-size", str(batch)))
+    if ubatch is not None:
+        args.extend(("--ubatch-size", str(ubatch)))
+    if kv:
+        args.extend(("--cache-type-k", kv, "--cache-type-v", kv))
+    return args
 
 
 def _variant_args(variant: ServerVariant) -> list[str]:
@@ -389,10 +402,6 @@ def _variant_args(variant: ServerVariant) -> list[str]:
         variant.spec_type,
         "--spec-draft-n-max",
         str(variant.draft_n_max),
-        "--spec-draft-n-min",
-        "0",
-        "--spec-draft-ngl",
-        "all",
     ]
 
 
