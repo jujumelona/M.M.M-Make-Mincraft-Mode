@@ -16,7 +16,7 @@ from typing import Any
 
 from .target_contract import TargetContractError, target_coordinates_from_mapping
 
-SCHEMA = "mmm/coder-execution-contract-v2"
+SCHEMA = "mmm/coder-execution-contract"
 
 
 def _canonical(value: Any) -> str:
@@ -215,6 +215,13 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
     task_ref = str(contract.get("task_ref") or "").strip()
     if not task_ref:
         raise ValueError("coder execution contract requires task_ref")
+    if not str(contract.get("execution_role") or "").strip():
+        raise ValueError(f"coder execution contract {task_ref!r} has no execution_role")
+    if not str(contract.get("semantic_outcome") or "").strip():
+        raise ValueError(f"coder execution contract {task_ref!r} has no semantic_outcome")
+    worksheet = contract.get("engineering_worksheet")
+    if not isinstance(worksheet, Mapping) or not worksheet:
+        raise ValueError(f"coder execution contract {task_ref!r} has no engineering_worksheet")
     target_constraints = contract.get("target_constraints")
     if not isinstance(target_constraints, Mapping):
         raise ValueError(f"coder execution contract {task_ref!r} has no target contract")
@@ -252,6 +259,10 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
     for index, step in enumerate(steps):
         if not isinstance(step, Mapping):
             raise ValueError(f"coder execution step {index} is not an object")
+        if not str(step.get("obligation") or "").strip():
+            raise ValueError(f"coder execution step {index} has no obligation")
+        if not _strings(step.get("target_refs")):
+            raise ValueError(f"coder execution step {index} has no target_refs")
         checklist = step.get("execution_checklist")
         if not isinstance(checklist, list) or len(checklist) < 6:
             raise ValueError(
@@ -259,6 +270,23 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
             )
         if not str(step.get("done_when") or "").strip():
             raise ValueError(f"coder execution step {index} has no completion condition")
+    verification_plan = contract.get("verification_plan")
+    if not isinstance(verification_plan, list) or not verification_plan:
+        raise ValueError(f"coder execution contract {task_ref!r} has no verification_plan")
+    for index, gate in enumerate(verification_plan):
+        if not isinstance(gate, Mapping) or not str(gate.get("gate") or "").strip():
+            raise ValueError(f"coder verification gate {index} is incomplete")
+    completion = contract.get("completion_predicate")
+    if not isinstance(completion, Mapping) or completion.get("operator") != "all":
+        raise ValueError(f"coder execution contract {task_ref!r} has no completion predicate")
+    conditions = completion.get("conditions")
+    if not isinstance(conditions, list) or not conditions:
+        raise ValueError(f"coder execution contract {task_ref!r} has no completion conditions")
+    if completion.get("model_self_report_is_authoritative") is not False:
+        raise ValueError(f"coder execution contract {task_ref!r} trusts model self-report")
+    protected = contract.get("protected_boundaries")
+    if not isinstance(protected, Mapping) or not _strings(protected.get("writable_paths")):
+        raise ValueError(f"coder execution contract {task_ref!r} has no writable boundary")
     if contract.get("contract_sha256") != _hash_without(contract, "contract_sha256"):
         raise ValueError(f"coder execution contract {task_ref!r} hash mismatch")
 
