@@ -101,7 +101,7 @@ def _assert_argument_page(request: GenerationRequest) -> None:
     assert request.response_schema.get("additionalProperties") is False
 
 
-def test_host_selected_mutation_exposes_no_action_tool_to_model() -> None:
+def test_host_selected_mutation_uses_only_argument_contract() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
@@ -128,7 +128,7 @@ def test_host_selected_mutation_exposes_no_action_tool_to_model() -> None:
     assert result.tool_calls[0].id.startswith("host_mutation_")
 
 
-def test_invalid_arguments_receive_one_argument_only_json_repair() -> None:
+def test_invalid_arguments_receive_one_same_contract_repair() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
@@ -210,90 +210,30 @@ def test_argument_page_never_executes_stale_tool_call() -> None:
         _assert_argument_page(request)
 
 
-def test_failed_native_required_probe_falls_back_to_argument_only_json_page() -> None:
+def test_host_selected_nonmutation_uses_same_argument_contract_without_probe() -> None:
     target = "java_workspace_symbols"
 
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
 
-        def _server_url(self, request: GenerationRequest) -> str:
-            return "http://probe-fallback.test"
-
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
-            if len(self.requests) == 1:
-                return GenerationResponse(content="native required was not enforced")
             return _page_response({"query": "workspace"})
 
     _install_adapter_class(
         Adapter,
         transport_name="Local regression model",
         deterministic_stale_read=False,
-        probe_native_required=True,
     )
     adapter = Adapter()
 
     result = adapter.generate_turn(_forced_query_request(target))
 
-    assert len(adapter.requests) == 2
-    probe, fallback = adapter.requests
-    assert probe.tool_choice == "required"
-    assert probe.tools[0]["function"]["name"] == "mmm_required_tool_probe"
-    _assert_argument_page(fallback)
+    assert len(adapter.requests) == 1
+    _assert_argument_page(adapter.requests[0])
     assert [call.name for call in result.tool_calls] == [target]
     assert result.tool_calls[0].id.startswith("host_action_")
-
-
-def test_successful_native_required_probe_uses_native_action_once() -> None:
-    target = "java_workspace_symbols"
-
-    class Adapter:
-        def __init__(self) -> None:
-            self.requests: list[GenerationRequest] = []
-
-        def _server_url(self, request: GenerationRequest) -> str:
-            return "http://probe-native.test"
-
-        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-            self.requests.append(request)
-            if len(self.requests) == 1:
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="probe",
-                            name="mmm_required_tool_probe",
-                            arguments={"nonce": "mmm"},
-                            raw_arguments='{"nonce":"mmm"}',
-                        ),
-                    )
-                )
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="native",
-                        name=target,
-                        arguments={"query": "workspace"},
-                        raw_arguments='{"query":"workspace"}',
-                    ),
-                )
-            )
-
-    _install_adapter_class(
-        Adapter,
-        transport_name="Local regression model",
-        deterministic_stale_read=False,
-        probe_native_required=True,
-    )
-    adapter = Adapter()
-
-    result = adapter.generate_turn(_forced_query_request(target))
-
-    assert len(adapter.requests) == 2
-    assert adapter.requests[1].tool_choice == "required"
-    assert [item["function"]["name"] for item in adapter.requests[1].tools] == [target]
-    assert [call.name for call in result.tool_calls] == [target]
-    assert result.tool_calls[0].id == "native"
 
 
 def test_host_tool_phase_classification_is_canonical() -> None:
