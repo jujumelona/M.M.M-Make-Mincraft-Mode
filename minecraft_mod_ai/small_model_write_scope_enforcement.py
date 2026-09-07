@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Fail-closed write-scope enforcement for small-model custom generation.
+"""Fail-closed write-scope enforcement for evidence-owned small-model tasks.
 
-Planning owns the exact target files. This layer carries that ownership through the
-staged-workspace transaction boundary so a coder cannot broaden a task merely because
-a path lives under a generally mutable source directory.
+Planning owns exact target files for evidence-backed production tasks. This layer carries
+that ownership through the staged-workspace transaction boundary without changing the
+legacy/dynamic custom-generation boundary used before a task capsule exists.
 """
 
 import threading
@@ -29,6 +29,18 @@ def _normalize_path(value: Any) -> str:
         return ""
     normalized = candidate.as_posix()
     return "" if normalized in {"", "."} else normalized
+
+
+def _declares_evidence_task(module: Any) -> bool:
+    """Return whether this module entered the evidence-owned task pipeline.
+
+    Absence means a legacy/dynamic generation path and must not be converted into a task
+    capsule implicitly. Presence with malformed data remains fail-closed in
+    ``exact_task_writable_paths``.
+    """
+
+    config = getattr(module, "config", None)
+    return isinstance(config, Mapping) and "evidence_task" in config
 
 
 def exact_task_writable_paths(module: Any) -> tuple[str, ...]:
@@ -98,7 +110,7 @@ def _active_write_scope(paths: Sequence[str]):
 
 
 def install(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
-    """Compose exact task ownership into the live custom-coder transaction path."""
+    """Compose exact evidence-task ownership into the live custom-coder transaction path."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -119,6 +131,16 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
         loader: str | None = None,
         mappings: str | None = None,
     ) -> Any:
+        if not _declares_evidence_task(module):
+            return original_generate(
+                self,
+                project_root,
+                module=module,
+                research_modules=research_modules,
+                minecraft_version=minecraft_version,
+                loader=loader,
+                mappings=mappings,
+            )
         writable_paths = exact_task_writable_paths(module)
         with _active_write_scope(writable_paths):
             return original_generate(
@@ -148,8 +170,8 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
     generator_type.generate = scoped_generate
     generator_type._validate_operations = exact_validate
 
-    # Keep staged-operation discovery aligned with the same coarse custom-coder policy
-    # that is published to the model. Exact task ownership is enforced above it.
+    # The coarse dynamic/legacy boundary remains host-owned. Evidence-owned tasks are
+    # further narrowed to exact writable paths by the wrapper above.
     custom_module_generator_module._agent_mutable_path = (
         host_grounding_module.custom_module_path_allowed
     )
