@@ -100,37 +100,49 @@ class GradleRunner:
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
 
-        wrapper_result = self._run(
-            name="wrapper",
-            executable=gradle,
-            arguments=(
-                "--no-daemon",
-                "wrapper",
-                "--gradle-version",
-                gradle_version,
-                "--gradle-distribution-sha256-sum",
-                gradle_sha256,
-                "--stacktrace",
-            ),
-            cwd=project_root,
-            env=environment,
-            log_path=logs / "gradle-wrapper.log",
-        )
-        commands.append(wrapper_result)
-        if wrapper_result.exit_code != 0:
-            return BuildReport(
-                status="FAIL",
-                gradle_version=gradle_version,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=None,
-                error="Gradle wrapper generation failed.",
+        if not self._wrapper_is_current(project_root, gradle_version, gradle_sha256):
+            wrapper_result = self._run(
+                name="wrapper",
+                executable=gradle,
+                arguments=(
+                    "--no-daemon",
+                    "wrapper",
+                    "--gradle-version",
+                    gradle_version,
+                    "--gradle-distribution-sha256-sum",
+                    gradle_sha256,
+                    "--stacktrace",
+                ),
+                cwd=project_root,
+                env=environment,
+                log_path=logs / "gradle-wrapper.log",
             )
+            commands.append(wrapper_result)
+            if wrapper_result.exit_code != 0:
+                return BuildReport(
+                    status="FAIL",
+                    gradle_version=gradle_version,
+                    commands=tuple(commands),
+                    jar_path=None,
+                    gametest_report=None,
+                    error="Gradle wrapper generation failed.",
+                )
 
+        force_clean = os.environ.get("MMM_GRADLE_FORCE_CLEAN", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        build_arguments = (
+            ("--no-daemon", "clean", "build", "--stacktrace")
+            if force_clean
+            else ("--no-daemon", "build", "--stacktrace")
+        )
         build_result = self._run(
-            name="clean_build",
+            name="clean_build" if force_clean else "build",
             executable=gradle,
-            arguments=("--no-daemon", "clean", "build", "--stacktrace"),
+            arguments=build_arguments,
             cwd=project_root,
             env=environment,
             log_path=logs / "gradle-build.log",
@@ -143,7 +155,7 @@ class GradleRunner:
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=None,
-                error="Gradle clean build failed.",
+                error="Gradle build failed.",
             )
 
         if run_gametest:
@@ -185,11 +197,43 @@ class GradleRunner:
             error=None,
         )
 
+    @staticmethod
+    def _wrapper_is_current(
+        project_root: Path,
+        gradle_version: str,
+        gradle_sha256: str,
+    ) -> bool:
+        properties = project_root / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        launcher = project_root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        if not properties.is_file() or not launcher.is_file():
+            return False
+        try:
+            text = properties.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return (
+            f"gradle-{gradle_version}-bin.zip" in text
+            and gradle_sha256.lower() in text.lower()
+        )
+
     def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
         distribution_dir = self.cache_dir / f"gradle-{gradle_version}"
         executable = distribution_dir / "bin" / (
             "gradle.bat" if os.name == "nt" else "gradle"
         )
+        verification_marker = distribution_dir / ".minecraft-ai-gradle-sha256"
+
+        if executable.is_file() and verification_marker.is_file():
+            try:
+                verified_sha256 = verification_marker.read_text(
+                    encoding="ascii"
+                ).strip().lower()
+            except OSError:
+                verified_sha256 = ""
+            if verified_sha256 == gradle_sha256.lower():
+                if os.name != "nt":
+                    executable.chmod(0o755)
+                return executable
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         archive = self.cache_dir / f"gradle-{gradle_version}-bin.zip"
@@ -237,6 +281,10 @@ class GradleRunner:
                 shutil.rmtree(extraction_root)
         if not executable.is_file():
             raise BuildRunnerError("Gradle executable is missing after extraction.")
+        verification_marker.write_text(
+            gradle_sha256.lower() + "\n",
+            encoding="ascii",
+        )
         if os.name != "nt":
             executable.chmod(0o755)
         return executable
