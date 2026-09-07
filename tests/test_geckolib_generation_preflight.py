@@ -100,11 +100,21 @@ def test_generator_preflight_fails_before_first_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    info = _project_info(tmp_path, depends=[])
+    info = _project_info(tmp_path)
     writes = {"count": 0}
 
-    monkeypatch.setattr(contract, "adapter_from_project", lambda _root: _adapter())
     monkeypatch.setattr(geckolib_generator, "inspect_fabric_project", lambda _root: info)
+
+    def fail_preflight(_info):
+        raise contract.GeckoLibGenerationContractError(
+            "fabric.mod.json depends must be an object."
+        )
+
+    monkeypatch.setattr(
+        contract,
+        "validate_geckolib_project_preflight",
+        fail_preflight,
+    )
 
     def write_text_files(*_args, **_kwargs):
         writes["count"] += 1
