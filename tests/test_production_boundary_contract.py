@@ -95,14 +95,27 @@ def test_requirements_keep_single_authoritative_ids():
     assert all(not value.startswith("requirement:") for value in approved)
 
 
-def test_canonical_public_acceptance_must_be_one_per_requirement():
-    with pytest.raises(
-        ProductionContractError,
-        match="exposes multiple public acceptance contracts",
-    ):
-        boundary._approved_acceptance(
-            {
-                "requirement_id": "req_many",
-                "acceptance": ["Given A; when B; then C.", "Given D; when E; then F."],
-            }
-        )
+def test_canonical_public_acceptance_preserves_multiple_checks_per_requirement():
+    checks = ["Given A; when B; then C.", "Given D; when E; then F."]
+    assert boundary._approved_acceptance(
+        {
+            "requirement_id": "req_many",
+            "acceptance": checks,
+        }
+    ) == "; ".join(checks)
+
+
+def test_space_economy_regression_keeps_all_public_acceptance_checks():
+    checks = [
+        "플레이어가 자원을 채굴하거나 수집할 수 있는 메커니즘이 존재한다.",
+        "플레이어가 자원을 통해 돈을 획득할 수 있는 메커니즘이 존재한다.",
+        "플레이어가 다른 플레이어 또는 NPC와 자원을 거래할 수 있는 인터페이스가 존재한다.",
+    ]
+    projected = boundary._approved_acceptance(
+        {
+            "requirement_id": "req_001",
+            "acceptance": checks,
+        }
+    )
+    assert projected == "; ".join(checks)
+    assert all(check in projected for check in checks)
