@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from minecraft_mod_ai.forced_tool_execution_contract import _install_adapter_class
@@ -17,6 +15,8 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
     _VERIFY_TOOLS,
     LoopPhase,
 )
+
+_ARGUMENT_PAGE_TOOL = "mmm_submit_argument_page"
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -86,14 +86,38 @@ def _valid_arguments() -> dict[str, str]:
     }
 
 
-def test_host_selected_mutation_never_exposes_tool_name_to_model() -> None:
+def _page_call(arguments: dict[str, str], *, call_id: str = "page") -> GenerationResponse:
+    return GenerationResponse(
+        tool_calls=(
+            ToolCall(
+                id=call_id,
+                name=_ARGUMENT_PAGE_TOOL,
+                arguments=arguments,
+                raw_arguments="",
+            ),
+        )
+    )
+
+
+def _assert_argument_page(request: GenerationRequest) -> None:
+    assert request.parallel_tool_calls is False
+    assert request.tool_choice == "required"
+    assert len(request.tools) == 1
+    assert len(request.tool_validation_schemas) == 1
+    assert request.tools[0]["function"]["name"] == _ARGUMENT_PAGE_TOOL
+    assert request.tool_validation_schemas[0]["function"]["name"] == _ARGUMENT_PAGE_TOOL
+    assert request.response_format == "text"
+    assert request.response_schema is None
+
+
+def test_host_selected_mutation_exposes_only_argument_page_not_action_name() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
 
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
-            return GenerationResponse(content=json.dumps(_valid_arguments()))
+            return _page_call(_valid_arguments())
 
     _install_adapter_class(
         Adapter,
@@ -106,18 +130,16 @@ def test_host_selected_mutation_never_exposes_tool_name_to_model() -> None:
 
     assert len(adapter.requests) == 1
     page = adapter.requests[0]
-    assert page.tools == ()
-    assert page.tool_validation_schemas == ()
-    assert page.tool_choice is None
-    assert page.parallel_tool_calls is False
-    assert page.response_format == "json"
-    assert page.response_schema == _schema("apply_source_edit")["function"]["parameters"]
+    _assert_argument_page(page)
+    assert all(
+        item["function"]["name"] != "apply_source_edit" for item in page.tools
+    )
     assert [call.name for call in result.tool_calls] == ["apply_source_edit"]
     assert result.tool_calls[0].arguments == _valid_arguments()
     assert result.tool_calls[0].id.startswith("host_mutation_")
 
 
-def test_invalid_arguments_receive_one_argument_only_repair() -> None:
+def test_invalid_arguments_receive_one_native_page_repair() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
@@ -125,8 +147,8 @@ def test_invalid_arguments_receive_one_argument_only_repair() -> None:
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
             if len(self.requests) == 1:
-                return GenerationResponse(content="{}")
-            return GenerationResponse(content=json.dumps(_valid_arguments()))
+                return _page_call({})
+            return _page_call(_valid_arguments(), call_id="repair")
 
     _install_adapter_class(
         Adapter,
@@ -138,9 +160,8 @@ def test_invalid_arguments_receive_one_argument_only_repair() -> None:
     result = adapter.generate_turn(_mutation_request())
 
     assert len(adapter.requests) == 2
-    assert all(request.tools == () for request in adapter.requests)
-    assert all(request.tool_choice is None for request in adapter.requests)
-    assert "Repair the arguments only" in adapter.requests[1].messages[-1]["content"]
+    assert all(_assert_argument_page(request) is None for request in adapter.requests)
+    assert "previous native argument page was invalid" in adapter.requests[1].messages[-1]["content"]
     assert [call.name for call in result.tool_calls] == ["apply_source_edit"]
 
 
@@ -151,7 +172,7 @@ def test_repeated_invalid_argument_page_is_a_fixed_point() -> None:
 
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
-            return GenerationResponse(content="{}")
+            return _page_call({})
 
     _install_adapter_class(
         Adapter,
@@ -164,7 +185,8 @@ def test_repeated_invalid_argument_page_is_a_fixed_point() -> None:
         adapter.generate_turn(_mutation_request())
 
     assert len(adapter.requests) == 2
-    assert all(request.tools == () for request in adapter.requests)
+    for request in adapter.requests:
+        _assert_argument_page(request)
 
 
 def test_argument_page_never_executes_stale_tool_call() -> None:
@@ -194,8 +216,8 @@ def test_argument_page_never_executes_stale_tool_call() -> None:
         adapter.generate_turn(_mutation_request())
 
     assert len(adapter.requests) == 2
-    assert all(request.tools == () for request in adapter.requests)
-    assert all(request.tool_validation_schemas == () for request in adapter.requests)
+    for request in adapter.requests:
+        _assert_argument_page(request)
 
 
 def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
@@ -212,7 +234,7 @@ def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
             self.requests.append(request)
             if len(self.requests) == 1:
                 return GenerationResponse(content="native required was not enforced")
-            return GenerationResponse(content='{"query":"workspace"}')
+            return _page_call({"query": "workspace"})
 
     _install_adapter_class(
         Adapter,
@@ -228,9 +250,7 @@ def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
     probe, fallback = adapter.requests
     assert probe.tool_choice == "required"
     assert probe.tools[0]["function"]["name"] == "mmm_required_tool_probe"
-    assert fallback.tools == ()
-    assert fallback.tool_choice is None
-    assert fallback.response_format == "json"
+    _assert_argument_page(fallback)
     assert [call.name for call in result.tool_calls] == [target]
     assert result.tool_calls[0].id.startswith("host_action_")
 
@@ -287,7 +307,6 @@ def test_successful_native_required_probe_uses_native_action_once() -> None:
 
 
 def test_host_tool_phase_classification_is_canonical() -> None:
-    """Tool → phase mapping is host-owned via the canonical tool sets."""
     assert "search_code_rag" in _READ_OBSERVE_TOOLS
     assert "search_project_rag" in _READ_OBSERVE_TOOLS
     assert "external_mcp_call" in _READ_OBSERVE_TOOLS
@@ -303,16 +322,13 @@ def test_host_tool_phase_classification_is_canonical() -> None:
 
 
 def test_mutation_tool_set_is_disjoint_from_observe_and_verify() -> None:
-    """Mutation tools must not overlap with observe or verify sets."""
     assert _MUTATION_ACT_TOOLS.isdisjoint(_READ_OBSERVE_TOOLS)
     assert _MUTATION_ACT_TOOLS.isdisjoint(_VERIFY_TOOLS)
 
 
 def test_loop_phase_values_cover_all_execution_phases() -> None:
-    """LoopPhase enum must cover the four canonical execution phases."""
     phases = {p.value for p in LoopPhase}
     assert "OBSERVE" in phases
     assert "ACT" in phases
     assert "VERIFY" in phases
     assert "RECOVER" in phases
-
