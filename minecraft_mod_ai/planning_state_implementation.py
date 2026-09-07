@@ -38,6 +38,8 @@ _FINAL_OUTPUT_LABEL_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:final(?:\s+(?:answer|specification))?|specification|answer)\s*(?:\*\*|__)?\s*:\s*",
     re.IGNORECASE,
 )
+_CONTINUITY_CONTEXT_MAX_CHARS = 8_000
+_CONTINUITY_ELLIPSIS = " … "
 
 
 def _text(value: Any) -> str:
@@ -179,13 +181,53 @@ def _normalize_section_text(raw: Any, section: str) -> str:
     return value
 
 
+def _bounded_continuity_excerpt(value: str, limit: int) -> str:
+    normalized = _text(value)
+    if limit <= 0:
+        return ""
+    if len(normalized) <= limit:
+        return normalized
+    if limit <= len(_CONTINUITY_ELLIPSIS):
+        return normalized[:limit]
+    body_budget = limit - len(_CONTINUITY_ELLIPSIS)
+    head_budget = (body_budget * 2) // 3
+    tail_budget = body_budget - head_budget
+    if tail_budget <= 0:
+        return normalized[:head_budget] + _CONTINUITY_ELLIPSIS
+    return (
+        normalized[:head_budget]
+        + _CONTINUITY_ELLIPSIS
+        + normalized[-tail_budget:]
+    )
+
+
 def _continuity_context(specifications: Mapping[str, str]) -> str:
     if not specifications:
         return "- No earlier section has been authored for this requirement."
-    return "\n".join(
-        f"- {section}: {specification}"
+
+    normalized = [
+        (str(section), _text(specification))
         for section, specification in specifications.items()
+    ]
+    full = "\n".join(
+        f"- {section}: {specification}"
+        for section, specification in normalized
     )
+    if len(full) <= _CONTINUITY_CONTEXT_MAX_CHARS:
+        return full
+
+    label_overhead = sum(len(f"- {section}: ") for section, _ in normalized)
+    newline_overhead = max(0, len(normalized) - 1)
+    available = max(
+        0,
+        _CONTINUITY_CONTEXT_MAX_CHARS - label_overhead - newline_overhead,
+    )
+    share, remainder = divmod(available, len(normalized))
+    rows = [
+        f"- {section}: {_bounded_continuity_excerpt(specification, share + (index < remainder))}"
+        for index, (section, specification) in enumerate(normalized)
+    ]
+    return "\n".join(rows)
 
 
 def _plain_section(
