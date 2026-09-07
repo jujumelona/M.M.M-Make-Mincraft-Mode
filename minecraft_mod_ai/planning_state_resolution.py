@@ -7,6 +7,7 @@ required to reproduce prompt IDs, evidence IDs, hashes, receipts, or any other i
 identifier, so a harmless metadata mismatch cannot abort planning.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -37,6 +38,93 @@ def _strings(value: Any) -> list[str]:
     return list(dict.fromkeys(text for item in value if (text := _text(item))))
 
 
+def _resolution_prose(value: Any) -> str:
+    if isinstance(value, str):
+        return _text(value)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        texts: list[str] = []
+        for elem in value:
+            if isinstance(elem, Mapping):
+                elem_text = _text(
+                    elem.get("claim")
+                    or elem.get("statement")
+                    or elem.get("fact")
+                    or elem.get("text")
+                )
+            else:
+                elem_text = _text(elem)
+            if elem_text:
+                texts.append(elem_text)
+        return " ".join(dict.fromkeys(texts))
+    return _text(value)
+
+
+def _planner_context_budget(router: Any) -> int:
+    registry = getattr(router, "registry", None)
+    resolve = getattr(registry, "role", None)
+    profile = str(getattr(router, "profile", "") or "").strip()
+    if callable(resolve) and profile:
+        try:
+            config = resolve(profile, "planner")
+            from .model_context_budget import request_message_budget
+
+            return int(request_message_budget(config, (_REQUIREMENT_PARAMETERS,)))
+        except Exception:
+            pass
+    from .model_context_budget import _default_context_bytes
+
+    return int(_default_context_bytes())
+
+
+def _fit_context_to_budget(
+    context: dict[str, Any],
+    *,
+    byte_budget: int,
+    catalog_and_system_bytes: int,
+) -> dict[str, Any]:
+    """Ensure serialized user task payload strictly respects the active runtime context budget."""
+    target_budget = max(4096, byte_budget - catalog_and_system_bytes - 1024)
+    fitted = deepcopy(context)
+
+    def _size() -> int:
+        return len(
+            json.dumps(
+                fitted,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    if _size() <= target_budget:
+        return fitted
+
+    # Phase 1: Trim research claims
+    claims = fitted.get("research_claims", [])
+    while claims and _size() > target_budget:
+        claims.pop()
+    if not claims:
+        fitted.pop("research_claims", None)
+
+    if _size() <= target_budget:
+        return fitted
+
+    # Phase 2: Trim resolved items
+    resolved = fitted.get("resolved", [])
+    while len(resolved) > 1 and _size() > target_budget:
+        resolved.pop()
+
+    if _size() <= target_budget:
+        return fitted
+
+    # Phase 3: Shorten resolution prose in remaining resolved item
+    if resolved:
+        res = str(resolved[0].get("resolution") or "")
+        if len(res) > 200:
+            resolved[0]["resolution"] = res[:200] + "..."
+
+    return fitted
+
+
 def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
     """Give the model semantic facts, never host receipts or identity bookkeeping."""
     known = [
@@ -46,11 +134,33 @@ def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
     ] if isinstance(state.get("known"), list) else []
     goal = state.get("goal")
     goal_statement = _text(goal.get("statement")) if isinstance(goal, Mapping) else ""
-    resolved = [
-        {"resolution": _text(item.get("resolution"))}
-        for item in state.get("resolved", [])
-        if isinstance(item, Mapping) and _text(item.get("resolution"))
-    ] if isinstance(state.get("resolved"), list) else []
+
+    unresolved_questions: dict[str, str] = {}
+    if isinstance(state.get("unresolved"), list):
+        for item in state.get("unresolved", []):
+            if isinstance(item, Mapping):
+                uid = str(item.get("unresolved_id") or "")
+                q = _text(item.get("question"))
+                if uid and q:
+                    unresolved_questions[uid] = q
+
+    resolved: list[dict[str, Any]] = []
+    seen_resolutions: set[str] = set()
+    if isinstance(state.get("resolved"), list):
+        for item in state.get("resolved", []):
+            if not isinstance(item, Mapping):
+                continue
+            prose = _resolution_prose(item.get("resolution"))
+            if not prose or prose in seen_resolutions:
+                continue
+            seen_resolutions.add(prose)
+            question = unresolved_questions.get(str(item.get("unresolved_id") or ""))
+            entry: dict[str, Any] = {}
+            if question:
+                entry["question"] = question
+            entry["resolution"] = prose
+            resolved.append(entry)
+
     evidence_claims: list[str] = []
     for item in state.get("evidence", []) if isinstance(state.get("evidence"), list) else []:
         if not isinstance(item, Mapping):
@@ -62,13 +172,15 @@ def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
                     text = _text(claim.get("claim") or claim.get("statement") or claim.get("text"))
                 else:
                     text = _text(claim)
-                if text:
+                if text and text not in seen_resolutions:
                     evidence_claims.append(text)
+                    seen_resolutions.add(text)
+
     return {
         "goal": goal_statement,
         "known": known,
         "resolved": resolved,
-        "research_claims": list(dict.fromkeys(evidence_claims)),
+        "research_claims": list(dict.fromkeys(evidence_claims))[:8],
     }
 
 
@@ -215,28 +327,39 @@ def compile_researched_requirements(
     if _blocking_unknowns(state, stage="requirement_selection"):
         return _preserve_blocked_state(state)
 
-    context = _resolved_context(state)
+    raw_context = _resolved_context(state)
+    budget = _planner_context_budget(router)
+    system_content = (
+        "Compile independently testable, player-visible requirements from the supplied "
+        "task semantics. Do not output or reason about host IDs, evidence IDs, hashes, "
+        "receipts, provenance keys, files, classes, registrations, or invented APIs. "
+        "Choose a semantic capability from the supplied catalog when it clearly fits; "
+        f"otherwise use '{CUSTOM_CAPABILITY_SENTINEL}'. Missing balance values or detailed "
+        "mechanics are later design work. Return behavior statements and observable "
+        "acceptance conditions only."
+    )
+    catalog = capability_catalog_for_model()
+    overhead_bytes = len(system_content.encode("utf-8")) + len(
+        json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    context = _fit_context_to_budget(
+        raw_context,
+        byte_budget=budget,
+        catalog_and_system_bytes=overhead_bytes,
+    )
+    user_payload = {
+        "task": context,
+        "semantic_capability_catalog": catalog,
+        "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
+    }
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "Compile independently testable, player-visible requirements from the supplied "
-                "task semantics. Do not output or reason about host IDs, evidence IDs, hashes, "
-                "receipts, provenance keys, files, classes, registrations, or invented APIs. "
-                "Choose a semantic capability from the supplied catalog when it clearly fits; "
-                f"otherwise use '{CUSTOM_CAPABILITY_SENTINEL}'. Missing balance values or detailed "
-                "mechanics are later design work. Return behavior statements and observable "
-                "acceptance conditions only."
-            ),
-        },
+        {"role": "system", "content": system_content},
         {
             "role": "user",
-            "content": str(
-                {
-                    "task": context,
-                    "semantic_capability_catalog": capability_catalog_for_model(),
-                    "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
-                }
+            "content": json.dumps(
+                user_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
             ),
         },
     ]

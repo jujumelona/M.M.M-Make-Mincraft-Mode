@@ -319,6 +319,13 @@ class ModelRouter:
                 ),
             },
         )
+        from .model_context_budget import fit_messages_to_context
+
+        request_messages = fit_messages_to_context(
+            request_messages,
+            config=config,
+            tools=(schema,),
+        )
         request = GenerationRequest(
             messages=request_messages,
             media_paths=(),

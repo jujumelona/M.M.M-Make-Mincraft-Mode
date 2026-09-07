@@ -56,8 +56,14 @@ def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
     return result
 
 
+_MAX_EXCERPT_CHARS = 800
+_MAX_DOMAIN_EVIDENCE_CARDS = 4
+
+
 def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
     text = str(content or "")
+    if not text.strip():
+        return "", 0
     candidates = [
         chunk.strip()
         for chunk in re.split(r"(?:\r?\n){2,}|(?<=[.!?])\s+(?=[A-Z0-9가-힣])", text)
@@ -66,10 +72,58 @@ def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
     if not candidates:
         return "", 0
     ranked = [
-        (len(wanted & _tokens(chunk)), len(_tokens(chunk)), -index, chunk)
+        (
+            len(wanted & _tokens(chunk)),
+            len(wanted & _tokens(chunk))
+            / max(1, len(re.findall(r"[a-z0-9]+|[가-힣]+", chunk.casefold()))),
+            -len(chunk),
+            -index,
+            chunk,
+        )
         for index, chunk in enumerate(candidates)
     ]
-    score, _specificity, _order, selected = max(ranked)
+    score, _density, _neg_len, _order, selected = max(ranked)
+    if not selected:
+        return "", 0
+
+    if len(selected) > _MAX_EXCERPT_CHARS:
+        selected_cf = selected.casefold()
+        term_positions = [
+            selected_cf.find(t)
+            for t in wanted
+            if t and selected_cf.find(t) != -1
+        ]
+        if term_positions:
+            first_pos = min(term_positions)
+            start = max(0, first_pos - 40)
+        else:
+            start = 0
+
+        if start > 0:
+            space_idx = selected.find(" ", start, start + 30)
+            if space_idx != -1:
+                start = space_idx + 1
+
+        end = min(len(selected), start + _MAX_EXCERPT_CHARS)
+        if end < len(selected):
+            last_space = selected.rfind(" ", start + 20, end)
+            if last_space != -1:
+                end = last_space
+
+        slice_candidate = selected[start:end].strip()
+        sub_idx = selected.find(slice_candidate)
+        if sub_idx != -1 and slice_candidate:
+            exact_slice = selected[sub_idx : sub_idx + len(slice_candidate)]
+            slice_score = len(wanted & _tokens(exact_slice))
+            if slice_score > 0 or not wanted:
+                return exact_slice, max(0, int(slice_score if wanted else score))
+
+        fallback_slice = selected[:_MAX_EXCERPT_CHARS].strip()
+        sub_idx = selected.find(fallback_slice)
+        if sub_idx != -1 and fallback_slice:
+            exact_slice = selected[sub_idx : sub_idx + len(fallback_slice)]
+            return exact_slice, max(0, int(len(wanted & _tokens(exact_slice)) if wanted else score))
+
     return selected, max(0, int(score))
 
 
@@ -137,7 +191,14 @@ def _grounded_evidence_cards(
                 "semantic_claim": False,
             }
         )
-    return cards
+    cards.sort(
+        key=lambda card: (
+            int(card.get("domain_term_overlap", 0)),
+            -len(str(card.get("exact_excerpt", ""))),
+        ),
+        reverse=True,
+    )
+    return cards[:_MAX_DOMAIN_EVIDENCE_CARDS]
 
 
 def _claims_from_grounded_cards(

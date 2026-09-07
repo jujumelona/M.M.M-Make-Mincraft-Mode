@@ -446,10 +446,21 @@ def collect_planning_state_research(
                 continue
             if sufficient:
                 unresolved["status"] = "resolved"
+                claim_texts = [
+                    _text(c.get("claim") or c.get("statement") or c.get("text"))
+                    for c in (note.get("claims") or [])
+                    if isinstance(c, Mapping)
+                ]
+                claim_texts = [t for t in claim_texts if t]
+                resolution_text = (
+                    " ".join(dict.fromkeys(claim_texts))
+                    if claim_texts
+                    else "Evidenced by grounded research."
+                )
                 value["resolved"].append(
                     {
                         "unresolved_id": unresolved["unresolved_id"],
-                        "resolution": deepcopy(note.get("claims") or []),
+                        "resolution": resolution_text,
                         "basis": "grounded_research",
                         "evidence_refs": refs,
                     }
