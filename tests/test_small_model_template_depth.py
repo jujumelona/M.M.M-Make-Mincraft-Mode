@@ -87,42 +87,30 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
         validate_worksheet(duplicate_ref, {"ev:1"})
 
 
-def test_detailed_planner_receives_canonical_worksheet_contract_once() -> None:
+def test_detailed_planner_receives_one_bounded_plain_text_slot_per_section() -> None:
     class Router:
         def __init__(self) -> None:
-            self.messages: list[dict[str, str]] = []
+            self.calls: list[list[dict[str, str]]] = []
 
-        def generate_tool_decision(
+        def generate_text(
             self,
-            _role: str,
+            role: str,
             messages: list[dict[str, str]],
-            **_kwargs: object,
-        ) -> dict[str, object]:
-            self.messages = messages
-            return {
-                "engineering_worksheet": _worksheet(),
-                "implementation_capabilities": [
-                    {
-                        "capability": "Persist one evidence-backed gameplay state transition.",
-                        "constraint_evidence_refs": [],
-                    }
-                ],
-                "implementation_obligations": [
-                    {
-                        "obligation": "The authoritative owner persists the state when the transition succeeds.",
-                        "constraint_evidence_refs": [],
-                    }
-                ],
-                "artifact_obligations": [],
-                "grounded_bindings": [],
-                "reuse_candidates": [],
-                "verification_obligations": [
-                    {
-                        "check": "Given persisted state, when reload occurs, then the same state is observable.",
-                        "constraint_evidence_refs": [],
-                    }
-                ],
-            }
+            **kwargs: object,
+        ) -> str:
+            assert role == "planner"
+            assert kwargs["response_format"] == "text"
+            assert kwargs["enable_tools"] is False
+            self.calls.append([dict(message) for message in messages])
+            section = next(
+                line.removeprefix("Section: ")
+                for line in messages[1]["content"].splitlines()
+                if line.startswith("Section: ")
+            )
+            return (
+                f"{section} uses one authoritative owner with explicit state transitions, "
+                "bounded failure behavior, deterministic limits, and observable verification outcomes."
+            )
 
     router = Router()
     state = {
@@ -137,11 +125,12 @@ def test_detailed_planner_receives_canonical_worksheet_contract_once() -> None:
             {
                 "research_ref": "research_001",
                 "sufficient": True,
+                "claims": ["Persistent state requires an explicit authoritative lifecycle."],
                 "evidence_refs": ["ev:1"],
             }
         ],
     }
-    _compile_requirement_plan(
+    plan = _compile_requirement_plan(
         router,
         state,
         {
@@ -150,14 +139,35 @@ def test_detailed_planner_receives_canonical_worksheet_contract_once() -> None:
         },
     )
 
-    system_text = router.messages[0]["content"]
-    user_text = router.messages[1]["content"]
-    marker = "mandatory completion protocol"
-    assert marker in system_text
-    assert marker not in user_text
-    assert "engineering_worksheet_contract" not in user_text
-    assert "req_001" in user_text
-    assert "ev:1" in user_text
+    assert len(router.calls) == len(DETAIL_FIELDS)
+    seen_sections: list[str] = []
+    all_prompt_text: list[str] = []
+    for messages in router.calls:
+        system_text = messages[0]["content"]
+        user_text = messages[1]["content"]
+        all_prompt_text.extend((system_text, user_text))
+        assert "plain prose only" in system_text
+        assert "no JSON" in system_text
+        assert "Persist the gameplay state across reload." in user_text
+        assert user_text.count("Section: ") == 1
+        section = next(
+            line.removeprefix("Section: ")
+            for line in user_text.splitlines()
+            if line.startswith("Section: ")
+        )
+        seen_sections.append(section)
+        assert section in DETAIL_FIELDS
+        assert all(concern in user_text for concern in DETAIL_SLOT_GUIDANCE[section])
+
+    joined = "\n".join(all_prompt_text)
+    assert tuple(seen_sections) == tuple(DETAIL_FIELDS)
+    assert "req_001" not in joined
+    assert "ev:1" not in joined
+    assert tuple(plan["engineering_worksheet"]) == tuple(DETAIL_FIELDS)
+    assert all(
+        row["constraint_evidence_refs"] == []
+        for row in plan["engineering_worksheet"].values()
+    )
 
 
 def test_research_facet_slot_carries_explicit_review_method() -> None:
