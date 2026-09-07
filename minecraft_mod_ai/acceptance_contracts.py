@@ -3,9 +3,15 @@ from __future__ import annotations
 """Canonical owner for requirement/public acceptance contracts and host test receipts.
 
 Every planner and production boundary must consume the public-acceptance policy defined
-here.  A requirement may legitimately expose any number of independently observable
-public checks; serialization may compose them into one stable requirement-scoped public
-statement, but it must never discard checks or reinterpret the contract downstream.
+here. A requirement may legitimately expose any number of independently observable public
+checks; serialization may compose them into one stable requirement-scoped public statement,
+but it must never discard checks or reinterpret the contract downstream.
+
+Verified legacy plans are the only compatibility exception: after the evidence-plan hash and
+structure have already been validated, the old compiler may temporarily ingest historical
+internal acceptance text solely so this module can project it back to a safe public contract.
+That compatibility state is also owned here, so downstream adapters cannot invent their own
+legacy bypass semantics.
 
 Host ownership alone does not prove donor behavior. A contract may only authorize
 BEHAVIOR_VERIFIED when ``implementation_bound`` is true and the generated test directly
@@ -14,7 +20,9 @@ evidence but are deliberately capped below behavioral proof.
 """
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,10 +40,23 @@ PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = (
     "task_sha256",
     "done_predicate",
 )
+_VERIFIED_LEGACY_ACCEPTANCE = ContextVar(
+    "mmm_verified_legacy_acceptance", default=False
+)
 
 
 class AcceptanceContractError(ValueError):
     """Raised when canonical public requirement acceptance is invalid."""
+
+
+def _nonempty_public_text(
+    statement: Any,
+    *,
+    error_type: type[Exception],
+) -> str:
+    if not isinstance(statement, str) or not statement.strip():
+        raise error_type("public acceptance must be a non-empty string")
+    return statement.strip()
 
 
 def validate_public_acceptance(
@@ -43,15 +64,9 @@ def validate_public_acceptance(
     *,
     error_type: type[Exception] = AcceptanceContractError,
 ) -> str:
-    """Validate and return one canonical public acceptance statement.
+    """Validate and return one strict canonical public acceptance statement."""
 
-    The rule lives here so planning, production and serialization cannot drift. Callers
-    may request their own public exception type, but not their own acceptance semantics.
-    """
-
-    if not isinstance(statement, str) or not statement.strip():
-        raise error_type("public acceptance must be a non-empty string")
-    text = statement.strip()
+    text = _nonempty_public_text(statement, error_type=error_type)
     folded = text.casefold()
     matched_marker = ""
     if "task_" in folded:
@@ -69,8 +84,35 @@ def validate_public_acceptance(
     return text
 
 
+def validate_runtime_public_acceptance(
+    statement: Any,
+    *,
+    error_type: type[Exception] = AcceptanceContractError,
+) -> str:
+    """Validate the production input boundary under the central legacy policy.
+
+    The legacy relaxation is legal only inside ``verified_legacy_acceptance_context``.
+    Callers cannot select a different rule locally.
+    """
+
+    if _VERIFIED_LEGACY_ACCEPTANCE.get():
+        return _nonempty_public_text(statement, error_type=error_type)
+    return validate_public_acceptance(statement, error_type=error_type)
+
+
+@contextmanager
+def verified_legacy_acceptance_context(enabled: bool) -> Iterator[None]:
+    """Temporarily permit already-verified legacy input before safe reprojection."""
+
+    token = _VERIFIED_LEGACY_ACCEPTANCE.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _VERIFIED_LEGACY_ACCEPTANCE.reset(token)
+
+
 def is_public_acceptance(value: Any) -> bool:
-    """Return whether ``value`` satisfies the single canonical public boundary."""
+    """Return whether ``value`` satisfies the strict canonical public boundary."""
 
     try:
         validate_public_acceptance(value)
@@ -83,6 +125,9 @@ def is_public_acceptance(value: Any) -> bool:
 # the policy owner now; no downstream wrapper is allowed to redefine the rule.
 is_public_acceptance._mmm_production_public_acceptance_guard = True
 is_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
+validate_runtime_public_acceptance._mmm_acceptance_contract_owner = (
+    CANONICAL_ACCEPTANCE_OWNER
+)
 
 
 def canonical_public_acceptance(
@@ -90,7 +135,7 @@ def canonical_public_acceptance(
     *,
     reject_invalid: bool = False,
 ) -> tuple[str, ...]:
-    """Normalize a public acceptance sequence without imposing an arbitrary count cap."""
+    """Normalize public checks without imposing an arbitrary count cap."""
 
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
         return ()
