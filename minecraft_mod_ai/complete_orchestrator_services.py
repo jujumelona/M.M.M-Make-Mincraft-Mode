@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .model_response_templates import response_schema, response_template_prompt
+
 import hashlib
 import json
 import os
@@ -585,6 +587,7 @@ def visual_review(
                     "for every supplied acceptance test. Reject missing textures, broken models, unreadable GUI, "
                     "animation clipping and deviations from the approved design. Do not mark non-visual behavior "
                     "as PASS unless the screenshot visibly proves it."
+                    + response_template_prompt("visual_review")
                 ),
             },
             {
@@ -600,6 +603,7 @@ def visual_review(
         ],
         media_paths=paths,
         response_format="json",
+        response_schema=response_schema("visual_review"),
     )
     value = _extract_json(text)
     if set(value) != {

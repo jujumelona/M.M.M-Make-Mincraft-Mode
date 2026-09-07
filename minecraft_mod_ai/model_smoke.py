@@ -103,6 +103,7 @@ def run_model_smoke(
                     ],
                     media_paths=media,
                     response_format="json",
+                    response_schema={"type": "object", "properties": {}, "additionalProperties": False},
                     enable_tools=False,
                 )
             if not str(text).strip():

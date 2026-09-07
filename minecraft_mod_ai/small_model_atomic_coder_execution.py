@@ -254,14 +254,18 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         if len(batches) == 1:
             return original_generate_text(self, role, batches[0], *args, **kwargs)
 
+        from .model_response_templates import response_schema
+
+        structured_summary = kwargs.get("response_schema") == response_schema("coder_summary")
         summaries: list[str] = []
         for index, batch in enumerate(batches, start=1):
             result = original_generate_text(self, role, batch, *args, **kwargs)
-            summary = str(result or "").strip()
+            summary = json.loads(result)["summary"] if structured_summary else str(result or "").strip()
             if len(summary) > _MAX_SUMMARY_CHARS_PER_STEP:
                 summary = summary[:_MAX_SUMMARY_CHARS_PER_STEP] + "…"
             summaries.append(f"atomic step {index}/{len(batches)}: {summary}")
-        return "\n".join(summaries)
+        combined = "\n".join(summaries)
+        return json.dumps({"summary": combined}, ensure_ascii=False) if structured_summary else combined
 
     @wraps(original_budget)
     def coder_project_context_budget(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .model_response_templates import response_schema, response_template_prompt
+
 """Host-governed semantic inference for unresolved capability concepts.
 
 Unknown prompt concepts may be expanded into provisional capability nodes only when
@@ -87,8 +89,9 @@ def _router_payload(router: Any, span: str) -> Any:
                     "gameplay capabilities needed to preserve its meaning. Do not add "
                     "genre conventions or implementation choices that are not supported "
                     "by the requirement. Return JSON with a capabilities array. Each "
-                    "capability may contain capability_id, source_span, description, "
+                    "capability must contain capability_id, source_span, description, "
                     "category, and dependencies."
+                    + response_template_prompt("capabilities")
                 ),
             },
             {"role": "user", "content": span},
@@ -97,6 +100,7 @@ def _router_payload(router: Any, span: str) -> Any:
             "planner",
             messages,
             response_format="json",
+            response_schema=response_schema("capabilities"),
             enable_tools=False,
         )
         if isinstance(raw, str):

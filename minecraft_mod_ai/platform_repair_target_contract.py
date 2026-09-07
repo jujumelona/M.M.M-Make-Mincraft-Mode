@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .model_response_templates import response_schema, response_template_prompt
+
 import json
 from contextvars import ContextVar
 from functools import wraps
@@ -99,11 +101,13 @@ def _install_dynamic_patch_request(module: Any) -> None:
                     "content": (
                         "You are a hash-guarded Fabric source repair agent. Repair only "
                         "for the exact immutable target object supplied by the host."
+                        + response_template_prompt("repair")
                     ),
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             response_format="json",
+            response_schema=response_schema("repair"),
             # Best-of-N candidate generation is a pure proposal phase. The normal
             # generation stage exposes mutating MCP tools such as apply_source_patch;
             # allowing candidates to call them would let a losing candidate change the

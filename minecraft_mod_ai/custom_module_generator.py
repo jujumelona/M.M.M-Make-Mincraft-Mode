@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .model_response_templates import response_schema, response_template_prompt
+
 import hashlib
 import json
 import os
@@ -703,7 +705,8 @@ class CustomModuleGenerator:
             "rules": [
                 "Implement the feature directly; do not return a file-plan protocol.",
                 "Use workspace/RAG/MCP tools to retrieve exact source as needed instead of asking for the whole repository.",
-                "Apply real edits with the source-edit tool; final text is only a short work summary.",
+                "Apply real edits with the source-edit tool; return the final summary in the supplied JSON template.",
+                response_template_prompt("coder_summary"),
                 "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
                 "Build infrastructure, Gradle configuration and host-owned ledgers are read-only.",
                 "Do not delete files. Preserve valid source already present in a resumed checkpoint.",
@@ -741,7 +744,8 @@ class CustomModuleGenerator:
                 summary = self.router.generate_text(
                     "coder",
                     initial_messages,
-                    response_format="text",
+                    response_format="json",
+                    response_schema=response_schema("coder_summary"),
                     tool_stage="generation",
                     enable_tools=True,
                 )
@@ -780,6 +784,10 @@ class CustomModuleGenerator:
                 "its bounded in-state output recovery; refusing an outer continuation because it "
                 "would reset HostRunState over an already-mutated staged workspace."
             ) from exc
+
+        summary_text = json.loads(summary)["summary"]
+        if not isinstance(summary_text, str):
+            raise CustomModuleGenerationError("Coder summary must be a string in the fixed JSON template.")
 
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
@@ -830,7 +838,7 @@ class CustomModuleGenerator:
             "source_observation_receipt": observation_ledger["receipt"],
             "touched_paths": touched_paths,
             "discarded_out_of_scope_paths": discarded_paths,
-            "agent_summary": str(summary or "").strip()[:4096],
+            "agent_summary": summary_text.strip()[:4096],
             "output_exhaustion_continuations": continuation_count,
             "generation_checkpoint_resumed": checkpoint_resumed,
             "generation_checkpoint": {

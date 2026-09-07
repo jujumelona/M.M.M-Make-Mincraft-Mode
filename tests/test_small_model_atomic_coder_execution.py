@@ -139,3 +139,25 @@ def test_single_step_is_still_compacted_to_atomic_contract() -> None:
 def test_unrelated_model_request_is_not_rewritten() -> None:
     messages = ({"role": "user", "content": "plain question"},)
     assert atomicize_coder_messages(messages) == (messages,)
+
+
+def test_atomic_summary_aggregation_preserves_response_template():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.small_model_atomic_coder_execution import install
+    from minecraft_mod_ai.model_response_templates import response_schema
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert kwargs["response_schema"] == response_schema("coder_summary")
+            return json.dumps({"summary": "Completed an isolated obligation."})
+
+    custom = SimpleNamespace(
+        _coder_project_context_budget=lambda *a, **k: 4096,
+        _materialize_owned_reuse_context=lambda *a, **k: {},
+    )
+    install(custom_module_generator_module=custom, model_router_module=SimpleNamespace(ModelRouter=Router))
+    result = Router().generate_text("coder", _messages(step_count=3),
+                                    response_format="json", response_schema=response_schema("coder_summary"))
+    summary = json.loads(result)["summary"]
+    assert summary.count("Completed an isolated obligation.") == 3
+    assert "atomic step 3/3" in summary

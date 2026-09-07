@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .model_response_templates import response_schema, response_template_prompt
+
 import json
 import os
 import re
@@ -327,24 +329,20 @@ class RepairEngine:
                             "You are a hash-guarded Minecraft source repair planner. "
                             "Inspect evidence with read-only tools and return patch operations; "
                             "the host transaction is the only writer."
+                            + response_template_prompt("repair")
                         ),
                     },
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 tool_stage="quality",
                 response_format="json",
+                response_schema=response_schema("repair"),
             )
         except Exception as exc:
             print(f"  [!] Repair coder model call failed ({type(exc).__name__}: {exc}); skipping attempt", flush=True)
             return []
         value = _extract_json(text)
-        operations = None
-        if isinstance(value, dict):
-            operations = value.get("operations") or value.get("patch") or value.get("edits") or value.get("changes") or value.get("files")
-            if not operations and "path" in value and ("operation" in value or "content" in value or "replacements" in value):
-                operations = [value]
-        elif isinstance(value, list):
-            operations = value
+        operations = value.get("operations") if isinstance(value, dict) and set(value) == {"operations"} else None
         if not isinstance(operations, list) or not operations:
             return []
         encoded = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))

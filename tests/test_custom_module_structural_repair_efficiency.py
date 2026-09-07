@@ -117,7 +117,7 @@ class _AgenticRouter:
         target = project / "src/main/java/example/Generated.java"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("package example; final class Generated {}\n", encoding="utf-8")
-        return "Implemented the approved module."
+        return json.dumps({"summary": "Implemented the approved module."})
 
 
 def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path) -> None:
@@ -666,7 +666,7 @@ def test_exact_input_rerun_resumes_hash_bound_checkpoint(tmp_path: Path) -> None
                 "// preserved chunk\nfinal class Durable {}\n",
                 encoding="utf-8",
             )
-            return "Completed the resumed module."
+            return json.dumps({"summary": "Completed the resumed module."})
 
     resumed = _ResumeRouter()
     result = CustomModuleGenerator(

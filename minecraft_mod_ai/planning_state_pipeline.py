@@ -258,6 +258,13 @@ def prepare_planning_state(
     # Fresh states are already validated inside build_initial_planning_state(). Only a
     # restored checkpoint needs another entry-boundary validation here.
     if existing_state is not None:
+        from .planning_detail_checkpoint import refresh_worksheet_checkpoint
+
+        state = _transition(
+            "refresh_worksheet_checkpoint",
+            lambda: refresh_worksheet_checkpoint(state),
+            input_state=state,
+        )
         _transition(
             "validate_restored_state",
             lambda: validate_planning_state(state, prompt=prompt),
