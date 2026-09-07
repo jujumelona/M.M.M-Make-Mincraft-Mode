@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from minecraft_mod_ai.planning_detail_contract import validate_detailed_plan_grounding
+from minecraft_mod_ai.planning_detail_contract import (
+    validate_detailed_plan_grounding,
+    validate_evidence_refs,
+)
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet
 from minecraft_mod_ai.planning_state_implementation import (
     _compile_requirement_plan,
     _implementation_evidence,
     _preflight_detailed_planning,
-    _validate_refs,
 )
 from minecraft_mod_ai.planning_state_invariants import validate_state_links
 
@@ -46,24 +50,16 @@ def _authored_plan() -> dict[str, object]:
     }
 
 
-class _TextOnlyRouter:
+class _StructuredRouter:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
+        self.calls: list[dict[str, object]] = []
 
     def generate_text(self, role, messages, **kwargs):
-        assert kwargs["response_format"] == "text"
+        assert kwargs["response_format"] == "json"
         assert kwargs["enable_tools"] is False
-        rendered = str(messages[-1]["content"])
-        marker = next(line for line in rendered.splitlines() if line.startswith("Section: "))
-        section = marker.split(": ", 1)[1]
-        self.calls.append((section, kwargs))
-        return (
-            f"For {section}, the server-owned design uses explicit state owners, guarded transitions, "
-            f"bounded failure behavior, and observable postconditions unique to {section}."
-        )
-
-    def generate_tool_decision(self, *args, **kwargs):
-        raise AssertionError("detailed planning must not ask the model for a structured tool payload")
+        assert kwargs["response_schema"]["required"] == list(WORKSHEET_SECTIONS)
+        self.calls.append({"role": role, "messages": messages, **kwargs})
+        return json.dumps(_authored_worksheet())
 
 
 def _grounded_state() -> dict[str, object]:
@@ -84,8 +80,8 @@ def _grounded_state() -> dict[str, object]:
     }
 
 
-def test_detailed_plan_is_host_assembled_from_plain_text_sections() -> None:
-    router = _TextOnlyRouter()
+def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None:
+    router = _StructuredRouter()
     requirement = {
         "requirement_id": "req_001",
         "statement": "Provide a server-owned economy.",
@@ -94,7 +90,7 @@ def test_detailed_plan_is_host_assembled_from_plain_text_sections() -> None:
 
     plan = _compile_requirement_plan(router, _grounded_state(), requirement, WORKSHEET_SECTIONS)
 
-    assert len(router.calls) == len(WORKSHEET_SECTIONS)
+    assert len(router.calls) == 1
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []
@@ -122,11 +118,15 @@ def test_constraint_evidence_must_still_be_host_allowed_when_present() -> None:
 
 
 def test_grounded_external_fact_requires_real_allowed_evidence() -> None:
-    assert _validate_refs(["source:1"], {"source:1"}, field="binding") == ["source:1"]
+    assert validate_evidence_refs(
+        ["source:1"], {"source:1"}, field="binding", require=True
+    ) == ["source:1"]
     with pytest.raises(ValueError, match="grounded evidence is required"):
-        _validate_refs([], {"source:1"}, field="binding")
+        validate_evidence_refs([], {"source:1"}, field="binding", require=True)
     with pytest.raises(ValueError, match="unknown evidence refs"):
-        _validate_refs(["model:guess"], {"source:1"}, field="binding")
+        validate_evidence_refs(
+            ["model:guess"], {"source:1"}, field="binding", require=True
+        )
 
 
 def test_shared_grounding_contract_allows_unconstrained_authored_design() -> None:
