@@ -151,6 +151,7 @@ def test_implementation_only_unknown_does_not_block_requirement_selection():
                 "requirements": [
                     {
                         "statement": "The player can keep and use the weather compass.",
+                        "capability": "weather.compass",
                         "prompt_refs": ["goal"],
                         "evidence_refs": [],
                         "acceptance": ["The compass remains available to the player."],
@@ -187,8 +188,6 @@ def test_research_route_and_sources_are_host_owned_not_model_payload():
                 "question": "Which external weather rule is authoritative?",
                 "reason": "external_fact",
                 "information_needed": "The authoritative external weather rule.",
-                # A fake router bypasses JSON-schema enforcement here on purpose. These
-                # fields prove the host builder ignores model attempts to choose routing.
                 "resolution_route": "user_only",
                 "source_kinds": [],
                 "blocks": ["implementation_plan"],
