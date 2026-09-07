@@ -44,6 +44,7 @@ _TARGET_NEUTRAL_RESEARCH: ContextVar[bool] = ContextVar(
     default=False,
 )
 _COMPACT_CONTEXT_MARKER = "_mmm_compact_skill_context_v1"
+_MAX_SKILL_DESCRIPTION_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -357,7 +358,7 @@ def _build_agent_capability_context_with_policy(
         skills.append(
             {
                 "name": contract.name,
-                "description": str(contract.description)[:240],
+                "description": str(contract.description)[:_MAX_SKILL_DESCRIPTION_CHARS],
                 "activate_when": contract.activate_when,
                 "required_evidence": contract.required_rag,
                 "model_tools": model_tools,
