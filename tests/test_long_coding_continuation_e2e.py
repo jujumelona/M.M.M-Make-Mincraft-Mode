@@ -27,7 +27,16 @@ def test_output_exhaustion_continuation_messages_structure() -> None:
             "evidence_task": {
                 "task_id": "custom_sword",
                 "semantic_outcome": "Implement the approved custom sword continuation contract.",
+                "target_cell": {
+                    "minecraft_version": "1.20.1",
+                    "loader": "fabric",
+                    "mappings": "yarn",
+                    "java_version": 17,
+                },
                 "owned_anchors": [anchor],
+                "implementation_obligations": [
+                    "Implement the approved custom sword continuation behavior in the exact owned target."
+                ],
                 "production_bindings": [
                     {
                         "task_ref": "custom_sword",
@@ -35,6 +44,7 @@ def test_output_exhaustion_continuation_messages_structure() -> None:
                         "owned_anchors": [anchor],
                     }
                 ],
+                "required_gates": ["source_static_validation", "target_compile"],
             },
         },
         depends_on=(),
