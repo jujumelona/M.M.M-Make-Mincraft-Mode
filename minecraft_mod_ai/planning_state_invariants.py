@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Cross-record structural invariants for the canonical planning-state SSOT.
 
-These checks protect topology and provenance links. They deliberately do not re-interpret
-prompt language or require literal quote equality.
+These checks protect host-owned topology and grounded research links. They deliberately
+never require model-authored prompt/evidence identity bookkeeping for requirements.
 """
 
 from collections.abc import Mapping
@@ -46,7 +46,7 @@ def _optional_records(
 
 
 def validate_state_links(state: Mapping[str, Any]) -> None:
-    """Reject broken task-state links while leaving semantic interpretation to its owner."""
+    """Reject broken host-owned links while leaving semantic interpretation to its owner."""
     from .planning_state_contract import ROUTE_SOURCES, _validated_route
 
     known = _records(state, "known", "known_id")
@@ -167,29 +167,18 @@ def validate_state_links(state: Mapping[str, Any]) -> None:
             "PROMPT_STATE_RESOLVED: resolved status requires a resolution record"
         )
 
-    prompt_refs_allowed = {"goal", *known.keys()}
     requirements: dict[str, Mapping[str, Any]] = {}
     details: dict[str, Mapping[str, Any]] = {}
     for decision_id, row in decisions.items():
         kind = row.get("decision_type")
         if kind == "requirement":
-            prompt_refs = row.get("prompt_refs", [])
-            evidence_refs = row.get("evidence_refs", [])
-            if not isinstance(prompt_refs, list) or not isinstance(evidence_refs, list):
-                raise ValueError(
-                    "PROMPT_STATE_DECISION: requirement provenance refs must be arrays"
-                )
-            if not prompt_refs and not evidence_refs:
-                raise ValueError("PROMPT_STATE_DECISION: requirement lacks provenance")
-            if not set(prompt_refs).issubset(prompt_refs_allowed):
-                raise ValueError("PROMPT_STATE_DECISION: requirement cites unknown prompt refs")
-            if not set(evidence_refs).issubset(sufficient_refs):
-                raise ValueError("PROMPT_STATE_DECISION: requirement cites unknown evidence")
             requirement_id = str(row.get("requirement_id") or "")
             if not requirement_id or requirement_id in requirements:
                 raise ValueError(
                     "PROMPT_STATE_DECISION: duplicate or missing requirement ID"
                 )
+            if not str(row.get("statement") or "").strip():
+                raise ValueError("PROMPT_STATE_DECISION: requirement statement is empty")
             requirements[requirement_id] = row
         elif kind == "detailed_implementation_plan":
             requirement_id = str(row.get("requirement_ref") or "")
