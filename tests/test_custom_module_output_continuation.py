@@ -31,7 +31,16 @@ def test_output_continuation_carries_preserved_source_state() -> None:
             "evidence_task": {
                 "task_id": "example_block",
                 "semantic_outcome": "Implement the approved example block continuation contract.",
+                "target_cell": {
+                    "minecraft_version": "1.21.1",
+                    "loader": "fabric",
+                    "mappings": "1.21.1+build.3",
+                    "java_version": 21,
+                },
                 "owned_anchors": [anchor],
+                "implementation_obligations": [
+                    "Implement the approved example block continuation behavior in the exact owned target."
+                ],
                 "production_bindings": [
                     {
                         "task_ref": "example_block",
@@ -39,6 +48,7 @@ def test_output_continuation_carries_preserved_source_state() -> None:
                         "owned_anchors": [anchor],
                     }
                 ],
+                "required_gates": ["source_static_validation", "target_compile"],
             },
         },
     )
