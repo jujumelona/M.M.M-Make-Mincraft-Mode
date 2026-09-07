@@ -1,23 +1,17 @@
 from __future__ import annotations
 
-"""Execute host-selected actions without re-asking the model for an action name.
+"""Execute host-selected actions through one fixed argument contract.
 
-The causal frontier owns action selection. Remote and local adapters recover arguments
-for an already-selected action only through bounded native function-call pages owned by
-the host. Local llama.cpp/Qwen may first use one host-narrowed ``required`` tool decode
-only when that original schema is itself atomic; oversized schemas are decomposed before
-they reach any model transport. Protocol failures fall back to the same native atomic
-argument-page protocol. No forced action recovery path asks the model to author a raw
-JSON document.
+The causal frontier owns action selection. Once the host selects an action, every model
+adapter receives the same bounded argument-page protocol for that action. There is no
+native-tool probe, transport failover, alternate parser, or second execution surface.
+Deterministic read arguments may be supplied directly by the host when all required values
+are already known and schema-valid; otherwise the fixed argument-page contract is used.
 """
 
 import hashlib
 import json
-import os
-import threading
-import time
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from functools import wraps
 from typing import Any
 
@@ -25,36 +19,8 @@ from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_
 
 _MARKER = "_mmm_forced_tool_execution"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
-_MAX_FALLBACK_QUERY_CHARS = 4096
-_MAX_FALLBACK_ERROR_CHARS = 768
-_NATIVE_PROBE_TOOL = "mmm_required_tool_probe"
-_NATIVE_PROBE_LOCK = threading.RLock()
-_NATIVE_PROBE_CACHE: dict[tuple[str, str], bool] = {}
-_NATIVE_PROBE_NEGATIVE_AT: dict[tuple[str, str], float] = {}
-_NATIVE_PROBE_TRANSIENT_AT: dict[tuple[str, str], float] = {}
-_NATIVE_PROBE_KEY_LOCKS: dict[tuple[str, str], threading.Lock] = {}
-_DEFAULT_NATIVE_NEGATIVE_TTL_SECONDS = 60.0
-_DEFAULT_NATIVE_TRANSIENT_COOLDOWN_SECONDS = 5.0
-
-
-def _positive_seconds(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    return value if value > 0 else default
-
-
-def _native_probe_key_lock(key: tuple[str, str]) -> threading.Lock:
-    with _NATIVE_PROBE_LOCK:
-        lock = _NATIVE_PROBE_KEY_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _NATIVE_PROBE_KEY_LOCKS[key] = lock
-        return lock
+_MAX_QUERY_CHARS = 4096
+_MAX_ERROR_CHARS = 768
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -100,12 +66,6 @@ def _parameters(schema: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(parameters, Mapping):
         raise ModelConfigurationError("Host-selected tool schema is missing JSON parameters.")
     return parameters
-
-
-def _model_schema_is_atomic(request: Any, name: str) -> bool:
-    from .model_output_atomicity_contract import is_atomic_model_schema
-
-    return is_atomic_model_schema(_parameters(_selected_schema(request, name)))
 
 
 def _json_mapping(value: Any) -> Mapping[str, Any] | None:
@@ -194,7 +154,7 @@ def _latest_failed_mutation_context(messages: Sequence[Mapping[str, Any]]) -> st
         fields.append(f"operation={operation}")
     if path:
         fields.append(f"path={path}")
-    error = _redacted_text(selected.get("error", ""), limit=_MAX_FALLBACK_ERROR_CHARS)
+    error = _redacted_text(selected.get("error", ""), limit=_MAX_ERROR_CHARS)
     if error:
         fields.append(f"error={error}")
     return "failed mutation " + " ".join(fields)
@@ -205,7 +165,7 @@ def _bounded_task_query(request: Any) -> str:
     for raw in (getattr(request, "task", ""), getattr(request, "prompt", "")):
         value = " ".join(str(raw or "").split())
         if value:
-            base = _redacted_text(value, limit=_MAX_FALLBACK_QUERY_CHARS)
+            base = _redacted_text(value, limit=_MAX_QUERY_CHARS)
             break
     messages = tuple(
         message
@@ -219,15 +179,12 @@ def _bounded_task_query(request: Any) -> str:
             content = message.get("content")
             if not isinstance(content, str):
                 continue
-            value = _structured_task(content) or _redacted_text(
-                content,
-                limit=_MAX_FALLBACK_QUERY_CHARS,
-            )
+            value = _structured_task(content) or _redacted_text(content, limit=_MAX_QUERY_CHARS)
             if value:
                 base = value
                 break
     failure = _latest_failed_mutation_context(messages)
-    return " ".join(value for value in (base, failure) if value)[:_MAX_FALLBACK_QUERY_CHARS]
+    return " ".join(value for value in (base, failure) if value)[:_MAX_QUERY_CHARS]
 
 
 def _metadata_value(request: Any, key: str) -> str:
@@ -392,11 +349,11 @@ def host_selected_argument_turn(
     *,
     prefix: str = "host_action",
 ) -> Any:
-    """Recover one fixed action through bounded native argument pages."""
+    """Generate arguments for one already-selected action through the fixed page contract."""
 
-    from .native_atomic_argument_recovery import host_selected_argument_turn as recover
+    from .native_atomic_argument_recovery import host_selected_argument_turn as generate_arguments
 
-    return recover(
+    return generate_arguments(
         current,
         adapter,
         request,
@@ -406,188 +363,15 @@ def host_selected_argument_turn(
 
 
 def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-    """Recover one fixed mutation through bounded native argument pages."""
+    """Generate mutation arguments through the same fixed page contract."""
 
-    from .native_atomic_argument_recovery import host_selected_mutation_turn as recover
-
-    return recover(current, adapter, request, name)
-
-
-def _single_tool_request(request: Any, name: str) -> Any:
-    selected = (_selected_schema(request, name),)
-    return replace(
+    return host_selected_argument_turn(
+        current,
+        adapter,
         request,
-        tools=selected,
-        tool_validation_schemas=selected,
-        tool_choice="required",
-        parallel_tool_calls=False,
+        name,
+        prefix="host_mutation",
     )
-
-
-def _contains_exact_call(turn: Any, name: str) -> bool:
-    calls = tuple(getattr(turn, "tool_calls", ()) or ())
-    return len(calls) == 1 and str(getattr(calls[0], "name", "")).strip() == name
-
-
-def _call_names(turn: Any) -> str:
-    return ",".join(
-        str(getattr(call, "name", "")).strip()
-        for call in tuple(getattr(turn, "tool_calls", ()) or ())
-    ) or "<prose>"
-
-
-def _native_probe_request(request: Any) -> Any:
-    schema = {
-        "type": "function",
-        "function": {
-            "name": _NATIVE_PROBE_TOOL,
-            "description": "MMM startup/preflight required-tool capability probe",
-            "parameters": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {"nonce": {"type": "string", "const": "mmm"}},
-                "required": ["nonce"],
-            },
-        },
-    }
-    return replace(
-        request,
-        messages=(
-            {
-                "role": "system",
-                "content": "Capability probe. Call the only available function exactly once.",
-            },
-            {
-                "role": "user",
-                "content": "Call the available function with nonce set to mmm.",
-            },
-        ),
-        tools=(schema,),
-        tool_validation_schemas=(schema,),
-        tool_choice="required",
-        parallel_tool_calls=False,
-        response_format="text",
-        response_schema=None,
-        media_paths=(),
-    )
-
-
-def _native_probe_key(adapter: Any, request: Any) -> tuple[str, str] | None:
-    try:
-        endpoint = str(adapter._server_url(request)).strip().rstrip("/")
-    except Exception:  # noqa: BLE001 - optional adapter endpoint boundary
-        return None
-    model_id = str(getattr(getattr(adapter, "config", None), "model_id", "local"))
-    return (endpoint, model_id) if endpoint else None
-
-
-def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool:
-    key = _native_probe_key(adapter, request)
-    if key is None:
-        return False
-    negative_ttl = _positive_seconds(
-        "MMM_LLAMA_NATIVE_TOOL_NEGATIVE_TTL_SECONDS",
-        _DEFAULT_NATIVE_NEGATIVE_TTL_SECONDS,
-    )
-    transient_cooldown = _positive_seconds(
-        "MMM_LLAMA_NATIVE_TOOL_TRANSIENT_COOLDOWN_SECONDS",
-        _DEFAULT_NATIVE_TRANSIENT_COOLDOWN_SECONDS,
-    )
-
-    with _native_probe_key_lock(key):
-        now = time.monotonic()
-        with _NATIVE_PROBE_LOCK:
-            cached = _NATIVE_PROBE_CACHE.get(key)
-            negative_at = _NATIVE_PROBE_NEGATIVE_AT.get(key)
-            transient_at = _NATIVE_PROBE_TRANSIENT_AT.get(key)
-            if cached is True:
-                return True
-            if cached is False and negative_at is not None:
-                if now - negative_at < negative_ttl:
-                    return False
-                _NATIVE_PROBE_CACHE.pop(key, None)
-                _NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
-            elif cached is False:
-                _NATIVE_PROBE_CACHE.pop(key, None)
-            if transient_at is not None and now - transient_at < transient_cooldown:
-                return False
-
-        supported = False
-        try:
-            turn = current(adapter, _native_probe_request(request))
-            if _contains_exact_call(turn, _NATIVE_PROBE_TOOL):
-                call = next(iter(getattr(turn, "tool_calls", ()) or ()))
-                arguments = getattr(call, "arguments", {})
-                supported = isinstance(arguments, Mapping) and arguments.get("nonce") == "mmm"
-        except Exception as exc:  # noqa: BLE001 - capability transport/protocol boundary
-            with _NATIVE_PROBE_LOCK:
-                if _native_protocol_failure(exc):
-                    _NATIVE_PROBE_CACHE[key] = False
-                    _NATIVE_PROBE_NEGATIVE_AT[key] = now
-                    _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
-                    reason = "protocol"
-                    retry_after = negative_ttl
-                else:
-                    _NATIVE_PROBE_CACHE.pop(key, None)
-                    _NATIVE_PROBE_TRANSIENT_AT[key] = now
-                    reason = "transient"
-                    retry_after = transient_cooldown
-            print(
-                "llama native forced-tool preflight:",
-                " supported=unknown" if reason == "transient" else " supported=no",
-                f" reason={reason}",
-                f" model={key[1]}",
-                f" retry_after={retry_after:.0f}s",
-                flush=True,
-            )
-            return False
-
-        with _NATIVE_PROBE_LOCK:
-            _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
-            _NATIVE_PROBE_CACHE[key] = supported
-            if supported:
-                _NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
-            else:
-                _NATIVE_PROBE_NEGATIVE_AT[key] = now
-        print(
-            "llama native forced-tool preflight:",
-            f" supported={'yes' if supported else 'no'}",
-            f" model={key[1]}",
-            "" if supported else f" retry_after={negative_ttl:.0f}s",
-            sep="",
-            flush=True,
-        )
-        return supported
-
-
-def _native_probe_cache_key(adapter: Any, request: Any) -> tuple[str, str] | None:
-    return _native_probe_key(adapter, request)
-
-
-def _mark_native_unsupported(adapter: Any, request: Any) -> None:
-    key = _native_probe_cache_key(adapter, request)
-    if key is not None:
-        with _NATIVE_PROBE_LOCK:
-            _NATIVE_PROBE_CACHE[key] = False
-            _NATIVE_PROBE_NEGATIVE_AT[key] = time.monotonic()
-            _NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
-
-
-def _native_protocol_failure(exc: BaseException) -> bool:
-    cause = getattr(exc, "cause", exc)
-    if not isinstance(cause, RuntimeError):
-        return False
-    if type(cause).__name__ == "ToolCallValidationError":
-        return True
-    text = str(cause).casefold()
-    markers = (
-        "did not emit a tool call",
-        "violated named tool_choice",
-        "no semantic action",
-        "tool continuation without a semantic action",
-        "unexpected empty grammar stack",
-    )
-    return any(marker in text for marker in markers)
 
 
 def _install_adapter_class(
@@ -595,7 +379,6 @@ def _install_adapter_class(
     *,
     transport_name: str,
     deterministic_stale_read: bool,
-    probe_native_required: bool = False,
 ) -> None:
     current = cls.generate_turn
     if getattr(current, _MARKER, False):
@@ -603,60 +386,25 @@ def _install_adapter_class(
 
     @wraps(current)
     def generate_turn(self: Any, request: Any) -> Any:
-        from .model_adapters import ModelConfigurationError
-
         name = forced_tool_name(getattr(request, "tool_choice", None))
         if not name:
             return current(self, request)
-
-        local_native_mutation = probe_native_required and name in _SOURCE_MUTATION_TOOLS
-        if name in _SOURCE_MUTATION_TOOLS and not local_native_mutation:
-            return host_selected_mutation_turn(current, self, request, name)
 
         if deterministic_stale_read:
             deterministic = deterministic_forced_read_turn(request, name)
             if deterministic is not None:
                 return deterministic
 
-        if not _model_schema_is_atomic(request, name):
-            if name in _SOURCE_MUTATION_TOOLS:
-                return host_selected_mutation_turn(current, self, request, name)
-            return host_selected_argument_turn(current, self, request, name)
-
-        if (
-            probe_native_required
-            and not local_native_mutation
-            and not _native_required_supported(current, self, request)
-        ):
-            return host_selected_argument_turn(current, self, request, name)
-
-        try:
-            turn = current(self, _single_tool_request(request, name))
-        except BaseException as exc:
-            if probe_native_required and _native_protocol_failure(exc):
-                if not local_native_mutation:
-                    _mark_native_unsupported(self, request)
-                return host_selected_argument_turn(current, self, request, name)
-            raise
-        if _contains_exact_call(turn, name):
-            return turn
-        if probe_native_required:
-            if not local_native_mutation:
-                _mark_native_unsupported(self, request)
-            return host_selected_argument_turn(current, self, request, name)
-        raise ModelConfigurationError(
-            f"{transport_name} failed the host-selected action {name!r}; received "
-            f"{_call_names(turn)}. The host will not repeat the same tool-name selection."
-        )
+        if name in _SOURCE_MUTATION_TOOLS:
+            return host_selected_mutation_turn(current, self, request, name)
+        return host_selected_argument_turn(current, self, request, name)
 
     setattr(generate_turn, _MARKER, True)
     generate_turn._mmm_forced_tool_execution_v2 = True
     generate_turn._mmm_forced_tool_single_surface = True
     generate_turn._mmm_forced_tool_single_context = True
-    generate_turn._mmm_forced_tool_required_transport = True
     generate_turn._mmm_host_selected_mutation_arguments = True
-    generate_turn._mmm_local_native_mutation_transport = probe_native_required
-    generate_turn._mmm_native_forced_tool_preflight = probe_native_required
+    generate_turn._mmm_native_forced_tool_preflight = False
     cls.generate_turn = generate_turn
 
 
@@ -671,7 +419,6 @@ def install(*, openai_compatible_module: Any, llama_cpp_module: Any | None = Non
             llama_cpp_module.LlamaCppAdapter,
             transport_name="Local llama model",
             deterministic_stale_read=True,
-            probe_native_required=True,
         )
 
 
