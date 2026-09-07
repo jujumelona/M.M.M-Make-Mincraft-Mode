@@ -13,8 +13,11 @@ from typing import Any
 
 from . import evidence_first_planning as _evidence
 from .acceptance_contracts import canonical_public_acceptance
+from .minecraft_template_catalog import semantic_capability_choices
 from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
+
+_SEMANTIC_CAPABILITY_CHOICES = frozenset(semantic_capability_choices())
 
 
 def _text(value: Any) -> str:
@@ -145,6 +148,16 @@ def _implementation_queries(state: Mapping[str, Any], requirement_ref: str) -> l
     return values
 
 
+def _semantic_capability(requirement: Mapping[str, Any]) -> str:
+    capability = _text(requirement.get("semantic_capability")).casefold()
+    if capability not in _SEMANTIC_CAPABILITY_CHOICES:
+        raise ValueError(
+            "PLANNING_HANDOFF_CAPABILITY: requirement has no valid canonical semantic "
+            f"capability: {capability or '<empty>'}"
+        )
+    return capability
+
+
 def build_request_catalog_from_planning_state(
     prompt: str, state: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -163,7 +176,7 @@ def build_request_catalog_from_planning_state(
 
     sufficient_refs = _sufficient_refs(state)
     output: list[dict[str, Any]] = []
-    for index, requirement in enumerate(requirements):
+    for requirement in requirements:
         requirement_id = str(requirement.get("requirement_id") or "")
         detail = details.get(requirement_id)
         if detail is None:
@@ -183,9 +196,7 @@ def build_request_catalog_from_planning_state(
                 reject_invalid=True,
             )
         )
-        capability = "researched." + _evidence._sha(
-            {"requirement": statement, "index": index}
-        )[7:23]
+        capability = _semantic_capability(requirement)
         prompt_refs = (
             [_text(ref) for ref in requirement.get("prompt_refs", []) if _text(ref)]
             if isinstance(requirement.get("prompt_refs"), list)
@@ -275,7 +286,7 @@ def build_request_catalog_from_planning_state(
             "generation_policy": "prompt_first_grounded_state_machine",
             "model_generated_planning_json": True,
             "source_grounding_owner": "host_validated_evidence",
-            "capability_id_owner": "host_handoff",
+            "capability_id_owner": "planning_state_requirement",
             "dependency_owner": "host_downstream_plan",
             "implementation_architecture_owner": "grounded_detailed_plan",
             "research_query_owner": "bounded_query_compiler",
