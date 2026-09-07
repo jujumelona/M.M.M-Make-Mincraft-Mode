@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-"""Native, bounded recovery for host-selected tool arguments.
+"""Bounded argument-only recovery for a host-selected action.
 
-The host owns the original argument container. When a model cannot emit the already
-selected tool directly, this module decomposes its object schema into small native
-function-call pages, validates each page, merges them, then validates the final object
-against the original schema. No recovery turn asks the model to author a JSON document.
+The host has already selected the semantic action before this module runs. Recovery must
+therefore not ask a small model to select a tool again. Each bounded page is requested as
+a JSON object constrained by the page's argument schema, model-returned tool calls are
+ignored, and the host constructs the final ToolCall only after every page validates.
 """
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-_ARGUMENT_PAGE_TOOL = "mmm_submit_argument_page"
 _MAX_PAGE_PROPERTIES = 4
 _MAX_REPAIR_ERROR_CHARS = 1200
 
@@ -24,20 +24,6 @@ def _forced_module() -> Any:
     from . import forced_tool_execution_contract
 
     return forced_tool_execution_contract
-
-
-def _tool_schema(parameters: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": _ARGUMENT_PAGE_TOOL,
-            "description": (
-                "Submit exactly one bounded page of arguments for an action that the host "
-                "has already selected. Do not choose another action."
-            ),
-            "parameters": dict(parameters),
-        },
-    }
 
 
 def _required_names(schema: Mapping[str, Any]) -> tuple[str, ...]:
@@ -92,7 +78,6 @@ def _argument_pages(parameters: Mapping[str, Any]) -> tuple[dict[str, Any], ...]
 def _messages(
     request: Any,
     *,
-    action_name: str,
     page_index: int,
     page_count: int,
     page_schema: Mapping[str, Any],
@@ -110,14 +95,15 @@ def _messages(
         else "arguments"
     )
     instruction = (
-        f"HOST ACTION IS FIXED: {action_name}. Supply argument page {page_index}/{page_count}. "
-        f"Call the only available function exactly once. This page owns only these fields: {fields}. "
-        "Do not emit JSON prose, YAML, XML, a code fence, or another function name. "
-        "The host owns the complete argument object and will merge and validate pages."
+        f"The host already selected the action. Supply argument page {page_index}/{page_count} "
+        f"as one JSON object containing only these fields: {fields}. "
+        "Do not choose or name a tool. Do not emit prose, YAML, XML, or a code fence. "
+        "The host owns action selection, merges bounded pages, validates the complete object, "
+        "and constructs the final tool call."
     )
     if repair_error:
         instruction += (
-            " The previous native argument page was invalid. Repair only this page. Validation: "
+            " Repair the arguments only. The previous argument object was invalid. Validation: "
             + repair_error[:_MAX_REPAIR_ERROR_CHARS]
         )
     messages.append({"role": "user", "content": instruction})
@@ -127,7 +113,6 @@ def _messages(
 def _request(
     request: Any,
     *,
-    action_name: str,
     page_index: int,
     page_count: int,
     page_schema: Mapping[str, Any],
@@ -135,58 +120,69 @@ def _request(
 ) -> Any:
     # The boundary is checked per model-authored page, never against the host-owned
     # original container. A single oversized nested field therefore fails closed before
-    # generation rather than falling back to a large raw-JSON response.
+    # generation rather than falling back to an unconstrained response.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
     assert_atomic_model_schema(
         page_schema,
-        surface=f"native argument page for {action_name!r}",
+        surface="host-selected argument page",
     )
-    schema = _tool_schema(page_schema)
     return replace(
         request,
         messages=_messages(
             request,
-            action_name=action_name,
             page_index=page_index,
             page_count=page_count,
             page_schema=page_schema,
             repair_error=repair_error,
         ),
-        tools=(schema,),
-        tool_validation_schemas=(schema,),
-        tool_choice="required",
+        tools=(),
+        tool_validation_schemas=(),
+        tool_choice=None,
         parallel_tool_calls=False,
-        response_format="text",
-        response_schema=None,
+        response_format="json",
+        response_schema=dict(page_schema),
     )
+
+
+def _fingerprint(value: Any) -> str:
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        encoded = repr(value).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, str, str]:
+    """Parse only JSON content; stale/model-authored ToolCalls never become executable."""
+
     forced = _forced_module()
-    calls = tuple(getattr(turn, "tool_calls", ()) or ())
-    if len(calls) != 1:
-        reason = f"expected one native argument-page call, received {len(calls)}"
-        return None, reason, hashlib.sha256(reason.encode()).hexdigest()
-    call = calls[0]
-    call_name = str(getattr(call, "name", "") or "").strip()
-    if call_name != _ARGUMENT_PAGE_TOOL:
-        reason = f"unexpected native argument-page tool {call_name or '<empty>'!r}"
-        return None, reason, hashlib.sha256(reason.encode()).hexdigest()
-    arguments = getattr(call, "arguments", None)
-    if not isinstance(arguments, Mapping):
-        reason = "native argument-page call did not contain an argument object"
-        return None, reason, hashlib.sha256(reason.encode()).hexdigest()
-    normalized = dict(arguments)
+    raw = str(getattr(turn, "content", "") or "").strip()
+    if not raw:
+        reason = "argument page returned no JSON object"
+        return None, reason, _fingerprint({"content": raw})
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        reason = f"argument page was not valid JSON: {exc}"
+        return None, reason, _fingerprint({"content": raw})
+    if not isinstance(parsed, Mapping):
+        reason = "argument page JSON must be an object"
+        return None, reason, _fingerprint(parsed)
+    normalized = dict(parsed)
     if not forced._arguments_match_schema(normalized, page_schema):
-        reason = "native argument-page arguments failed the host page schema"
-        fingerprint = hashlib.sha256(repr(sorted(normalized.items())).encode()).hexdigest()
-        return None, reason, fingerprint
-    fingerprint = hashlib.sha256(repr(sorted(normalized.items())).encode()).hexdigest()
-    return normalized, "", fingerprint
+        reason = "argument page JSON failed the host page schema"
+        return None, reason, _fingerprint(normalized)
+    return normalized, "", _fingerprint(normalized)
 
 
 def _page_attempt(
@@ -200,8 +196,7 @@ def _page_attempt(
     except BaseException as exc:
         cause = getattr(exc, "cause", exc)
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
-        fingerprint = hashlib.sha256(reason.encode()).hexdigest()
-        return None, reason, fingerprint
+        return None, reason, _fingerprint({"exception": reason})
     return _page_result(turn, page_schema)
 
 
@@ -213,7 +208,7 @@ def host_selected_argument_turn(
     *,
     prefix: str = "host_action",
 ) -> Any:
-    """Recover one already-selected action through bounded native argument pages."""
+    """Recover one already-selected action through bounded argument-only JSON pages."""
 
     from .model_adapters import ModelConfigurationError
 
@@ -228,7 +223,6 @@ def host_selected_argument_turn(
     for page_index, page_schema in enumerate(pages, start=1):
         first_request = _request(
             request,
-            action_name=name,
             page_index=page_index,
             page_count=len(pages),
             page_schema=page_schema,
@@ -242,7 +236,6 @@ def host_selected_argument_turn(
         if arguments is None:
             repair_request = _request(
                 request,
-                action_name=name,
                 page_index=page_index,
                 page_count=len(pages),
                 page_schema=page_schema,
@@ -257,9 +250,9 @@ def host_selected_argument_turn(
             if arguments is None:
                 fixed_point = first_fingerprint == second_fingerprint
                 suffix = (
-                    "repeated-invalid native argument-page fixed point"
+                    "repeated-invalid argument-page fixed point"
                     if fixed_point
-                    else "bounded native argument-page repair exhausted"
+                    else "bounded argument-page repair exhausted"
                 )
                 raise ModelConfigurationError(
                     f"Host-selected action {name!r} {suffix} on page "
@@ -275,7 +268,7 @@ def host_selected_argument_turn(
 
     if not forced._arguments_match_schema(merged, parameters):
         raise ModelConfigurationError(
-            f"HOST_ARGUMENT_DECOMPOSITION: merged native pages for {name!r} "
+            f"HOST_ARGUMENT_DECOMPOSITION: merged argument pages for {name!r} "
             "failed the original schema"
         )
     return forced._response_for_call(name, merged, prefix=prefix)
