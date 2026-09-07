@@ -86,30 +86,22 @@ jobs:
           production.write_text(text, encoding='utf-8')
 
           # Fail the migration itself if any retired policy definition survived.
-          if 'def _is_public_acceptance(' in evidence.read_text(encoding='utf-8'):
-              raise SystemExit('retired evidence acceptance policy still present')
+          etext = evidence.read_text(encoding='utf-8')
           ptext = production.read_text(encoding='utf-8')
+          if 'def _is_public_acceptance(' in etext:
+              raise SystemExit('retired evidence acceptance policy still present')
           if '_PUBLIC_ACCEPTANCE_INTERNAL_MARKERS' in ptext:
               raise SystemExit('retired production marker table still present')
           if 'def _validate_public_acceptance(' in ptext:
               raise SystemExit('retired production acceptance validator still present')
+          if 'from .acceptance_contracts import is_public_acceptance as _is_public_acceptance' not in etext:
+              raise SystemExit('evidence planner is not bound to canonical acceptance contract')
+          if 'validate_runtime_public_acceptance' not in ptext or 'CANONICAL_ACCEPTANCE_OWNER' not in ptext:
+              raise SystemExit('production compiler is not bound to canonical acceptance contract')
           PY
 
           rm .github/workflows/one-shot-acceptance-ssot-migration.yml
           python -m compileall -q minecraft_mod_ai
-          python - <<'PY'
-          import minecraft_mod_ai
-          from minecraft_mod_ai import acceptance_contracts
-          from minecraft_mod_ai import evidence_first_planning as evidence
-          from minecraft_mod_ai import production_contract
-
-          assert evidence._is_public_acceptance is acceptance_contracts.is_public_acceptance
-          assert getattr(
-              production_contract._validate_public_acceptance,
-              '_mmm_acceptance_contract_owner',
-              '',
-          ) == acceptance_contracts.CANONICAL_ACCEPTANCE_OWNER
-          PY
       - name: Commit migration to main
         shell: bash
         run: |
