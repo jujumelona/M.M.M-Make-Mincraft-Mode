@@ -19,6 +19,10 @@ def test_runtime_public_acceptance_policy_has_one_owner() -> None:
         )
         == acceptance_contracts.CANONICAL_ACCEPTANCE_OWNER
     )
+    assert (
+        getattr(production_contract._validate_public_acceptance, "func", None)
+        is acceptance_contracts.validate_runtime_public_acceptance
+    )
 
 
 def test_acceptance_policy_has_no_secondary_source_definition() -> None:
@@ -42,6 +46,28 @@ def test_acceptance_policy_has_no_secondary_source_definition() -> None:
                 f"acceptance policy must be owned only by {owner.name}; "
                 f"secondary definition {marker!r} found in {path.relative_to(package_root)}"
             )
+
+
+def test_acceptance_ssot_drift_is_fail_closed_not_runtime_repaired() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    boundary = (package_root / "production_boundary_contract.py").read_text(
+        encoding="utf-8"
+    )
+    evidence_source = (package_root / "evidence_first_planning.py").read_text(
+        encoding="utf-8"
+    )
+    production_source = (package_root / "production_contract.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_evidence._is_public_acceptance =" not in boundary
+    assert "_production._validate_public_acceptance =" not in boundary
+    assert "_assert_canonical_acceptance_bindings()" in boundary
+    assert (
+        "from .acceptance_contracts import is_public_acceptance as _is_public_acceptance"
+        in evidence_source
+    )
+    assert "validate_runtime_public_acceptance" in production_source
 
 
 @pytest.mark.parametrize("count", [2, 3, 4, 5, 16])
