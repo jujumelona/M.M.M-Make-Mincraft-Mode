@@ -17,6 +17,12 @@ from minecraft_mod_ai.custom_module_generator import (
 
 
 def test_output_continuation_carries_preserved_source_state() -> None:
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/example/Block.java#Block",
+        "status": "host_reserved",
+        "source_set": "main",
+    }
     module = ProductionModule(
         module_id="example_block",
         kind="block",
@@ -25,6 +31,14 @@ def test_output_continuation_carries_preserved_source_state() -> None:
             "evidence_task": {
                 "task_id": "example_block",
                 "semantic_outcome": "Implement the approved example block continuation contract.",
+                "owned_anchors": [anchor],
+                "production_bindings": [
+                    {
+                        "task_ref": "example_block",
+                        "reuse_action": "fresh",
+                        "owned_anchors": [anchor],
+                    }
+                ],
             },
         },
     )
@@ -88,7 +102,7 @@ def test_output_continuation_preserves_host_grounding_receipts() -> None:
             "minecraft_version": "1.21.1",
             "loader": "fabric",
             "mappings": "1.21.1+build.3",
-            "java_version": "21",
+            "java_version": 21,
         },
         "owned_anchors": [anchor],
         "implementation_obligations": [
