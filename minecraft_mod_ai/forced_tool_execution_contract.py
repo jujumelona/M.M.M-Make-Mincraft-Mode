@@ -2,11 +2,11 @@ from __future__ import annotations
 
 """Execute host-selected actions without re-asking the model for an action name.
 
-The causal frontier owns action selection. Remote adapters keep the argument-only
-fallback for source mutations. Local llama.cpp/Qwen uses one host-narrowed ``required``
-tool decode for mutations so the already-validated native Qwen tool parser owns its
-wire format; protocol failures still fail over to host-validated argument generation.
-Other exact local actions use native ``required`` decoding after a live capability probe.
+The causal frontier owns action selection. Remote and local adapters recover arguments
+for an already-selected action only through bounded native function-call pages owned by
+the host. Local llama.cpp/Qwen may first use one host-narrowed ``required`` tool decode;
+protocol failures fall back to the same native atomic argument-page protocol. No forced
+action recovery path asks the model to author a raw JSON document.
 """
 
 import hashlib
@@ -20,16 +20,11 @@ from functools import wraps
 from typing import Any
 
 from .source_mutation_contract import SOURCE_MUTATION_NAMES as _SOURCE_MUTATION_TOOLS
-from .structured_output import (
-    StructuredOutputValidationError,
-    validate_structured_output,
-)
 
 _MARKER = "_mmm_forced_tool_execution"
 _DETERMINISTIC_READ_TOOLS = frozenset({"search_code_rag", "search_project_rag"})
 _MAX_FALLBACK_QUERY_CHARS = 4096
 _MAX_FALLBACK_ERROR_CHARS = 768
-_MAX_ARGUMENT_ERROR_CHARS = 1600
 _NATIVE_PROBE_TOOL = "mmm_required_tool_probe"
 _NATIVE_PROBE_LOCK = threading.RLock()
 _NATIVE_PROBE_CACHE: dict[tuple[str, str], bool] = {}
@@ -381,123 +376,6 @@ def deterministic_forced_read_turn(request: Any, name: str) -> Any | None:
     return _response_for_call(name, arguments, prefix="host_read")
 
 
-def _focused_argument_messages(
-    request: Any,
-    name: str,
-    *,
-    repair_error: str = "",
-) -> tuple[dict[str, Any], ...]:
-    messages = [
-        dict(raw)
-        for raw in tuple(getattr(request, "messages", ()) or ())
-        if isinstance(raw, Mapping)
-    ]
-    if name == "apply_source_edit":
-        instruction = (
-            f"HOST ACTION IS FIXED: {name}. Do not emit a tool/function tag. "
-            "Return exactly one JSON object containing only the arguments for that action. "
-            "The 'operation' field specifies the edit type (one of: 'create_file', 'replace_exact', 'insert_before', 'insert_after', 'create_java_type', 'add_java_import', 'insert_java_member', 'delete_file'). "
-            "Use 'path' for target file, 'old' for span to replace, and 'new' (or 'content') for replacement text."
-        )
-    else:
-        instruction = (
-            f"HOST ACTION IS FIXED: {name}. Do not choose or emit a tool/function name. "
-            "Return exactly one JSON object containing only the arguments for that host action. "
-            "Use the supplied JSON schema exactly. The host will execute the action after validation."
-        )
-    if repair_error:
-        instruction += (
-            " The previous argument object was invalid. Repair the arguments only; do not repeat the "
-            f"same invalid object. Validation: {repair_error[:_MAX_ARGUMENT_ERROR_CHARS]}"
-        )
-    # Qwen3.5 permits a system message only at the beginning of a chat template. This
-    # is a current-turn instruction, so append it as user input rather than creating an
-    # illegal trailing system role after the accumulated tool conversation.
-    messages.append({"role": "user", "content": instruction})
-    return tuple(messages)
-
-
-def _argument_page_request(
-    request: Any,
-    name: str,
-    parameters: Mapping[str, Any],
-    *,
-    repair_error: str = "",
-) -> Any:
-    return replace(
-        request,
-        messages=_focused_argument_messages(request, name, repair_error=repair_error),
-        tools=(),
-        tool_validation_schemas=(),
-        tool_choice=None,
-        parallel_tool_calls=False,
-        response_format="json",
-        response_schema=dict(parameters),
-    )
-
-
-def _argument_failure(
-    turn: Any,
-    parameters: Mapping[str, Any],
-) -> tuple[Mapping[str, Any] | None, str, str]:
-    calls = tuple(getattr(turn, "tool_calls", ()) or ())
-    content = str(getattr(turn, "content", "") or "").strip()
-    if calls:
-        names = ",".join(str(getattr(call, "name", "")).strip() for call in calls)
-        reason = f"argument-only page emitted tool calls instead of JSON arguments: {names or '<unknown>'}"
-        fingerprint = hashlib.sha256(reason.encode("utf-8")).hexdigest()
-        return None, reason, fingerprint
-    try:
-        validate_structured_output(
-            content,
-            response_format="json",
-            response_schema=parameters,
-        )
-        decoded = json.loads(content)
-        if not isinstance(decoded, Mapping):
-            raise TypeError("host action arguments must be a JSON object")
-        raw = json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return dict(decoded), "", hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    except StructuredOutputValidationError as exc:
-        reason = "; ".join(exc.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        reason = f"{type(exc).__name__}: {exc}"[:_MAX_ARGUMENT_ERROR_CHARS]
-    fingerprint = hashlib.sha256(f"{content}\0{reason}".encode()).hexdigest()
-    return None, reason, fingerprint
-
-
-def _structured_exception_failure(
-    exc: BaseException,
-) -> tuple[Mapping[str, Any] | None, str, str] | None:
-    candidate: Any = exc
-    cause = getattr(exc, "cause", None)
-    if isinstance(cause, StructuredOutputValidationError):
-        candidate = cause
-    if not isinstance(candidate, StructuredOutputValidationError):
-        return None
-    reason = "; ".join(candidate.errors)[:_MAX_ARGUMENT_ERROR_CHARS]
-    fingerprint = hashlib.sha256(
-        f"{candidate.output}\0{reason}".encode()
-    ).hexdigest()
-    return None, reason, fingerprint
-
-
-def _argument_attempt(
-    current: Any,
-    adapter: Any,
-    page_request: Any,
-    parameters: Mapping[str, Any],
-) -> tuple[Mapping[str, Any] | None, str, str]:
-    try:
-        turn = current(adapter, page_request)
-    except BaseException as exc:
-        structured = _structured_exception_failure(exc)
-        if structured is None:
-            raise
-        return structured
-    return _argument_failure(turn, parameters)
-
-
 def host_selected_argument_turn(
     current: Any,
     adapter: Any,
@@ -506,50 +384,25 @@ def host_selected_argument_turn(
     *,
     prefix: str = "host_action",
 ) -> Any:
-    """Generate only arguments for one already-selected action with one repair page."""
+    """Recover one fixed action through bounded native argument pages."""
 
-    from .model_adapters import ModelConfigurationError
+    from .native_atomic_argument_recovery import host_selected_argument_turn as recover
 
-    parameters = _parameters(_selected_schema(request, name))
-    first = _argument_page_request(request, name, parameters)
-    arguments, error, first_fingerprint = _argument_attempt(
-        current, adapter, first, parameters
-    )
-    if arguments is not None:
-        return _response_for_call(name, arguments, prefix=prefix)
-
-    repair = _argument_page_request(
-        request,
-        name,
-        parameters,
-        repair_error=error,
-    )
-    repaired, repair_error, second_fingerprint = _argument_attempt(
-        current, adapter, repair, parameters
-    )
-    if repaired is not None:
-        return _response_for_call(name, repaired, prefix=prefix)
-
-    fixed_point = first_fingerprint == second_fingerprint
-    suffix = (
-        "repeated-invalid-argument fixed point"
-        if fixed_point
-        else "bounded argument repair exhausted"
-    )
-    raise ModelConfigurationError(
-        f"Host-selected action {name!r} {suffix}; first={first_fingerprint[:12]} "
-        f"retry={second_fingerprint[:12]} error={repair_error or error}."
-    )
-
-
-def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-    return host_selected_argument_turn(
+    return recover(
         current,
         adapter,
         request,
         name,
-        prefix="host_mutation",
+        prefix=prefix,
     )
+
+
+def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
+    """Recover one fixed mutation through bounded native argument pages."""
+
+    from .native_atomic_argument_recovery import host_selected_mutation_turn as recover
+
+    return recover(current, adapter, request, name)
 
 
 def _single_tool_request(request: Any, name: str) -> Any:
@@ -725,7 +578,7 @@ def _native_protocol_failure(exc: BaseException) -> bool:
         return False
     # A native forced-tool probe can succeed with a tiny scalar schema and still fail
     # on real arguments. Treat strict parser failures as transport/protocol failures so
-    # the existing bounded argument-only path gets one chance with the action already
+    # the bounded native argument-page path gets one chance with the action already
     # selected by the host. This does not weaken schema validation or retry indefinitely.
     if type(cause).__name__ == "ToolCallValidationError":
         return True
