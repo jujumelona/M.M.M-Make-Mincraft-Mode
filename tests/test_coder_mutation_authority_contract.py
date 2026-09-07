@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai import small_model_task_capsule_contract as task_capsule
 from minecraft_mod_ai.coder_mutation_authority_contract import install
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
@@ -56,8 +57,20 @@ def _tool_schema() -> dict:
     }
 
 
+def _payload(status: str) -> dict:
+    module = _module(status)
+    return {
+        "phase": "implement_module",
+        "module": {
+            "module_id": module.module_id,
+            "kind": module.kind,
+            "evidence_task": module.config["evidence_task"],
+        },
+    }
+
+
 def setup_module() -> None:
-    install(task_capsule)
+    install(task_capsule, tool_loop)
 
 
 def test_existing_primary_is_writable_but_not_creatable() -> None:
@@ -137,6 +150,25 @@ def test_model_schema_hides_create_and_delete_when_only_existing_targets_exist()
     assert "delete_file" not in enum
     assert "replace_exact" in enum
     assert "insert_java_member" in enum
+
+
+def test_fresh_reuse_action_does_not_turn_existing_anchor_into_new_file() -> None:
+    context = tool_loop._fresh_owned_symbol_context(_payload("existing"))
+    assert context is not None
+    assert context.target_path == JAVA_PATH
+    assert context.target_symbol == SYMBOL
+    assert context.is_new_file is False
+    assert context.localization_stage == tool_loop.LocalizationStage.NEED_BODY
+    assert context.evidence_source == "evidence_existing_owned_anchor"
+
+
+def test_host_reserved_anchor_is_still_a_new_file_target() -> None:
+    context = tool_loop._fresh_owned_symbol_context(_payload("host_reserved"))
+    assert context is not None
+    assert context.target_path == JAVA_PATH
+    assert context.is_new_file is True
+    assert context.localization_stage == tool_loop.LocalizationStage.READY
+    assert context.evidence_source == "evidence_host_reserved_owned_anchor"
 
 
 def test_unknown_primary_status_still_fails_closed() -> None:
