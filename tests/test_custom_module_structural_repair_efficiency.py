@@ -67,7 +67,16 @@ def _task_module(module_id: str, feature: str) -> ProductionModule:
             "evidence_task": {
                 "task_id": module_id,
                 "semantic_outcome": f"Implement the approved {feature} behavior.",
+                "target_cell": {
+                    "minecraft_version": "1.20.1",
+                    "loader": "fabric",
+                    "mappings": "yarn",
+                    "java_version": 17,
+                },
                 "owned_anchors": [anchor],
+                "implementation_obligations": [
+                    f"Implement the approved {feature} behavior in the exact owned target."
+                ],
                 "production_bindings": [
                     {
                         "task_ref": module_id,
@@ -75,6 +84,7 @@ def _task_module(module_id: str, feature: str) -> ProductionModule:
                         "owned_anchors": [anchor],
                     }
                 ],
+                "required_gates": ["source_static_validation", "target_compile"],
             },
         },
     )
