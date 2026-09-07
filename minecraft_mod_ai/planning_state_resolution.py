@@ -295,10 +295,6 @@ def compile_researched_requirements(
             "requirement_id": requirement_id,
             "statement": row["statement"],
             "semantic_capability": row["semantic_capability"],
-            # Retained as inert compatibility fields only. The model never supplies them and
-            # the active planner never validates them.
-            "prompt_refs": [],
-            "evidence_refs": [],
             "acceptance": row["acceptance"],
             "status": "implementation_research_pending",
         }
