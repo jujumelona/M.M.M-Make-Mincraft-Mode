@@ -222,7 +222,13 @@ def _schema_formats_supported(schema: Mapping[str, Any], checker: Any) -> bool:
         name = schema.get("format")
         if not isinstance(name, str) or name not in available:
             return False
-    for keyword in ("$defs", "definitions", "properties", "patternProperties", "dependentSchemas"):
+    for keyword in (
+        "$defs",
+        "definitions",
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+    ):
         children = schema.get(keyword)
         if isinstance(children, Mapping):
             for child in children.values():
@@ -372,7 +378,9 @@ def host_selected_argument_turn(
 ) -> Any:
     """Generate arguments for one already-selected action through the fixed page contract."""
 
-    from .native_atomic_argument_recovery import host_selected_argument_turn as generate_arguments
+    from .native_atomic_argument_recovery import (
+        host_selected_argument_turn as generate_arguments,
+    )
 
     return generate_arguments(
         current,
@@ -401,6 +409,8 @@ def _install_adapter_class(
     transport_name: str,
     deterministic_stale_read: bool,
 ) -> None:
+    if not isinstance(transport_name, str) or not transport_name.strip():
+        raise ValueError("forced-tool transport_name must be a non-empty string")
     current = cls.generate_turn
     if getattr(current, _MARKER, False):
         return
