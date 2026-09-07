@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-"""Reconcile coder mutation authority with the canonical implementation contract.
+"""Reconcile coder target existence with the canonical implementation contract.
 
 The implementation contract distinguishes existing targets (modify) from host-reserved
 targets (create-or-modify). The task capsule and live tool loop must preserve that
 distinction: existing owned files are writable and require source localization, while
-creation is authorized only for host-reserved destinations. Deletion is never an
-evidence-task coder operation.
+creation is authorized only for host-reserved destinations.
+
+Creation conflicts remain enforced by the canonical progress-aware mutation authority,
+and file deletion remains rejected by the staged custom-module operation validator before
+anything is committed to the live project. This module only repairs the two stale semantic
+assumptions that cannot be expressed by those existing owners.
 """
 
 import copy
@@ -18,22 +22,13 @@ from typing import Any
 _MARKER = "_mmm_coder_mutation_authority_v1"
 _LOOP_MARKER = "_mmm_coder_target_existence_v1"
 _EXISTING_STATUSES = frozenset({"existing", "reuse", "modify", "host_existing"})
-_CREATE_OPERATIONS = frozenset(
-    {
-        "create",
-        "create_file",
-        "create_class",
-        "create_type",
-        "create_java_type",
-        "create_java_class",
-        "write",
-        "write_file",
-    }
-)
-_DELETE_OPERATIONS = frozenset({"delete", "delete_file", "remove", "remove_file"})
 
 
-def _primary_candidate(target_module: Any, task: Mapping[str, Any], task_id: str) -> tuple[str, str] | None:
+def _primary_candidate(
+    target_module: Any,
+    task: Mapping[str, Any],
+    task_id: str,
+) -> tuple[str, str] | None:
     bindings = target_module._matching_bindings(task, task_id)
     candidates = target_module._binding_symbol_candidates(bindings)
     return candidates[0] if len(candidates) == 1 else None
@@ -51,7 +46,10 @@ def _parsed_anchors(target_module: Any, task: Mapping[str, Any]) -> tuple[Any, .
     return tuple(result)
 
 
-def _module_with_reserved_primary(target_module: Any, module: Any) -> tuple[Any, tuple[Any, ...]] | None:
+def _module_with_reserved_primary(
+    target_module: Any,
+    module: Any,
+) -> tuple[Any, tuple[Any, ...]] | None:
     config = getattr(module, "config", None)
     if not isinstance(config, Mapping):
         return None
@@ -93,7 +91,11 @@ def _module_with_reserved_primary(target_module: Any, module: Any) -> tuple[Any,
     return proxy, anchors
 
 
-def _restore_capsule_authority(target_module: Any, capsule: Any, anchors: tuple[Any, ...]) -> Any:
+def _restore_capsule_authority(
+    target_module: Any,
+    capsule: Any,
+    anchors: tuple[Any, ...],
+) -> Any:
     digest_input = {
         "task_id": capsule.task_id,
         "module_kind": capsule.module_kind,
@@ -168,7 +170,9 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
                 or not loop_module._is_workspace_file_path(target_path)
             ):
                 continue
-            status = str(anchor.get("status") or task_statuses.get(target_path) or "").strip().casefold()
+            status = str(
+                anchor.get("status") or task_statuses.get(target_path) or ""
+            ).strip().casefold()
             if status == "host_reserved":
                 is_new_file = True
                 evidence_source = "evidence_host_reserved_owned_anchor"
@@ -179,7 +183,11 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
                 continue
             return loop_module.TargetMutationContext(
                 target_path=target_path,
-                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
+                target_symbol=(
+                    target_symbol.strip()
+                    if separator and target_symbol.strip()
+                    else None
+                ),
                 is_new_file=is_new_file,
                 evidence_source=evidence_source,
             )
@@ -194,7 +202,6 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
 
     if not getattr(target_module, _MARKER, False):
         original_compile = target_module.compile_task_capsule
-        original_bind = target_module.bind_source_edit_arguments
 
         def compile_task_capsule(module: Any):
             try:
@@ -211,30 +218,13 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
                     return None
                 return _restore_capsule_authority(target_module, capsule, anchors)
 
-        def bind_source_edit_arguments(arguments: Mapping[str, Any], capsule: Any) -> dict[str, Any]:
-            bound = original_bind(arguments, capsule)
-            operation = str(bound.get("operation") or "").strip().casefold()
-            path = str(bound.get("path") or "").strip()
-            if operation in _DELETE_OPERATIONS:
-                raise target_module.TaskCapsuleContractError(
-                    "TASK_MUTATION_DELETE_FORBIDDEN: evidence-task coder may not delete files."
-                )
-            if operation in _CREATE_OPERATIONS and path not in capsule.creatable_paths:
-                raise target_module.TaskCapsuleContractError(
-                    "TASK_MUTATION_CREATE_NOT_RESERVED: creation requires a host_reserved target; "
-                    f"path={path!r}, creatable={list(capsule.creatable_paths)!r}."
-                )
-            return bound
-
         compile_task_capsule.__name__ = original_compile.__name__
-        bind_source_edit_arguments.__name__ = original_bind.__name__
         target_module.compile_task_capsule = compile_task_capsule
-        target_module.bind_source_edit_arguments = bind_source_edit_arguments
         setattr(target_module, _MARKER, True)
 
     if not getattr(loop_module, _LOOP_MARKER, False):
-        loop_module._fresh_owned_symbol_context = lambda payload: _status_aware_owned_symbol_context(
-            loop_module, payload
+        loop_module._fresh_owned_symbol_context = (
+            lambda payload: _status_aware_owned_symbol_context(loop_module, payload)
         )
         setattr(loop_module, _LOOP_MARKER, True)
 
