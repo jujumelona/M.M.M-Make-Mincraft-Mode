@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .owned_target_contract import target_operation
 from .target_contract import TargetContractError, target_coordinates_from_mapping
 
 SCHEMA = "mmm/coder-execution-contract"
@@ -97,12 +98,13 @@ def _anchor_target(anchor: Mapping[str, Any]) -> dict[str, str]:
     locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
     path, separator, symbol = locator.partition("#")
     kind = str(anchor.get("kind") or "").strip()
-    status = str(anchor.get("status") or "").strip().casefold()
-    operation = (
-        "modify"
-        if status in {"existing", "reuse", "modify", "host_existing"}
-        else "create_or_modify"
-    )
+    status = str(anchor.get("status") or "").strip()
+    try:
+        operation = target_operation(status)
+    except ValueError as exc:
+        raise ValueError(
+            f"coder owned target {locator or '<missing>'!r} has invalid status {status or '<empty>'!r}"
+        ) from exc
     return {
         "kind": kind,
         "locator": locator,
