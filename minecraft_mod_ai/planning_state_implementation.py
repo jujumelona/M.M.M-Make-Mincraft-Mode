@@ -225,29 +225,21 @@ def _host_derived_checks(requirement: Mapping[str, Any], worksheet: Mapping[str,
     ]
 
 
-def _compile_requirement_plan(
-    router: Any,
-    state: Mapping[str, Any],
+def _assemble_requirement_plan(
     requirement: Mapping[str, Any],
-    required_sections: Iterable[str] | None = None,
+    requirement_ref: str,
+    selected_sections: tuple[str, ...],
+    specifications: Mapping[str, str],
+    allowed: set[str],
 ) -> dict[str, Any]:
-    selected_sections = normalize_required_sections(required_sections)
-    requirement_ref = _text(requirement.get("requirement_id"))
-    evidence, allowed = _requirement_grounding(state, requirement_ref)
-
-    worksheet_raw: dict[str, dict[str, Any]] = {}
-    for section in selected_sections:
-        worksheet_raw[section] = {
-            "specification": _plain_section(
-                router,
-                requirement=requirement,
-                section=section,
-                evidence=evidence,
-            ),
+    worksheet_raw = {
+        section: {
+            "specification": specifications[section],
             "constraint_evidence_refs": [],
         }
+        for section in selected_sections
+    }
     worksheet = validate_worksheet(worksheet_raw, allowed, selected_sections)
-
     plan = {
         "requirement_ref": requirement_ref,
         "required_detail_sections": list(selected_sections),
@@ -261,6 +253,91 @@ def _compile_requirement_plan(
     }
     validate_detailed_plan_grounding(plan, allowed)
     return plan
+
+
+def _compile_requirement_plan(
+    router: Any,
+    state: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+    required_sections: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    selected_sections = normalize_required_sections(required_sections)
+    requirement_ref = _text(requirement.get("requirement_id"))
+    evidence, allowed = _requirement_grounding(state, requirement_ref)
+    specifications = {
+        section: _plain_section(
+            router,
+            requirement=requirement,
+            section=section,
+            evidence=evidence,
+        )
+        for section in selected_sections
+    }
+    return _assemble_requirement_plan(
+        requirement,
+        requirement_ref,
+        selected_sections,
+        specifications,
+        allowed,
+    )
+
+
+def _compile_requirement_plans_parallel(
+    router: Any,
+    state: Mapping[str, Any],
+    requirements: list[Mapping[str, Any]],
+    section_selection: Mapping[str, tuple[str, ...]],
+    *,
+    workers: int,
+) -> list[dict[str, Any]]:
+    """Use one bounded pool across independent requirement/section model calls."""
+
+    prepared: list[
+        tuple[Mapping[str, Any], str, list[Mapping[str, Any]], set[str], tuple[str, ...]]
+    ] = []
+    for requirement in requirements:
+        requirement_ref = _text(requirement.get("requirement_id"))
+        evidence, allowed = _requirement_grounding(state, requirement_ref)
+        prepared.append(
+            (
+                requirement,
+                requirement_ref,
+                evidence,
+                allowed,
+                section_selection[requirement_ref],
+            )
+        )
+
+    specifications: list[dict[str, str]] = [dict() for _ in prepared]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
+        futures = [
+            (
+                requirement_index,
+                section,
+                pool.submit(
+                    _plain_section,
+                    router,
+                    requirement=requirement,
+                    section=section,
+                    evidence=evidence,
+                ),
+            )
+            for requirement_index, (requirement, _ref, evidence, _allowed, sections) in enumerate(prepared)
+            for section in sections
+        ]
+        for requirement_index, section, future in futures:
+            specifications[requirement_index][section] = future.result()
+
+    return [
+        _assemble_requirement_plan(
+            requirement,
+            requirement_ref,
+            sections,
+            specifications[index],
+            allowed,
+        )
+        for index, (requirement, requirement_ref, _evidence, allowed, sections) in enumerate(prepared)
+    ]
 
 
 def _host_section_selection(
@@ -304,7 +381,8 @@ def compile_detailed_implementation_plans(
 
     _preflight_detailed_planning(value, requirements)
     section_selection = _host_section_selection(requirements, required_sections_by_requirement)
-    workers = min(len(requirements), router_native_model_parallelism(router))
+    total_sections = sum(len(section_selection[str(item.get("requirement_id") or "")]) for item in requirements)
+    workers = min(total_sections, router_native_model_parallelism(router))
     if workers <= 1:
         compiled = [
             _compile_requirement_plan(
@@ -316,18 +394,13 @@ def compile_detailed_implementation_plans(
             for requirement in requirements
         ]
     else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
-            futures = [
-                pool.submit(
-                    _compile_requirement_plan,
-                    router,
-                    value,
-                    requirement,
-                    section_selection[str(requirement.get("requirement_id") or "")],
-                )
-                for requirement in requirements
-            ]
-            compiled = [future.result() for future in futures]
+        compiled = _compile_requirement_plans_parallel(
+            router,
+            value,
+            requirements,
+            section_selection,
+            workers=workers,
+        )
 
     detailed: list[dict[str, Any]] = []
     coverage: list[dict[str, Any]] = []
