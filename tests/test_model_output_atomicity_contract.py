@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from minecraft_mod_ai import forced_tool_execution_contract as forced
@@ -7,7 +9,6 @@ from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
     GenerationResponse,
     ModelConfigurationError,
-    ToolCall,
 )
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 
@@ -36,23 +37,18 @@ def _large_request(name: str, *, field_count: int = 12) -> GenerationRequest:
     )
 
 
-def _valid_page_response(request: GenerationRequest, *, call_id: str) -> GenerationResponse:
-    assert request.response_format == "text"
-    assert request.response_schema is None
-    assert len(request.tools) == 1
-    tool = request.tools[0]
-    assert isinstance(tool, dict)
-    function = tool["function"]
-    assert function["name"] == "mmm_submit_argument_page"
-    page_properties = function["parameters"]["properties"]
+def _valid_page_response(request: GenerationRequest) -> GenerationResponse:
+    assert request.response_format == "json"
+    assert isinstance(request.response_schema, dict)
+    assert request.tools == ()
+    assert request.tool_validation_schemas == ()
+    assert request.tool_choice is None
+    page_properties = request.response_schema["properties"]
     assert len(page_properties) <= 4
     return GenerationResponse(
-        tool_calls=(
-            ToolCall(
-                id=call_id,
-                name="mmm_submit_argument_page",
-                arguments={name: f"value-{name}" for name in page_properties},
-            ),
+        content=json.dumps(
+            {name: f"value-{name}" for name in page_properties},
+            sort_keys=True,
         )
     )
 
@@ -85,13 +81,13 @@ def test_legacy_raw_json_argument_recovery_helpers_are_removed() -> None:
     assert not hasattr(forced, "_argument_failure")
 
 
-def test_large_host_owned_argument_container_is_decomposed_without_raw_json_turns() -> None:
+def test_large_host_owned_argument_container_is_decomposed_into_bounded_json_pages() -> None:
     request = _large_request("large_host_action")
     observed: list[GenerationRequest] = []
 
     def current(_adapter: object, page_request: GenerationRequest) -> GenerationResponse:
         observed.append(page_request)
-        return _valid_page_response(page_request, call_id=f"page-{len(observed)}")
+        return _valid_page_response(page_request)
 
     response = forced.host_selected_argument_turn(
         current,
@@ -106,17 +102,18 @@ def test_large_host_owned_argument_container_is_decomposed_without_raw_json_turn
     assert response.tool_calls[0].arguments == {
         f"field_{index}": f"value-field_{index}" for index in range(12)
     }
-    assert all(turn.response_format != "json" for turn in observed)
-    assert all(turn.tools for turn in observed)
+    assert all(turn.response_format == "json" for turn in observed)
+    assert all(isinstance(turn.response_schema, dict) for turn in observed)
+    assert all(turn.tools == () for turn in observed)
 
 
-def test_mutation_recovery_uses_the_same_native_atomic_pages() -> None:
+def test_mutation_recovery_uses_the_same_bounded_argument_only_json_pages() -> None:
     request = _large_request("apply_source_edit", field_count=9)
     observed: list[GenerationRequest] = []
 
     def current(_adapter: object, page_request: GenerationRequest) -> GenerationResponse:
         observed.append(page_request)
-        return _valid_page_response(page_request, call_id=f"mutation-page-{len(observed)}")
+        return _valid_page_response(page_request)
 
     response = forced.host_selected_mutation_turn(
         current,
@@ -128,20 +125,20 @@ def test_mutation_recovery_uses_the_same_native_atomic_pages() -> None:
     assert len(observed) == 3
     assert response.tool_calls[0].name == "apply_source_edit"
     assert response.tool_calls[0].id.startswith("host_mutation_")
-    assert all(turn.response_format == "text" for turn in observed)
-    assert all(turn.response_schema is None for turn in observed)
-    assert all(turn.tools for turn in observed)
+    assert all(turn.response_format == "json" for turn in observed)
+    assert all(isinstance(turn.response_schema, dict) for turn in observed)
+    assert all(turn.tools == () for turn in observed)
 
 
-def test_invalid_native_page_repair_never_switches_to_raw_json() -> None:
+def test_invalid_json_page_repair_stays_argument_only_and_schema_bounded() -> None:
     request = _large_request("repairable_action", field_count=4)
     observed: list[GenerationRequest] = []
 
     def current(_adapter: object, page_request: GenerationRequest) -> GenerationResponse:
         observed.append(page_request)
         if len(observed) == 1:
-            return GenerationResponse(content='{"field_0":"raw-json-is-not-accepted"}')
-        return _valid_page_response(page_request, call_id="repaired-page")
+            return GenerationResponse(content="not-json")
+        return _valid_page_response(page_request)
 
     response = forced.host_selected_argument_turn(
         current,
@@ -152,9 +149,10 @@ def test_invalid_native_page_repair_never_switches_to_raw_json() -> None:
 
     assert len(observed) == 2
     assert response.tool_calls[0].name == "repairable_action"
-    assert all(turn.response_format == "text" for turn in observed)
-    assert all(turn.response_schema is None for turn in observed)
-    assert all(turn.tools for turn in observed)
+    assert all(turn.response_format == "json" for turn in observed)
+    assert all(isinstance(turn.response_schema, dict) for turn in observed)
+    assert all(turn.tools == () for turn in observed)
+    assert "Repair the arguments only" in observed[1].messages[-1]["content"]
 
 
 def test_oversized_single_nested_field_fails_closed_before_model_generation() -> None:
