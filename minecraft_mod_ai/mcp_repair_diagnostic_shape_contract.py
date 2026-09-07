@@ -4,9 +4,11 @@ from collections.abc import Mapping
 from functools import wraps
 from typing import Any
 
+from .validation_diagnostic_contract import diagnostic_items
+
 
 def install(repair_batch_module: Any) -> None:
-    """Teach MCP repair enrichment to read JDT-LS v2 URI-grouped diagnostics."""
+    """Teach MCP repair enrichment to consume the canonical diagnostic receipt shape."""
 
     current = repair_batch_module._diagnostic_text
     if getattr(current, "_mmm_jdt_v2_diagnostic_text", False):
@@ -15,22 +17,7 @@ def install(repair_batch_module: Any) -> None:
     @wraps(current)
     def diagnostic_text(evidence: Mapping[str, Any]) -> str:
         parts: list[str] = []
-        receipt = evidence.get("diagnostics", {})
-        raw = receipt.get("diagnostics", {}) if isinstance(receipt, Mapping) else {}
-        if isinstance(raw, Mapping):
-            diagnostics = [
-                item
-                for group in raw.values()
-                if isinstance(group, list)
-                for item in group
-                if isinstance(item, Mapping)
-            ]
-        elif isinstance(raw, list):
-            diagnostics = [item for item in raw if isinstance(item, Mapping)]
-        else:
-            diagnostics = []
-
-        for item in diagnostics:
+        for item in diagnostic_items(evidence.get("diagnostics", {})):
             parts.append(str(item.get("message", "")))
             parts.append(str(item.get("code", "")))
         build = evidence.get("build", {})
