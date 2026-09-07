@@ -84,12 +84,25 @@ def test_exact_validator_rejects_other_source_file_even_inside_allowed_source_tr
         )
 
 
-def test_runtime_installs_exact_scope_and_single_coarse_path_authority() -> None:
+def test_runtime_installs_single_coarse_authority_then_exact_task_scope_narrows_it() -> None:
     assert_installed(
         custom_module_generator_module=custom_module_generator,
         host_grounding_module=host_grounding,
     )
     assert custom_module_generator._agent_mutable_path is host_grounding.custom_module_path_allowed
     assert custom_module_generator._agent_mutable_path("src/main/java/demo/Owned.java") is True
-    assert custom_module_generator._agent_mutable_path("build.gradle") is False
-    assert custom_module_generator._agent_mutable_path(".minecraft_ai/generated/x.json") is False
+    assert custom_module_generator._agent_mutable_path("build.gradle") is True
+    assert custom_module_generator._agent_mutable_path(".minecraft_ai/generated/x.json") is True
+    assert custom_module_generator._agent_mutable_path(".minecraft_ai/research/x.json") is False
+
+    allowed = exact_task_writable_paths(_module())
+    with pytest.raises(RuntimeError, match="TASK_WRITE_SCOPE_ESCAPE"):
+        validate_exact_task_operations(
+            [{"operation": "replace", "path": "build.gradle"}],
+            allowed,
+        )
+    with pytest.raises(RuntimeError, match="TASK_WRITE_SCOPE_ESCAPE"):
+        validate_exact_task_operations(
+            [{"operation": "create", "path": ".minecraft_ai/generated/x.json"}],
+            allowed,
+        )
