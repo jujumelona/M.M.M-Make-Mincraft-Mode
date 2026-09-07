@@ -36,25 +36,29 @@ _ALLOWED_WRITE_PREFIXES = (
     "src/client/resources/",
     "src/test/java/",
     "src/gametest/",
+    ".minecraft_ai/",
 )
-_ALLOWED_WRITE_FILES: tuple[str, ...] = ()
-_PROTECTED_WRITE_PREFIXES = (".minecraft_ai",)
-_REJECTED_WRITE_EXAMPLES = (
-    "README.md",
-    "LICENSE",
-    "docs/",
+_ALLOWED_WRITE_FILES = (
     "build.gradle",
-    "gradle.properties",
+    "build.gradle.kts",
     "settings.gradle",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "gradle/libs.versions.toml",
 )
+_PROTECTED_WRITE_PREFIXES = (
+    ".minecraft_ai/research",
+    ".minecraft_ai/context-observations",
+)
+_REJECTED_WRITE_EXAMPLES = ("README.md", "LICENSE", "docs/", "gradlew")
 
 
 def custom_module_write_scope() -> dict[str, Any]:
-    """Return the coarse custom-coder boundary published before decoding.
+    """Return the coarse dynamic custom-coder boundary published before decoding.
 
-    The task capsule narrows this source-only boundary to exact writable file paths.
-    Build metadata and ``.minecraft_ai`` host state stay read-only for custom feature
-    generation; platform repair has its own separately-scoped contract.
+    Dynamic/legacy generation may need Gradle metadata or generated host-state receipts.
+    Evidence-owned production tasks are further narrowed by the task capsule's exact
+    ``writable_paths`` at the staged transaction boundary.
     """
 
     return {
@@ -63,8 +67,8 @@ def custom_module_write_scope() -> dict[str, Any]:
         "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
         "examples_rejected": list(_REJECTED_WRITE_EXAMPLES),
         "policy": (
-            "This is the coarse custom-coder boundary; the task capsule writable_paths "
-            "is the exact mutation allowlist."
+            "This is the coarse dynamic custom-coder boundary. Evidence-owned tasks are "
+            "additionally restricted to the task capsule exact writable_paths."
         ),
     }
 
@@ -117,9 +121,9 @@ def build_coder_grounding(
     baseline grounding mandatory without duplicating expensive project scans or
     external requests for every production shard.
 
-    The coarse source-only write boundary is published here before the first decode.
-    The host-owned task capsule further narrows it to exact task-owned writable files,
-    so the model never needs to infer mutation ownership from repository structure.
+    The coarse write boundary is published before the first decode. Evidence-owned
+    task capsules then narrow it to exact host-selected files, so a small coder never
+    has to infer mutation ownership from repository structure.
     """
     kind = str(module_kind).strip()
     if not kind:
