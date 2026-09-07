@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import pytest
 
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
-from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet_section
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
