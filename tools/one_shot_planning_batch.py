@@ -1,0 +1,386 @@
+from pathlib import Path
+
+path = Path("minecraft_mod_ai/planning_state_implementation.py")
+source = path.read_text(encoding="utf-8")
+
+
+def replace_once(old: str, new: str) -> None:
+    global source
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f"expected exactly one match, found {count}: {old[:80]!r}")
+    source = source.replace(old, new, 1)
+
+
+replace_once(
+    """The model never authors the plan container, evidence identifiers, or a large JSON/tool
+payload. Host code owns structure and validation; the small model writes one bounded
+plain-text engineering section at a time.""",
+    """The model never authors the plan container, evidence identifiers, or a large JSON/tool
+payload. Host code owns structure and validation. The normal path asks the small model
+for all host-selected sections of one requirement in one bounded, delimiter-framed
+response; malformed or missing sections are repaired individually.""",
+)
+replace_once(
+    "from copy import deepcopy\nfrom typing import Any\n",
+    "from copy import deepcopy\nimport re\nfrom typing import Any\n",
+)
+replace_once(
+    "from .planning_state_contract import validate_planning_state\n\n\n",
+    '''from .planning_state_contract import validate_planning_state
+
+
+_BATCH_SECTION_RE = re.compile(
+    r"<<<SECTION:([a-z_]+)>>>\\s*(.*?)\\s*<<<END_SECTION>>>",
+    re.DOTALL,
+)
+_BATCH_TOKENS_PER_SECTION = 180
+_BATCH_MIN_TOKENS = 900
+_BATCH_MAX_TOKENS = 2200
+
+
+''',
+)
+replace_once(
+    "def _plain_section(\n",
+    '''def _normalize_section_text(raw: Any, section: str) -> str:
+    value = str(raw or "").strip()
+    if value.startswith("```"):
+        value = value.strip("`").strip()
+    if value.lstrip().startswith(("{", "[")):
+        raise ValueError(
+            f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
+        )
+    value = _text(value)
+    if len(value) < 24:
+        raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
+    return value
+
+
+def _plain_section(
+''',
+)
+replace_once(
+    '''    value = str(raw or "").strip()
+    if value.startswith("```"):
+        value = value.strip("`").strip()
+    if value.lstrip().startswith(("{", "[")):
+        raise ValueError(
+            f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
+        )
+    value = _text(value)
+    if len(value) < 24:
+        raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
+    return value
+
+
+''',
+    '''    return _normalize_section_text(raw, section)
+
+
+''',
+)
+
+batch_helpers = '''def _batch_output_tokens(section_count: int) -> int:
+    return min(
+        _BATCH_MAX_TOKENS,
+        max(_BATCH_MIN_TOKENS, section_count * _BATCH_TOKENS_PER_SECTION),
+    )
+
+
+def _batch_prompt(
+    requirement: Mapping[str, Any],
+    selected_sections: tuple[str, ...],
+    evidence: list[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    section_instructions = "\\n".join(
+        f"- {section}: {DETAIL_FIELDS[section]} Explicitly cover: "
+        + "; ".join(DETAIL_SLOT_GUIDANCE[section])
+        for section in selected_sections
+    )
+    output_skeleton = "\\n".join(
+        (
+            f"<<<SECTION:{section}>>>\\n"
+            "<write 2-5 concise implementation sentences here>\\n"
+            "<<<END_SECTION>>>"
+        )
+        for section in selected_sections
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Write a bounded engineering design for exactly one requirement. The host owns all structure "
+                "and provenance. Fill every requested section independently. Do not invent API names, symbols, "
+                "versions, dependencies, repository paths, source facts, or evidence identifiers. Keep target "
+                "details abstract when research has not established them. Return only the requested delimiter "
+                "blocks in the same order. Inside each block write plain prose only: no JSON, YAML, XML, code "
+                "fence, object keys, or extra headings."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Requirement: {_text(requirement.get('statement'))}\\n"
+                "Grounded research context (context only; do not emit evidence IDs):\\n"
+                f"{_evidence_context(evidence)}\\n\\n"
+                "Section-specific requirements:\\n"
+                f"{section_instructions}\\n\\n"
+                "Return this exact block structure in this exact order. Replace each angle-bracketed "
+                "placeholder with the section prose and preserve every delimiter exactly:\\n"
+                f"{output_skeleton}"
+            ),
+        },
+    ]
+
+
+def _parse_batch_sections(
+    raw: Any,
+    selected_sections: tuple[str, ...],
+) -> dict[str, str]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+
+    allowed = set(selected_sections)
+    matches: dict[str, list[str]] = {}
+    for match in _BATCH_SECTION_RE.finditer(text):
+        section = match.group(1)
+        if section in allowed:
+            matches.setdefault(section, []).append(match.group(2))
+
+    parsed: dict[str, str] = {}
+    for section in selected_sections:
+        values = matches.get(section, [])
+        if len(values) != 1:
+            continue
+        try:
+            parsed[section] = _normalize_section_text(values[0], section)
+        except ValueError:
+            continue
+    return parsed
+
+
+def _batch_plain_sections(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    selected_sections: tuple[str, ...],
+    evidence: list[Mapping[str, Any]],
+) -> dict[str, str]:
+    messages = _batch_prompt(requirement, selected_sections, evidence)
+    with planner_operation(
+        "detailed_requirement_batch",
+        output_tokens=_batch_output_tokens(len(selected_sections)),
+    ):
+        raw = router.generate_text(
+            "planner",
+            messages,
+            response_format="text",
+            enable_tools=False,
+        )
+    return _parse_batch_sections(raw, selected_sections)
+
+
+def _compile_requirement_specifications(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    selected_sections: tuple[str, ...],
+    evidence: list[Mapping[str, Any]],
+) -> dict[str, str]:
+    try:
+        specifications = _batch_plain_sections(
+            router,
+            requirement=requirement,
+            selected_sections=selected_sections,
+            evidence=evidence,
+        )
+    except Exception:
+        specifications = {}
+
+    seen: set[str] = set()
+    repair: list[str] = []
+    for section in selected_sections:
+        specification = specifications.get(section)
+        normalized = _text(specification).casefold() if specification else ""
+        if not normalized or normalized in seen:
+            repair.append(section)
+            continue
+        seen.add(normalized)
+
+    for section in repair:
+        specifications[section] = _plain_section(
+            router,
+            requirement=requirement,
+            section=section,
+            evidence=evidence,
+        )
+    return {section: specifications[section] for section in selected_sections}
+
+
+'''
+replace_once(
+    "def _host_derived_capabilities(",
+    batch_helpers + "def _host_derived_capabilities(",
+)
+replace_once(
+    '''    specifications = {
+        section: _plain_section(
+            router,
+            requirement=requirement,
+            section=section,
+            evidence=evidence,
+        )
+        for section in selected_sections
+    }
+''',
+    '''    specifications = _compile_requirement_specifications(
+        router,
+        requirement=requirement,
+        selected_sections=selected_sections,
+        evidence=evidence,
+    )
+''',
+)
+
+start = source.index("def _compile_requirement_plans_parallel(")
+end = source.index("\n\ndef _host_section_selection(", start)
+replacement = '''def _compile_requirement_plans_parallel(
+    router: Any,
+    state: Mapping[str, Any],
+    requirements: list[Mapping[str, Any]],
+    section_selection: Mapping[str, tuple[str, ...]],
+    *,
+    workers: int,
+) -> list[dict[str, Any]]:
+    """Use one bounded pool across independent requirement batches."""
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
+        futures = [
+            pool.submit(
+                _compile_requirement_plan,
+                router,
+                state,
+                requirement,
+                section_selection[_text(requirement.get("requirement_id"))],
+            )
+            for requirement in requirements
+        ]
+        return [future.result() for future in futures]
+'''
+source = source[:start] + replacement + source[end:]
+replace_once(
+    '''    total_sections = sum(len(section_selection[str(item.get("requirement_id") or "")]) for item in requirements)
+    workers = min(total_sections, router_native_model_parallelism(router))
+''',
+    '''    workers = min(len(requirements), router_native_model_parallelism(router))
+''',
+)
+
+path.write_text(source, encoding="utf-8")
+
+test = Path("tests/test_planning_detail_requirement_batching.py")
+test.write_text('''from __future__ import annotations
+
+from minecraft_mod_ai import planning_state_implementation as implementation
+
+
+SECTIONS = ("behavior_contract", "state_model")
+REQUIREMENT = {
+    "requirement_id": "req_001",
+    "statement": "A player can exchange collected resources through a bounded economy loop.",
+}
+EVIDENCE = [
+    {
+        "research_ref": "research_001",
+        "claims": ["The implementation boundary is grounded for this test."],
+        "evidence_refs": ["evidence_001"],
+        "sufficient": True,
+        "source": "fixture",
+    }
+]
+
+
+def _block(section: str, text: str) -> str:
+    return f"<<<SECTION:{section}>>>\\n{text}\\n<<<END_SECTION>>>"
+
+
+class _Router:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def generate_text(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def test_requirement_details_use_one_model_call_when_batch_is_complete():
+    router = _Router([
+        "\\n".join(
+            (
+                _block(
+                    "behavior_contract",
+                    "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result.",
+                ),
+                _block(
+                    "state_model",
+                    "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
+                ),
+            )
+        )
+    ])
+
+    result = implementation._compile_requirement_specifications(
+        router,
+        requirement=REQUIREMENT,
+        selected_sections=SECTIONS,
+        evidence=EVIDENCE,
+    )
+
+    assert list(result) == list(SECTIONS)
+    assert len(router.calls) == 1
+
+
+def test_requirement_details_repair_only_missing_batch_section():
+    router = _Router([
+        _block(
+            "behavior_contract",
+            "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result.",
+        ),
+        "The state owner validates every mutation, keeps values bounded, and resets transient state on lifecycle cleanup.",
+    ])
+
+    result = implementation._compile_requirement_specifications(
+        router,
+        requirement=REQUIREMENT,
+        selected_sections=SECTIONS,
+        evidence=EVIDENCE,
+    )
+
+    assert result["behavior_contract"].startswith("The server owns")
+    assert result["state_model"].startswith("The state owner")
+    assert len(router.calls) == 2
+
+
+def test_requirement_details_fall_back_to_single_sections_when_batch_fails():
+    router = _Router([
+        RuntimeError("batch transport failure"),
+        "The server validates the interaction inputs, applies one bounded mutation, and exposes success or rejection to the player.",
+        "The authoritative state owner stores bounded values, applies guarded transitions, and performs deterministic lifecycle cleanup.",
+    ])
+
+    result = implementation._compile_requirement_specifications(
+        router,
+        requirement=REQUIREMENT,
+        selected_sections=SECTIONS,
+        evidence=EVIDENCE,
+    )
+
+    assert list(result) == list(SECTIONS)
+    assert len(router.calls) == 3
+''', encoding="utf-8")
