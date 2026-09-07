@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import threading
-
 import pytest
 
 from minecraft_mod_ai import planning_state_implementation as planning_impl
@@ -58,7 +56,9 @@ def test_host_selection_rejects_model_shaped_non_mapping_payload() -> None:
         _host_section_selection(_requirements(), [CORE_WORKSHEET_SECTIONS])
 
 
-def test_single_requirement_detail_slots_use_native_parallel_capacity(monkeypatch) -> None:
+def test_single_requirement_uses_one_requirement_batch_even_with_parallel_capacity(
+    monkeypatch,
+) -> None:
     requirement = {
         "requirement_id": "REQ-1",
         "statement": "Persist the approved gameplay state safely.",
@@ -81,26 +81,30 @@ def test_single_requirement_detail_slots_use_native_parallel_capacity(monkeypatc
             }
         ],
     }
-    barrier = threading.Barrier(2)
-    lock = threading.Lock()
-    call_count = 0
-    worker_threads: set[int] = set()
+    batch_calls: list[tuple[str, ...]] = []
 
-    def fake_plain_section(_router, *, requirement, section, evidence):
-        nonlocal call_count
+    def fake_batch_plain_sections(
+        _router,
+        *,
+        requirement,
+        selected_sections,
+        evidence,
+    ):
         del requirement, evidence
-        with lock:
-            index = call_count
-            call_count += 1
-            worker_threads.add(threading.get_ident())
-        if index < 2:
-            barrier.wait(timeout=2)
-        return (
-            f"{section} defines one concrete authoritative behavior with bounded failure "
-            "handling and an observable verification outcome for the approved requirement."
-        )
+        batch_calls.append(selected_sections)
+        return {
+            section: (
+                f"{section} defines one concrete authoritative behavior with bounded failure "
+                "handling and an observable verification outcome for the approved requirement."
+            )
+            for section in selected_sections
+        }
 
-    monkeypatch.setattr(planning_impl, "_plain_section", fake_plain_section)
+    monkeypatch.setattr(
+        planning_impl,
+        "_batch_plain_sections",
+        fake_batch_plain_sections,
+    )
     plans = planning_impl._compile_requirement_plans_parallel(
         object(),
         state,
@@ -110,6 +114,5 @@ def test_single_requirement_detail_slots_use_native_parallel_capacity(monkeypatc
     )
 
     assert len(plans) == 1
-    assert call_count == len(CORE_WORKSHEET_SECTIONS)
-    assert len(worker_threads) >= 2
+    assert batch_calls == [CORE_WORKSHEET_SECTIONS]
     assert tuple(plans[0]["engineering_worksheet"]) == CORE_WORKSHEET_SECTIONS
