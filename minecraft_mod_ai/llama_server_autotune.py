@@ -20,7 +20,7 @@ _MANAGED_PROCESS: subprocess.Popen[bytes] | None = None
 _MANAGED_URL: str | None = None
 _MANAGED_KEY: str | None = None
 _ATTEMPTED_KEYS: set[str] = set()
-_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v3-native-fit"
+_BENCHMARK_SCHEMA_VERSION = "mmm/llama-server-autotune-v4-max-gpu"
 _BENCHMARK_OUTPUT_TOKENS = 96
 
 
@@ -351,9 +351,8 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
     ubatch = _env_optional_int("MMM_LLAMA_UBATCH")
     kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()
 
-    # Resource ownership belongs to llama.cpp.  -1 selects native automatic slot
-    # sizing and --fit lets llama-server fit model/context placement to live device
-    # memory.  MMM adds resource flags only when the user explicitly overrides them.
+    # Keep throughput-critical CUDA paths at their maximum setting.  llama-server
+    # still owns slot/context/batch sizing through native auto + --fit.
     args = [
         binary,
         "-m",
@@ -365,6 +364,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         "--parallel",
         str(parallel if parallel is not None else -1),
         "--fit",
+        "on",
+        "--gpu-layers",
+        "all",
+        "--flash-attn",
         "on",
         "--load-mode",
         "none",
@@ -402,6 +405,8 @@ def _variant_args(variant: ServerVariant) -> list[str]:
         variant.spec_type,
         "--spec-draft-n-max",
         str(variant.draft_n_max),
+        "--spec-draft-ngl",
+        "all",
     ]
 
 
