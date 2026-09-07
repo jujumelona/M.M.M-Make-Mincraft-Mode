@@ -20,7 +20,13 @@ def test_output_continuation_carries_preserved_source_state() -> None:
     module = ProductionModule(
         module_id="example_block",
         kind="block",
-        config={"implementation": "custom"},
+        config={
+            "implementation": "custom",
+            "evidence_task": {
+                "task_id": "example_block",
+                "semantic_outcome": "Implement the approved example block continuation contract.",
+            },
+        },
     )
     messages = _output_exhaustion_continuation_messages(
         module=module,
