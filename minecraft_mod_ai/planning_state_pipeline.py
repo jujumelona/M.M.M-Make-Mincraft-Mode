@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-"""Single prompt-first planning state machine.
+"""Single prompt-first planning state machine with durable transition snapshots.
 
 No requirement catalog, implementation plan, or retrieval query exists before the
-preceding state is available. Every blocked stage is surfaced before a downstream stage
-can overwrite its root cause with a secondary invariant failure.
+preceding state is available. Every transition persists its complete input/output state
+as a trace artifact, so a downstream failure cannot erase the state that caused it.
 """
 
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any, TypeVar
 
+from .planner_trace_artifacts import repository_revision
 from .planning_detail_applicability import (
     apply_host_detail_section_applicability,
     ensure_host_detail_section_applicability,
@@ -20,21 +21,97 @@ from .planning_state_contract import build_initial_planning_state, validate_plan
 from .planning_state_implementation import compile_detailed_implementation_plans
 from .planning_state_research import collect_planning_state_research
 from .planning_state_resolution import compile_researched_requirements
-from .root_cause_trace import traced_callable
+from .root_cause_trace import emit_root_cause, traced_callable
 
 _T = TypeVar("_T")
 DetailSectionApplicabilityResolver = Callable[
     [tuple[str, ...]],
     Mapping[str, Mapping[str, str]],
 ]
+_STATE_COLLECTIONS = (
+    "known",
+    "references",
+    "unresolved",
+    "research_queue",
+    "evidence",
+    "resolved",
+    "decisions",
+    "implementation_candidates",
+    "coverage",
+    "blockers",
+)
 
 
-def _transition(operation: str, callback: Callable[[], _T]) -> _T:
-    return traced_callable(
+def _state_summary(state: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "state_sha256": str(state.get("state_sha256") or ""),
+        "plan_ready": state.get("plan_ready"),
+        "counts": {
+            key: len(value) if isinstance((value := state.get(key)), list) else None
+            for key in _STATE_COLLECTIONS
+        },
+    }
+
+
+def _trace_state_snapshot(
+    event: str,
+    operation: str,
+    state: Mapping[str, Any],
+    *,
+    result: str = "SNAPSHOT",
+    reason: str = "",
+) -> None:
+    """Persist the complete state in an unabridged trace artifact.
+
+    ``emit_root_cause`` keeps the console/journal representation bounded but writes its
+    original ``details`` object through ``save_trace_artifact`` before bounding it. That
+    gives every transition a durable full-state artifact without flooding stderr.
+    """
+    emit_root_cause(
+        event,
+        stage="planning_state",
+        operation=operation,
+        result=result,
+        reason=reason,
+        details={
+            **_state_summary(state),
+            "state": deepcopy(dict(state)),
+        },
+    )
+
+
+def _transition(
+    operation: str,
+    callback: Callable[[], _T],
+    *,
+    input_state: Mapping[str, Any] | None = None,
+) -> _T:
+    if input_state is not None:
+        _trace_state_snapshot(
+            "planning_state_transition_input",
+            operation,
+            input_state,
+        )
+    value = traced_callable(
         callback,
         stage="planning_state",
         operation=operation,
     )()
+    if isinstance(value, Mapping):
+        _trace_state_snapshot(
+            "planning_state_transition_output",
+            operation,
+            value,
+        )
+    else:
+        emit_root_cause(
+            "planning_state_transition_output",
+            stage="planning_state",
+            operation=operation,
+            result="SNAPSHOT",
+            details={"value": value},
+        )
+    return value
 
 
 def _requirements_exist(state: Mapping[str, Any]) -> bool:
@@ -128,6 +205,17 @@ def _block_summary(state: Mapping[str, Any], *, stage: str) -> str:
     )
 
 
+def _raise_blocked(state: Mapping[str, Any], *, operation: str, message: str) -> None:
+    _trace_state_snapshot(
+        "planning_state_blocked",
+        operation,
+        state,
+        result="FAIL",
+        reason=message,
+    )
+    raise ValueError(message)
+
+
 def prepare_planning_state(
     router: Any,
     prompt: str,
@@ -145,6 +233,19 @@ def prepare_planning_state(
     full fail-safe worksheet branch.
     """
 
+    emit_root_cause(
+        "planning_state_runtime_identity",
+        stage="planning_state",
+        operation="prepare_planning_state",
+        result="START",
+        details={
+            **repository_revision(),
+            "module_file": __file__,
+            "restored_state": existing_state is not None,
+            "trace_metadata": dict(trace_metadata or {}),
+        },
+    )
+
     state = _transition(
         "bootstrap_or_restore",
         lambda: (
@@ -152,8 +253,16 @@ def prepare_planning_state(
             if existing_state is not None
             else build_initial_planning_state(router, prompt)
         ),
+        input_state=existing_state,
     )
-    _transition("validate_initial", lambda: validate_planning_state(state, prompt=prompt))
+    # Fresh states are already validated inside build_initial_planning_state(). Only a
+    # restored checkpoint needs another entry-boundary validation here.
+    if existing_state is not None:
+        _transition(
+            "validate_restored_state",
+            lambda: validate_planning_state(state, prompt=prompt),
+            input_state=state,
+        )
     if state.get("plan_ready") is True:
         return state
     if checkpoint is not None:
@@ -169,6 +278,7 @@ def prepare_planning_state(
                     state,
                     trace_metadata=trace_metadata,
                 ),
+                input_state=state,
             )
             if checkpoint is not None:
                 checkpoint(deepcopy(state))
@@ -176,25 +286,32 @@ def prepare_planning_state(
         state = _transition(
             "compile_researched_requirements",
             lambda: compile_researched_requirements(router, prompt, state),
+            input_state=state,
         )
         if checkpoint is not None:
             checkpoint(deepcopy(state))
 
         if not _requirements_exist(state):
-            raise ValueError(
-                "PLANNING_REQUIREMENT_SELECTION_BLOCKED: "
-                + _block_summary(state, stage="requirement_selection")
+            _raise_blocked(
+                state,
+                operation="requirement_selection",
+                message=(
+                    "PLANNING_REQUIREMENT_SELECTION_BLOCKED: "
+                    + _block_summary(state, stage="requirement_selection")
+                ),
             )
 
     if detail_section_applicability_resolver is None:
         state = _transition(
             "normalize_detail_section_applicability",
             lambda: ensure_host_detail_section_applicability(state),
+            input_state=state,
         )
     else:
         applicability_by_requirement = _transition(
             "resolve_detail_section_applicability",
             lambda: detail_section_applicability_resolver(_requirement_ids(state)),
+            input_state=state,
         )
         state = _transition(
             "apply_detail_section_applicability",
@@ -202,6 +319,7 @@ def prepare_planning_state(
                 state,
                 applicability_by_requirement,
             ),
+            input_state=state,
         )
     if checkpoint is not None:
         checkpoint(deepcopy(state))
@@ -214,22 +332,27 @@ def prepare_planning_state(
             state,
             trace_metadata=trace_metadata,
         ),
+        input_state=state,
     )
     if checkpoint is not None:
         checkpoint(deepcopy(state))
 
-    # Do not descend into detailed planning while implementation evidence is blocked.
-    # That would replace provider/source diagnostics with a secondary DETAILED_PLAN_*
-    # invariant and recreate the original failure pattern one stage later.
+    # Stop on the actual research blocker and persist the complete blocked state before
+    # any detailed-plan invariant can replace the first cause.
     if _stage_unknowns(state, "implementation_plan"):
-        raise ValueError(
-            "PLANNING_IMPLEMENTATION_RESEARCH_BLOCKED: "
-            + _block_summary(state, stage="implementation_plan")
+        _raise_blocked(
+            state,
+            operation="implementation_plan",
+            message=(
+                "PLANNING_IMPLEMENTATION_RESEARCH_BLOCKED: "
+                + _block_summary(state, stage="implementation_plan")
+            ),
         )
 
     section_selection = _transition(
         "select_detail_sections",
         lambda: required_sections_by_requirement(state),
+        input_state=state,
     )
     state = _transition(
         "compile_detailed_implementation_plans",
@@ -239,11 +362,18 @@ def prepare_planning_state(
             state,
             required_sections_by_requirement=section_selection,
         ),
+        input_state=state,
     )
-    _transition("validate_final", lambda: validate_planning_state(state, prompt=prompt))
+    _transition(
+        "validate_final",
+        lambda: validate_planning_state(state, prompt=prompt),
+        input_state=state,
+    )
     if state.get("plan_ready") is not True:
-        raise ValueError(
-            "PLANNING_STATE_NOT_READY: planning state did not reach code-ready coverage"
+        _raise_blocked(
+            state,
+            operation="final_readiness",
+            message="PLANNING_STATE_NOT_READY: planning state did not reach code-ready coverage",
         )
     if checkpoint is not None:
         checkpoint(deepcopy(state))
