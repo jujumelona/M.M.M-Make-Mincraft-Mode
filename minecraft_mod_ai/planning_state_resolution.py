@@ -12,10 +12,17 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from .minecraft_template_catalog import (
+    CUSTOM_CAPABILITY_SENTINEL,
+    capability_catalog_for_model,
+    semantic_capability_choices,
+)
 from .planner_operation import planner_operation
 from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
+_SEMANTIC_CAPABILITY_CHOICES = semantic_capability_choices()
+_SEMANTIC_CAPABILITY_CHOICE_SET = frozenset(_SEMANTIC_CAPABILITY_CHOICES)
 _REQUIREMENT_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -26,11 +33,21 @@ _REQUIREMENT_PARAMETERS: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "statement": {"type": "string"},
+                    "semantic_capability": {
+                        "type": "string",
+                        "enum": list(_SEMANTIC_CAPABILITY_CHOICES),
+                    },
                     "prompt_refs": {"type": "array", "items": {"type": "string"}},
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                     "acceptance": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["statement", "prompt_refs", "evidence_refs", "acceptance"],
+                "required": [
+                    "statement",
+                    "semantic_capability",
+                    "prompt_refs",
+                    "evidence_refs",
+                    "acceptance",
+                ],
                 "additionalProperties": False,
             },
         }
@@ -168,16 +185,28 @@ def compile_researched_requirements(
                 "Compile independently testable, player-visible requirements from only the "
                 "supplied canonical task state. Do not reinterpret the raw request and do not "
                 "invent Minecraft APIs, files, classes, registrations, or implementation "
-                "architecture. Cite prompt provenance structurally with prompt_refs: use 'goal' "
-                "or known_id values present in the supplied state. Cite grounded external facts "
-                "with evidence_refs. Every requirement needs at least one prompt_ref or evidence_ref. "
-                "For reference-driven requirements, use only grounded reference evidence inside the "
-                "resolved scope. Missing balance values or detailed mechanics are later design work, "
-                "not a reason to omit an authored behavior requirement. Return behavior requirements "
-                "and acceptance observations only."
+                "architecture. For each requirement select exactly one semantic_capability from "
+                "the supplied host capability catalog; never invent or paraphrase capability IDs, "
+                f"and use '{CUSTOM_CAPABILITY_SENTINEL}' only when no listed capability accurately "
+                "describes the behavior. Cite prompt provenance structurally with prompt_refs: use "
+                "'goal' or known_id values present in the supplied state. Cite grounded external "
+                "facts with evidence_refs. Every requirement needs at least one prompt_ref or "
+                "evidence_ref. For reference-driven requirements, use only grounded reference "
+                "evidence inside the resolved scope. Missing balance values or detailed mechanics "
+                "are later design work, not a reason to omit an authored behavior requirement. "
+                "Return behavior requirements and acceptance observations only."
             ),
         },
-        {"role": "user", "content": str(_resolved_context(state))},
+        {
+            "role": "user",
+            "content": str(
+                {
+                    "task_state": _resolved_context(state),
+                    "semantic_capability_catalog": capability_catalog_for_model(),
+                    "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
+                }
+            ),
+        },
     ]
     with planner_operation("researched_requirement_compile", output_tokens=2048):
         raw = router.generate_tool_decision(
@@ -203,12 +232,18 @@ def compile_researched_requirements(
         if not isinstance(item, Mapping):
             raise ValueError("PLANNING_REQUIREMENT_SHAPE: requirement must be an object")
         statement = _text(item.get("statement"))
+        semantic_capability = _text(item.get("semantic_capability")).casefold()
         prompt_refs = _strings(item.get("prompt_refs"))
         evidence_refs = _strings(item.get("evidence_refs"))
         acceptance = _strings(item.get("acceptance"))
         if not statement or not acceptance:
             raise ValueError(
                 "PLANNING_REQUIREMENT_CONTENT: statement and acceptance are required"
+            )
+        if semantic_capability not in _SEMANTIC_CAPABILITY_CHOICE_SET:
+            raise ValueError(
+                "PLANNING_REQUIREMENT_CAPABILITY: unknown semantic capability: "
+                + (semantic_capability or "<empty>")
             )
         invalid_prompt = [ref for ref in prompt_refs if ref not in allowed_prompt]
         if invalid_prompt:
@@ -230,6 +265,7 @@ def compile_researched_requirements(
             {
                 "requirement_id": f"req_{index:03d}",
                 "statement": statement,
+                "semantic_capability": semantic_capability,
                 "prompt_refs": prompt_refs,
                 "evidence_refs": evidence_refs,
                 "acceptance": acceptance,
