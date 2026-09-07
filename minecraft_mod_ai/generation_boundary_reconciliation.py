@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Game design is host-owned and deterministic. Runtime finalization installs the final
 host-side generation wrappers here so stale imported callables cannot bypass approval
-or resource-asset preflight contracts.
+or generation preflight contracts.
 """
 
 import json
@@ -106,6 +106,34 @@ def _install_resource_asset_preflight(
         wrap_generate(orchestrator_module)
 
 
+def _install_geckolib_project_preflight(geckolib_module: Any) -> None:
+    """Validate late-known project invariants at GeckoLib's last pre-write boundary."""
+
+    from .geckolib_generation_contract import (
+        GeckoLibGenerationContractError,
+        validate_geckolib_project_preflight,
+    )
+
+    original_inspect = geckolib_module.inspect_fabric_project
+    if getattr(original_inspect, "_mmm_geckolib_generation_preflight", False):
+        return
+
+    @wraps(original_inspect)
+    def inspect_fabric_project(project_root: str | Path):
+        info = original_inspect(project_root)
+        try:
+            validate_geckolib_project_preflight(info)
+        except GeckoLibGenerationContractError as exc:
+            raise geckolib_module.GeckoLibGenerationError(
+                f"GeckoLib generation preflight failed: {exc}"
+            ) from exc
+        return info
+
+    inspect_fabric_project._mmm_geckolib_generation_preflight = True
+    inspect_fabric_project.__wrapped__ = original_inspect
+    geckolib_module.inspect_fabric_project = inspect_fabric_project
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -113,12 +141,13 @@ def install() -> None:
 
     from . import complete_orchestrator
     from . import fabric_official_template_provider as fabric_provider
-    from . import resource_asset_production
+    from . import geckolib_generator, resource_asset_production
 
     _install_resource_asset_preflight(
         resource_asset_production,
         orchestrator_module=complete_orchestrator,
     )
+    _install_geckolib_project_preflight(geckolib_generator)
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):
