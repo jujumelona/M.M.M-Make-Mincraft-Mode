@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from minecraft_mod_ai import acceptance_contracts, production_contract
@@ -17,6 +19,29 @@ def test_runtime_public_acceptance_policy_has_one_owner() -> None:
         )
         == acceptance_contracts.CANONICAL_ACCEPTANCE_OWNER
     )
+
+
+def test_acceptance_policy_has_no_secondary_source_definition() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    owner = package_root / "acceptance_contracts.py"
+    forbidden = (
+        "PUBLIC_ACCEPTANCE_INTERNAL_MARKERS =",
+        "def validate_public_acceptance(",
+        "def validate_runtime_public_acceptance(",
+        "def is_public_acceptance(",
+        "def _is_public_acceptance(",
+        "exposes multiple public acceptance contracts",
+    )
+
+    for path in package_root.rglob("*.py"):
+        if path == owner:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in text, (
+                f"acceptance policy must be owned only by {owner.name}; "
+                f"secondary definition {marker!r} found in {path.relative_to(package_root)}"
+            )
 
 
 @pytest.mark.parametrize("count", [2, 3, 4, 5, 16])
