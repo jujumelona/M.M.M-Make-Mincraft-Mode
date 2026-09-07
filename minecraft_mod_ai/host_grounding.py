@@ -32,6 +32,8 @@ _KIND_SKILL: dict[str, str] = {
 _ALLOWED_WRITE_PREFIXES = (
     "src/main/java/",
     "src/main/resources/",
+    "src/client/java/",
+    "src/client/resources/",
     "src/test/java/",
     "src/gametest/",
 )

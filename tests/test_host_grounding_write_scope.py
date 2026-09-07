@@ -36,6 +36,8 @@ def test_coder_grounding_publishes_source_only_outer_write_scope(monkeypatch) ->
     assert scope["allowed_prefixes"] == [
         "src/main/java/",
         "src/main/resources/",
+        "src/client/java/",
+        "src/client/resources/",
         "src/test/java/",
         "src/gametest/",
     ]
@@ -50,6 +52,8 @@ def test_custom_module_path_policy_keeps_build_and_host_state_read_only() -> Non
     for path in (
         "src/main/java/example/Feature.java",
         "src/main/resources/fabric.mod.json",
+        "src/client/java/example/FeatureScreen.java",
+        "src/client/resources/assets/example/lang/en_us.json",
         "src/test/java/example/FeatureTest.java",
         "src/gametest/resources/test.snbt",
     ):
