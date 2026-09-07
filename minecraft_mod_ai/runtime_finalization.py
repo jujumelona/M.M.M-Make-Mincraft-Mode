@@ -33,10 +33,12 @@ def finalize_runtime() -> None:
             complete_orchestrator,
             complete_orchestrator_support,
             complete_spec,
+            custom_module_generator,
             execution_feedback_replan_contract,
             external_agent_bridge,
             external_mcp_router,
             external_procedural_skill_contract,
+            host_grounding,
             llama_server_autotune,
             llama_server_runtime_tuning,
             mcp_transport_pool,
@@ -96,6 +98,8 @@ def finalize_runtime() -> None:
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
         from .small_model_task_capsule_contract import install as install_small_model_task_capsule
+        from .small_model_write_scope_enforcement import assert_installed as assert_small_model_write_scope
+        from .small_model_write_scope_enforcement import install as install_small_model_write_scope
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
@@ -104,39 +108,24 @@ def finalize_runtime() -> None:
         from .work_graph_receipt_integrity_contract import install as install_work_graph_receipt_integrity
 
         install_agent_mcp_transport_pool()
-        install_mcp_schema_integrity(
-            agent_tool_runtime,
-            external_agent_bridge,
-            external_mcp_router,
-        )
+        install_mcp_schema_integrity(agent_tool_runtime, external_agent_bridge, external_mcp_router)
         install_external_mcp_binding(external_agent_bridge, external_mcp_router)
         install_external_mcp_binding_concurrency(external_agent_bridge)
-        install_runtime_hot_paths(
-            mcp_transport_pool_module=mcp_transport_pool,
-            external_mcp_router_module=external_mcp_router,
-            research_rag_performance_module=research_rag_performance,
-        )
+        install_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         install_mcp_child_trace(mcp_transport_pool)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         install_procedural_skill_identity(external_procedural_skill_contract)
-        install_tool_schema_ownership(
-            agent_tool_runtime,
-            expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
-        )
+        install_tool_schema_ownership(agent_tool_runtime, expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA})
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
         install_planir_mutation_authority(progress_aware_tool_loop)
         install_retrieval_residency(model_router_module=model_router)
 
-        retrieval_cpu_budget_contract._install_live_hybrid_budget(
-            small_model_hybrid_search_contract
-        )
+        retrieval_cpu_budget_contract._install_live_hybrid_budget(small_model_hybrid_search_contract)
         retrieval_cpu_budget_contract._install_production_tool_budget(production_tools)
         if not retrieval_cpu_budget_contract._dense_opted_in():
-            repository_grounding._explore_with_degraded_fallback = (
-                retrieval_cpu_budget_contract._lexical_repository_exploration
-            )
+            repository_grounding._explore_with_degraded_fallback = retrieval_cpu_budget_contract._lexical_repository_exploration
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
@@ -156,18 +145,10 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        install_implementation_kind_boundary(
-            complete_spec_module=complete_spec,
-            support_module=complete_orchestrator_support,
-            orchestrator_module=complete_orchestrator,
-            template_module=planner_template_schema,
-        )
+        install_implementation_kind_boundary(complete_spec_module=complete_spec, support_module=complete_orchestrator_support, orchestrator_module=complete_orchestrator, template_module=planner_template_schema)
         install_execution_feedback_exception_scope(execution_feedback_replan_contract)
         install_execution_feedback_owner_precision(execution_feedback_replan_contract)
-        execution_feedback_replan_contract.install(
-            orchestrator_module=complete_orchestrator,
-            work_graph_module=work_graph,
-        )
+        execution_feedback_replan_contract.install(orchestrator_module=complete_orchestrator, work_graph_module=work_graph)
 
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
@@ -176,12 +157,10 @@ def finalize_runtime() -> None:
 
         install_small_model_task_capsule()
         assert_small_model_task_capsule()
+        install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
+        assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
 
-        assert_runtime_hot_paths(
-            mcp_transport_pool_module=mcp_transport_pool,
-            external_mcp_router_module=external_mcp_router,
-            research_rag_performance_module=research_rag_performance,
-        )
+        assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         verify_installed_wrappers()
         run_context_budget_preflight()
         run_runtime_live_path_preflight()

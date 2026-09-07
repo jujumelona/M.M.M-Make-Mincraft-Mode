@@ -34,25 +34,36 @@ _ALLOWED_WRITE_PREFIXES = (
     "src/main/resources/",
     "src/test/java/",
     "src/gametest/",
-    ".minecraft_ai/",
 )
-_ALLOWED_WRITE_FILES = ("build.gradle", "gradle.properties", "settings.gradle")
-_PROTECTED_WRITE_PREFIXES = (
-    ".minecraft_ai/research",
-    ".minecraft_ai/context-observations",
+_ALLOWED_WRITE_FILES: tuple[str, ...] = ()
+_PROTECTED_WRITE_PREFIXES = (".minecraft_ai",)
+_REJECTED_WRITE_EXAMPLES = (
+    "README.md",
+    "LICENSE",
+    "docs/",
+    "build.gradle",
+    "gradle.properties",
+    "settings.gradle",
 )
-_REJECTED_WRITE_EXAMPLES = ("README.md", "LICENSE", "docs/")
 
 
 def custom_module_write_scope() -> dict[str, Any]:
-    """Return the single model/validator write-scope contract."""
+    """Return the coarse custom-coder boundary published before decoding.
+
+    The task capsule narrows this source-only boundary to exact writable file paths.
+    Build metadata and ``.minecraft_ai`` host state stay read-only for custom feature
+    generation; platform repair has its own separately-scoped contract.
+    """
 
     return {
         "allowed_prefixes": list(_ALLOWED_WRITE_PREFIXES),
         "allowed_files": list(_ALLOWED_WRITE_FILES),
         "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
         "examples_rejected": list(_REJECTED_WRITE_EXAMPLES),
-        "policy": "Every patch operation path must match this allowlist.",
+        "policy": (
+            "This is the coarse custom-coder boundary; the task capsule writable_paths "
+            "is the exact mutation allowlist."
+        ),
     }
 
 
@@ -104,10 +115,9 @@ def build_coder_grounding(
     baseline grounding mandatory without duplicating expensive project scans or
     external requests for every production shard.
 
-    The exact write allowlist is also published here before the first decode. Keeping
-    it beside the evidence bindings makes the model-facing contract match the host
-    validator and avoids expensive repair generations for paths such as ``README.md``
-    that the patcher can never accept.
+    The coarse source-only write boundary is published here before the first decode.
+    The host-owned task capsule further narrows it to exact task-owned writable files,
+    so the model never needs to infer mutation ownership from repository structure.
     """
     kind = str(module_kind).strip()
     if not kind:
