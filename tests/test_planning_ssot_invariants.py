@@ -151,7 +151,7 @@ def test_implementation_only_unknown_does_not_block_requirement_selection():
                 "requirements": [
                     {
                         "statement": "The player can keep and use the weather compass.",
-                        "capability": "weather.compass",
+                        "semantic_capability": "custom.semantic",
                         "prompt_refs": ["goal"],
                         "evidence_refs": [],
                         "acceptance": ["The compass remains available to the player."],
