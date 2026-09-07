@@ -2,6 +2,7 @@
 
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
+from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
@@ -64,6 +65,8 @@ from .technology_radar import (
     build_technology_radar,
     technology_research_routes,
 )
+
+install_source_observation_budget()
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
