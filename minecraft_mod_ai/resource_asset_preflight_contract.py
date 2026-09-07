@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-"""Fail closed on deterministic resource-asset inputs before model generation."""
+"""Pure deterministic contract for resource-asset generation inputs."""
 
 from collections.abc import Mapping
-from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
-
-from .spec import SpecValidationError
 
 
 class ResourceAssetPreflightError(ValueError):
@@ -75,57 +72,9 @@ def safe_asset_target(project_root: Path, raw_path: str) -> Path:
     return target
 
 
-def install(resource_module: Any) -> None:
-    """Install one shared preflight in both prompt planning and binary generation."""
-
-    original_attach = resource_module.attach_generation_plan
-    if not getattr(original_attach, "_mmm_resource_asset_preflight", False):
-
-        @wraps(original_attach)
-        def attach_generation_plan(router: Any, proposal: Any):
-            if getattr(proposal, "assets", None):
-                try:
-                    validate_asset_generation_inputs(proposal)
-                except ResourceAssetPreflightError as exc:
-                    raise SpecValidationError(f"Resource asset preflight failed: {exc}") from exc
-            return original_attach(router, proposal)
-
-        attach_generation_plan._mmm_resource_asset_preflight = True
-        attach_generation_plan.__wrapped__ = original_attach
-        resource_module.attach_generation_plan = attach_generation_plan
-
-    original_generate = resource_module.generate_assets
-    if not getattr(original_generate, "_mmm_resource_asset_preflight", False):
-
-        @wraps(original_generate)
-        def generate_assets(router: Any, proposal: Any, project_root: Path, run_root: Path):
-            if hasattr(proposal, "game_design") and getattr(proposal, "assets", None):
-                try:
-                    validate_asset_generation_inputs(proposal)
-                except (ResourceAssetPreflightError, SpecValidationError) as exc:
-                    raise resource_module.AssetProductionError(
-                        f"Resource asset preflight failed: {exc}"
-                    ) from exc
-            return original_generate(router, proposal, project_root, run_root)
-
-        generate_assets._mmm_resource_asset_preflight = True
-        generate_assets.__wrapped__ = original_generate
-        resource_module.generate_assets = generate_assets
-
-    def safe_target(project_root: Path, raw_path: str) -> Path:
-        try:
-            return safe_asset_target(project_root, raw_path)
-        except ResourceAssetPreflightError as exc:
-            raise resource_module.AssetProductionError(str(exc)) from exc
-
-    safe_target._mmm_resource_asset_preflight = True
-    resource_module._safe_target = safe_target
-
-
 __all__ = [
     "ResourceAssetPreflightError",
     "canonical_asset_target",
-    "install",
     "safe_asset_target",
     "validate_asset_generation_inputs",
 ]
