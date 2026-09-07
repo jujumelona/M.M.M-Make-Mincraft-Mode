@@ -76,3 +76,39 @@ def test_merge_rejects_undeclared_fields():
 
     with pytest.raises(ValueError, match="undeclared field"):
         merge_worksheet_section_chunks("behavior_contract", chunk_payloads, set())
+
+
+def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
+    canonical = row("behavior_contract")
+    chunks = pack_section_concerns("behavior_contract")
+    chunk_payloads = []
+    for index, concern_group in enumerate(chunks):
+        payload: dict = {"inapplicable_concerns": []}
+        for c in concern_group:
+            if c in ("preconditions", "boundaries"):
+                # Small model left these empty and forgot to put them in inapplicable_concerns
+                payload[c] = []
+            elif c == "rejection_postconditions":
+                # Small model put a dummy placeholder record
+                payload[c] = [{"condition": "", "preserved_state": "", "observation": ""}]
+            else:
+                payload[c] = canonical["specification"][c]
+        if index == 0:
+            # Model hallucinated an evidence ref
+            payload["constraint_evidence_refs"] = ["allowed_ref_1", "hallucinated_ref"]
+        chunk_payloads.append(payload)
+
+    allowed_refs = {"allowed_ref_1"}
+    merged = merge_worksheet_section_chunks("behavior_contract", chunk_payloads, allowed_refs)
+
+    # Inapplicable concerns are automatically reconciled for empty concerns
+    reconciled_concerns = {item["concern"] for item in merged["specification"]["inapplicable_concerns"]}
+    assert "preconditions" in reconciled_concerns
+    assert "boundaries" in reconciled_concerns
+    assert "rejection_postconditions" in reconciled_concerns
+
+    # Hallucinated evidence ref is filtered out to keep constraint_evidence_refs strictly bounded
+    assert merged["constraint_evidence_refs"] == ["allowed_ref_1"]
+
+    # Merged section passes canonical validation without ValueError
+    assert validate_worksheet_section(merged, allowed_refs, "behavior_contract") == merged

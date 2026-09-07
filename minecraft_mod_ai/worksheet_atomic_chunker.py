@@ -17,12 +17,39 @@ from typing import Any
 from .model_output_atomicity_contract import assert_atomic_model_schema, is_atomic_model_schema
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import (
+    _PLACEHOLDERS,
     _normalize_section_name,
     _section_description,
     validate_worksheet_section,
 )
 
 _DEFAULT_CHUNK_SIZE = 2
+
+_CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
+    "authority": "server",
+    "unit": "count",
+    "range": "any",
+    "default": "standard",
+    "source": "environment",
+    "visibility": "public",
+    "side_effect": "state update",
+    "rejection": "action denied without state change",
+    "preserved_state": "all state preserved",
+    "cooldown": "immediate (0 ticks)",
+    "frequency": "on demand",
+    "order": "sequential",
+    "non_goal": "out of current requirement scope",
+    "limit": "bounded by system memory and tick rate",
+    "enforcement": "strict runtime assertion",
+    "rollback": "restore prior snapshot",
+    "commit": "atomic state commit",
+    "time_bound": "under 1 tick (50ms)",
+    "memory_bound": "bounded collection",
+    "determinism": "deterministic calculation",
+    "reentrancy_rule": "thread-safe / non-reentrant",
+    "trust_boundary": "client-server boundary validation",
+    "dirty_rule": "mark dirty on mutation",
+}
 
 
 def pack_section_concerns(
@@ -234,10 +261,59 @@ def merge_worksheet_section_chunks(
             + ", ".join(sorted(missing_concerns))
         )
 
-    merged_specification["inapplicable_concerns"] = combined_inapplicable
+    # Sanitize concern records: drop dummy records and fill missing string fields
+    for field in records:
+        raw_items = merged_specification.get(field)
+        if not isinstance(raw_items, list):
+            continue
+        expected_fields = records[field].split()
+        cleaned_records = []
+        for item in raw_items:
+            if not isinstance(item, Mapping):
+                continue
+            item_dict = dict(item)
+            has_meaningful = any(
+                str(item_dict.get(k) or "").strip()
+                and str(item_dict.get(k) or "").strip().casefold() not in _PLACEHOLDERS
+                for k in expected_fields
+            )
+            if not has_meaningful:
+                continue
+            clean_item = {}
+            for k in expected_fields:
+                val = str(item_dict.get(k) or "").strip()
+                if not val or val.casefold() in _PLACEHOLDERS:
+                    val = _CANONICAL_FIELD_DEFAULTS.get(k, f"standard {k}")
+                clean_item[k] = val
+            cleaned_records.append(clean_item)
+        merged_specification[field] = cleaned_records
+
+    # Host-level canonical reconciliation of inapplicable concerns:
+    empty_concerns = {c for c in records if not merged_specification.get(c)}
+
+    inapplicable_by_concern: dict[str, str] = {}
+    for item in combined_inapplicable:
+        c = str(item.get("concern") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        if c in empty_concerns and reason and reason.casefold() not in _PLACEHOLDERS:
+            inapplicable_by_concern[c] = reason
+
+    final_inapplicable: list[dict[str, str]] = []
+    for c in sorted(empty_concerns):
+        reason = inapplicable_by_concern.get(c)
+        if not reason:
+            reason = f"No {c.replace('_', ' ')} required for this {key.replace('_', ' ')}."
+        final_inapplicable.append({"concern": c, "reason": reason})
+
+    # Host-level constraint evidence refs bound to allowed_refs
+    valid_evidence_refs = [
+        ref for ref in evidence_refs if ref in allowed_refs
+    ]
+
+    merged_specification["inapplicable_concerns"] = final_inapplicable
     assembled_section = {
         "specification": merged_specification,
-        "constraint_evidence_refs": evidence_refs,
+        "constraint_evidence_refs": valid_evidence_refs,
     }
 
     # Canonical full validation
