@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from minecraft_mod_ai.forced_tool_execution_contract import _install_adapter_class
@@ -15,8 +17,6 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
     _VERIFY_TOOLS,
     LoopPhase,
 )
-
-_ARGUMENT_PAGE_TOOL = "mmm_submit_argument_page"
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -86,38 +86,29 @@ def _valid_arguments() -> dict[str, str]:
     }
 
 
-def _page_call(arguments: dict[str, str], *, call_id: str = "page") -> GenerationResponse:
-    return GenerationResponse(
-        tool_calls=(
-            ToolCall(
-                id=call_id,
-                name=_ARGUMENT_PAGE_TOOL,
-                arguments=arguments,
-                raw_arguments="",
-            ),
-        )
-    )
+def _page_response(arguments: dict[str, str]) -> GenerationResponse:
+    return GenerationResponse(content=json.dumps(arguments))
 
 
 def _assert_argument_page(request: GenerationRequest) -> None:
     assert request.parallel_tool_calls is False
-    assert request.tool_choice == "required"
-    assert len(request.tools) == 1
-    assert len(request.tool_validation_schemas) == 1
-    assert request.tools[0]["function"]["name"] == _ARGUMENT_PAGE_TOOL
-    assert request.tool_validation_schemas[0]["function"]["name"] == _ARGUMENT_PAGE_TOOL
-    assert request.response_format == "text"
-    assert request.response_schema is None
+    assert request.tools == ()
+    assert request.tool_validation_schemas == ()
+    assert request.tool_choice is None
+    assert request.response_format == "json"
+    assert isinstance(request.response_schema, dict)
+    assert request.response_schema.get("type") == "object"
+    assert request.response_schema.get("additionalProperties") is False
 
 
-def test_host_selected_mutation_exposes_only_argument_page_not_action_name() -> None:
+def test_host_selected_mutation_exposes_no_action_tool_to_model() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
 
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
-            return _page_call(_valid_arguments())
+            return _page_response(_valid_arguments())
 
     _install_adapter_class(
         Adapter,
@@ -131,15 +122,13 @@ def test_host_selected_mutation_exposes_only_argument_page_not_action_name() -> 
     assert len(adapter.requests) == 1
     page = adapter.requests[0]
     _assert_argument_page(page)
-    assert all(
-        item["function"]["name"] != "apply_source_edit" for item in page.tools
-    )
+    assert "apply_source_edit" not in json.dumps(page.response_schema)
     assert [call.name for call in result.tool_calls] == ["apply_source_edit"]
     assert result.tool_calls[0].arguments == _valid_arguments()
     assert result.tool_calls[0].id.startswith("host_mutation_")
 
 
-def test_invalid_arguments_receive_one_native_page_repair() -> None:
+def test_invalid_arguments_receive_one_argument_only_json_repair() -> None:
     class Adapter:
         def __init__(self) -> None:
             self.requests: list[GenerationRequest] = []
@@ -147,8 +136,8 @@ def test_invalid_arguments_receive_one_native_page_repair() -> None:
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
             if len(self.requests) == 1:
-                return _page_call({})
-            return _page_call(_valid_arguments(), call_id="repair")
+                return _page_response({})
+            return _page_response(_valid_arguments())
 
     _install_adapter_class(
         Adapter,
@@ -160,8 +149,9 @@ def test_invalid_arguments_receive_one_native_page_repair() -> None:
     result = adapter.generate_turn(_mutation_request())
 
     assert len(adapter.requests) == 2
-    assert all(_assert_argument_page(request) is None for request in adapter.requests)
-    assert "previous native argument page was invalid" in adapter.requests[1].messages[-1]["content"]
+    for request in adapter.requests:
+        _assert_argument_page(request)
+    assert "Repair the arguments only" in adapter.requests[1].messages[-1]["content"]
     assert [call.name for call in result.tool_calls] == ["apply_source_edit"]
 
 
@@ -172,7 +162,7 @@ def test_repeated_invalid_argument_page_is_a_fixed_point() -> None:
 
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
-            return _page_call({})
+            return _page_response({})
 
     _install_adapter_class(
         Adapter,
@@ -220,7 +210,7 @@ def test_argument_page_never_executes_stale_tool_call() -> None:
         _assert_argument_page(request)
 
 
-def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
+def test_failed_native_required_probe_falls_back_to_argument_only_json_page() -> None:
     target = "java_workspace_symbols"
 
     class Adapter:
@@ -234,7 +224,7 @@ def test_failed_native_required_probe_falls_back_to_argument_page() -> None:
             self.requests.append(request)
             if len(self.requests) == 1:
                 return GenerationResponse(content="native required was not enforced")
-            return _page_call({"query": "workspace"})
+            return _page_response({"query": "workspace"})
 
     _install_adapter_class(
         Adapter,
