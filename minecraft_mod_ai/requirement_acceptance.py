@@ -1,35 +1,16 @@
 from __future__ import annotations
 
-"""Host-owned public acceptance normalization.
+"""Host-owned requirement acceptance projection.
 
-Acceptance is user-facing observable behavior. Task hashes, owned anchors, provider
-receipts and gate bookkeeping are internal invariants and must never leak into the
-public requirement contract.
+Public-acceptance semantics are owned exclusively by acceptance_contracts.py. This
+module only projects candidate checks onto a requirement and must not define a second
+acceptance policy.
 """
 
 from collections.abc import Iterable
 from typing import Any
 
-_INTERNAL_MARKERS = (
-    "owned anchors",
-    "owned_anchor",
-    "declared provides",
-    "declared_provides",
-    "required gates",
-    "required_gates",
-    "task_sha256",
-    "done_predicate",
-)
-
-
-def is_public_acceptance(value: Any) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    folded = text.casefold()
-    if folded.startswith("task_") and ":" in folded:
-        return False
-    return not any(marker in folded for marker in _INTERNAL_MARKERS)
+from .acceptance_contracts import is_public_acceptance
 
 
 def requirement_acceptance(
