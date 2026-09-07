@@ -6,7 +6,6 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from .platform_catalog import PlatformAdapter, adapter_from_project
 from .project_edit import FabricProjectInfo, ProjectEditError, inspect_fabric_project
@@ -28,29 +27,15 @@ def _read_utf8(path: Path, *, label: str) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        raise GeckoLibGenerationContractError(f"{label} must be readable UTF-8 text: {path}") from exc
-
-
-def preflight_geckolib_generation_target(
-    project_root: str | Path,
-    *,
-    mod_id: str,
-    package_name: str,
-    geckolib_version: str,
-) -> GeckoLibGenerationTarget:
-    """Validate every project condition knowable before GeckoLib writes begin."""
-
-    try:
-        info = inspect_fabric_project(project_root)
-    except (ProjectEditError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise GeckoLibGenerationContractError(
-            f"GeckoLib project inspection failed before generation: {exc}"
+            f"{label} must be readable UTF-8 text: {path}"
         ) from exc
 
-    if info.mod_id != mod_id or info.package_name != package_name:
-        raise GeckoLibGenerationContractError(
-            "GeckoLib target does not match fabric.mod.json."
-        )
+
+def validate_geckolib_project_preflight(
+    info: FabricProjectInfo,
+) -> PlatformAdapter:
+    """Validate project state that existing GeckoLib code would otherwise reject late."""
 
     try:
         adapter = adapter_from_project(info.root)
@@ -93,13 +78,7 @@ def preflight_geckolib_generation_target(
             "build.gradle is required before GeckoLib dependency generation."
         )
     build_text = _read_utf8(build_file, label="build.gradle")
-    dependency_line = (
-        'modImplementation("software.bernie.geckolib:'
-        f'geckolib-{adapter.loader}-{adapter.minecraft_version}:{geckolib_version}")'
-    )
-    marker = "// mmm:geckolib"
-    already_bound = marker in build_text and dependency_line in build_text
-    if not already_bound and _DEPENDENCIES_BLOCK.search(build_text) is None:
+    if _DEPENDENCIES_BLOCK.search(build_text) is None:
         raise GeckoLibGenerationContractError(
             "build.gradle has no dependencies block for GeckoLib insertion."
         )
@@ -107,6 +86,30 @@ def preflight_geckolib_generation_target(
     if info.main_java.is_file() and not info.main_java.is_symlink():
         _read_utf8(info.main_java, label="Fabric main entrypoint")
 
+    return adapter
+
+
+def preflight_geckolib_generation_target(
+    project_root: str | Path,
+    *,
+    mod_id: str,
+    package_name: str,
+) -> GeckoLibGenerationTarget:
+    """Inspect and validate every project condition knowable before writes begin."""
+
+    try:
+        info = inspect_fabric_project(project_root)
+    except (ProjectEditError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GeckoLibGenerationContractError(
+            f"GeckoLib project inspection failed before generation: {exc}"
+        ) from exc
+
+    if info.mod_id != mod_id or info.package_name != package_name:
+        raise GeckoLibGenerationContractError(
+            "GeckoLib target does not match fabric.mod.json."
+        )
+
+    adapter = validate_geckolib_project_preflight(info)
     return GeckoLibGenerationTarget(info=info, adapter=adapter)
 
 
@@ -114,4 +117,5 @@ __all__ = [
     "GeckoLibGenerationContractError",
     "GeckoLibGenerationTarget",
     "preflight_geckolib_generation_target",
+    "validate_geckolib_project_preflight",
 ]
