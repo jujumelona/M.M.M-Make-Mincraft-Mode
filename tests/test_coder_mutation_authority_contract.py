@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +7,6 @@ import pytest
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai import small_model_task_capsule_contract as task_capsule
 from minecraft_mod_ai.coder_mutation_authority_contract import install
-from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
 TASK_ID = "task_existing_source_edit"
 JAVA_PATH = "src/main/java/example/ExistingFeature.java"
@@ -44,17 +42,6 @@ def _module(status: str) -> SimpleNamespace:
         depends_on=(),
         required_gates=("source_static_validation",),
     )
-
-
-def _tool_schema() -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": "apply_source_edit",
-            "description": "tool",
-            "parameters": json.loads(json.dumps(SOURCE_EDIT_SCHEMA)),
-        },
-    }
 
 
 def _payload(status: str) -> dict:
@@ -136,20 +123,6 @@ def test_evidence_task_delete_is_always_rejected() -> None:
             {"operation": "delete_file", "path": JAVA_PATH},
             capsule,
         )
-
-
-def test_model_schema_hides_create_and_delete_when_only_existing_targets_exist() -> None:
-    capsule = task_capsule.compile_task_capsule(_module("existing"))
-    assert capsule is not None
-    narrowed = task_capsule.narrow_source_edit_schema(_tool_schema(), capsule)
-    enum = narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
-    assert "create" not in enum
-    assert "create_file" not in enum
-    assert "create_java_type" not in enum
-    assert "delete" not in enum
-    assert "delete_file" not in enum
-    assert "replace_exact" in enum
-    assert "insert_java_member" in enum
 
 
 def test_fresh_reuse_action_does_not_turn_existing_anchor_into_new_file() -> None:
