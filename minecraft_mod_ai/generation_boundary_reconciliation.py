@@ -134,12 +134,43 @@ def _install_geckolib_project_preflight(geckolib_module: Any) -> None:
     geckolib_module.inspect_fabric_project = inspect_fabric_project
 
 
+def _install_production_generation_preflight(complete_spec_module: Any) -> None:
+    """Reject proposal-known built-in generator failures before work dispatch."""
+
+    from .production_generation_preflight import (
+        ProductionGenerationPreflightError,
+        validate_production_generation_modules,
+    )
+    from .spec import SpecValidationError
+
+    original_validate = complete_spec_module.CompleteProposal.validate
+    if getattr(original_validate, "_mmm_production_generation_preflight", False):
+        return
+
+    @wraps(original_validate)
+    def validate(proposal: Any, *, policy: Any = None) -> None:
+        original_validate(proposal, policy=policy)
+        try:
+            validate_production_generation_modules(
+                proposal.modules,
+                policy=policy,
+            )
+        except ProductionGenerationPreflightError as exc:
+            raise SpecValidationError(
+                f"Production generation preflight failed: {exc}"
+            ) from exc
+
+    validate._mmm_production_generation_preflight = True
+    validate.__wrapped__ = original_validate
+    complete_spec_module.CompleteProposal.validate = validate
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
-    from . import complete_orchestrator
+    from . import complete_orchestrator, complete_spec
     from . import fabric_official_template_provider as fabric_provider
     from . import geckolib_generator, resource_asset_production
 
@@ -148,6 +179,7 @@ def install() -> None:
         orchestrator_module=complete_orchestrator,
     )
     _install_geckolib_project_preflight(geckolib_generator)
+    _install_production_generation_preflight(complete_spec)
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):
