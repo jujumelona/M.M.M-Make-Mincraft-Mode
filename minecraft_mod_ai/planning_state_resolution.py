@@ -91,6 +91,55 @@ def _known_prompt_refs(state: Mapping[str, Any]) -> set[str]:
     return refs
 
 
+def _prompt_ref_aliases(state: Mapping[str, Any]) -> dict[str, str]:
+    """Map host-owned prompt receipts back to the canonical prompt-ref namespace.
+
+    Small models sometimes copy provenance metadata such as ``prompt_sha256`` or a
+    receipt ``text_sha256`` instead of the requested ``goal``/``known_*`` ID. Those
+    values already prove authored-prompt provenance, so normalize only aliases that the
+    host can derive from this exact state. Arbitrary model-authored IDs remain invalid.
+    """
+
+    aliases: dict[str, str] = {
+        "goal": "goal",
+        "prompt_sha256": "goal",
+        "requested_prompt": "goal",
+    }
+    prompt_hash = _text(state.get("prompt_sha256"))
+    if prompt_hash:
+        aliases[prompt_hash] = "goal"
+
+    goal = state.get("goal")
+    if isinstance(goal, Mapping):
+        source = goal.get("source")
+        if isinstance(source, Mapping):
+            receipt_hash = _text(source.get("text_sha256"))
+            if receipt_hash:
+                aliases[receipt_hash] = "goal"
+
+    rows = state.get("known", [])
+    if isinstance(rows, list):
+        for item in rows:
+            if not isinstance(item, Mapping):
+                continue
+            known_id = _text(item.get("known_id"))
+            if not known_id:
+                continue
+            aliases[known_id] = known_id
+            source = item.get("source")
+            if not isinstance(source, Mapping):
+                continue
+            receipt_hash = _text(source.get("text_sha256"))
+            if receipt_hash and receipt_hash != prompt_hash:
+                aliases.setdefault(receipt_hash, known_id)
+    return aliases
+
+
+def _normalize_prompt_refs(state: Mapping[str, Any], value: Any) -> list[str]:
+    aliases = _prompt_ref_aliases(state)
+    return list(dict.fromkeys(aliases.get(ref, ref) for ref in _strings(value)))
+
+
 def _resolved_context(state: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "goal": deepcopy(state.get("goal")),
@@ -189,12 +238,13 @@ def compile_researched_requirements(
                 "the supplied host capability catalog; never invent or paraphrase capability IDs, "
                 f"and use '{CUSTOM_CAPABILITY_SENTINEL}' only when no listed capability accurately "
                 "describes the behavior. Cite prompt provenance structurally with prompt_refs: use "
-                "'goal' or known_id values present in the supplied state. Cite grounded external "
-                "facts with evidence_refs. Every requirement needs at least one prompt_ref or "
-                "evidence_ref. For reference-driven requirements, use only grounded reference "
-                "evidence inside the resolved scope. Missing balance values or detailed mechanics "
-                "are later design work, not a reason to omit an authored behavior requirement. "
-                "Return behavior requirements and acceptance observations only."
+                "only 'goal' or known_id values present in the supplied state; never copy source_id, "
+                "text_sha256, prompt_sha256, or other receipt metadata into prompt_refs. Cite "
+                "grounded external facts with evidence_refs. Every requirement needs at least one "
+                "prompt_ref or evidence_ref. For reference-driven requirements, use only grounded "
+                "reference evidence inside the resolved scope. Missing balance values or detailed "
+                "mechanics are later design work, not a reason to omit an authored behavior "
+                "requirement. Return behavior requirements and acceptance observations only."
             ),
         },
         {
@@ -233,7 +283,7 @@ def compile_researched_requirements(
             raise ValueError("PLANNING_REQUIREMENT_SHAPE: requirement must be an object")
         statement = _text(item.get("statement"))
         semantic_capability = _text(item.get("semantic_capability")).casefold()
-        prompt_refs = _strings(item.get("prompt_refs"))
+        prompt_refs = _normalize_prompt_refs(state, item.get("prompt_refs"))
         evidence_refs = _strings(item.get("evidence_refs"))
         acceptance = _strings(item.get("acceptance"))
         if not statement or not acceptance:
