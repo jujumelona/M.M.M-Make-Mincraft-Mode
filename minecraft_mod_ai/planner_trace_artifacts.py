@@ -57,7 +57,19 @@ def _redacted(value: Any, seen: set[int]) -> Any:
         seen.remove(id(value))
 
 
-def save_trace_artifact(value: Any, directory: Path) -> dict[str, Any]:
+def save_trace_artifact(
+    value: Any,
+    directory: Path,
+    *,
+    sync: bool = True,
+) -> dict[str, Any]:
+    """Persist one deduplicated trace artifact.
+
+    ``sync`` controls the durability barrier, not whether the artifact is written. Failure
+    paths keep ``sync=True``; routine success events may set it to ``False`` so tracing does
+    not force a disk barrier on every model/tool boundary.
+    """
+
     data = json.dumps(
         _redacted(value, set()),
         ensure_ascii=False,
@@ -73,7 +85,8 @@ def save_trace_artifact(value: Any, directory: Path) -> dict[str, Any]:
             with temporary.open("wb") as stream:
                 stream.write(data)
                 stream.flush()
-                os.fsync(stream.fileno())
+                if sync:
+                    os.fsync(stream.fileno())
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
