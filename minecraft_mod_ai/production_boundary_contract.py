@@ -4,7 +4,7 @@ from __future__ import annotations
 
 All public-acceptance semantics are owned by ``acceptance_contracts``. This module only
 adapts that canonical contract to production-specific exception types, catalog shapes and
-quality coverage. It must not define a second acceptance policy.
+quality coverage. It must not define, patch, or silently repair a second acceptance policy.
 """
 
 from collections.abc import Mapping
@@ -26,37 +26,27 @@ from .acceptance_contracts import (
 _INSTALLED = False
 
 
-def _strict_public_acceptance(value: Any) -> bool:
-    """Compatibility adapter; the rule itself is owned by acceptance_contracts."""
-
-    return _canonical_is_public_acceptance(value)
-
-
-def _canonical_public_acceptance(values: Any) -> list[str]:
-    """Compatibility adapter returning the canonical ordered public checks."""
-
-    return list(_canonical_acceptance_values(values))
-
-
-def _production_public_acceptance(statement: str) -> None:
-    """Expose the canonical runtime rule through ProductionContractError."""
-
-    validate_runtime_public_acceptance(
-        statement,
-        error_type=_production.ProductionContractError,
-    )
-
-
-_production_public_acceptance._mmm_contextual_legacy_boundary = True
-_production_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
-
-
-def _install_planner_public_acceptance_guard() -> None:
-    """Bind evidence planning directly to the canonical acceptance predicate."""
+def _assert_canonical_acceptance_bindings() -> None:
+    """Fail closed if any runtime stage stops consuming the canonical SSOT directly."""
 
     from . import evidence_first_planning as _evidence
 
-    _evidence._is_public_acceptance = _canonical_is_public_acceptance
+    if _evidence._is_public_acceptance is not _canonical_is_public_acceptance:
+        raise _production.ProductionContractError(
+            "evidence planner acceptance policy is not bound directly to "
+            f"{CANONICAL_ACCEPTANCE_OWNER}"
+        )
+
+    validator = _production._validate_public_acceptance
+    if (
+        getattr(validator, "_mmm_acceptance_contract_owner", "")
+        != CANONICAL_ACCEPTANCE_OWNER
+        or getattr(validator, "func", None) is not validate_runtime_public_acceptance
+    ):
+        raise _production.ProductionContractError(
+            "production acceptance policy is not bound directly to "
+            f"{CANONICAL_ACCEPTANCE_OWNER}"
+        )
 
 
 def _validated_evidence_plan(
@@ -238,17 +228,10 @@ def _rewrite_compilation(
 
         if item.get("visibility") == "public":
             statement = str(item.get("statement") or "")
-            try:
-                # Rewritten output is always strict, even when the old compiler was
-                # temporarily allowed to ingest a verified legacy representation.
-                if not _canonical_is_public_acceptance(statement):
-                    raise _production.ProductionContractError(
-                        "canonical public acceptance rejected rewritten statement"
-                    )
-            except _production.ProductionContractError as exc:
+            if not _canonical_is_public_acceptance(statement):
                 raise _production.ProductionContractError(
                     f"public acceptance leaked an internal task invariant: {ref}"
-                ) from exc
+                )
             if statement in seen_public:
                 raise _production.ProductionContractError(
                     "duplicate public acceptance statement would destroy requirement "
@@ -327,13 +310,7 @@ def install_production_boundary_contract() -> None:
     if _INSTALLED:
         return
 
-    _install_planner_public_acceptance_guard()
-    if getattr(
-        _production._validate_public_acceptance,
-        "_mmm_acceptance_contract_owner",
-        "",
-    ) != CANONICAL_ACCEPTANCE_OWNER:
-        _production._validate_public_acceptance = _production_public_acceptance
+    _assert_canonical_acceptance_bindings()
 
     original = _production.compile_production_contract
     if not getattr(original, "_mmm_authority_acceptance_projection", False):
@@ -358,7 +335,7 @@ def install_production_boundary_contract() -> None:
             )
             # A plan reaches this compatibility context only after its canonical hash and
             # structure validate. The central contract owns the temporary relaxation;
-            # production_boundary_contract merely enters it.
+            # this adapter only enters that centrally defined state.
             with verified_legacy_acceptance_context(
                 isinstance(effective_plan, Mapping)
             ):
