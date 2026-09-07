@@ -33,11 +33,10 @@ output_schema:
   - explicit failure reason
 
 validators:
-  - every normalized requirement traces back to the user request, supplied reference, or a necessary dependency
-  - no approved proposal or approval hash is required as an input to this pre-approval stage
-  - no unrequested gameplay system, content type, performance requirement, or implementation technique is invented
-  - target/version facts are copied from the host-selected PlatformLock or left unresolved
-  - planning output is read-only and does not claim build/runtime success
+  - requirement_traceability
+  - execution_boundary
+  - exact_version_evidence
+  - no_self_certification
 
 retry_policy:
   max_attempts: null
