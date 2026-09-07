@@ -60,6 +60,8 @@ def finalize_runtime() -> None:
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .authored_scope_research_contract import install as install_authored_scope_research
+        from .coder_mutation_authority_contract import assert_installed as assert_coder_mutation_authority
+        from .coder_mutation_authority_contract import install as install_coder_mutation_authority
         from .context_budget_preflight import run_context_budget_preflight
         from .deep_design_execution_contract import install as install_deep_design_execution
         from .design_resolution_provenance_contract import install_design_resolution_provenance_contract
@@ -161,6 +163,8 @@ def finalize_runtime() -> None:
 
         install_small_model_task_capsule()
         assert_small_model_task_capsule()
+        install_coder_mutation_authority()
+        assert_coder_mutation_authority()
         install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         install_small_model_atomic_coder(
