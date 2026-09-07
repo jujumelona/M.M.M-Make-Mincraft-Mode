@@ -4,9 +4,10 @@ from __future__ import annotations
 
 The planner may keep a multi-step host task for dependency and verification purposes, but
 one small coder decode must never be responsible for every implementation obligation at
-once.  This runtime contract slices the already-approved task at the ModelRouter boundary,
-keeps each decode on one obligation, and preserves the shared staged workspace between
-slices.  The outer custom-module generator still owns the final transaction and gates.
+once. This runtime contract slices the already-approved task at the ModelRouter boundary,
+keeps each decode on one obligation, preserves the canonical context required to execute
+that obligation, and preserves the shared staged workspace between slices. The outer
+custom-module generator still owns the final transaction and gates.
 """
 
 import copy
@@ -15,8 +16,8 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
-_MARKER = "_mmm_small_model_atomic_coder_v1"
-_ATOMIC_SCHEMA = "mmm/atomic-coder-step-v1"
+_MARKER = "_mmm_small_model_atomic_coder_v2"
+_ATOMIC_SCHEMA = "mmm/atomic-coder-step-v2"
 _MAX_INITIAL_SOURCE_BYTES = 4 * 1024
 _MAX_APPROVED_REUSE_BYTES = 4 * 1024
 _MAX_SUMMARY_CHARS_PER_STEP = 1024
@@ -28,6 +29,12 @@ def _is_sequence(value: Any) -> bool:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _sequence_copy(value: Any) -> list[Any]:
+    if not _is_sequence(value):
+        return []
+    return copy.deepcopy(list(value))
 
 
 def _steps(contract: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -62,6 +69,44 @@ def _dataflow(contract: Mapping[str, Any], name: str) -> list[str]:
     return []
 
 
+def _step_target_refs(step: Mapping[str, Any]) -> list[str]:
+    return [str(item).strip() for item in _sequence_copy(step.get("target_refs")) if str(item).strip()]
+
+
+def _step_targets(contract: Mapping[str, Any], step: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw_targets = contract.get("targets")
+    if not _is_sequence(raw_targets):
+        return []
+    targets = [copy.deepcopy(dict(item)) for item in raw_targets if isinstance(item, Mapping)]
+    refs = frozenset(_step_target_refs(step))
+    if not refs:
+        return targets
+    filtered = [
+        target
+        for target in targets
+        if str(target.get("locator") or "").strip() in refs
+    ]
+    return filtered or targets
+
+
+def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str, Any]:
+    obligation = str(step.get("obligation") or "").strip()
+    if not obligation:
+        raise RuntimeError("ATOMIC_CODER_OBLIGATION_MISSING: atomic step has no obligation")
+    result: dict[str, Any] = {
+        "index": index + 1,
+        "count": count,
+        "sequence": step.get("sequence", index),
+        "obligation": obligation,
+        "target_refs": _step_target_refs(step),
+        "consumes": _sequence_copy(step.get("consumes")),
+        "must_provide": _sequence_copy(step.get("must_provide")),
+        "execution_checklist": _sequence_copy(step.get("execution_checklist")),
+        "done_when": str(step.get("done_when") or "").strip(),
+    }
+    return result
+
+
 def _atomic_contract(
     contract: Mapping[str, Any],
     evidence_task: Mapping[str, Any],
@@ -70,14 +115,16 @@ def _atomic_contract(
     index: int,
     count: int,
 ) -> dict[str, Any]:
-    """Build the deliberately small model-visible contract for one approved obligation."""
+    """Build one obligation contract without discarding canonical execution authority.
+
+    Atomicization removes sibling implementation steps only. It must not remove the
+    engineering worksheet, exact targets, step checklist, boundaries, or verification
+    contract that the canonical coder hand-off explicitly requires the coder to obey.
+    """
 
     task_ref = _task_ref(contract, evidence_task)
     if not task_ref:
         raise RuntimeError("ATOMIC_CODER_TASK_REF_MISSING: coder contract has no task identity")
-    obligation = str(step.get("obligation") or "").strip()
-    if not obligation:
-        raise RuntimeError("ATOMIC_CODER_OBLIGATION_MISSING: atomic step has no obligation")
 
     source_sha = str(
         contract.get("source_task_sha256")
@@ -89,19 +136,26 @@ def _atomic_contract(
         "schema_version": _ATOMIC_SCHEMA,
         "task_ref": task_ref,
         "source_task_sha256": source_sha,
+        "source_contract_sha256": str(contract.get("contract_sha256") or "").strip(),
         "objective": _objective(contract),
-        "step": {
-            "index": index + 1,
-            "count": count,
-            "obligation": obligation,
-        },
+        "execution_role": str(contract.get("execution_role") or "").strip(),
+        "requirement_refs": _sequence_copy(contract.get("requirement_refs")),
+        "step": _atomic_step(step, index=index, count=count),
         "target_constraints": copy.deepcopy(_mapping(contract.get("target_constraints"))),
-        "depends_on": list(contract.get("depends_on") or ()),
+        "targets": _step_targets(contract, step),
+        "depends_on": _sequence_copy(contract.get("depends_on")),
         "consumes": _dataflow(contract, "consumes"),
         "provides": _dataflow(contract, "provides"),
+        "engineering_worksheet": copy.deepcopy(contract.get("engineering_worksheet")),
+        "artifacts": _sequence_copy(contract.get("artifacts")),
+        "reuse_refs": _sequence_copy(contract.get("reuse_refs")),
+        "protected_boundaries": copy.deepcopy(_mapping(contract.get("protected_boundaries"))),
+        "verification_plan": _sequence_copy(contract.get("verification_plan")),
+        "completion_predicate": copy.deepcopy(_mapping(contract.get("completion_predicate"))),
         "scope_policy": (
             "Execute only this obligation. Do not start, pre-implement, redesign, or summarize "
-            "sibling obligations. Exact writable paths are supplied separately by host authority."
+            "sibling obligations. Preserve the complete canonical execution authority carried "
+            "in this atomic contract; exact writable paths are additionally enforced by host tools."
         ),
     }
     return result
@@ -127,11 +181,11 @@ def _implementation_request(messages: Sequence[Mapping[str, Any]]) -> tuple[int,
 def atomicize_coder_messages(
     messages: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[dict[str, Any], ...], ...]:
-    """Return one compact message batch per host-approved implementation obligation.
+    """Return one canonical-context message batch per approved implementation obligation.
 
-    Non-custom/non-implementation messages are returned unchanged as one batch.  This makes
-    the wrapper safe for every other ModelRouter caller while letting tests inspect the
-    exact model-visible payload without starting a model backend.
+    Non-custom/non-implementation messages are returned unchanged as one batch. Each atomic
+    batch removes sibling obligations while retaining the exact host-owned information the
+    selected obligation needs for implementation and verification.
     """
 
     parsed = _implementation_request(messages)
@@ -187,6 +241,7 @@ def atomicize_coder_messages(
         rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
         current["rules"] = [
             "Work on this atomic obligation only; sibling obligations are host-scheduled later.",
+            "Read and obey the atomic contract's engineering worksheet, exact targets, execution checklist, protected boundaries, and verification plan before editing.",
             "Read only the exact source chunk needed for this obligation; use bounded retrieval tools for additional source.",
             *rules,
         ]
