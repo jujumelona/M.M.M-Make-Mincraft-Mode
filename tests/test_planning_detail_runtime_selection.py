@@ -56,7 +56,7 @@ def test_host_selection_rejects_model_shaped_non_mapping_payload() -> None:
         _host_section_selection(_requirements(), [CORE_WORKSHEET_SECTIONS])
 
 
-def test_single_requirement_uses_one_requirement_compilation_even_with_parallel_capacity(
+def test_single_requirement_uses_one_worksheet_compilation_even_with_parallel_capacity(
     monkeypatch,
 ) -> None:
     requirement = {
@@ -83,27 +83,32 @@ def test_single_requirement_uses_one_requirement_compilation_even_with_parallel_
     }
     compilation_calls: list[tuple[str, ...]] = []
 
-    def fake_compile_requirement_specifications(
+    def fake_compile_requirement_worksheet(
         _router,
         *,
         requirement,
         selected_sections,
         evidence,
+        allowed,
     ):
         del requirement, evidence
+        assert allowed == {"ev:1"}
         compilation_calls.append(selected_sections)
         return {
-            section: (
-                f"{section} defines one concrete authoritative behavior with bounded failure "
-                "handling and an observable verification outcome for the approved requirement."
-            )
+            section: {
+                "specification": (
+                    f"{section} defines one concrete authoritative behavior with bounded failure "
+                    "handling and an observable verification outcome for the approved requirement."
+                ),
+                "constraint_evidence_refs": [],
+            }
             for section in selected_sections
         }
 
     monkeypatch.setattr(
         planning_impl,
-        "_compile_requirement_specifications",
-        fake_compile_requirement_specifications,
+        "_compile_requirement_worksheet",
+        fake_compile_requirement_worksheet,
     )
     plans = planning_impl._compile_requirement_plans_parallel(
         object(),
