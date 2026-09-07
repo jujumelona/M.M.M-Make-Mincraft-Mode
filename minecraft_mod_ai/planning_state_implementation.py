@@ -9,7 +9,7 @@ shape, and detailed planning never depends on free-form section boundaries or
 reasoning-label parsing.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from copy import deepcopy
 import json
@@ -23,9 +23,7 @@ from .planning_detail_template import (
     WORKSHEET_SECTIONS,
     normalize_required_sections,
     validate_worksheet,
-    validate_worksheet_section,
     worksheet_section_prompt,
-    worksheet_section_schema,
 )
 from .worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
