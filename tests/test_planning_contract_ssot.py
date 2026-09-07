@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import json
+from typing import Any
+
 import pytest
 
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
