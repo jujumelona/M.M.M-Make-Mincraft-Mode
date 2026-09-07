@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import custom_module_generator
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai import small_model_task_capsule_contract as task_capsule
 from minecraft_mod_ai.coder_mutation_authority_contract import install
@@ -84,44 +85,42 @@ def test_existing_primary_accepts_semantic_modification() -> None:
     assert bound["operation"] == "replace_exact"
 
 
-def test_existing_primary_rejects_creation() -> None:
-    capsule = task_capsule.compile_task_capsule(_module("existing"))
-    assert capsule is not None
-    with pytest.raises(task_capsule.TaskCapsuleContractError, match="CREATE_NOT_RESERVED"):
-        task_capsule.bind_source_edit_arguments(
-            {
-                "operation": "create_java_type",
-                "path": JAVA_PATH,
-                "package_name": "example",
-                "declaration": f"public final class {SYMBOL}",
-            },
-            capsule,
-        )
+def test_existing_primary_rejects_creation_before_tool_execution() -> None:
+    context = tool_loop._fresh_owned_symbol_context(_payload("existing"))
+    assert context is not None
+    error = tool_loop._mutation_target_error(
+        "apply_source_edit",
+        {"operation": "create_java_type", "path": JAVA_PATH},
+        context,
+    )
+    assert error is not None
+    assert "MUTATION_TARGET_CREATION_CONFLICT" in error
 
 
 def test_reserved_primary_remains_creatable() -> None:
     capsule = task_capsule.compile_task_capsule(_module("host_reserved"))
     assert capsule is not None
     assert capsule.creatable_paths == (JAVA_PATH,)
-    bound = task_capsule.bind_source_edit_arguments(
-        {
-            "operation": "create_java_type",
-            "path": JAVA_PATH,
-            "package_name": "example",
-            "declaration": f"public final class {SYMBOL}",
-        },
-        capsule,
+    context = tool_loop._fresh_owned_symbol_context(_payload("host_reserved"))
+    assert context is not None
+    assert (
+        tool_loop._mutation_target_error(
+            "apply_source_edit",
+            {"operation": "create_java_type", "path": JAVA_PATH},
+            context,
+        )
+        is None
     )
-    assert bound["path"] == JAVA_PATH
 
 
-def test_evidence_task_delete_is_always_rejected() -> None:
-    capsule = task_capsule.compile_task_capsule(_module("existing"))
-    assert capsule is not None
-    with pytest.raises(task_capsule.TaskCapsuleContractError, match="DELETE_FORBIDDEN"):
-        task_capsule.bind_source_edit_arguments(
-            {"operation": "delete_file", "path": JAVA_PATH},
-            capsule,
+def test_staged_custom_module_validator_rejects_delete_before_live_commit() -> None:
+    generator = object.__new__(custom_module_generator.CustomModuleGenerator)
+    with pytest.raises(
+        custom_module_generator.CustomModuleGenerationError,
+        match="may not delete",
+    ):
+        generator._validate_operations(
+            [{"operation": "delete", "path": JAVA_PATH}]
         )
 
 
