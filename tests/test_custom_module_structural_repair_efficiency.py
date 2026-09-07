@@ -49,6 +49,16 @@ def _implement_request(messages) -> dict:
 
 
 def _task_module(module_id: str, feature: str) -> ProductionModule:
+    target_name = {
+        "chunked_output": "Chunked",
+        "durable_chunk": "Durable",
+    }.get(module_id, "Generated")
+    anchor = {
+        "kind": "symbol",
+        "locator": f"src/main/java/example/{target_name}.java#{target_name}",
+        "status": "host_reserved",
+        "source_set": "main",
+    }
     return ProductionModule(
         module_id,
         "custom_java",
@@ -57,6 +67,14 @@ def _task_module(module_id: str, feature: str) -> ProductionModule:
             "evidence_task": {
                 "task_id": module_id,
                 "semantic_outcome": f"Implement the approved {feature} behavior.",
+                "owned_anchors": [anchor],
+                "production_bindings": [
+                    {
+                        "task_ref": module_id,
+                        "reuse_action": "fresh",
+                        "owned_anchors": [anchor],
+                    }
+                ],
             },
         },
     )
