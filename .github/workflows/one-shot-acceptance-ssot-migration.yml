@@ -1,0 +1,127 @@
+name: One-shot acceptance SSOT migration
+
+on:
+  push:
+    paths:
+      - .github/workflows/one-shot-acceptance-ssot-migration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Remove duplicate acceptance policy definitions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+
+          evidence = root / 'minecraft_mod_ai' / 'evidence_first_planning.py'
+          text = evidence.read_text(encoding='utf-8')
+          import_anchor = 'from typing import Any\n\n'
+          import_line = 'from .acceptance_contracts import is_public_acceptance as _is_public_acceptance\n\n'
+          if import_line not in text:
+              if import_anchor not in text:
+                  raise SystemExit('evidence import anchor missing')
+              text = text.replace(import_anchor, import_anchor + import_line, 1)
+          pattern = re.compile(
+              r'\ndef _is_public_acceptance\(value: Any\) -> bool:\n.*?\n\ndef build_request_catalog\(',
+              re.DOTALL,
+          )
+          text, count = pattern.subn('\n\ndef build_request_catalog(', text, count=1)
+          if count != 1:
+              raise SystemExit(f'evidence duplicate policy removal count={count}')
+          evidence.write_text(text, encoding='utf-8')
+
+          production = root / 'minecraft_mod_ai' / 'production_contract.py'
+          text = production.read_text(encoding='utf-8')
+          typing_anchor = 'from typing import TYPE_CHECKING, Any\n\n'
+          policy_import = (
+              'from functools import partial\n\n'
+              'from .acceptance_contracts import (\n'
+              '    CANONICAL_ACCEPTANCE_OWNER,\n'
+              '    validate_runtime_public_acceptance,\n'
+              ')\n\n'
+          )
+          if 'validate_runtime_public_acceptance' not in text:
+              if typing_anchor not in text:
+                  raise SystemExit('production import anchor missing')
+              text = text.replace(typing_anchor, typing_anchor + policy_import, 1)
+
+          markers = re.compile(
+              r"\n_PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = \(\n.*?\n\)\n",
+              re.DOTALL,
+          )
+          text, count = markers.subn('\n', text, count=1)
+          if count != 1:
+              raise SystemExit(f'production marker policy removal count={count}')
+
+          validator = re.compile(
+              r'\ndef _validate_public_acceptance\(statement: str\) -> None:\n.*?\n\ndef bound_game_design\(',
+              re.DOTALL,
+          )
+          replacement = (
+              '\n_validate_public_acceptance = partial(\n'
+              '    validate_runtime_public_acceptance,\n'
+              '    error_type=ProductionContractError,\n'
+              ')\n'
+              '_validate_public_acceptance._mmm_contextual_legacy_boundary = True\n'
+              '_validate_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER\n\n'
+              'def bound_game_design('
+          )
+          text, count = validator.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'production duplicate validator removal count={count}')
+          production.write_text(text, encoding='utf-8')
+
+          # Fail the migration itself if any retired policy definition survived.
+          if 'def _is_public_acceptance(' in evidence.read_text(encoding='utf-8'):
+              raise SystemExit('retired evidence acceptance policy still present')
+          ptext = production.read_text(encoding='utf-8')
+          if '_PUBLIC_ACCEPTANCE_INTERNAL_MARKERS' in ptext:
+              raise SystemExit('retired production marker table still present')
+          if 'def _validate_public_acceptance(' in ptext:
+              raise SystemExit('retired production acceptance validator still present')
+          PY
+
+          rm .github/workflows/one-shot-acceptance-ssot-migration.yml
+          python -m compileall -q minecraft_mod_ai
+          python - <<'PY'
+          import minecraft_mod_ai
+          from minecraft_mod_ai import acceptance_contracts
+          from minecraft_mod_ai import evidence_first_planning as evidence
+          from minecraft_mod_ai import production_contract
+
+          assert evidence._is_public_acceptance is acceptance_contracts.is_public_acceptance
+          assert getattr(
+              production_contract._validate_public_acceptance,
+              '_mmm_acceptance_contract_owner',
+              '',
+          ) == acceptance_contracts.CANONICAL_ACCEPTANCE_OWNER
+          PY
+      - name: Commit migration to main
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/evidence_first_planning.py minecraft_mod_ai/production_contract.py .github/workflows/one-shot-acceptance-ssot-migration.yml
+          git commit -m 'refactor: delete duplicate acceptance policy implementations'
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git fetch origin main
+            git rebase origin/main
+          done
+          exit 1
