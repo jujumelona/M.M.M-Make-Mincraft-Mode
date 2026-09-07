@@ -3,9 +3,9 @@ from __future__ import annotations
 """Host-owned detailed-plan compilation from grounded research.
 
 The model never authors the plan container, evidence identifiers, or a large JSON/tool
-payload. Host code owns structure and validation. The normal path asks the small model
-for all host-selected sections of one requirement in one bounded, delimiter-framed
-response; malformed or missing sections are repaired individually.
+payload. Host code owns structure and validation. Detailed planning follows the semantic
+sections selected by research/host policy: each selected section is one complete work
+unit. Token counts do not decide decomposition, retries, or fallback behavior.
 """
 
 from collections.abc import Iterable, Mapping
@@ -26,13 +26,6 @@ from .planning_detail_template import (
 from .planning_state_contract import validate_planning_state
 
 
-_BATCH_SECTION_RE = re.compile(
-    r"<<<SECTION:([a-z_]+)>>>\s*(.*?)\s*<<<END_SECTION>>>",
-    re.DOTALL,
-)
-_BATCH_TOKENS_PER_SECTION = 180
-_BATCH_MIN_TOKENS = 900
-_BATCH_MAX_TOKENS = 2200
 _META_REASONING_TAG_RE = re.compile(
     r"^\s*<\s*think(?:ing)?\b[^>]*>.*?<\s*/\s*think(?:ing)?\s*>\s*",
     re.IGNORECASE | re.DOTALL,
@@ -185,25 +178,38 @@ def _normalize_section_text(raw: Any, section: str) -> str:
         raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
     return value
 
+
+def _continuity_context(specifications: Mapping[str, str]) -> str:
+    if not specifications:
+        return "- No earlier section has been authored for this requirement."
+    return "\n".join(
+        f"- {section}: {specification}"
+        for section, specification in specifications.items()
+    )
+
+
 def _plain_section(
     router: Any,
     *,
     requirement: Mapping[str, Any],
     section: str,
     evidence: list[Mapping[str, Any]],
+    prior_specifications: Mapping[str, str] | None = None,
 ) -> str:
     checklist = "; ".join(DETAIL_SLOT_GUIDANCE[section])
     statement = _text(requirement.get("statement"))
+    continuity = _continuity_context(prior_specifications or {})
     messages = [
         {
             "role": "system",
             "content": (
-                "Write one bounded engineering-design section for a small-model planning pipeline. "
-                "Return plain prose only: no JSON, YAML, XML, tool/function call, code fence, object keys, "
-                "or evidence identifiers. The host owns all structure and provenance. Do not invent API names, "
-                "symbols, versions, dependencies, repository paths, or source facts. Keep the design abstract "
-                "where target facts are not established. Be concrete about actors, state, branches, limits, "
-                "failure behavior, and observable outcomes that belong to this section."
+                "Write exactly one complete semantic engineering-design section for a small-model planning pipeline. "
+                "The host has already chosen this section because it is a meaningful planning unit; do not split or "
+                "resize the work based on token length. Return plain prose only: no JSON, YAML, XML, tool/function "
+                "call, code fence, object keys, or evidence identifiers. The host owns all structure and provenance. "
+                "Do not invent API names, symbols, versions, dependencies, repository paths, or source facts. Keep "
+                "the design abstract where target facts are not established. Be concrete about actors, state, branches, "
+                "limits, failure behavior, and observable outcomes that belong to this section."
             ),
         },
         {
@@ -215,11 +221,13 @@ def _plain_section(
                 f"Checklist: {checklist}\n"
                 "Grounded research context (context only; do not emit evidence IDs):\n"
                 f"{_evidence_context(evidence)}\n"
-                "Write only the section specification."
+                "Earlier completed semantic sections for continuity only:\n"
+                f"{continuity}\n"
+                "Write only the complete section specification."
             ),
         },
     ]
-    with planner_operation(f"detailed_section:{section}", output_tokens=900):
+    with planner_operation(f"detailed_section:{section}"):
         raw = router.generate_text(
             "planner",
             messages,
@@ -229,107 +237,6 @@ def _plain_section(
     return _normalize_section_text(raw, section)
 
 
-def _batch_output_tokens(section_count: int) -> int:
-    return min(
-        _BATCH_MAX_TOKENS,
-        max(_BATCH_MIN_TOKENS, section_count * _BATCH_TOKENS_PER_SECTION),
-    )
-
-
-def _batch_prompt(
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-) -> list[dict[str, str]]:
-    section_instructions = "\n".join(
-        f"- {section}: {DETAIL_FIELDS[section]} Explicitly cover: "
-        + "; ".join(DETAIL_SLOT_GUIDANCE[section])
-        for section in selected_sections
-    )
-    output_skeleton = "\n".join(
-        (
-            f"<<<SECTION:{section}>>>\n"
-            "<write 2-5 concise implementation sentences here>\n"
-            "<<<END_SECTION>>>"
-        )
-        for section in selected_sections
-    )
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Write a bounded engineering design for exactly one requirement. The host owns all structure "
-                "and provenance. Fill every requested section independently. Do not invent API names, symbols, "
-                "versions, dependencies, repository paths, source facts, or evidence identifiers. Keep target "
-                "details abstract when research has not established them. Return only the requested delimiter "
-                "blocks in the same order. Inside each block write plain prose only: no JSON, YAML, XML, code "
-                "fence, object keys, or extra headings."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Requirement: {_text(requirement.get('statement'))}\n"
-                "Grounded research context (context only; do not emit evidence IDs):\n"
-                f"{_evidence_context(evidence)}\n\n"
-                "Section-specific requirements:\n"
-                f"{section_instructions}\n\n"
-                "Return this exact block structure in this exact order. Replace each angle-bracketed "
-                "placeholder with the section prose and preserve every delimiter exactly:\n"
-                f"{output_skeleton}"
-            ),
-        },
-    ]
-
-
-def _parse_batch_sections(
-    raw: Any,
-    selected_sections: tuple[str, ...],
-) -> dict[str, str]:
-    text = str(raw or "").strip()
-    if not text:
-        return {}
-
-    allowed = set(selected_sections)
-    matches: dict[str, list[str]] = {}
-    for match in _BATCH_SECTION_RE.finditer(text):
-        section = match.group(1)
-        if section in allowed:
-            matches.setdefault(section, []).append(match.group(2))
-
-    parsed: dict[str, str] = {}
-    for section in selected_sections:
-        values = matches.get(section, [])
-        if len(values) != 1:
-            continue
-        try:
-            parsed[section] = _normalize_section_text(values[0], section)
-        except ValueError:
-            continue
-    return parsed
-
-
-def _batch_plain_sections(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-) -> dict[str, str]:
-    messages = _batch_prompt(requirement, selected_sections, evidence)
-    with planner_operation(
-        "detailed_requirement_batch",
-        output_tokens=_batch_output_tokens(len(selected_sections)),
-    ):
-        raw = router.generate_text(
-            "planner",
-            messages,
-            response_format="text",
-            enable_tools=False,
-        )
-    return _parse_batch_sections(raw, selected_sections)
-
-
 def _compile_requirement_specifications(
     router: Any,
     *,
@@ -337,34 +244,32 @@ def _compile_requirement_specifications(
     selected_sections: tuple[str, ...],
     evidence: list[Mapping[str, Any]],
 ) -> dict[str, str]:
-    try:
-        specifications = _batch_plain_sections(
-            router,
-            requirement=requirement,
-            selected_sections=selected_sections,
-            evidence=evidence,
-        )
-    except Exception:
-        specifications = {}
+    """Author the host-selected semantic sections once, in dependency-preserving order.
 
+    There is deliberately no token-derived batching, token escalation, repair retry, or
+    fallback path here. The selected section names are the decomposition boundary.
+    Earlier completed sections are passed forward as continuity context so a small model
+    can keep one requirement coherent without authoring a monolithic response.
+    """
+
+    specifications: dict[str, str] = {}
     seen: set[str] = set()
-    repair: list[str] = []
     for section in selected_sections:
-        specification = specifications.get(section)
-        normalized = _text(specification).casefold() if specification else ""
-        if not normalized or normalized in seen:
-            repair.append(section)
-            continue
-        seen.add(normalized)
-
-    for section in repair:
-        specifications[section] = _plain_section(
+        specification = _plain_section(
             router,
             requirement=requirement,
             section=section,
             evidence=evidence,
+            prior_specifications=specifications,
         )
-    return {section: specifications[section] for section in selected_sections}
+        normalized = _text(specification).casefold()
+        if normalized in seen:
+            raise ValueError(
+                f"DETAILED_PLAN_DUPLICATE_SECTION: {section} duplicated an earlier semantic section"
+            )
+        specifications[section] = specification
+        seen.add(normalized)
+    return specifications
 
 
 def _host_derived_capabilities(worksheet: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -387,24 +292,26 @@ def _host_derived_obligations(worksheet: Mapping[str, Mapping[str, Any]]) -> lis
     ]
 
 
-def _host_derived_checks(requirement: Mapping[str, Any], worksheet: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _host_derived_checks(
+    requirement: Mapping[str, Any], worksheet: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     acceptance = requirement.get("acceptance")
-    checks = [
-        _text(item)
-        for item in acceptance
-        if _text(item)
-    ] if isinstance(acceptance, list) else []
+    checks = (
+        [_text(item) for item in acceptance if _text(item)]
+        if isinstance(acceptance, list)
+        else []
+    )
     if not checks:
         verification = worksheet.get("verification", {})
         specification = _text(verification.get("specification"))
         if specification:
             checks = [specification]
     if not checks:
-        checks = [f"Given the requirement is exercised, verify the observable behavior: {_text(requirement.get('statement'))}"]
-    return [
-        {"check": check, "constraint_evidence_refs": []}
-        for check in checks
-    ]
+        checks = [
+            "Given the requirement is exercised, verify the observable behavior: "
+            + _text(requirement.get("statement"))
+        ]
+    return [{"check": check, "constraint_evidence_refs": []} for check in checks]
 
 
 def _assemble_requirement_plan(
@@ -469,7 +376,7 @@ def _compile_requirement_plans_parallel(
     *,
     workers: int,
 ) -> list[dict[str, Any]]:
-    """Use one bounded pool across independent requirement batches."""
+    """Run independent requirements in parallel; preserve section order inside each one."""
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
         futures = [
