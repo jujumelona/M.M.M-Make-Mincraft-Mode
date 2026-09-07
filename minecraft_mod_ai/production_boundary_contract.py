@@ -19,7 +19,8 @@ from .acceptance_contracts import (
     canonical_public_acceptance as _canonical_acceptance_values,
     is_public_acceptance as _canonical_is_public_acceptance,
     project_requirement_public_acceptance,
-    validate_public_acceptance,
+    validate_runtime_public_acceptance,
+    verified_legacy_acceptance_context,
 )
 
 _INSTALLED = False
@@ -38,9 +39,9 @@ def _canonical_public_acceptance(values: Any) -> list[str]:
 
 
 def _production_public_acceptance(statement: str) -> None:
-    """Expose the canonical rule through ProductionContractError."""
+    """Expose the canonical runtime rule through ProductionContractError."""
 
-    validate_public_acceptance(
+    validate_runtime_public_acceptance(
         statement,
         error_type=_production.ProductionContractError,
     )
@@ -238,7 +239,12 @@ def _rewrite_compilation(
         if item.get("visibility") == "public":
             statement = str(item.get("statement") or "")
             try:
-                _production_public_acceptance(statement)
+                # Rewritten output is always strict, even when the old compiler was
+                # temporarily allowed to ingest a verified legacy representation.
+                if not _canonical_is_public_acceptance(statement):
+                    raise _production.ProductionContractError(
+                        "canonical public acceptance rejected rewritten statement"
+                    )
             except _production.ProductionContractError as exc:
                 raise _production.ProductionContractError(
                     f"public acceptance leaked an internal task invariant: {ref}"
@@ -350,15 +356,21 @@ def install_production_boundary_contract() -> None:
                 acceptance_tests,
                 effective_plan,
             )
-            compilation = original(
-                requested_prompt,
-                game_design,
-                research_brief,
-                modules,
-                assets,
-                effective_acceptance,
-                effective_plan,
-            )
+            # A plan reaches this compatibility context only after its canonical hash and
+            # structure validate. The central contract owns the temporary relaxation;
+            # production_boundary_contract merely enters it.
+            with verified_legacy_acceptance_context(
+                isinstance(effective_plan, Mapping)
+            ):
+                compilation = original(
+                    requested_prompt,
+                    game_design,
+                    research_brief,
+                    modules,
+                    assets,
+                    effective_acceptance,
+                    effective_plan,
+                )
             return _rewrite_compilation(
                 compilation,
                 modules=modules,
