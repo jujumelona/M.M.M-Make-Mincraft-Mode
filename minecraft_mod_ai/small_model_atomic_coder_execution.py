@@ -50,15 +50,16 @@ def _sequence_copy(value: Any) -> list[Any]:
 
 def _steps(contract: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     raw = contract.get("implementation_steps")
-    if not _is_sequence(raw):
-        return ()
+    if not _is_sequence(raw) or not raw:
+        _fail("canonical coder execution contract has no implementation steps")
     result: list[dict[str, Any]] = []
-    for item in raw:
+    for index, item in enumerate(raw):
         if not isinstance(item, Mapping):
-            continue
+            _fail(f"implementation step {index + 1} is not an object")
         obligation = str(item.get("obligation") or "").strip()
-        if obligation:
-            result.append(dict(item))
+        if not obligation:
+            _fail(f"implementation step {index + 1} has no obligation")
+        result.append(dict(item))
     return tuple(result)
 
 
@@ -256,8 +257,6 @@ def atomicize_coder_messages(
             f"{contract.get('schema_version')!r}"
         )
     steps = _steps(contract)
-    if not steps:
-        _fail("canonical coder execution contract has no implementation steps")
 
     batches: list[tuple[dict[str, Any], ...]] = []
     for step_index, step in enumerate(steps):
