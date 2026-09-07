@@ -166,6 +166,24 @@ def _completion_contract_for_task(
     return tuple(dict.fromkeys(obligations)), tuple(dict.fromkeys(acceptance))
 
 
+def _template_task_obligations(task: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return concrete work owned by this host-compiled template step.
+
+    Requirement-wide obligations intentionally stay on the completion task. Intermediate
+    template tasks still need one executable local obligation, otherwise the coder handoff
+    is semantic-only. Only host-selected template tasks may promote their frozen outcome;
+    arbitrary model-authored semantic prose is never treated as an implementation command.
+    """
+
+    explicit = _strings(task.get("implementation_obligations"))
+    if explicit:
+        return explicit
+    if not str(task.get("template_id") or "").strip():
+        return ()
+    outcome = str(task.get("semantic_outcome") or "").strip()
+    return (outcome,) if outcome else ()
+
+
 def _execution_task(
     plan: Mapping[str, Any], raw_task: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -229,7 +247,8 @@ def _execution_task(
     task["derived_requirements"] = derived
     acceptance = list(_strings(task.get("acceptance")))
     acceptance.extend(planner_acceptance)
-    implementation_obligations = list(planner_obligations)
+    implementation_obligations = list(_template_task_obligations(task))
+    implementation_obligations.extend(planner_obligations)
     for item in derived:
         acceptance.extend(_strings(item.get("acceptance")))
         implementation_obligations.extend(
