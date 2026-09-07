@@ -269,6 +269,28 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
         return False
 
 
+def _schema_validation_diagnostics(arguments: Mapping[str, Any], schema: Mapping[str, Any]) -> str:
+    try:
+        from jsonschema import validators
+        from jsonschema.exceptions import SchemaError
+
+        schema_dict = dict(schema)
+        validator_cls = validators.validator_for(schema_dict)
+        validator_cls.check_schema(schema_dict)
+        checker = validator_cls.FORMAT_CHECKER
+        validator = validator_cls(schema_dict, format_checker=checker)
+        errors = list(validator.iter_errors(dict(arguments)))
+        if not errors:
+            return ""
+        diag_lines = []
+        for err in errors[:3]:
+            path = ".".join(str(p) for p in err.absolute_path) or "root"
+            diag_lines.append(f"{path}: {err.message}")
+        return "; ".join(diag_lines)
+    except Exception as exc:
+        return f"schema error: {exc}"
+
+
 def _deterministic_read_arguments(request: Any, name: str) -> dict[str, Any] | None:
     if name not in _DETERMINISTIC_READ_TOOLS:
         return None

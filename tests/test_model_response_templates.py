@@ -35,7 +35,7 @@ def test_every_explicit_json_generation_call_supplies_a_schema():
     root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     missing = []
     for path in root.rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.Call):
                 continue
             name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")

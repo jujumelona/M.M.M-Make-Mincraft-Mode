@@ -60,9 +60,11 @@ def test_large_model_authored_schema_is_rejected_before_generation() -> None:
             f"field_{index}": {
                 "type": "object",
                 "properties": {f"nested_{inner}": {"type": "string"} for inner in range(4)},
+                "additionalProperties": False,
             }
             for index in range(20)
         },
+        "additionalProperties": False,
     }
     with pytest.raises(ModelConfigurationError, match="MODEL_STRUCTURE_ATOMICITY"):
         assert_atomic_model_schema(schema, surface="regression")
@@ -70,7 +72,12 @@ def test_large_model_authored_schema_is_rejected_before_generation() -> None:
 
 def test_small_atomic_schema_remains_allowed() -> None:
     assert_atomic_model_schema(
-        {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
         surface="regression",
     )
 

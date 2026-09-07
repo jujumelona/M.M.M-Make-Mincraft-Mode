@@ -17,7 +17,7 @@ from .minecraft_template_catalog import (
     semantic_capability_choices,
 )
 from .planner_operation import planner_operation
-from .planning_state_contract import ROUTE_SOURCES
+from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 from .root_cause_trace import emit_root_cause
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
@@ -183,12 +183,57 @@ def _normalize_requirement_rows(
     return deduped
 
 
+def _blocking_unknowns(
+    state: Mapping[str, Any],
+    *,
+    stage: str = "requirement_selection",
+) -> list[Mapping[str, Any]]:
+    """Return only unresolved rows that explicitly block the requested host stage."""
+    rows = state.get("unresolved", [])
+    if not isinstance(rows, list):
+        return []
+    return [
+        item
+        for item in rows
+        if isinstance(item, Mapping)
+        and item.get("status") != "resolved"
+        and stage in _strings(item.get("blocks"))
+    ]
+
+
+def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Represent incomplete requirement knowledge in state instead of throwing it away."""
+    value = deepcopy(dict(state))
+    blocking = _blocking_unknowns(value, stage="requirement_selection")
+    existing = [
+        item
+        for item in value.get("blockers", [])
+        if isinstance(item, Mapping) and item.get("stage") != "requirement_selection"
+    ]
+    if blocking:
+        existing.append(
+            {
+                "blocker_id": "blocker_requirement_selection",
+                "stage": "requirement_selection",
+                "statement": "Requirement selection is waiting for unresolved task-state knowledge.",
+                "caused_by": [str(item.get("unresolved_id") or "") for item in blocking],
+            }
+        )
+    value["blockers"] = existing
+    value["plan_ready"] = False
+    return _rehash(value)
+
+
 def compile_researched_requirements(
     router: Any,
     prompt: str,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Add behavior requirements; semantic model mistakes never become planner invariants."""
+    validate_planning_state(state, prompt=prompt)
+    if _blocking_unknowns(state, stage="requirement_selection"):
+        return _preserve_blocked_state(state)
+
     context = _resolved_context(state)
     messages = [
         {

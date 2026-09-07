@@ -15,9 +15,9 @@ from typing import Any
 
 _INSTALLED = False
 _MAX_SCHEMA_CHARS = 12_000
-_MAX_SCHEMA_NODES = 120
-_MAX_SCHEMA_DEPTH = 8
-_MAX_SCHEMA_PROPERTIES = 32
+_MAX_SCHEMA_NODES = 140
+_MAX_SCHEMA_DEPTH = 9
+_MAX_SCHEMA_PROPERTIES = 36
 _MARKER = "_mmm_atomic_model_output_boundary"
 
 

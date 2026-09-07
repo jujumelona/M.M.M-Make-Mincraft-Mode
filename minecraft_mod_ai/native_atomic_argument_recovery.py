@@ -94,9 +94,15 @@ def _messages(
         if isinstance(properties, Mapping)
         else "arguments"
     )
+    schema_hint = json.dumps(
+        dict(page_schema),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     instruction = (
         f"The host already selected the action. Supply argument page {page_index}/{page_count} "
         f"as one JSON object containing only these fields: {fields}. "
+        f"Exact page JSON schema: {schema_hint}. "
         "Do not choose or name a tool. Do not emit prose, YAML, XML, or a code fence. "
         "The host owns action selection, merges bounded pages, validates the complete object, "
         "and constructs the final tool call."
@@ -180,7 +186,8 @@ def _page_result(
         return None, reason, _fingerprint(parsed)
     normalized = dict(parsed)
     if not forced._arguments_match_schema(normalized, page_schema):
-        reason = "argument page JSON failed the host page schema"
+        diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(normalized, page_schema)
+        reason = f"argument page JSON failed the host page schema ({diag})" if diag else "argument page JSON failed the host page schema"
         return None, reason, _fingerprint(normalized)
     return normalized, "", _fingerprint(normalized)
 

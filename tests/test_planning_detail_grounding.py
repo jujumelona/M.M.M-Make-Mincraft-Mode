@@ -58,10 +58,23 @@ class _StructuredRouter:
     def generate_text(self, role, messages, **kwargs):
         assert kwargs["response_format"] == "json"
         assert kwargs["enable_tools"] is False
-        assert kwargs["response_schema"]["required"] == ["specification", "constraint_evidence_refs"]
         self.calls.append({"role": role, "messages": messages, **kwargs})
         section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
-        return json.dumps(_authored_worksheet()[section])
+        schema = kwargs["response_schema"]
+        full = _authored_worksheet()[section]
+        payload: dict = {}
+        for prop in schema.get("properties", {}):
+            if prop == "constraint_evidence_refs":
+                payload[prop] = full.get(prop, [])
+            elif prop == "inapplicable_concerns":
+                payload[prop] = [
+                    item
+                    for item in full["specification"].get("inapplicable_concerns", [])
+                    if item["concern"] in schema.get("properties", {})
+                ]
+            elif prop in full["specification"]:
+                payload[prop] = full["specification"][prop]
+        return json.dumps(payload)
 
 
 def _grounded_state() -> dict[str, object]:
@@ -92,7 +105,7 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
 
     plan = _compile_requirement_plans_dag(router, _grounded_state(), [requirement], {"req_001": WORKSHEET_SECTIONS}, workers=1)[0]
 
-    assert len(router.calls) == len(WORKSHEET_SECTIONS)
+    assert len(router.calls) >= len(WORKSHEET_SECTIONS)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []

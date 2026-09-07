@@ -27,6 +27,12 @@ from .planning_detail_template import (
     worksheet_section_prompt,
     worksheet_section_schema,
 )
+from .worksheet_atomic_chunker import (
+    merge_worksheet_section_chunks,
+    pack_section_concerns,
+    worksheet_chunk_prompt,
+    worksheet_chunk_schema,
+)
 from .planning_state_contract import validate_planning_state
 
 
@@ -236,6 +242,61 @@ def _structured_output_text(exc: BaseException) -> str:
     return str(getattr(exc, "output", "") or "")
 
 
+def _chunk_messages(
+    requirement: Mapping[str, Any],
+    selected_sections: tuple[str, ...],
+    section: str,
+    evidence: list[Mapping[str, Any]],
+    completed: Mapping[str, Mapping[str, Any]],
+    *,
+    chunk_index: int,
+    chunk_count: int,
+    concerns: tuple[str, ...],
+    include_evidence: bool = False,
+    repair_error: str = "",
+) -> list[dict[str, str]]:
+    statement = _text(requirement.get("statement"))
+    acceptance = requirement.get("acceptance")
+    acceptance_rows = (
+        [_text(item) for item in acceptance if _text(item)]
+        if isinstance(acceptance, list)
+        else []
+    )
+    acceptance_text = "\n".join(f"- {row}" for row in acceptance_rows) or "- none supplied"
+    prerequisite_context = _section_dependency_context(
+        section, selected_sections, completed
+    )
+    instruction = (
+        f"Complete atomic concern chunk {chunk_index}/{chunk_count} of engineering worksheet section {section!r}. "
+        "Return only the JSON object required by the supplied response schema. "
+        "Do not emit analysis, reasoning, commentary, markdown, code fences, or keys outside "
+        "that schema. Do not invent target API names, symbols, versions, repository paths, "
+        "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context."
+    )
+    if repair_error:
+        instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
+
+    return [
+        {
+            "role": "system",
+            "content": instruction,
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Requirement: {statement}\n"
+                "Acceptance observations supplied by the requirement:\n"
+                f"{acceptance_text}\n"
+                "Grounded implementation evidence:\n"
+                f"{_evidence_context(evidence)}\n\n"
+                "Direct prerequisite worksheet sections:\n"
+                f"{prerequisite_context}\n\n"
+                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
+            ),
+        },
+    ]
+
+
 def _compile_worksheet_section(
     router: Any,
     *,
@@ -246,28 +307,70 @@ def _compile_worksheet_section(
     allowed: set[str],
     completed: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Generate and validate one dependency-scoped worksheet section."""
+    """Generate and validate one dependency-scoped worksheet section via atomic concern chunks."""
 
     requirement_ref = _text(requirement.get("requirement_id"))
-    schema = worksheet_section_schema(section)
-    messages = _section_messages(
-        requirement, selected_sections, section, evidence, completed
-    )
-    raw = ""
     operation = f"detailed_section:{section}"
+    chunks_def = pack_section_concerns(section)
+    chunk_count = len(chunks_def)
+    chunk_results: list[dict[str, Any]] = []
+
     try:
         with planner_operation(operation):
-            raw = router.generate_text(
-                "planner",
-                messages,
-                response_format="json",
-                response_schema=schema,
-                enable_tools=False,
-            )
-        decoded = json.loads(raw)
-        return validate_worksheet_section(decoded, allowed, section)
+            for index, concerns in enumerate(chunks_def, start=1):
+                is_first = index == 1
+                chunk_schema = worksheet_chunk_schema(
+                    section, concerns, include_evidence=is_first
+                )
+                messages = _chunk_messages(
+                    requirement,
+                    selected_sections,
+                    section,
+                    evidence,
+                    completed,
+                    chunk_index=index,
+                    chunk_count=chunk_count,
+                    concerns=concerns,
+                    include_evidence=is_first,
+                )
+                raw = router.generate_text(
+                    "planner",
+                    messages,
+                    response_format="json",
+                    response_schema=chunk_schema,
+                    enable_tools=False,
+                )
+                try:
+                    decoded = json.loads(raw)
+                    if not isinstance(decoded, Mapping):
+                        raise ValueError("chunk output must be a JSON object")
+                except (json.JSONDecodeError, ValueError) as parse_err:
+                    repair_messages = _chunk_messages(
+                        requirement,
+                        selected_sections,
+                        section,
+                        evidence,
+                        completed,
+                        chunk_index=index,
+                        chunk_count=chunk_count,
+                        concerns=concerns,
+                        include_evidence=is_first,
+                        repair_error=str(parse_err),
+                    )
+                    raw = router.generate_text(
+                        "planner",
+                        repair_messages,
+                        response_format="json",
+                        response_schema=chunk_schema,
+                        enable_tools=False,
+                    )
+                    decoded = json.loads(raw)
+
+                chunk_results.append(decoded)
+
+            return merge_worksheet_section_chunks(section, chunk_results, allowed)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
-        raw_text = raw or _structured_output_text(exc)
+        raw_text = _structured_output_text(exc)
         emit_root_cause(
             "detailed_section_failure",
             stage="planning_state",
@@ -284,10 +387,10 @@ def _compile_worksheet_section(
                 "raw_output": raw_text,
                 "raw_output_chars": len(raw_text),
                 "response_format": "json",
-                "response_schema": schema,
+                "chunks_count": chunk_count,
                 "allowed_evidence_refs": sorted(allowed),
                 "parser_rule": (
-                    "one JSON worksheet section matching the host-owned response schema; "
+                    "atomic JSON worksheet chunks merged and validated by host; "
                     "evidence refs are validated by the host"
                 ),
             },
