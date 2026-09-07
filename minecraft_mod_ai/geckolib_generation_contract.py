@@ -3,15 +3,26 @@ from __future__ import annotations
 """Pure deterministic preflight for GeckoLib generation targets."""
 
 import json
+import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .platform_catalog import PlatformAdapter, adapter_from_project
 from .project_edit import FabricProjectInfo, ProjectEditError, inspect_fabric_project
+from .scale_policy import ScalePolicy
 
 _DEPENDENCIES_BLOCK = re.compile(r"\bdependencies\s*\{")
 _GECKOLIB_DEPENDENCY_MARKER = "// MMM:geckolib:dependency"
+_ARCHETYPES = frozenset(
+    {"biped", "quadruped", "flying", "serpentine", "construct", "custom"}
+)
+_BEHAVIORS = frozenset({"hostile_melee", "neutral_melee", "passive", "npc"})
+_SPAWN_GROUPS = frozenset(
+    {"monster", "creature", "ambient", "water_creature", "misc"}
+)
 
 
 class GeckoLibGenerationContractError(ValueError):
@@ -22,6 +33,166 @@ class GeckoLibGenerationContractError(ValueError):
 class GeckoLibGenerationTarget:
     info: FabricProjectInfo
     adapter: PlatformAdapter
+
+
+@dataclass(frozen=True)
+class GeckoLibEntityGenerationInputs:
+    """Canonical entity arguments shared by proposal preflight and generation."""
+
+    texture_width: int
+    texture_height: int
+    max_health: float
+    attack_damage: float
+    movement_speed: float
+    follow_range: float
+    archetype: str
+    behavior: str
+    entity_width: float
+    entity_height: float
+    spawn_group: str
+    custom_bones: list[dict[str, Any]] | None
+
+    def generator_kwargs(self) -> dict[str, Any]:
+        return {
+            "texture_width": self.texture_width,
+            "texture_height": self.texture_height,
+            "max_health": self.max_health,
+            "attack_damage": self.attack_damage,
+            "movement_speed": self.movement_speed,
+            "follow_range": self.follow_range,
+            "archetype": self.archetype,
+            "behavior": self.behavior,
+            "entity_width": self.entity_width,
+            "entity_height": self.entity_height,
+            "spawn_group": self.spawn_group,
+            "custom_bones": self.custom_bones,
+        }
+
+
+def validate_geckolib_entity_inputs(
+    *,
+    texture_width: int,
+    texture_height: int,
+    max_health: int | float,
+    attack_damage: int | float,
+    movement_speed: int | float,
+    follow_range: int | float,
+    archetype: str,
+    behavior: str,
+    entity_width: int | float,
+    entity_height: int | float,
+    spawn_group: str | None,
+    custom_bones: list[dict[str, Any]] | None,
+    policy: ScalePolicy | None = None,
+) -> GeckoLibEntityGenerationInputs:
+    """Validate the exact deterministic inputs consumed by the GeckoLib generator."""
+
+    policy = policy or ScalePolicy.from_environment()
+    policy.validate()
+    if (
+        type(texture_width) is not int
+        or type(texture_height) is not int
+        or not 1 <= texture_width <= policy.max_texture_dimension
+        or not 1 <= texture_height <= policy.max_texture_dimension
+    ):
+        raise GeckoLibGenerationContractError(
+            "Texture dimensions exceed configured resource policy."
+        )
+
+    numeric = {
+        "max_health": max_health,
+        "attack_damage": attack_damage,
+        "movement_speed": movement_speed,
+        "follow_range": follow_range,
+        "entity_width": entity_width,
+        "entity_height": entity_height,
+    }
+    normalized_numeric: dict[str, float] = {}
+    for name, value in numeric.items():
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
+            raise GeckoLibGenerationContractError(
+                f"{name} must be a positive finite number."
+            )
+        normalized_numeric[name] = float(value)
+
+    if archetype not in _ARCHETYPES or (
+        archetype == "custom" and not custom_bones
+    ):
+        raise GeckoLibGenerationContractError(
+            "Unknown or incomplete entity archetype."
+        )
+    if behavior not in _BEHAVIORS:
+        raise GeckoLibGenerationContractError("Unknown entity behavior profile.")
+    effective_spawn_group = spawn_group or (
+        "monster" if behavior == "hostile_melee" else "creature"
+    )
+    if effective_spawn_group not in _SPAWN_GROUPS:
+        raise GeckoLibGenerationContractError("Unknown spawn group.")
+
+    return GeckoLibEntityGenerationInputs(
+        texture_width=texture_width,
+        texture_height=texture_height,
+        max_health=normalized_numeric["max_health"],
+        attack_damage=normalized_numeric["attack_damage"],
+        movement_speed=normalized_numeric["movement_speed"],
+        follow_range=normalized_numeric["follow_range"],
+        archetype=archetype,
+        behavior=behavior,
+        entity_width=normalized_numeric["entity_width"],
+        entity_height=normalized_numeric["entity_height"],
+        spawn_group=effective_spawn_group,
+        custom_bones=custom_bones,
+    )
+
+
+def geckolib_entity_inputs_from_module_config(
+    kind: str,
+    config: Mapping[str, Any],
+    *,
+    policy: ScalePolicy | None = None,
+) -> GeckoLibEntityGenerationInputs:
+    """Apply the orchestrator's coercion semantics before any generation can start."""
+
+    behavior_default = "npc" if kind == "npc" else "hostile_melee"
+    raw_custom_bones = config.get("custom_bones")
+    custom_bones = raw_custom_bones if isinstance(raw_custom_bones, list) else None
+    try:
+        texture_width = int(config.get("texture_width", 64))
+        texture_height = int(config.get("texture_height", 64))
+        max_health = float(config.get("max_health", 80.0))
+        attack_damage = float(config.get("attack_damage", 8.0))
+        movement_speed = float(config.get("movement_speed", 0.27))
+        follow_range = float(config.get("follow_range", 40.0))
+        entity_width = float(config.get("entity_width", 0.8))
+        entity_height = float(config.get("entity_height", 2.0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise GeckoLibGenerationContractError(
+            "Entity generation numeric fields cannot be converted to generator inputs."
+        ) from exc
+
+    spawn_group = (
+        str(config["spawn_group"]) if config.get("spawn_group") else None
+    )
+    return validate_geckolib_entity_inputs(
+        texture_width=texture_width,
+        texture_height=texture_height,
+        max_health=max_health,
+        attack_damage=attack_damage,
+        movement_speed=movement_speed,
+        follow_range=follow_range,
+        archetype=str(config.get("archetype", "biped")),
+        behavior=str(config.get("behavior", behavior_default)),
+        entity_width=entity_width,
+        entity_height=entity_height,
+        spawn_group=spawn_group,
+        custom_bones=custom_bones,
+        policy=policy,
+    )
 
 
 def _read_utf8(path: Path, *, label: str) -> str:
@@ -118,8 +289,11 @@ def preflight_geckolib_generation_target(
 
 
 __all__ = [
+    "GeckoLibEntityGenerationInputs",
     "GeckoLibGenerationContractError",
     "GeckoLibGenerationTarget",
+    "geckolib_entity_inputs_from_module_config",
     "preflight_geckolib_generation_target",
+    "validate_geckolib_entity_inputs",
     "validate_geckolib_project_preflight",
 ]
