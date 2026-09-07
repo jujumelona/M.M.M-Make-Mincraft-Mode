@@ -4,9 +4,9 @@ from __future__ import annotations
 
 Minecraft ecosystem retrieval intentionally filters for Minecraft mods. Reference-driven
 requests need a different source path before any Minecraft implementation decision exists.
-Encyclopedic sources are authoritative for reference semantics; GitHub README search is a
-last-resort fallback only when Wikipedia returns no claim-bearing body. It is never run in
-parallel with a successful encyclopedia lookup.
+Wikipedia and GitHub are independent, host-owned reference providers. Every authored query
+runs against both providers; no provider is selected because another provider failed or
+returned no evidence.
 """
 
 import atexit
@@ -106,7 +106,7 @@ def _relevant(query: str, title: str, body: str) -> bool:
 
 
 def _wikipedia_languages(query: str) -> tuple[str, ...]:
-    """Search the language implied by the authored reference, then English as fallback."""
+    """Search the language implied by the authored reference plus English."""
     languages: list[str] = []
     if re.search(r"[가-힣]", query):
         languages.append("ko")
@@ -269,7 +269,7 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
                 "content": body,
                 "content_sha256": _sha(body),
                 "body_retrieved": True,
-                "evidence_origin": "github_reference_readme_fallback",
+                "evidence_origin": "github_reference_readme",
                 "metadata": {"provider": "github", "repository": full_name, "query": query},
             }
         )
@@ -278,7 +278,7 @@ def _github_reference_sources(query: str) -> tuple[list[dict[str, Any]], dict[st
         "status": "available",
         "result_count": len(records),
         "errors": errors[:3],
-        "policy": "wikipedia_empty_fallback_only",
+        "policy": "independent_provider",
     }
 
 
@@ -303,34 +303,31 @@ def _retrieve_provider(
 
 
 def _retrieve_query_row(query: str) -> dict[str, Any]:
-    """Retrieve one query without changing Wikipedia-first/GitHub-fallback semantics."""
+    """Retrieve one query from every fixed provider without failover semantics."""
+    provider_specs: tuple[tuple[str, _ReferenceProvider], ...] = (
+        ("wikipedia", _wikipedia_sources),
+        ("github_reference", _github_reference_sources),
+    )
+    with ThreadPoolExecutor(
+        max_workers=len(provider_specs),
+        thread_name_prefix="mmm-reference-provider",
+    ) as executor:
+        futures = [
+            executor.submit(_retrieve_provider, query, provider, function)
+            for provider, function in provider_specs
+        ]
+        provider_results = [future.result() for future in futures]
+
     records: list[dict[str, Any]] = []
     providers: dict[str, Any] = {}
     errors: list[dict[str, str]] = []
-
-    wiki_found, wiki_receipt, wiki_error = _retrieve_provider(
-        query, "wikipedia", _wikipedia_sources
-    )
-    records.extend(wiki_found)
-    providers["wikipedia"] = wiki_receipt
-    if wiki_error is not None:
-        errors.append(wiki_error)
-
-    if wiki_found:
-        providers["github_reference"] = {
-            "provider": "github_reference",
-            "status": "skipped_wikipedia_has_evidence",
-            "result_count": 0,
-            "policy": "wikipedia_empty_fallback_only",
-        }
-    else:
-        github_found, github_receipt, github_error = _retrieve_provider(
-            query, "github_reference", _github_reference_sources
-        )
-        records.extend(github_found)
-        providers["github_reference"] = github_receipt
-        if github_error is not None:
-            errors.append(github_error)
+    for (provider, _), (found, receipt, error) in zip(
+        provider_specs, provider_results, strict=True
+    ):
+        records.extend(found)
+        providers[provider] = receipt
+        if error is not None:
+            errors.append(error)
 
     unique: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -346,7 +343,7 @@ def _retrieve_query_row(query: str) -> dict[str, Any]:
         "content_record_count": len(unique),
         "provider_receipts": providers,
         "retrieval_errors": errors,
-        "provider_policy": "wikipedia_then_github_empty_fallback",
+        "provider_policy": "independent_parallel",
     }
 
 
