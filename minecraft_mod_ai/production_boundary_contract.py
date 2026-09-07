@@ -1,92 +1,61 @@
 from __future__ import annotations
 
-"""Production serialization boundary for stable requirement identity and public acceptance.
+"""Production serialization adapter for the canonical requirement acceptance contract.
 
-Evidence-mode production contracts must project the approved requirement graph rather than
-rephrasing it. User-facing acceptance is copied from the requirement authority; task IDs,
-anchor integrity and implementation invariants remain internal. Conditional quality coverage
-is bound to the requirement that activated it instead of every requested requirement.
+All public-acceptance semantics are owned by ``acceptance_contracts``. This module only
+adapts that canonical contract to production-specific exception types, catalog shapes and
+quality coverage. It must not define a second acceptance policy.
 """
 
 from collections.abc import Mapping
-from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
 from . import production_contract as _production
+from .acceptance_contracts import (
+    CANONICAL_ACCEPTANCE_OWNER,
+    AcceptanceContractError,
+    approved_requirements as _canonical_approved_requirements,
+    canonical_public_acceptance as _canonical_acceptance_values,
+    is_public_acceptance as _canonical_is_public_acceptance,
+    project_requirement_public_acceptance,
+    validate_public_acceptance,
+)
 
 _INSTALLED = False
-_STRICT_PUBLIC_ACCEPTANCE = _production._validate_public_acceptance
-_ALLOW_VERIFIED_LEGACY_ACCEPTANCE: ContextVar[bool] = ContextVar(
-    "mmm_allow_verified_legacy_acceptance", default=False
-)
 
 
 def _strict_public_acceptance(value: Any) -> bool:
-    """Return whether ``value`` satisfies the production public-acceptance boundary."""
-    if not isinstance(value, str):
-        return False
-    try:
-        _production._validate_public_acceptance(value.strip())
-    except _production.ProductionContractError:
-        return False
-    return True
+    """Compatibility adapter; the rule itself is owned by acceptance_contracts."""
+
+    return _canonical_is_public_acceptance(value)
 
 
 def _canonical_public_acceptance(values: Any) -> list[str]:
-    """Normalize already-authoritative acceptance without reviving retired inference."""
+    """Compatibility adapter returning the canonical ordered public checks."""
 
-    if not isinstance(values, list):
-        return []
-    result: list[str] = []
-    for raw in values:
-        text = str(raw or "").strip()
-        if not text or not _strict_public_acceptance(text) or text in result:
-            continue
-        result.append(text)
-    return result
+    return list(_canonical_acceptance_values(values))
 
 
-def _contextual_public_acceptance(statement: str) -> None:
-    """Relax only the already-verified legacy projection seed in this context."""
-    if _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.get():
-        if not isinstance(statement, str) or not statement.strip():
-            raise _production.ProductionContractError(
-                "legacy acceptance must still be a non-empty string"
-            )
-        return
-    _STRICT_PUBLIC_ACCEPTANCE(statement)
+def _production_public_acceptance(statement: str) -> None:
+    """Expose the canonical rule through ProductionContractError."""
+
+    validate_public_acceptance(
+        statement,
+        error_type=_production.ProductionContractError,
+    )
 
 
-_contextual_public_acceptance._mmm_contextual_legacy_boundary = True
+_production_public_acceptance._mmm_contextual_legacy_boundary = True
+_production_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
 
 
 def _install_planner_public_acceptance_guard() -> None:
-    """Make evidence planning use the same strict public boundary as production.
+    """Bind evidence planning directly to the canonical acceptance predicate."""
 
-    The evidence planner has additional testability checks that remain authoritative.
-    This guard only tightens its result with the production leak detector so a plan
-    accepted upstream cannot fail later solely because task/integrity language crossed
-    the public boundary.
-    """
     from . import evidence_first_planning as _evidence
 
-    original = _evidence._is_public_acceptance
-    if getattr(original, "_mmm_production_public_acceptance_guard", False):
-        return
-
-    @wraps(original)
-    def is_public_acceptance(value: Any) -> bool:
-        if not original(value):
-            return False
-        normalize = getattr(_evidence, "_normalize_public_acceptance", None)
-        candidate = (
-            normalize(value) if callable(normalize) else str(value or "").strip()
-        )
-        return _strict_public_acceptance(candidate)
-
-    is_public_acceptance._mmm_production_public_acceptance_guard = True
-    _evidence._is_public_acceptance = is_public_acceptance
+    _evidence._is_public_acceptance = _canonical_is_public_acceptance
 
 
 def _validated_evidence_plan(
@@ -95,6 +64,7 @@ def _validated_evidence_plan(
     requested_prompt: str,
 ) -> Mapping[str, Any] | None:
     """Validate the frozen contract without rewriting authored acceptance or task IDs."""
+
     if isinstance(evidence_plan, Mapping):
         from .evidence_first_planning import validate_evidence_first_plan
 
@@ -106,14 +76,8 @@ def _filter_evidence_input_acceptance(
     acceptance_tests: Any,
     evidence_plan: Mapping[str, Any] | None,
 ) -> Any:
-    """Drop non-authoritative internal acceptance text before evidence-mode compilation.
+    """Drop non-authoritative internal acceptance before evidence-mode compilation."""
 
-    In evidence mode the canonical public contract belongs to
-    ``request_catalog.requirements[*].acceptance``. Free-form input tests are only
-    supplementary, so internal task/integrity prose must never be allowed to abort the
-    compiler before the canonical requirement authority is projected. Outside evidence
-    mode the original strict fail-closed behavior is preserved unchanged.
-    """
     if not isinstance(evidence_plan, Mapping):
         return acceptance_tests
     if isinstance(acceptance_tests, (str, bytes, bytearray)):
@@ -125,58 +89,25 @@ def _filter_evidence_input_acceptance(
     return tuple(
         value
         for value in values
-        if not isinstance(value, str) or _strict_public_acceptance(value)
+        if not isinstance(value, str) or _canonical_is_public_acceptance(value)
     )
 
 
 def _approved_requirements(
     evidence_plan: Mapping[str, Any] | None,
 ) -> dict[str, Mapping[str, Any]]:
-    if not isinstance(evidence_plan, Mapping):
-        return {}
-    request = evidence_plan.get("request_catalog")
-    values = request.get("requirements") if isinstance(request, Mapping) else None
-    if not isinstance(values, list):
-        return {}
-    return {
-        str(item.get("requirement_id")): item
-        for item in values
-        if isinstance(item, Mapping) and str(item.get("requirement_id") or "")
-    }
+    """Compatibility adapter to the canonical requirement authority extractor."""
+
+    return _canonical_approved_requirements(evidence_plan)
 
 
 def _approved_acceptance(requirement: Mapping[str, Any]) -> str:
-    """Project one strict public check after the original evidence hash was verified."""
-    acceptance = _canonical_public_acceptance(requirement.get("acceptance"))
-    if len(acceptance) == 1:
-        return acceptance[0]
-    if len(acceptance) > 1:
-        raise _production.ProductionContractError(
-            f"approved requirement {requirement.get('requirement_id')} exposes multiple public acceptance contracts"
-        )
-    observable = requirement.get("observable_behavior")
-    if isinstance(observable, Mapping):
-        given = str(observable.get("given") or "").strip()
-        when = str(observable.get("when") or "").strip()
-        then = str(observable.get("then") or "").strip()
-        if given and when and then:
-            candidate = f"Given {given}, when {when}, then {then}."
-            if _strict_public_acceptance(candidate):
-                return candidate
-    capability = str(requirement.get("capability") or "").strip()
-    if capability:
-        candidate = "Verify the observable player-facing behavior for capability " + capability + "."
-        if _strict_public_acceptance(candidate):
-            return candidate
-    span = requirement.get("source_span")
-    source_text = str(span.get("text") or "").strip() if isinstance(span, Mapping) else ""
-    if source_text:
-        candidate = "Demonstrate the observable requested behavior: " + source_text
-        if _strict_public_acceptance(candidate):
-            return candidate
-    raise _production.ProductionContractError(
-        f"approved requirement {requirement.get('requirement_id')} has no safe public acceptance projection"
-    )
+    """Project every approved public check without imposing a count limit."""
+
+    try:
+        return project_requirement_public_acceptance(requirement)
+    except AcceptanceContractError as exc:
+        raise _production.ProductionContractError(str(exc)) from exc
 
 
 def _requirement_context(
@@ -275,7 +206,14 @@ def _rewrite_compilation(
     approved_statements = {
         req_id: _approved_acceptance(req) for req_id, req in approved.items()
     }
-    approved_statement_set = set(approved_statements.values())
+    # Input acceptance is supplementary in evidence mode. Remove both the exact
+    # requirement-scoped projection and every individual canonical check so the same
+    # contract cannot appear twice under different origins.
+    authoritative_public = set(approved_statements.values())
+    for requirement in approved.values():
+        authoritative_public.update(
+            _canonical_acceptance_values(requirement.get("acceptance"))
+        )
 
     removed_refs: set[str] = set()
     rewritten_catalog: list[dict[str, Any]] = []
@@ -292,21 +230,23 @@ def _rewrite_compilation(
             item["statement"] = approved_statements[req_id]
         elif (
             origin == "input"
-            and str(item.get("statement") or "") in approved_statement_set
+            and str(item.get("statement") or "") in authoritative_public
         ):
             removed_refs.add(ref)
             continue
+
         if item.get("visibility") == "public":
             statement = str(item.get("statement") or "")
             try:
-                _production._validate_public_acceptance(statement)
+                _production_public_acceptance(statement)
             except _production.ProductionContractError as exc:
                 raise _production.ProductionContractError(
                     f"public acceptance leaked an internal task invariant: {ref}"
                 ) from exc
             if statement in seen_public:
                 raise _production.ProductionContractError(
-                    f"duplicate public acceptance statement would destroy requirement traceability: {ref}"
+                    "duplicate public acceptance statement would destroy requirement "
+                    f"traceability: {ref}"
                 )
             seen_public.add(statement)
         rewritten_catalog.append(item)
@@ -382,12 +322,12 @@ def install_production_boundary_contract() -> None:
         return
 
     _install_planner_public_acceptance_guard()
-    if not getattr(
+    if getattr(
         _production._validate_public_acceptance,
-        "_mmm_contextual_legacy_boundary",
-        False,
-    ):
-        _production._validate_public_acceptance = _contextual_public_acceptance
+        "_mmm_acceptance_contract_owner",
+        "",
+    ) != CANONICAL_ACCEPTANCE_OWNER:
+        _production._validate_public_acceptance = _production_public_acceptance
 
     original = _production.compile_production_contract
     if not getattr(original, "_mmm_authority_acceptance_projection", False):
@@ -410,21 +350,15 @@ def install_production_boundary_contract() -> None:
                 acceptance_tests,
                 effective_plan,
             )
-            legacy_token = _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.set(
-                isinstance(effective_plan, Mapping)
+            compilation = original(
+                requested_prompt,
+                game_design,
+                research_brief,
+                modules,
+                assets,
+                effective_acceptance,
+                effective_plan,
             )
-            try:
-                compilation = original(
-                    requested_prompt,
-                    game_design,
-                    research_brief,
-                    modules,
-                    assets,
-                    effective_acceptance,
-                    effective_plan,
-                )
-            finally:
-                _ALLOW_VERIFIED_LEGACY_ACCEPTANCE.reset(legacy_token)
             return _rewrite_compilation(
                 compilation,
                 modules=modules,
@@ -433,6 +367,7 @@ def install_production_boundary_contract() -> None:
             )
 
         compile_contract._mmm_authority_acceptance_projection = True
+        compile_contract._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
         _production.compile_production_contract = compile_contract
     _INSTALLED = True
 
