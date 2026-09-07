@@ -96,6 +96,8 @@ def finalize_runtime() -> None:
         from .runtime_preflight import run_runtime_preflight
         from .runtime_regression_reconciliation import install as install_runtime_regression_reconciliation
         from .runtime_wrapper_integrity import verify_installed_wrappers
+        from .small_model_atomic_coder_execution import assert_installed as assert_small_model_atomic_coder
+        from .small_model_atomic_coder_execution import install as install_small_model_atomic_coder
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
         from .small_model_task_capsule_contract import install as install_small_model_task_capsule
         from .small_model_write_scope_enforcement import assert_installed as assert_small_model_write_scope
@@ -159,6 +161,14 @@ def finalize_runtime() -> None:
         assert_small_model_task_capsule()
         install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
+        install_small_model_atomic_coder(
+            custom_module_generator_module=custom_module_generator,
+            model_router_module=model_router,
+        )
+        assert_small_model_atomic_coder(
+            custom_module_generator_module=custom_module_generator,
+            model_router_module=model_router,
+        )
 
         assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         verify_installed_wrappers()
