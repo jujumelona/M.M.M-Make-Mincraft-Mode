@@ -1,0 +1,110 @@
+name: Apply planner meta-output guard
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch central detailed-plan text boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/planning_state_implementation.py')
+          source = path.read_text(encoding='utf-8')
+
+          old_constants = '''_BATCH_TOKENS_PER_SECTION = 180
+          _BATCH_MIN_TOKENS = 900
+          _BATCH_MAX_TOKENS = 2200
+          '''.replace('          ', '')
+          new_constants = '''_BATCH_TOKENS_PER_SECTION = 180
+          _BATCH_MIN_TOKENS = 900
+          _BATCH_MAX_TOKENS = 2200
+          _META_REASONING_TAG_RE = re.compile(
+              r"^\\s*<\\s*think(?:ing)?\\b[^>]*>.*?<\\s*/\\s*think(?:ing)?\\s*>\\s*",
+              re.IGNORECASE | re.DOTALL,
+          )
+          _META_REASONING_LABEL_RE = re.compile(
+              r"^\\s*(?:#{1,6}\\s*)?(?:\\*\\*|__)?\\s*(?:thinking\\s+process|reasoning|analysis)\\s*(?:\\*\\*|__)?\\s*:\\s*",
+              re.IGNORECASE,
+          )
+          _FINAL_OUTPUT_LABEL_RE = re.compile(
+              r"(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\*\\*|__)?\\s*(?:final(?:\\s+(?:answer|specification))?|specification|answer)\\s*(?:\\*\\*|__)?\\s*:\\s*",
+              re.IGNORECASE,
+          )
+          '''.replace('          ', '')
+          if source.count(old_constants) != 1:
+              raise SystemExit('batch constants anchor drifted')
+          source = source.replace(old_constants, new_constants, 1)
+
+          old_normalizer = '''def _normalize_section_text(raw: Any, section: str) -> str:
+              value = str(raw or "").strip()
+              if value.startswith("```"):
+                  value = value.strip("`").strip()
+              if value.lstrip().startswith(("{", "[")):
+                  raise ValueError(
+                      f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
+                  )
+              value = _text(value)
+              if len(value) < 24:
+                  raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
+              return value
+          '''.replace('            ', '')
+          new_normalizer = '''def _strip_leading_meta_reasoning(raw: Any, section: str) -> str:
+              value = str(raw or "").strip()
+              while True:
+                  stripped = _META_REASONING_TAG_RE.sub("", value, count=1).strip()
+                  if stripped == value:
+                      break
+                  value = stripped
+
+              if _META_REASONING_LABEL_RE.match(value):
+                  final_output = _FINAL_OUTPUT_LABEL_RE.search(value)
+                  if final_output is None:
+                      raise ValueError(
+                          f"DETAILED_PLAN_META_REASONING: {section} returned reasoning without an explicit final-output boundary"
+                      )
+                  value = value[final_output.end():].strip()
+              return value
+
+
+          def _normalize_section_text(raw: Any, section: str) -> str:
+              value = _strip_leading_meta_reasoning(raw, section)
+              if value.startswith("```"):
+                  value = value.strip("`").strip()
+              if value.lstrip().startswith(("{", "[")):
+                  raise ValueError(
+                      f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
+                  )
+              value = _text(value)
+              if len(value) < 24:
+                  raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
+              return value
+          '''.replace('            ', '')
+          if source.count(old_normalizer) != 1:
+              raise SystemExit('normalizer anchor drifted')
+          source = source.replace(old_normalizer, new_normalizer, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+          python -m py_compile minecraft_mod_ai/planning_state_implementation.py
+      - name: Commit source guard and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/workflows/one-shot-strip-planner-meta.yml
+          git add minecraft_mod_ai/planning_state_implementation.py .github/workflows/one-shot-strip-planner-meta.yml
+          git commit -m 'fix: reject planner meta reasoning from artifacts'
+          git push origin HEAD:main
