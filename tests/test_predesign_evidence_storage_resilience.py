@@ -86,7 +86,11 @@ def test_corrupted_pages_jsonl_self_heals_from_raw(tmp_path, monkeypatch):
     assert body in healed_pages[0]["content"]
 
     # Disk file must now be valid JSONL
-    disk_lines = [l for l in pages_path.read_text(encoding="utf-8").split("\n") if l.strip()]
+    disk_lines = [
+        line
+        for line in pages_path.read_text(encoding="utf-8").split("\n")
+        if line.strip()
+    ]
     assert len(disk_lines) == 1
     parsed = json.loads(disk_lines[0])
     assert parsed["domain_id"] == "ship_domain"
