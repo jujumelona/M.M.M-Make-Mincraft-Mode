@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from minecraft_mod_ai import planning_state_implementation as implementation
-from minecraft_mod_ai.planner_operation import current_output_limit
+from minecraft_mod_ai.planning_detail_template import CORE_WORKSHEET_SECTIONS
 
 
-SECTIONS = ("behavior_contract", "state_model")
 REQUIREMENT = {
     "requirement_id": "req_001",
     "statement": "A player can exchange collected resources through a bounded economy loop.",
@@ -22,115 +23,67 @@ EVIDENCE = [
 ]
 
 
+def _payload() -> dict[str, dict[str, object]]:
+    return {
+        section: {
+            "specification": (
+                f"{section} defines one concrete authoritative contract with bounded failure "
+                "behavior and an observable verification outcome."
+            ),
+            "constraint_evidence_refs": [],
+        }
+        for section in CORE_WORKSHEET_SECTIONS
+    }
+
+
 class _Router:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
-        self.output_limits = []
 
     def generate_text(self, *args, **kwargs):
         self.calls.append((args, kwargs))
-        self.output_limits.append(current_output_limit())
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return response
 
 
-def test_requirement_details_generate_each_selected_semantic_section_once():
-    router = _Router(
-        [
-            "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result.",
-            "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
-        ]
-    )
+def test_requirement_details_generate_selected_sections_in_one_schema_call() -> None:
+    router = _Router([json.dumps(_payload())])
 
-    result = implementation._compile_requirement_specifications(
+    result = implementation._compile_requirement_worksheet(
         router,
         requirement=REQUIREMENT,
-        selected_sections=SECTIONS,
+        selected_sections=CORE_WORKSHEET_SECTIONS,
         evidence=EVIDENCE,
+        allowed={"evidence_001"},
     )
 
-    assert list(result) == list(SECTIONS)
-    assert len(router.calls) == len(SECTIONS)
-    assert router.output_limits == [None, None]
+    assert tuple(result) == CORE_WORKSHEET_SECTIONS
+    assert len(router.calls) == 1
+    kwargs = router.calls[0][1]
+    assert kwargs["response_format"] == "json"
+    assert kwargs["response_schema"]["required"] == list(CORE_WORKSHEET_SECTIONS)
+    assert kwargs["enable_tools"] is False
 
 
-def test_later_semantic_section_receives_completed_section_as_continuity_context():
-    first = (
-        "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result."
-    )
-    router = _Router(
-        [
-            first,
-            "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
-        ]
-    )
-
-    implementation._compile_requirement_specifications(
-        router,
-        requirement=REQUIREMENT,
-        selected_sections=SECTIONS,
-        evidence=EVIDENCE,
-    )
-
-    second_messages = router.calls[1][0][1]
-    second_prompt = second_messages[1]["content"]
-    assert "Earlier completed semantic sections" in second_prompt
-    assert f"- behavior_contract: {first}" in second_prompt
-    assert "<<<SECTION:" not in second_prompt
-
-
-def test_semantic_section_transport_failure_is_not_retried_or_fallback_rewritten():
+def test_structured_worksheet_transport_failure_is_not_retried() -> None:
     router = _Router([RuntimeError("transport failure")])
 
     with pytest.raises(RuntimeError, match="transport failure"):
-        implementation._compile_requirement_specifications(
+        implementation._compile_requirement_worksheet(
             router,
             requirement=REQUIREMENT,
-            selected_sections=SECTIONS,
+            selected_sections=CORE_WORKSHEET_SECTIONS,
             evidence=EVIDENCE,
+            allowed={"evidence_001"},
         )
 
     assert len(router.calls) == 1
 
 
-def test_section_normalizer_strips_complete_leading_think_block():
-    result = implementation._normalize_section_text(
-        "<think>I should reason about ownership before answering.</think>\n"
-        "The server owns the exchange mutation and emits a deterministic observable result.",
-        "behavior_contract",
-    )
-
-    assert result == (
-        "The server owns the exchange mutation and emits a deterministic observable result."
-    )
-
-
-def test_section_normalizer_keeps_only_explicit_final_after_reasoning_label():
-    result = implementation._normalize_section_text(
-        "Thinking Process: I should first reason about every possible state transition.\n\n"
-        "Specification: The authoritative state owner validates each transition and bounds every stored value.",
-        "state_model",
-    )
-
-    assert result == (
-        "The authoritative state owner validates each transition and bounds every stored value."
-    )
-
-
-def test_section_normalizer_rejects_reasoning_label_without_final_boundary():
-    with pytest.raises(ValueError, match="DETAILED_PLAN_META_REASONING"):
-        implementation._normalize_section_text(
-            "Analysis: I should inspect all possible branches before deciding how to implement this section.",
-            "behavior_contract",
-        )
-
-
-def test_section_normalizer_preserves_legitimate_analysis_word_in_prose():
-    text = (
-        "The analysis state belongs to the server and is cleared deterministically when the lifecycle ends."
-    )
-
-    assert implementation._normalize_section_text(text, "state_model") == text
+def test_old_free_form_section_parser_does_not_exist() -> None:
+    assert not hasattr(implementation, "_compile_requirement_specifications")
+    assert not hasattr(implementation, "_normalize_section_text")
+    assert not hasattr(implementation, "_continuity_context")
