@@ -11,6 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from functools import partial
+
+from .acceptance_contracts import (
+    CANONICAL_ACCEPTANCE_OWNER,
+    validate_runtime_public_acceptance,
+)
+
 if TYPE_CHECKING:
     from .complete_spec import AssetRequest, ProductionModule
 CONTRACT_SCHEMA = 'mmm/production-contract-v1'
@@ -26,39 +33,16 @@ _DIMENSIONS: dict[str, dict[str, Any]] = {'correctness': {'title': 'Requirement 
 _CONDITIONAL_ORDER = ('visual_3d', 'state_save_migration', 'multiplayer', 'performance', 'accessibility')
 _COMPLETION_POLICY = {'owner': 'code', 'allowed_evidence_statuses': ['PASS', 'MISSING', 'FAIL'], 'all_dimensions_must_pass': True, 'fresh_receipt_required': True, 'proposal_hash_binding_required': True, 'independent_verifier_required': True, 'self_reported_completion_accepted': False, 'plateau_identical_failure_threshold': _PLATEAU_THRESHOLD}
 _SKIP_SOURCE_KEYS = {'schema_version', 'approval_hash', 'brief_sha256', 'evidence_sha256', 'route_sha256', 'page_sha256', 'query_sha256', 'content_sha256', 'sha256', 'hash', 'url', 'uri', 'retrieved_at', 'created_at', 'updated_at', 'timestamp', 'next_cursor', 'cursor', 'offset'}
-_PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = (
-    'all declared provides',
-    'declared_provides',
-    'owned anchor',
-    'owned_anchor',
-    'required gates',
-    'required_gates',
-    'task integrity',
-    'task_sha256',
-    'done_predicate',
-)
 
 class ProductionContractError(ValueError):
     """Raised when a code-owned production or quality contract is invalid."""
 
-def _validate_public_acceptance(statement: str) -> None:
-    """Reject implementation-internal invariants at the user-facing boundary."""
-    if not isinstance(statement, str) or not statement.strip():
-        raise ProductionContractError('public acceptance must be a non-empty string')
-    folded = statement.casefold()
-    if 'task_' in folded or any(marker in folded for marker in _PUBLIC_ACCEPTANCE_INTERNAL_MARKERS):
-        matched_marker = (
-            'task_'
-            if 'task_' in folded
-            else next(
-                (marker for marker in _PUBLIC_ACCEPTANCE_INTERNAL_MARKERS if marker in folded),
-                'unknown',
-            )
-        )
-        raise ProductionContractError(
-            'public acceptance contains internal task or integrity language: '
-            f'marker={matched_marker!r}; value={folded!r}'
-        )
+_validate_public_acceptance = partial(
+    validate_runtime_public_acceptance,
+    error_type=ProductionContractError,
+)
+_validate_public_acceptance._mmm_contextual_legacy_boundary = True
+_validate_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
 
 def bound_game_design(game_design: Mapping[str, Any]) -> dict[str, Any]:
     """Return user/design content that is stable across execution decoration."""

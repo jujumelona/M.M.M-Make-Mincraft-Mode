@@ -17,6 +17,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
+
 from .minecraft_template_catalog import (
     FEATURE_DATAGEN,
     FEATURE_MIXIN,
@@ -113,25 +115,6 @@ def _canonical_capability(value: Any) -> str:
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
-
-def _is_public_acceptance(value: Any) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    folded = text.casefold()
-    internal = (
-        "owned anchors",
-        "owned_anchor",
-        "declared provides",
-        "declared_provides",
-        "required gates",
-        "required_gates",
-        "task_sha256",
-        "done_predicate",
-    )
-    return not re.match(r"^task_[a-z0-9_]+\s*:", folded) and not any(
-        marker in folded for marker in internal
-    )
 
 
 def build_request_catalog(
