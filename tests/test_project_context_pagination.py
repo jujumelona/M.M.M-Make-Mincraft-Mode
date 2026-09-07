@@ -149,7 +149,16 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
                 "evidence_task": {
                     "task_id": "cross_file_feature",
                     "semantic_outcome": "Implement the approved cross-file hook from grounded source evidence.",
+                    "target_cell": {
+                        "minecraft_version": target.minecraft_version,
+                        "loader": target.loader,
+                        "mappings": target.yarn_mappings,
+                        "java_version": target.java_version,
+                    },
                     "owned_anchors": [anchor],
+                    "implementation_obligations": [
+                        "Implement the grounded cross-file hook in the exact owned GeneratedHook target."
+                    ],
                     "production_bindings": [
                         {
                             "task_ref": "cross_file_feature",
@@ -157,6 +166,7 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
                             "owned_anchors": [anchor],
                         }
                     ],
+                    "required_gates": ["source_static_validation", "target_compile"],
                 },
             },
         ),
