@@ -87,7 +87,7 @@ def test_engineering_worksheet_fails_closed_on_shallow_duplicate_or_forged_fills
         validate_worksheet(duplicate_ref, {"ev:1"})
 
 
-def test_detailed_planner_receives_one_bounded_plain_text_slot_per_section() -> None:
+def test_detailed_planner_receives_one_bounded_plain_text_batch_per_requirement() -> None:
     class Router:
         def __init__(self) -> None:
             self.calls: list[list[dict[str, str]]] = []
@@ -102,14 +102,14 @@ def test_detailed_planner_receives_one_bounded_plain_text_slot_per_section() -> 
             assert kwargs["response_format"] == "text"
             assert kwargs["enable_tools"] is False
             self.calls.append([dict(message) for message in messages])
-            section = next(
-                line.removeprefix("Section: ")
-                for line in messages[1]["content"].splitlines()
-                if line.startswith("Section: ")
-            )
-            return (
-                f"{section} uses one authoritative owner with explicit state transitions, "
-                "bounded failure behavior, deterministic limits, and observable verification outcomes."
+            return "\n".join(
+                (
+                    f"<<<SECTION:{section}>>>\n"
+                    f"{section} uses one authoritative owner with explicit state transitions, "
+                    "bounded failure behavior, deterministic limits, and observable verification outcomes.\n"
+                    "<<<END_SECTION>>>"
+                )
+                for section in DETAIL_FIELDS
             )
 
     router = Router()
@@ -139,28 +139,19 @@ def test_detailed_planner_receives_one_bounded_plain_text_slot_per_section() -> 
         },
     )
 
-    assert len(router.calls) == len(DETAIL_FIELDS)
-    seen_sections: list[str] = []
-    all_prompt_text: list[str] = []
-    for messages in router.calls:
-        system_text = messages[0]["content"]
-        user_text = messages[1]["content"]
-        all_prompt_text.extend((system_text, user_text))
-        assert "plain prose only" in system_text
-        assert "no JSON" in system_text
-        assert "Persist the gameplay state across reload." in user_text
-        assert user_text.count("Section: ") == 1
-        section = next(
-            line.removeprefix("Section: ")
-            for line in user_text.splitlines()
-            if line.startswith("Section: ")
-        )
-        seen_sections.append(section)
-        assert section in DETAIL_FIELDS
+    assert len(router.calls) == 1
+    messages = router.calls[0]
+    system_text = messages[0]["content"]
+    user_text = messages[1]["content"]
+    assert "plain prose only" in system_text
+    assert "no JSON" in system_text
+    assert "Persist the gameplay state across reload." in user_text
+    for section in DETAIL_FIELDS:
+        assert f"<<<SECTION:{section}>>>" in user_text
+        assert f"- {section}:" in user_text
         assert all(concern in user_text for concern in DETAIL_SLOT_GUIDANCE[section])
 
-    joined = "\n".join(all_prompt_text)
-    assert tuple(seen_sections) == tuple(DETAIL_FIELDS)
+    joined = "\n".join((system_text, user_text))
     assert "req_001" not in joined
     assert "ev:1" not in joined
     assert tuple(plan["engineering_worksheet"]) == tuple(DETAIL_FIELDS)
