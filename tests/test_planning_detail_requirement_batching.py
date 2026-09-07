@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai import planning_state_implementation as implementation
 
 
@@ -100,3 +102,43 @@ def test_requirement_details_fall_back_to_single_sections_when_batch_fails():
 
     assert list(result) == list(SECTIONS)
     assert len(router.calls) == 3
+
+
+def test_section_normalizer_strips_complete_leading_think_block():
+    result = implementation._normalize_section_text(
+        "<think>I should reason about ownership before answering.</think>\n"
+        "The server owns the exchange mutation and emits a deterministic observable result.",
+        "behavior_contract",
+    )
+
+    assert result == (
+        "The server owns the exchange mutation and emits a deterministic observable result."
+    )
+
+
+def test_section_normalizer_keeps_only_explicit_final_after_reasoning_label():
+    result = implementation._normalize_section_text(
+        "Thinking Process: I should first reason about every possible state transition.\n\n"
+        "Specification: The authoritative state owner validates each transition and bounds every stored value.",
+        "state_model",
+    )
+
+    assert result == (
+        "The authoritative state owner validates each transition and bounds every stored value."
+    )
+
+
+def test_section_normalizer_rejects_reasoning_label_without_final_boundary():
+    with pytest.raises(ValueError, match="DETAILED_PLAN_META_REASONING"):
+        implementation._normalize_section_text(
+            "Analysis: I should inspect all possible branches before deciding how to implement this section.",
+            "behavior_contract",
+        )
+
+
+def test_section_normalizer_preserves_legitimate_analysis_word_in_prose():
+    text = (
+        "The analysis state belongs to the server and is cleared deterministically when the lifecycle ends."
+    )
+
+    assert implementation._normalize_section_text(text, "state_model") == text
