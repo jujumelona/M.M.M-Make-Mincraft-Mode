@@ -15,6 +15,7 @@ from copy import deepcopy
 from typing import Any
 
 from .planner_operation import planner_operation
+from .planning_contract_ssot import MODEL_UNRESOLVED_REASONS, SUBMIT_PROMPT_STATE_SCHEMA
 
 SCHEMA = "mmm/planning-state-v1"
 MODEL_TOOL = "submit_prompt_state"
@@ -36,11 +37,7 @@ UNRESOLVED_REASONS = (
 # authored request. Implementation/API/repository/compatibility unknowns are created by
 # host stages after concrete requirements exist; allowing them here lets a small model
 # turn ordinary design freedom into a false pre-requirement blocker.
-_MODEL_UNRESOLVED_REASONS = (
-    "external_fact",
-    "contradiction",
-    "user_preference",
-)
+_MODEL_UNRESOLVED_REASONS = MODEL_UNRESOLVED_REASONS
 
 _MODEL_BLOCKS_BY_REASON: dict[str, tuple[str, ...]] = {
     "external_fact": ("requirement_selection",),
@@ -112,67 +109,7 @@ ROUTE_SOURCES: dict[str, tuple[str, ...]] = {
     "user_only": (),
 }
 
-MODEL_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "goal": {
-            "type": "object",
-            "properties": {
-                "statement": {"type": "string"},
-                "source_quote": {"type": "string"},
-            },
-            "required": ["statement"],
-            "additionalProperties": False,
-        },
-        "known": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "statement": {"type": "string"},
-                    "source_quote": {"type": "string"},
-                },
-                "required": ["statement"],
-                "additionalProperties": False,
-            },
-        },
-        "references": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "source_quote": {"type": "string"},
-                    "what_must_be_learned": {"type": "string"},
-                },
-                "required": ["name", "what_must_be_learned"],
-                "additionalProperties": False,
-            },
-        },
-        "scope_status": {
-            "type": "string",
-            "enum": ["explicit", "partial", "unspecified"],
-        },
-        "unresolved": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string"},
-                    "reason": {
-                        "type": "string",
-                        "enum": list(_MODEL_UNRESOLVED_REASONS),
-                    },
-                    "information_needed": {"type": "string"},
-                },
-                "required": ["question", "reason", "information_needed"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["goal", "known", "references", "scope_status", "unresolved"],
-    "additionalProperties": False,
-}
+MODEL_PARAMETERS: dict[str, Any] = SUBMIT_PROMPT_STATE_SCHEMA
 
 
 def _canonical(value: Any) -> str:

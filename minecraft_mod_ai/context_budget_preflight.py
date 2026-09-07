@@ -103,6 +103,7 @@ def run_context_budget_preflight() -> None:
                     "path": {"type": "string"},
                 },
                 "required": ["operation", "path"],
+                "additionalProperties": False,
             },
         ),
     )

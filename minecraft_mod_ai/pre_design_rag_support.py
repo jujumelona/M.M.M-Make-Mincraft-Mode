@@ -19,46 +19,9 @@ def _emit_support_trace(event: str, **fields: Any) -> None:
     )
 
 
-def _support_schema(count: int) -> dict[str, Any]:
-    """Keep structured generation permissive; the host performs the strict validation."""
+from .planning_contract_ssot import pre_design_support_schema
 
-    verdict_item = {
-        "type": "object",
-        "properties": {
-            "claim_index": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": max(0, count - 1),
-            },
-            "supported": {"type": "boolean"},
-            "support_quote": {"type": "string"},
-            "quote": {"type": "string"},
-            "support": {"type": "string"},
-        },
-        "required": ["claim_index"],
-        "additionalProperties": True,
-    }
-    return {
-        "type": "object",
-        "properties": {
-            "verdicts": {
-                "type": "array",
-                "minItems": count,
-                "maxItems": count,
-                "items": verdict_item,
-            },
-            "claims": {
-                "type": "array",
-                "minItems": count,
-                "maxItems": count,
-                "items": verdict_item,
-            },
-            "sufficient": {"type": "boolean"},
-            "gaps": {},
-            "research_note": {},
-        },
-        "additionalProperties": True,
-    }
+_support_schema = pre_design_support_schema
 
 
 def _claim_candidates(notes: Sequence[Mapping[str, Any]]) -> list[str]:

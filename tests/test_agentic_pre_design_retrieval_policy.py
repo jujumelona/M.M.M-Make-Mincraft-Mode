@@ -68,7 +68,7 @@ class _VariantSupportRag:
         del agentic_module, router, messages, progress_label
         # Matches the alternate shape produced by the real local Qwen log:
         # top-level diagnostics + claims[] + quote alias.
-        assert response_schema["additionalProperties"] is True
+        assert response_schema["additionalProperties"] is False
         return parser(
             json.dumps(
                 {

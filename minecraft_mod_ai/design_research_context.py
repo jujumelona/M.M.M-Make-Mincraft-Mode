@@ -8,25 +8,9 @@ from .spec import SpecValidationError
 import hashlib
 import json
 from .external_procedural_skill_contract import _sanitize_procedure, compact_skillbank
+from .planning_contract_ssot import RESEARCH_NOTE_SCHEMA
 
-_RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "research_note": {
-            "type": "object",
-            "properties": {
-                "domain_id": {"type": "string"},
-                "claims": {"type": "array", "items": {}},
-                "gaps": {"type": "array", "items": {}},
-                "next_queries": {"type": "array", "items": {}},
-                "sufficient": {"type": "boolean"},
-                "procedures": {"type": "array", "items": {}},
-            },
-            "additionalProperties": True,
-        }
-    },
-    "additionalProperties": True,
-}
+_RESEARCH_NOTE_SCHEMA: dict[str, Any] = RESEARCH_NOTE_SCHEMA
 
 
 def _json_sha256(value: Any) -> str:

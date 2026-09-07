@@ -46,7 +46,7 @@ def _patch_pipeline_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         planning_state_pipeline,
         "_transition",
-        lambda _operation, callback: callback(),
+        lambda _operation, callback, **_kwargs: callback(),
     )
     monkeypatch.setattr(
         planning_state_pipeline,

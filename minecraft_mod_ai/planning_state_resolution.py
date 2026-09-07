@@ -17,33 +17,14 @@ from .minecraft_template_catalog import (
     semantic_capability_choices,
 )
 from .planner_operation import planner_operation
+from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
 from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 from .root_cause_trace import emit_root_cause
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
 _SEMANTIC_CAPABILITY_CHOICES = semantic_capability_choices()
 _SEMANTIC_CAPABILITY_CHOICE_SET = frozenset(_SEMANTIC_CAPABILITY_CHOICES)
-
-# Deliberately permissive. The model is not an authority for host identity/provenance and
-# malformed optional fields are normalized below instead of becoming planner exceptions.
-_REQUIREMENT_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "requirements": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "statement": {"type": "string"},
-                    "semantic_capability": {"type": "string"},
-                    "acceptance": {"type": "array", "items": {"type": "string"}},
-                },
-                "additionalProperties": True,
-            },
-        }
-    },
-    "additionalProperties": True,
-}
+_REQUIREMENT_PARAMETERS: dict[str, Any] = SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
 
 
 def _text(value: Any) -> str:
@@ -272,6 +253,10 @@ def compile_researched_requirements(
                 description="Submit player-visible requirements.",
             )
     except BaseException as exc:
+        from .model_adapters import ModelConfigurationError
+
+        if isinstance(exc, ModelConfigurationError):
+            raise
         generation_error = exc
         emit_root_cause(
             "planner_model_decision_failure",

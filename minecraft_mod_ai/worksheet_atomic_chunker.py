@@ -137,9 +137,12 @@ def worksheet_chunk_prompt(
     *,
     include_evidence: bool = False,
 ) -> str:
-    """Return compact, single-chunk instructions."""
+    """Return compact, single-chunk instructions with a concrete data skeleton."""
+    from .planning_contract_ssot import schema_skeleton_template
+
     key = _normalize_section_name(section)
     schema = worksheet_chunk_schema(key, concerns, include_evidence=include_evidence)
+    skeleton = schema_skeleton_template(schema)
     evidence_instruction = (
         " Also supply constraint_evidence_refs as an array of host-supplied evidence IDs (or empty array)."
         if include_evidence
@@ -154,9 +157,9 @@ def worksheet_chunk_prompt(
             f"Fill exactly these concern arrays: {', '.join(concerns)}.{evidence_instruction}",
             "Every concern array must contain records with non-empty strings for all required fields.",
             "If a concern is genuinely inapplicable, leave its array empty and provide exactly one concrete reason in inapplicable_concerns.",
-            "Do not output markdown, reasoning prose, or extra keys.",
-            "Exact response schema: "
-            + json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+            "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
+            "Fill and return only a JSON object matching this exact data template skeleton:",
+            json.dumps(skeleton, ensure_ascii=False, indent=2),
         )
     )
 
@@ -167,6 +170,8 @@ def merge_worksheet_section_chunks(
     allowed_refs: set[str],
 ) -> dict[str, Any]:
     """Deterministically merge atomic chunk outputs into a canonical worksheet section."""
+    from .planning_contract_ssot import is_schema_definition_echo
+
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
 
@@ -178,6 +183,10 @@ def merge_worksheet_section_chunks(
         if not isinstance(chunk, Mapping):
             raise ValueError(
                 f"DETAILED_PLAN_WORKSHEET: chunk for {key} must be a JSON object"
+            )
+        if is_schema_definition_echo(chunk):
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET: chunk for {key} echoed JSON Schema definition instead of data records"
             )
         chunk_dict = dict(chunk)
         if "specification" in chunk_dict and isinstance(chunk_dict["specification"], Mapping):
