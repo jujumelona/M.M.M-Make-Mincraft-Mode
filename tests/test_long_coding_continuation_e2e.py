@@ -13,6 +13,12 @@ from minecraft_mod_ai.custom_module_generator import (
 
 def test_output_exhaustion_continuation_messages_structure() -> None:
     """Verify that continuation messages carry forward preserved source state SHA and paths."""
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/com/example/CustomSwordItem.java#CustomSwordItem",
+        "status": "host_reserved",
+        "source_set": "main",
+    }
     module = ProductionModule(
         module_id="custom_sword",
         kind="item",
@@ -21,6 +27,14 @@ def test_output_exhaustion_continuation_messages_structure() -> None:
             "evidence_task": {
                 "task_id": "custom_sword",
                 "semantic_outcome": "Implement the approved custom sword continuation contract.",
+                "owned_anchors": [anchor],
+                "production_bindings": [
+                    {
+                        "task_ref": "custom_sword",
+                        "reuse_action": "fresh",
+                        "owned_anchors": [anchor],
+                    }
+                ],
             },
         },
         depends_on=(),
