@@ -6,6 +6,9 @@ from .source_set_boundary_installation import install as install_source_set_boun
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 initialize_runtime()
+from .model_output_atomicity_contract import install as install_model_output_atomicity
+
+install_model_output_atomicity()
 from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
