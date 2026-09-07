@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
-
-import pytest
 
 from minecraft_mod_ai.planning_state_contract import _sha
 from minecraft_mod_ai.planning_state_resolution import (
-    _fit_context_to_budget,
     _rehash,
     _resolved_context,
     compile_researched_requirements,
