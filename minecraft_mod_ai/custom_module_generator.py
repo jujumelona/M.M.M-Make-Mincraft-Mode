@@ -304,18 +304,15 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
 
     config = module.config if isinstance(module.config, dict) else {}
     evidence_task = config.get("evidence_task")
-    if isinstance(evidence_task, dict):
-        return {
-            "module_id": module.module_id,
-            "kind": module.kind,
-            "evidence_task": project_task_for_coder(evidence_task),
-        }
+    if not isinstance(evidence_task, dict):
+        raise CustomModuleGenerationError(
+            "TASK_LOCAL_CONTRACT_REQUIRED: "
+            f"module {module.module_id!r} is missing config.evidence_task"
+        )
     return {
         "module_id": module.module_id,
         "kind": module.kind,
-        "config": config,
-        "depends_on": list(module.depends_on),
-        "required_gates": list(module.required_gates),
+        "evidence_task": project_task_for_coder(evidence_task),
     }
 
 
