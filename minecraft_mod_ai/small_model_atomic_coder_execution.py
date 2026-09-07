@@ -16,11 +16,21 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
-_MARKER = "_mmm_small_model_atomic_coder_v2"
-_ATOMIC_SCHEMA = "mmm/atomic-coder-step-v2"
+from .implementation_template_contract import SCHEMA as CODER_EXECUTION_SCHEMA
+
+_MARKER = "_mmm_small_model_atomic_coder"
+_ATOMIC_SCHEMA = "mmm/atomic-coder-step"
 _MAX_INITIAL_SOURCE_BYTES = 4 * 1024
 _MAX_APPROVED_REUSE_BYTES = 4 * 1024
 _MAX_SUMMARY_CHARS_PER_STEP = 1024
+
+
+class AtomicCoderContractError(RuntimeError):
+    """Canonical coder authority could not be lowered safely to one obligation."""
+
+
+def _fail(reason: str) -> None:
+    raise AtomicCoderContractError(f"CODER_CONTRACT_LOWERING_FAILED: {reason}")
 
 
 def _is_sequence(value: Any) -> bool:
@@ -56,13 +66,10 @@ def _task_ref(contract: Mapping[str, Any], evidence_task: Mapping[str, Any]) -> 
 
 
 def _objective(contract: Mapping[str, Any]) -> str:
-    return str(contract.get("objective") or contract.get("semantic_outcome") or "").strip()
+    return str(contract.get("semantic_outcome") or "").strip()
 
 
 def _dataflow(contract: Mapping[str, Any], name: str) -> list[str]:
-    direct = contract.get(name)
-    if _is_sequence(direct):
-        return [str(item).strip() for item in direct if str(item).strip()]
     nested = contract.get("dataflow")
     if isinstance(nested, Mapping) and _is_sequence(nested.get(name)):
         return [str(item).strip() for item in nested[name] if str(item).strip()]
@@ -86,23 +93,32 @@ def _step_targets(contract: Mapping[str, Any], step: Mapping[str, Any]) -> list[
         for target in targets
         if str(target.get("locator") or "").strip() in refs
     ]
-    return filtered or targets
+    return filtered
 
 
 def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str, Any]:
     obligation = str(step.get("obligation") or "").strip()
+    target_refs = _step_target_refs(step)
+    checklist = _sequence_copy(step.get("execution_checklist"))
+    done_when = str(step.get("done_when") or "").strip()
     if not obligation:
-        raise RuntimeError("ATOMIC_CODER_OBLIGATION_MISSING: atomic step has no obligation")
+        _fail("atomic step has no obligation")
+    if not target_refs:
+        _fail(f"atomic step {index + 1} has no target_refs")
+    if not checklist:
+        _fail(f"atomic step {index + 1} has no execution_checklist")
+    if not done_when:
+        _fail(f"atomic step {index + 1} has no completion condition")
     return {
         "index": index + 1,
         "count": count,
         "sequence": step.get("sequence", index),
         "obligation": obligation,
-        "target_refs": _step_target_refs(step),
+        "target_refs": target_refs,
         "consumes": _sequence_copy(step.get("consumes")),
         "must_provide": _sequence_copy(step.get("must_provide")),
-        "execution_checklist": _sequence_copy(step.get("execution_checklist")),
-        "done_when": str(step.get("done_when") or "").strip(),
+        "execution_checklist": checklist,
+        "done_when": done_when,
     }
 
 
@@ -114,42 +130,66 @@ def _atomic_contract(
     index: int,
     count: int,
 ) -> dict[str, Any]:
-    """Build one obligation contract without discarding canonical execution authority.
+    """Build one obligation contract without discarding canonical execution authority."""
 
-    Constant host-owned context is deliberately serialized before the changing step fields.
-    This keeps the large common prefix cacheable across sibling atomic calls while still
-    removing sibling obligations from the model-visible payload.
-    """
-
+    if contract.get("schema_version") != CODER_EXECUTION_SCHEMA:
+        _fail(
+            "canonical schema mismatch: expected "
+            f"{CODER_EXECUTION_SCHEMA!r}, got {contract.get('schema_version')!r}"
+        )
     task_ref = _task_ref(contract, evidence_task)
     if not task_ref:
-        raise RuntimeError("ATOMIC_CODER_TASK_REF_MISSING: coder contract has no task identity")
+        _fail("coder contract has no task identity")
+    if task_ref != str(evidence_task.get("task_id") or "").strip():
+        _fail("coder contract task_ref disagrees with evidence_task.task_id")
 
     source_sha = str(
-        contract.get("source_task_sha256")
-        or contract.get("task_sha256_input")
-        or evidence_task.get("task_sha256")
-        or ""
+        contract.get("task_sha256_input") or evidence_task.get("task_sha256") or ""
     ).strip()
+    source_contract_sha = str(contract.get("contract_sha256") or "").strip()
+    objective = _objective(contract)
+    execution_role = str(contract.get("execution_role") or "").strip()
+    target_constraints = copy.deepcopy(_mapping(contract.get("target_constraints")))
+    targets = _step_targets(contract, step)
+    worksheet = copy.deepcopy(contract.get("engineering_worksheet"))
+    protected_boundaries = copy.deepcopy(_mapping(contract.get("protected_boundaries")))
+    verification_plan = _sequence_copy(contract.get("verification_plan"))
+    completion_predicate = copy.deepcopy(_mapping(contract.get("completion_predicate")))
+
+    required = {
+        "source_contract_sha256": source_contract_sha,
+        "semantic_outcome": objective,
+        "execution_role": execution_role,
+        "target_constraints": target_constraints,
+        "targets": targets,
+        "engineering_worksheet": worksheet,
+        "protected_boundaries": protected_boundaries,
+        "verification_plan": verification_plan,
+        "completion_predicate": completion_predicate,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        _fail("canonical coder authority is incomplete: " + ", ".join(missing))
+
     return {
         "schema_version": _ATOMIC_SCHEMA,
         "task_ref": task_ref,
         "source_task_sha256": source_sha,
-        "source_contract_sha256": str(contract.get("contract_sha256") or "").strip(),
-        "objective": _objective(contract),
-        "execution_role": str(contract.get("execution_role") or "").strip(),
+        "source_contract_sha256": source_contract_sha,
+        "semantic_outcome": objective,
+        "execution_role": execution_role,
         "requirement_refs": _sequence_copy(contract.get("requirement_refs")),
-        "target_constraints": copy.deepcopy(_mapping(contract.get("target_constraints"))),
-        "targets": _step_targets(contract, step),
+        "target_constraints": target_constraints,
+        "targets": targets,
         "depends_on": _sequence_copy(contract.get("depends_on")),
         "consumes": _dataflow(contract, "consumes"),
         "provides": _dataflow(contract, "provides"),
-        "engineering_worksheet": copy.deepcopy(contract.get("engineering_worksheet")),
+        "engineering_worksheet": worksheet,
         "artifacts": _sequence_copy(contract.get("artifacts")),
         "reuse_refs": _sequence_copy(contract.get("reuse_refs")),
-        "protected_boundaries": copy.deepcopy(_mapping(contract.get("protected_boundaries"))),
-        "verification_plan": _sequence_copy(contract.get("verification_plan")),
-        "completion_predicate": copy.deepcopy(_mapping(contract.get("completion_predicate"))),
+        "protected_boundaries": protected_boundaries,
+        "verification_plan": verification_plan,
+        "completion_predicate": completion_predicate,
         "step": _atomic_step(step, index=index, count=count),
         "scope_policy": (
             "Execute only this obligation. Do not start, pre-implement, redesign, or summarize "
@@ -181,9 +221,9 @@ def atomicize_coder_messages(
 ) -> tuple[tuple[dict[str, Any], ...], ...]:
     """Return one canonical-context message batch per approved implementation obligation.
 
-    Non-custom/non-implementation messages are returned unchanged as one batch. Each atomic
-    batch removes sibling obligations while retaining the exact host-owned information the
-    selected obligation needs for implementation and verification.
+    Non-implementation messages pass through unchanged. Once a request declares
+    ``phase=implement_module``, every host-owned contract component is mandatory and lowering
+    fails closed rather than falling back to the original large coder request.
     """
 
     parsed = _implementation_request(messages)
@@ -192,16 +232,21 @@ def atomicize_coder_messages(
     user_index, request = parsed
     module = request.get("module")
     if not isinstance(module, Mapping):
-        return (tuple(dict(message) for message in messages),)
+        _fail("implement_module request has no module object")
     evidence_task = module.get("evidence_task")
     if not isinstance(evidence_task, Mapping):
-        return (tuple(dict(message) for message in messages),)
+        _fail("implement_module request has no evidence_task object")
     contract = evidence_task.get("coder_execution_contract")
     if not isinstance(contract, Mapping):
-        return (tuple(dict(message) for message in messages),)
+        _fail("implement_module request has no coder_execution_contract")
+    if contract.get("schema_version") != CODER_EXECUTION_SCHEMA:
+        _fail(
+            "implement_module request carries a non-canonical coder execution schema: "
+            f"{contract.get('schema_version')!r}"
+        )
     steps = _steps(contract)
     if not steps:
-        return (tuple(dict(message) for message in messages),)
+        _fail("canonical coder execution contract has no implementation steps")
 
     batches: list[tuple[dict[str, Any], ...]] = []
     for step_index, step in enumerate(steps):
@@ -226,9 +271,6 @@ def atomicize_coder_messages(
             "evidence_task": current_evidence,
         }
 
-        # Keep all pre-module request text identical across sibling calls so llama.cpp/server
-        # prompt/KV reuse can retain the common prefix. The changing obligation lives near the
-        # end of the module contract instead of in this early task string.
         current["task"] = "Implement only the atomic obligation declared in module.evidence_task.coder_execution_contract.step."
         rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
         current["rules"] = [
@@ -246,8 +288,6 @@ def atomicize_coder_messages(
                 ),
             }
 
-        # Append the variable module/step fields after the stable request payload. Dict order is
-        # intentional here because the request is serialized without sort_keys below.
         current["module"] = current_module
         current["atomic_execution"] = {
             "schema_version": _ATOMIC_SCHEMA,
@@ -371,6 +411,7 @@ def assert_installed(*, custom_module_generator_module: Any, model_router_module
 
 
 __all__ = [
+    "AtomicCoderContractError",
     "assert_installed",
     "atomicize_coder_messages",
     "install",
