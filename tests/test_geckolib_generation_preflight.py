@@ -8,6 +8,7 @@ import pytest
 
 from minecraft_mod_ai import geckolib_generation_contract as contract
 from minecraft_mod_ai import geckolib_generator
+from minecraft_mod_ai import platform_specialized_generator_contract as specialized_contract
 from minecraft_mod_ai.generation_boundary_reconciliation import (
     _install_geckolib_project_preflight,
 )
@@ -121,6 +122,11 @@ def test_generator_preflight_fails_before_first_write(
     writes = {"count": 0}
 
     monkeypatch.setattr(geckolib_generator, "inspect_fabric_project", lambda _root: info)
+    monkeypatch.setattr(
+        specialized_contract,
+        "_require_deterministic_capability",
+        lambda *_args, **_kwargs: None,
+    )
 
     def fail_preflight(_info):
         raise contract.GeckoLibGenerationContractError(
