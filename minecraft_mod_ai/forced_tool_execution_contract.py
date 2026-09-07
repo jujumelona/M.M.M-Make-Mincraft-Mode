@@ -4,9 +4,11 @@ from __future__ import annotations
 
 The causal frontier owns action selection. Remote and local adapters recover arguments
 for an already-selected action only through bounded native function-call pages owned by
-the host. Local llama.cpp/Qwen may first use one host-narrowed ``required`` tool decode;
-protocol failures fall back to the same native atomic argument-page protocol. No forced
-action recovery path asks the model to author a raw JSON document.
+the host. Local llama.cpp/Qwen may first use one host-narrowed ``required`` tool decode
+only when that original schema is itself atomic; oversized schemas are decomposed before
+they reach any model transport. Protocol failures fall back to the same native atomic
+argument-page protocol. No forced action recovery path asks the model to author a raw
+JSON document.
 """
 
 import hashlib
@@ -98,6 +100,12 @@ def _parameters(schema: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(parameters, Mapping):
         raise ModelConfigurationError("Host-selected tool schema is missing JSON parameters.")
     return parameters
+
+
+def _model_schema_is_atomic(request: Any, name: str) -> bool:
+    from .model_output_atomicity_contract import is_atomic_model_schema
+
+    return is_atomic_model_schema(_parameters(_selected_schema(request, name)))
 
 
 def _json_mapping(value: Any) -> Mapping[str, Any] | None:
@@ -486,8 +494,6 @@ def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool
         _DEFAULT_NATIVE_TRANSIENT_COOLDOWN_SECONDS,
     )
 
-    # Serialize probes only per endpoint/model. Different local models remain concurrent,
-    # while duplicate simultaneous requests do not each launch the same capability decode.
     with _native_probe_key_lock(key):
         now = time.monotonic()
         with _NATIVE_PROBE_LOCK:
@@ -502,8 +508,6 @@ def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool
                 _NATIVE_PROBE_CACHE.pop(key, None)
                 _NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
             elif cached is False:
-                # Reprobe legacy unbounded negative entries instead of inheriting a
-                # permanent false capability state.
                 _NATIVE_PROBE_CACHE.pop(key, None)
             if transient_at is not None and now - transient_at < transient_cooldown:
                 return False
@@ -514,10 +518,7 @@ def _native_required_supported(current: Any, adapter: Any, request: Any) -> bool
             if _contains_exact_call(turn, _NATIVE_PROBE_TOOL):
                 call = next(iter(getattr(turn, "tool_calls", ()) or ()))
                 arguments = getattr(call, "arguments", {})
-                supported = (
-                    isinstance(arguments, Mapping)
-                    and arguments.get("nonce") == "mmm"
-                )
+                supported = isinstance(arguments, Mapping) and arguments.get("nonce") == "mmm"
         except Exception as exc:  # noqa: BLE001 - capability transport/protocol boundary
             with _NATIVE_PROBE_LOCK:
                 if _native_protocol_failure(exc):
@@ -576,10 +577,6 @@ def _native_protocol_failure(exc: BaseException) -> bool:
     cause = getattr(exc, "cause", exc)
     if not isinstance(cause, RuntimeError):
         return False
-    # A native forced-tool probe can succeed with a tiny scalar schema and still fail
-    # on real arguments. Treat strict parser failures as transport/protocol failures so
-    # the bounded native argument-page path gets one chance with the action already
-    # selected by the host. This does not weaken schema validation or retry indefinitely.
     if type(cause).__name__ == "ToolCallValidationError":
         return True
     text = str(cause).casefold()
@@ -620,6 +617,11 @@ def _install_adapter_class(
             deterministic = deterministic_forced_read_turn(request, name)
             if deterministic is not None:
                 return deterministic
+
+        if not _model_schema_is_atomic(request, name):
+            if name in _SOURCE_MUTATION_TOOLS:
+                return host_selected_mutation_turn(current, self, request, name)
+            return host_selected_argument_turn(current, self, request, name)
 
         if (
             probe_native_required
