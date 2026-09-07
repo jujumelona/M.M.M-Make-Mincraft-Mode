@@ -31,8 +31,6 @@ _CREATE_OPERATIONS = frozenset(
     }
 )
 _DELETE_OPERATIONS = frozenset({"delete", "delete_file", "remove", "remove_file"})
-_MODEL_CREATE_OPERATIONS = frozenset({"create", "create_file", "create_java_type"})
-_MODEL_DELETE_OPERATIONS = frozenset({"delete", "delete_file"})
 
 
 def _primary_candidate(target_module: Any, task: Mapping[str, Any], task_id: str) -> tuple[str, str] | None:
@@ -197,7 +195,6 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
     if not getattr(target_module, _MARKER, False):
         original_compile = target_module.compile_task_capsule
         original_bind = target_module.bind_source_edit_arguments
-        original_narrow = target_module.narrow_source_edit_schema
 
         def compile_task_capsule(module: Any):
             try:
@@ -229,29 +226,10 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
                 )
             return bound
 
-        def narrow_source_edit_schema(schema: Any, capsule: Any) -> Any:
-            narrowed = original_narrow(schema, capsule)
-            if not isinstance(narrowed, Mapping):
-                return narrowed
-            result = copy.deepcopy(dict(narrowed))
-            function = result.get("function")
-            parameters = function.get("parameters") if isinstance(function, dict) else None
-            properties = parameters.get("properties") if isinstance(parameters, dict) else None
-            operation = properties.get("operation") if isinstance(properties, dict) else None
-            enum = operation.get("enum") if isinstance(operation, dict) else None
-            if isinstance(enum, list):
-                blocked = set(_MODEL_DELETE_OPERATIONS)
-                if not capsule.creatable_paths:
-                    blocked.update(_MODEL_CREATE_OPERATIONS)
-                operation["enum"] = [item for item in enum if str(item).casefold() not in blocked]
-            return result
-
         compile_task_capsule.__name__ = original_compile.__name__
         bind_source_edit_arguments.__name__ = original_bind.__name__
-        narrow_source_edit_schema.__name__ = original_narrow.__name__
         target_module.compile_task_capsule = compile_task_capsule
         target_module.bind_source_edit_arguments = bind_source_edit_arguments
-        target_module.narrow_source_edit_schema = narrow_source_edit_schema
         setattr(target_module, _MARKER, True)
 
     if not getattr(loop_module, _LOOP_MARKER, False):
