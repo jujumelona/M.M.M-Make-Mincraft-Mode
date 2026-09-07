@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import planning_state_implementation as implementation
+from minecraft_mod_ai.planner_operation import current_output_limit
 
 
 SECTIONS = ("behavior_contract", "state_model")
@@ -21,77 +22,28 @@ EVIDENCE = [
 ]
 
 
-def _block(section: str, text: str) -> str:
-    return f"<<<SECTION:{section}>>>\n{text}\n<<<END_SECTION>>>"
-
-
 class _Router:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.output_limits = []
 
     def generate_text(self, *args, **kwargs):
         self.calls.append((args, kwargs))
+        self.output_limits.append(current_output_limit())
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return response
 
 
-def test_requirement_details_use_one_model_call_when_batch_is_complete():
-    router = _Router([
-        "\n".join(
-            (
-                _block(
-                    "behavior_contract",
-                    "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result.",
-                ),
-                _block(
-                    "state_model",
-                    "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
-                ),
-            )
-        )
-    ])
-
-    result = implementation._compile_requirement_specifications(
-        router,
-        requirement=REQUIREMENT,
-        selected_sections=SECTIONS,
-        evidence=EVIDENCE,
-    )
-
-    assert list(result) == list(SECTIONS)
-    assert len(router.calls) == 1
-
-
-def test_requirement_details_repair_only_missing_batch_section():
-    router = _Router([
-        _block(
-            "behavior_contract",
+def test_requirement_details_generate_each_selected_semantic_section_once():
+    router = _Router(
+        [
             "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result.",
-        ),
-        "The state owner validates every mutation, keeps values bounded, and resets transient state on lifecycle cleanup.",
-    ])
-
-    result = implementation._compile_requirement_specifications(
-        router,
-        requirement=REQUIREMENT,
-        selected_sections=SECTIONS,
-        evidence=EVIDENCE,
+            "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
+        ]
     )
-
-    assert result["behavior_contract"].startswith("The server owns")
-    assert result["state_model"].startswith("The state owner")
-    assert len(router.calls) == 2
-
-
-def test_requirement_details_fall_back_to_single_sections_when_batch_fails():
-    router = _Router([
-        RuntimeError("batch transport failure"),
-        "The server validates the interaction inputs, applies one bounded mutation, and exposes success or rejection to the player.",
-        "The authoritative state owner stores bounded values, applies guarded transitions, and performs deterministic lifecycle cleanup.",
-    ])
 
     result = implementation._compile_requirement_specifications(
         router,
@@ -101,7 +53,47 @@ def test_requirement_details_fall_back_to_single_sections_when_batch_fails():
     )
 
     assert list(result) == list(SECTIONS)
-    assert len(router.calls) == 3
+    assert len(router.calls) == len(SECTIONS)
+    assert router.output_limits == [None, None]
+
+
+def test_later_semantic_section_receives_completed_section_as_continuity_context():
+    first = (
+        "The server owns the exchange decision, validates eligibility, and emits one observable success or rejection result."
+    )
+    router = _Router(
+        [
+            first,
+            "The economy state has one authoritative owner, bounded numeric values, explicit transitions, and deterministic cleanup rules.",
+        ]
+    )
+
+    implementation._compile_requirement_specifications(
+        router,
+        requirement=REQUIREMENT,
+        selected_sections=SECTIONS,
+        evidence=EVIDENCE,
+    )
+
+    second_messages = router.calls[1][0][1]
+    second_prompt = second_messages[1]["content"]
+    assert "Earlier completed semantic sections" in second_prompt
+    assert f"- behavior_contract: {first}" in second_prompt
+    assert "<<<SECTION:" not in second_prompt
+
+
+def test_semantic_section_transport_failure_is_not_retried_or_fallback_rewritten():
+    router = _Router([RuntimeError("transport failure")])
+
+    with pytest.raises(RuntimeError, match="transport failure"):
+        implementation._compile_requirement_specifications(
+            router,
+            requirement=REQUIREMENT,
+            selected_sections=SECTIONS,
+            evidence=EVIDENCE,
+        )
+
+    assert len(router.calls) == 1
 
 
 def test_section_normalizer_strips_complete_leading_think_block():
