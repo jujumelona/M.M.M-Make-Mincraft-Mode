@@ -3,8 +3,9 @@ from __future__ import annotations
 """Global small-model output atomicity boundary.
 
 Machine-owned JSON remains valid for storage and transport. Model-authored structured
-payloads stay bounded, while the established host-selected argument-page protocol keeps
-its fixed-point detection, stale-tool rejection, and one-repair limit.
+payloads stay bounded. Host-selected actions are decomposed by the host and recovered
+through bounded native function calls; large original containers are never handed back
+to the model as raw JSON documents.
 """
 
 import json
@@ -64,41 +65,15 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
 
 
 def _install_forced_tool_boundary(forced: Any) -> None:
-    original_argument = forced.host_selected_argument_turn
-    if getattr(original_argument, _MARKER, False):
+    # The original forced-tool module still owns selection, deterministic read recovery,
+    # native capability probing, and adapter wrapping. Only its argument recovery entry
+    # points are replaced. Crucially, do not reject the original large schema here: the
+    # host must be allowed to see it so it can decompose it before any model call.
+    from .native_atomic_argument_recovery import install_into
+
+    if forced.host_selected_argument_turn.__module__ == "minecraft_mod_ai.native_atomic_argument_recovery":
         return
-
-    def host_selected_argument_turn(
-        current: Any,
-        adapter: Any,
-        request: Any,
-        name: str,
-        *,
-        prefix: str = "host_action",
-    ) -> Any:
-        parameters = forced._parameters(forced._selected_schema(request, name))
-        assert_atomic_model_schema(parameters, surface=f"forced tool {name!r}")
-        return original_argument(
-            current,
-            adapter,
-            request,
-            name,
-            prefix=prefix,
-        )
-
-    def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-        return host_selected_argument_turn(
-            current,
-            adapter,
-            request,
-            name,
-            prefix="host_mutation",
-        )
-
-    setattr(host_selected_argument_turn, _MARKER, True)
-    setattr(host_selected_mutation_turn, _MARKER, True)
-    forced.host_selected_argument_turn = host_selected_argument_turn
-    forced.host_selected_mutation_turn = host_selected_mutation_turn
+    install_into(forced)
 
 
 def _install_router_boundary(model_router_module: Any) -> None:
