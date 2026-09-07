@@ -419,7 +419,6 @@ def collect_planning_state_research(
         provider_statuses = _provider_statuses(provider_diagnostics)
         value["evidence"].append(
             {
-                "evidence_id": f"e_{len(value['evidence']) + 1:03d}",
                 "research_ref": research_id,
                 "claims": deepcopy(note.get("claims") or []),
                 "evidence_refs": refs,
