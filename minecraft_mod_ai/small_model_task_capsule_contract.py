@@ -22,10 +22,11 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from .implementation_template_contract import build_implementation_template
+from .owned_target_contract import target_is_creatable, target_is_writable
 from .root_cause_trace import emit_root_cause, trace_scope
 
-_MARKER = "_mmm_small_model_task_capsule_v2"
-_SCHEMA = "mmm/small-model-task-capsule-v2"
+_MARKER = "_mmm_small_model_task_capsule"
+_SCHEMA = "mmm/small-model-task-capsule"
 _SOURCE_EDIT_TOOL = "apply_source_edit"
 _JAVA_VERIFY_TOOLS = frozenset({"java_diagnostics", "jdt_diagnostics"})
 _REUSE_TOOLS = frozenset({"read_reuse_source", "read_donor_source", "inspect_reuse_source"})
@@ -124,7 +125,7 @@ class TaskCapsule:
             dict.fromkeys(
                 anchor.path
                 for anchor in self.anchors
-                if anchor.status.casefold() == "host_reserved"
+                if target_is_creatable(anchor.status)
             )
         )
 
@@ -312,6 +313,13 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         raise TaskCapsuleContractError(
             "TASK_CAPSULE_NO_CONCRETE_PATHS: owned_anchors contain no writable workspace paths."
         )
+    unsupported = [anchor for anchor in anchors if not target_is_writable(anchor.status)]
+    if unsupported:
+        rendered = [f"{anchor.locator}:{anchor.status or '<empty>'}" for anchor in unsupported]
+        raise TaskCapsuleContractError(
+            "TASK_CAPSULE_TARGET_STATUS_INVALID: owned workspace targets use unsupported status "
+            f"{rendered!r}."
+        )
 
     bindings = _matching_bindings(task, task_id)
     if not bindings:
@@ -334,9 +342,9 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         raise TaskCapsuleContractError(
             "TASK_CAPSULE_PRIMARY_NOT_JAVA: custom_java primary must be under src/main/java."
         )
-    if primary.status.casefold() != "host_reserved":
+    if not target_is_writable(primary.status):
         raise TaskCapsuleContractError(
-            "TASK_CAPSULE_PRIMARY_NOT_RESERVED: planned custom-Java destination must be host_reserved."
+            "TASK_CAPSULE_PRIMARY_NOT_WRITABLE: planned custom-Java target must have a supported writable status."
         )
 
     actions = {
