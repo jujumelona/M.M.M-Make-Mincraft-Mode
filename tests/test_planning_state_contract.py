@@ -257,3 +257,50 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
 def test_authoritative_catalog_has_no_raw_prompt_fallback() -> None:
     with pytest.raises(ValueError, match="PLANNING_AUTHORITY_STATE_REQUIRED"):
         build_authoritative_request_catalog("메이플스토리 모드 만들어줘")
+
+
+def test_empty_or_placeholder_references_and_known_are_cleanly_filtered() -> None:
+    prompt = "불을 뿜는 완드를 추가해줘"
+    router = _Router(
+        [
+            {
+                "goal": {
+                    "statement": "불을 뿜는 완드 추가",
+                    "source_quote": "불을 뿜는 완드를 추가해줘",
+                },
+                "known": [
+                    {"statement": "", "source_quote": ""},
+                    {"statement": "none", "source_quote": ""},
+                ],
+                "references": [
+                    {"name": "", "source_quote": "", "what_must_be_learned": ""},
+                    {"name": "none", "source_quote": "", "what_must_be_learned": ""},
+                    {"name": "Pokemon", "source_quote": "", "what_must_be_learned": ""},
+                ],
+                "scope_status": "invalid_scope_value",
+                "unresolved": [],
+            }
+        ]
+    )
+
+    state = build_initial_planning_state(router, prompt)
+
+    # Invalid scope defaults to unspecified
+    assert state["scope_status"] == "unspecified"
+
+    # Empty and placeholder references are filtered; valid reference with empty need is inferred
+    assert len(state["references"]) == 1
+    assert state["references"][0]["name"] == "Pokemon"
+    assert (
+        state["references"][0]["what_must_be_learned"]
+        == "Documented behavior, rules, and core mechanics of Pokemon"
+    )
+
+    # Empty known items filtered out, leaving defaulted goal statement
+    assert len(state["known"]) == 1
+    assert state["known"][0]["statement"] == "불을 뿜는 완드 추가"
+
+    # Unresolved has mechanical scope unknown + reference unknown for Pokemon
+    unknown_reasons = [u["reason"] for u in state["unresolved"]]
+    assert "scope" in unknown_reasons
+    assert "reference_semantics" in unknown_reasons

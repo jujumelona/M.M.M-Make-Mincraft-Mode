@@ -270,13 +270,13 @@ def _append_host_unknown(
     )
 
 
-def _host_reference(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
+def _host_reference(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[str, Any] | None:
     name = _text(raw.get("name"))
+    if not name or name.casefold() in {"none", "n/a", "null", "no", "false", "unknown", "nothing", "empty"}:
+        return None
     needed = _text(raw.get("what_must_be_learned"))
-    if not name or not needed:
-        raise ValueError(
-            "PROMPT_STATE_REFERENCE: reference name/research need must not be empty"
-        )
+    if not needed or needed.casefold() in {"none", "n/a", "null", "no", "false"}:
+        needed = f"Documented behavior, rules, and core mechanics of {name}"
     return {
         "reference_id": f"ref_{index + 1:03d}",
         "name": name,
@@ -285,10 +285,10 @@ def _host_reference(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[
     }
 
 
-def _host_known(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[str, Any]:
+def _host_known(prompt: str, raw: Mapping[str, Any], *, index: int) -> dict[str, Any] | None:
     statement = _text(raw.get("statement"))
-    if not statement:
-        raise ValueError("PROMPT_STATE_KNOWN: statement must not be empty")
+    if not statement or statement.casefold() in {"none", "n/a", "null"}:
+        return None
     return {
         "known_id": f"known_{index + 1:03d}",
         "statement": statement,
@@ -340,12 +340,12 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
     if not isinstance(known_raw, list) or not isinstance(references_raw, list) or not isinstance(unresolved_raw, list):
         raise ValueError("PROMPT_STATE_SHAPE: known/references/unresolved must be arrays")
     if scope_status not in {"explicit", "partial", "unspecified"}:
-        raise ValueError("PROMPT_STATE_SCOPE: scope_status is invalid")
+        scope_status = "unspecified"
 
     references = [
-        _host_reference(prompt, item, index=index)
+        ref
         for index, item in enumerate(references_raw)
-        if isinstance(item, Mapping)
+        if isinstance(item, Mapping) and (ref := _host_reference(prompt, item, index=index)) is not None
     ]
     unresolved = [
         _model_unknown(item, index=index)
@@ -353,6 +353,20 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
         if isinstance(item, Mapping)
     ]
     _ensure_mechanical_unknowns(unresolved, references, scope_status)
+
+    known = [
+        k
+        for index, item in enumerate(known_raw)
+        if isinstance(item, Mapping) and (k := _host_known(prompt, item, index=index)) is not None
+    ]
+    if not known:
+        known.append(
+            {
+                "known_id": "known_001",
+                "statement": _text(goal_raw.get("statement")),
+                "source": _source_receipt(prompt, goal_raw.get("source_quote")),
+            }
+        )
 
     state: dict[str, Any] = {
         "schema_version": SCHEMA,
@@ -362,11 +376,7 @@ def _build_host_state(prompt: str, model_value: Mapping[str, Any]) -> dict[str, 
             "statement": _text(goal_raw.get("statement")),
             "source": _source_receipt(prompt, goal_raw.get("source_quote")),
         },
-        "known": [
-            _host_known(prompt, item, index=index)
-            for index, item in enumerate(known_raw)
-            if isinstance(item, Mapping)
-        ],
+        "known": known,
         "references": references,
         "scope_status": scope_status,
         "unresolved": unresolved,
@@ -523,10 +533,11 @@ def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
                 "Fill the canonical prompt-understanding template only. Preserve the user's "
                 "goal. known contains only facts and requested behavior explicitly authored by "
                 "the user. references contains named games, mods, products, styles, works, or "
-                "external concepts that must be understood; the host creates reference research. "
-                "Set scope_status from the request; the host owns scope policy. unresolved is only "
-                "for a prompt-level fact, contradiction, or user preference whose answer is "
-                "actually required to understand the authored request. Missing prices, counts, "
+                "external concepts that must be understood; if none are referenced, leave "
+                "references as an empty array []. Set scope_status from the request; the host owns "
+                "scope policy. unresolved is only for a prompt-level fact, contradiction, or user "
+                "preference whose answer is actually required to understand the authored request; "
+                "if there are none, leave unresolved as an empty array []. Missing prices, counts, "
                 "balance values, mechanics, algorithms, Minecraft APIs, repository details, "
                 "compatibility methods, files, classes, architecture, or other design freedom are "
                 "NOT prompt unknowns: later host-owned design and implementation stages resolve "
