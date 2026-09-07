@@ -69,6 +69,13 @@ def _module_contracts(path: Path, package_root: Path) -> dict[str, Any]:
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             if node.name in _IGNORED_CLASS_NAMES:
                 continue
+            fields = _class_fields(node)
+            # The model-facing catalog exists to communicate structured payload shapes.
+            # A public exception, marker, protocol, or enum with no annotated fields adds
+            # only a name/base pair and cannot describe a payload. Keeping those entries
+            # multiplied prompt size across every request without adding usable schema.
+            if not fields:
+                continue
             types.append(
                 {
                     "name": node.name,
@@ -77,7 +84,7 @@ def _module_contracts(path: Path, package_root: Path) -> dict[str, Any]:
                         for base in (_base_name(base_node) for base_node in node.bases)
                         if base
                     ),
-                    "fields": _class_fields(node),
+                    "fields": fields,
                 }
             )
             continue
@@ -100,11 +107,12 @@ def _module_contracts(path: Path, package_root: Path) -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def contract_schema_manifest() -> tuple[dict[str, Any], ...]:
-    """Return every canonical contract module and its explicit type shape.
+    """Return every canonical contract module and its explicit payload type shape.
 
     The manifest is sorted by repository-relative path so prompts, traces, and tests stay
-    deterministic. It intentionally contains type names and annotated fields rather than
-    full source text to keep small-model context compact.
+    deterministic. Every canonical contract file remains represented, while model-facing
+    type entries contain only annotated payload fields (plus explicit type aliases). This
+    avoids paying prompt budget for marker/error classes that carry no serializable shape.
     """
 
     package_root = Path(__file__).resolve().parent
