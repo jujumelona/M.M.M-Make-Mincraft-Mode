@@ -135,7 +135,17 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
     target = adapter_for_target("1.20.1", "fabric")
     result = CustomModuleGenerator(router, policy=ScalePolicy(model_context_bytes=budget)).generate(
         root,
-        module=ProductionModule("cross_file_feature", "custom_java", {"feature": "crossFileHook"}),
+        module=ProductionModule(
+            "cross_file_feature",
+            "custom_java",
+            {
+                "feature": "crossFileHook",
+                "evidence_task": {
+                    "task_id": "cross_file_feature",
+                    "semantic_outcome": "Implement the approved cross-file hook from grounded source evidence.",
+                },
+            },
+        ),
         minecraft_version=target.minecraft_version,
         loader=target.loader,
         mappings=target.yarn_mappings,
