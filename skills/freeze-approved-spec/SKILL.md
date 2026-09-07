@@ -30,10 +30,10 @@ output_schema:
   - explicit failure reason
 
 validators:
-  - the approved bytes/semantic proposal are exactly the proposal shown for approval
-  - the approval hash is calculated by the code-owned approval mechanism, not invented by the model
-  - unresolved gates and blocked capabilities are preserved rather than silently removed
-  - approval does not itself claim that any file was generated, compiled, tested, or run
+  - proposal_identity
+  - approval_and_fidelity
+  - feature_preservation
+  - no_self_certification
 
 retry_policy:
   max_attempts: null
