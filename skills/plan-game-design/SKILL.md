@@ -1,19 +1,20 @@
 ---
 name: plan-game-design
-description: Produce a Fabric mod design, request-resolved implementation methods and acceptance-test plan.
+description: Produce a Fabric mod design, request-resolved implementation methods and acceptance-test plan without writing or executing the project.
+schema_version: mmm/skill-v2
 ---
 
 activate_when:
-  - The current task matches this skill's single responsibility.
+  - A version-locked user brief needs a concrete game design, implementation-method plan, or observable acceptance-test plan before approval.
   - Minecraft target is the exact host-selected PlatformLock (version, loader, mappings, Java, and dependency coordinates).
-  - Required operator configuration and prior gates are available.
+  - Required planning inputs and reviewed evidence are available or can be marked unresolved.
 
 inputs:
-  - approved proposal or read-only planning brief as applicable
-  - explicit target paths inside MMM_WORKSPACE
+  - version-locked user brief and exclusions
+  - host-selected PlatformLock
   - model roles: planner
-  - version, loader, mappings, library and license metadata
-  - resolved mod-development method plan
+  - resolved mod-development method plan when already available
+  - reviewed evidence receipts for design-critical technical claims
 
 required_rag:
   - Vanilla gameplay or mechanic claims must use the reviewed vanilla_knowledge capability, preferring the minecraft-wiki route when available.
@@ -30,32 +31,34 @@ allowed_tools:
 output_schema:
   - schema_version
   - status
-  - changed_paths or read-only findings
+  - game design and request-to-capability mapping
+  - request-resolved implementation methods
+  - observable acceptance-test plan
   - exact evidence and receipt hashes
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - loader/version/mapping consistency
-  - Java diagnostics and structured resource validation where applicable
-  - no advertised capability without its required build/runtime gate
+  - every user-requested capability is represented as implemented, partial, or blocked in the proposed design
+  - every implementation-critical design claim is bound to exact-version reviewed evidence or remains explicitly unresolved
+  - PlatformLock is preserved exactly and is not mixed with another loader, mapping set, Java target, or Minecraft version
+  - acceptance criteria are observable and do not claim build/runtime success before those stages execute
+  - planning performs no project writes, builds, tests, or world mutations
 
 retry_policy:
   max_attempts: null
-  strategy: progress-driven minimal-diff repair from fresh machine evidence only
+  strategy: revise only the unresolved or invalid planning slice using fresh evidence; stop when the same failure signature repeats without new evidence
   stop_on_repeated_error_signature: true
 
 approval_required:
-  writes: true
-  runtime: true
+  writes: false
+  runtime: false
   read_only_research: false
 
 forbidden_actions:
   - silent fallback to a heuristic or different model
   - arbitrary shell, script, browser code or unrestricted file access
   - mixing Fabric with Forge/NeoForge or another Minecraft version
-  - deleting requested functionality merely to make a build pass
+  - deleting requested functionality merely to make the plan easier
   - modifying a user's real Minecraft world
   - planning a standalone map, world save, world ZIP, schematic, Litematica file or external Builder handoff
   - selecting structure, biome or dimension generation unless fabric_worldgen is explicitly resolved from the request
@@ -64,10 +67,10 @@ forbidden_actions:
 
 exit_conditions:
   success:
-    - Every validator and skill-specific downstream gate passes.
+    - Every requested capability has an explicit design status and acceptance criterion.
     - Every design-critical required_rag claim has a reviewed evidence receipt.
-    - Outputs and hashes are persisted.
+    - The planning artifact is ready to be displayed for explicit approval and no project write or runtime action has occurred.
   blocked:
-    - Required MCP, model, dependency, approval or runtime is unavailable.
+    - A required planning input, exact-version fact, dependency decision, or evidence route remains unavailable.
   failed:
-    - Fresh machine evidence repeats without progress or a safety/version boundary is violated.
+    - The same planning failure repeats without new evidence or a safety/version boundary is violated.
