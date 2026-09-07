@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-"""Global small-model output boundary.
+"""Global small-model output atomicity boundary.
 
-Machine-owned JSON remains valid for storage and transport. Model-authored structure is
-kept atomic: large schemas are rejected before generation, and forced-tool recovery stays
-on the same native tool wire instead of falling back to free-form JSON.
+Machine-owned JSON remains valid for storage and transport. Model-authored structured
+payloads stay bounded, while the established host-selected argument-page protocol keeps
+its fixed-point detection, stale-tool rejection, and one-repair limit.
 """
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from functools import wraps
 from typing import Any
 
@@ -18,7 +17,7 @@ _MAX_SCHEMA_CHARS = 12_000
 _MAX_SCHEMA_NODES = 120
 _MAX_SCHEMA_DEPTH = 8
 _MAX_SCHEMA_PROPERTIES = 32
-_MAX_REPAIR_ERROR_CHARS = 900
+_MARKER = "_mmm_atomic_model_output_boundary"
 
 
 def _schema_metrics(value: Any, *, depth: int = 0) -> tuple[int, int, int]:
@@ -64,46 +63,11 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
         )
 
 
-def _repair_message(name: str, error: str = "") -> dict[str, str]:
-    suffix = f" Validation: {error[:_MAX_REPAIR_ERROR_CHARS]}" if error else ""
-    return {
-        "role": "user",
-        "content": (
-            f"The host already selected the only permitted function: {name}. "
-            f"Call {name} exactly once using the supplied native function schema. "
-            "Do not answer in prose and do not serialize a replacement JSON document outside the function call. "
-            "Correct only the malformed function arguments."
-            + suffix
-        ),
-    }
-
-
-def _same_tool_repair_request(forced: Any, request: Any, name: str, error: str = "") -> Any:
-    narrowed = forced._single_tool_request(request, name)
-    messages = tuple(
-        dict(message)
-        for message in tuple(getattr(narrowed, "messages", ()) or ())
-        if isinstance(message, Mapping)
-    ) + (_repair_message(name, error),)
-    return replace(
-        narrowed,
-        messages=messages,
-        response_format="text",
-        response_schema=None,
-    )
-
-
-def _restore_native_support(forced: Any, adapter: Any, request: Any) -> None:
-    key = forced._native_probe_cache_key(adapter, request)
-    if key is None:
-        return
-    with forced._NATIVE_PROBE_LOCK:
-        forced._NATIVE_PROBE_CACHE[key] = True
-        forced._NATIVE_PROBE_NEGATIVE_AT.pop(key, None)
-        forced._NATIVE_PROBE_TRANSIENT_AT.pop(key, None)
-
-
 def _install_forced_tool_boundary(forced: Any) -> None:
+    original_argument = forced.host_selected_argument_turn
+    if getattr(original_argument, _MARKER, False):
+        return
+
     def host_selected_argument_turn(
         current: Any,
         adapter: Any,
@@ -112,39 +76,34 @@ def _install_forced_tool_boundary(forced: Any) -> None:
         *,
         prefix: str = "host_action",
     ) -> Any:
-        del prefix
-        from .model_adapters import ModelConfigurationError
-
         parameters = forced._parameters(forced._selected_schema(request, name))
         assert_atomic_model_schema(parameters, surface=f"forced tool {name!r}")
-        repair_request = _same_tool_repair_request(forced, request, name)
-        try:
-            turn = current(adapter, repair_request)
-        except BaseException as exc:
-            cause = getattr(exc, "cause", exc)
-            raise ModelConfigurationError(
-                f"Host-selected action {name!r} failed its bounded native-tool repair; "
-                "free-form JSON fallback is disabled."
-            ) from cause
-        if forced._contains_exact_call(turn, name):
-            _restore_native_support(forced, adapter, request)
-            return turn
-        raise ModelConfigurationError(
-            f"Host-selected action {name!r} repair returned {forced._call_names(turn)}; "
-            "free-form JSON fallback is disabled."
+        return original_argument(
+            current,
+            adapter,
+            request,
+            name,
+            prefix=prefix,
         )
 
     def host_selected_mutation_turn(current: Any, adapter: Any, request: Any, name: str) -> Any:
-        return host_selected_argument_turn(current, adapter, request, name, prefix="host_mutation")
+        return host_selected_argument_turn(
+            current,
+            adapter,
+            request,
+            name,
+            prefix="host_mutation",
+        )
 
+    setattr(host_selected_argument_turn, _MARKER, True)
+    setattr(host_selected_mutation_turn, _MARKER, True)
     forced.host_selected_argument_turn = host_selected_argument_turn
     forced.host_selected_mutation_turn = host_selected_mutation_turn
 
 
 def _install_router_boundary(model_router_module: Any) -> None:
     cls = model_router_module.ModelRouter
-    marker = "_mmm_atomic_model_output_boundary"
-    if getattr(cls.generate_tool_decision, marker, False):
+    if getattr(cls.generate_tool_decision, _MARKER, False):
         return
 
     current_tool = cls.generate_tool_decision
@@ -169,7 +128,7 @@ def _install_router_boundary(model_router_module: Any) -> None:
             description=description,
         )
 
-    setattr(generate_tool_decision, marker, True)
+    setattr(generate_tool_decision, _MARKER, True)
     cls.generate_tool_decision = generate_tool_decision
 
     current_text = cls.generate_text
@@ -182,7 +141,7 @@ def _install_router_boundary(model_router_module: Any) -> None:
             assert_atomic_model_schema(response_schema, surface=f"JSON response for role {role!r}")
         return current_text(self, role, messages, **kwargs)
 
-    setattr(generate_text, marker, True)
+    setattr(generate_text, _MARKER, True)
     cls.generate_text = generate_text
 
 
