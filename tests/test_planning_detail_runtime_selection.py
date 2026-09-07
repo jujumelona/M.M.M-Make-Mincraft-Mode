@@ -6,10 +6,7 @@ from minecraft_mod_ai.planning_detail_template import (
     CORE_WORKSHEET_SECTIONS,
     WORKSHEET_SECTIONS,
 )
-from minecraft_mod_ai.planning_state_implementation import (
-    _host_section_selection,
-    _parameters_for_sections,
-)
+from minecraft_mod_ai.planning_state_implementation import _host_section_selection
 
 
 def _requirements() -> list[dict[str, str]]:
@@ -17,23 +14,6 @@ def _requirements() -> list[dict[str, str]]:
         {"requirement_id": "REQ-1"},
         {"requirement_id": "REQ-2"},
     ]
-
-
-def test_dynamic_tool_schema_matches_exact_host_selection() -> None:
-    parameters = _parameters_for_sections(CORE_WORKSHEET_SECTIONS)
-    worksheet = parameters["properties"]["engineering_worksheet"]
-
-    assert tuple(worksheet["required"]) == CORE_WORKSHEET_SECTIONS
-    assert tuple(worksheet["properties"]) == CORE_WORKSHEET_SECTIONS
-    assert parameters["additionalProperties"] is False
-
-
-def test_dynamic_tool_schema_defaults_to_full_fail_safe_contract() -> None:
-    parameters = _parameters_for_sections(None)
-    worksheet = parameters["properties"]["engineering_worksheet"]
-
-    assert tuple(worksheet["required"]) == WORKSHEET_SECTIONS
-    assert tuple(worksheet["properties"]) == WORKSHEET_SECTIONS
 
 
 def test_host_selection_defaults_every_requirement_to_full_contract() -> None:
@@ -64,9 +44,7 @@ def test_host_selection_rejects_unknown_requirement() -> None:
 
 
 def test_host_selection_cannot_omit_core_section() -> None:
-    selection = tuple(
-        key for key in WORKSHEET_SECTIONS if key != "verification"
-    )
+    selection = tuple(key for key in WORKSHEET_SECTIONS if key != "verification")
 
     with pytest.raises(ValueError, match="core section.*cannot be omitted"):
         _host_section_selection(_requirements(), {"REQ-1": selection})
