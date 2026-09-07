@@ -16,6 +16,7 @@ from .scale_policy import ScalePolicy
 
 _DEPENDENCIES_BLOCK = re.compile(r"\bdependencies\s*\{")
 _GECKOLIB_DEPENDENCY_MARKER = "// MMM:geckolib:dependency"
+_JAVA_TYPE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _ARCHETYPES = frozenset(
     {"biped", "quadruped", "flying", "serpentine", "construct", "custom"}
 )
@@ -195,6 +196,64 @@ def geckolib_entity_inputs_from_module_config(
     )
 
 
+def validate_existing_geckolib_records(project_root: str | Path) -> None:
+    """Validate persisted entity metadata reused while generating a new entity."""
+
+    root = Path(project_root).expanduser().resolve()
+    manifest = root / ".minecraft_ai/geckolib-entities.json"
+    if manifest.exists() and (not manifest.is_file() or manifest.is_symlink()):
+        raise GeckoLibGenerationContractError(
+            "Existing GeckoLib entity index must be a regular file."
+        )
+
+    from .geckolib_generator import iter_geckolib_entity_records
+
+    try:
+        records = tuple(iter_geckolib_entity_records(root))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise GeckoLibGenerationContractError(
+            f"Existing GeckoLib entity records are invalid: {exc}"
+        ) from exc
+
+    for record in records:
+        for field in ("class_name", "entity_class"):
+            value = record.get(field)
+            if not isinstance(value, str) or not _JAVA_TYPE.fullmatch(value):
+                raise GeckoLibGenerationContractError(
+                    f"Existing GeckoLib entity record {field} is not a Java type identifier."
+                )
+        for field in (
+            "max_health",
+            "attack_damage",
+            "movement_speed",
+            "follow_range",
+            "entity_width",
+            "entity_height",
+        ):
+            try:
+                value = float(record.get(field))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise GeckoLibGenerationContractError(
+                    f"Existing GeckoLib entity record {field} is not numeric."
+                ) from exc
+            if not math.isfinite(value) or value <= 0:
+                raise GeckoLibGenerationContractError(
+                    f"Existing GeckoLib entity record {field} must be positive and finite."
+                )
+        if str(record.get("archetype")) not in _ARCHETYPES:
+            raise GeckoLibGenerationContractError(
+                "Existing GeckoLib entity record archetype is invalid."
+            )
+        if str(record.get("behavior")) not in _BEHAVIORS:
+            raise GeckoLibGenerationContractError(
+                "Existing GeckoLib entity record behavior is invalid."
+            )
+        if str(record.get("spawn_group")) not in _SPAWN_GROUPS:
+            raise GeckoLibGenerationContractError(
+                "Existing GeckoLib entity record spawn_group is invalid."
+            )
+
+
 def _read_utf8(path: Path, *, label: str) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -294,6 +353,7 @@ __all__ = [
     "GeckoLibGenerationTarget",
     "geckolib_entity_inputs_from_module_config",
     "preflight_geckolib_generation_target",
+    "validate_existing_geckolib_records",
     "validate_geckolib_entity_inputs",
     "validate_geckolib_project_preflight",
 ]
