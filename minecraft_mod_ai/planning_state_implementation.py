@@ -2,45 +2,29 @@ from __future__ import annotations
 
 """Host-owned detailed-plan compilation from grounded research.
 
-The model never authors the plan container, evidence identifiers, or a large JSON/tool
-payload. Host code owns structure and validation. Detailed planning follows the semantic
-sections selected by research/host policy: each selected section is one complete work
-unit. Token counts do not decide decomposition, retries, or fallback behavior.
+Each requirement is authored as one schema-constrained engineering worksheet. The host
+owns requirement selection, worksheet sections, evidence identifiers, validation, and
+plan assembly. The model never chooses its own response shape and detailed planning does
+not depend on free-form section boundaries or reasoning-label parsing.
 """
 
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-import re
+import json
 from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .root_cause_trace import emit_root_cause
-from .planning_detail_contract import validate_detailed_plan_grounding, validate_evidence_refs
+from .planning_detail_contract import validate_detailed_plan_grounding
 from .planning_detail_template import (
-    DETAIL_FIELDS,
-    DETAIL_SLOT_GUIDANCE,
     normalize_required_sections,
     validate_worksheet,
+    worksheet_prompt,
+    worksheet_schema,
 )
 from .planning_state_contract import validate_planning_state
-
-
-_META_REASONING_TAG_RE = re.compile(
-    r"^\s*<\s*think(?:ing)?\b[^>]*>.*?<\s*/\s*think(?:ing)?\s*>\s*",
-    re.IGNORECASE | re.DOTALL,
-)
-_META_REASONING_LABEL_RE = re.compile(
-    r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:thinking\s+process|reasoning|analysis)\s*(?:\*\*|__)?\s*:\s*",
-    re.IGNORECASE,
-)
-_FINAL_OUTPUT_LABEL_RE = re.compile(
-    r"(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:final(?:\s+(?:answer|specification))?|specification|answer)\s*(?:\*\*|__)?\s*:\s*",
-    re.IGNORECASE,
-)
-_CONTINUITY_CONTEXT_MAX_CHARS = 8_000
-_CONTINUITY_ELLIPSIS = " … "
 
 
 def _text(value: Any) -> str:
@@ -121,16 +105,6 @@ def _preflight_detailed_planning(
         _requirement_grounding(state, requirement_ref)
 
 
-def _validate_refs(
-    refs: Any,
-    allowed: set[str],
-    *,
-    field: str,
-    require: bool = True,
-) -> list[str]:
-    return validate_evidence_refs(refs, allowed, field=field, require=require)
-
-
 def _rehash(state: dict[str, Any]) -> dict[str, Any]:
     from .planning_state_contract import _hash_without
 
@@ -143,167 +117,110 @@ def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
     rows: list[str] = []
     for item in evidence:
         research_ref = _text(item.get("research_ref"))
+        refs = ", ".join(
+            _text(ref) for ref in item.get("evidence_refs", []) if _text(ref)
+        )
         claims = item.get("claims") or []
         claim_text = " | ".join(_text(claim) for claim in claims if _text(claim))
-        if claim_text:
-            rows.append(f"- {research_ref}: {claim_text}")
-    return "\n".join(rows) or "- Grounded evidence exists, but no claim prose is available."
-
-
-def _strip_leading_meta_reasoning(raw: Any, section: str) -> str:
-    value = str(raw or "").strip()
-    while True:
-        stripped = _META_REASONING_TAG_RE.sub("", value, count=1).strip()
-        if stripped == value:
-            break
-        value = stripped
-
-    if _META_REASONING_LABEL_RE.match(value):
-        final_output = _FINAL_OUTPUT_LABEL_RE.search(value)
-        if final_output is None:
-            raise ValueError(
-                f"DETAILED_PLAN_META_REASONING: {section} returned reasoning without an explicit final-output boundary"
-            )
-        value = value[final_output.end():].strip()
-    return value
-
-
-def _normalize_section_text(raw: Any, section: str) -> str:
-    value = _strip_leading_meta_reasoning(raw, section)
-    if value.startswith("```"):
-        value = value.strip("`").strip()
-    if value.lstrip().startswith(("{", "[")):
-        raise ValueError(
-            f"DETAILED_PLAN_TEXT_BOUNDARY: {section} returned a structured payload instead of prose"
+        source = _text(item.get("source"))
+        rows.append(
+            f"- research_ref={research_ref}; evidence_refs=[{refs}]; "
+            f"source={source or 'unspecified'}; claims={claim_text or 'no claim prose'}"
         )
-    value = _text(value)
-    if len(value) < 24:
-        raise ValueError(f"DETAILED_PLAN_SECTION: {section} returned no concrete specification")
-    return value
-
-
-def _bounded_continuity_excerpt(value: str, limit: int) -> str:
-    normalized = _text(value)
-    if limit <= 0:
-        return ""
-    if len(normalized) <= limit:
-        return normalized
-    if limit <= len(_CONTINUITY_ELLIPSIS):
-        return normalized[:limit]
-    body_budget = limit - len(_CONTINUITY_ELLIPSIS)
-    head_budget = (body_budget * 2) // 3
-    tail_budget = body_budget - head_budget
-    if tail_budget <= 0:
-        return normalized[:head_budget] + _CONTINUITY_ELLIPSIS
-    return (
-        normalized[:head_budget]
-        + _CONTINUITY_ELLIPSIS
-        + normalized[-tail_budget:]
-    )
-
-
-def _continuity_context(specifications: Mapping[str, str]) -> str:
-    if not specifications:
-        return "- No earlier section has been authored for this requirement."
-
-    normalized = [
-        (str(section), _text(specification))
-        for section, specification in specifications.items()
-    ]
-    full = "\n".join(
-        f"- {section}: {specification}"
-        for section, specification in normalized
-    )
-    if len(full) <= _CONTINUITY_CONTEXT_MAX_CHARS:
-        return full
-
-    label_overhead = sum(len(f"- {section}: ") for section, _ in normalized)
-    newline_overhead = max(0, len(normalized) - 1)
-    available = max(
-        0,
-        _CONTINUITY_CONTEXT_MAX_CHARS - label_overhead - newline_overhead,
-    )
-    share, remainder = divmod(available, len(normalized))
-    rows = [
-        f"- {section}: {_bounded_continuity_excerpt(specification, share + (index < remainder))}"
-        for index, (section, specification) in enumerate(normalized)
-    ]
     return "\n".join(rows)
 
 
-def _plain_section(
-    router: Any,
-    *,
+def _worksheet_messages(
     requirement: Mapping[str, Any],
-    section: str,
+    selected_sections: tuple[str, ...],
     evidence: list[Mapping[str, Any]],
-    prior_specifications: Mapping[str, str] | None = None,
-) -> str:
-    checklist = "; ".join(DETAIL_SLOT_GUIDANCE[section])
+) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
-    continuity = _continuity_context(prior_specifications or {})
-    messages = [
+    acceptance = requirement.get("acceptance")
+    acceptance_rows = (
+        [_text(item) for item in acceptance if _text(item)]
+        if isinstance(acceptance, list)
+        else []
+    )
+    acceptance_text = "\n".join(f"- {row}" for row in acceptance_rows) or "- none supplied"
+    return [
         {
             "role": "system",
             "content": (
-                "Write exactly one complete semantic engineering-design section for a small-model planning pipeline. "
-                "The host has already chosen this section because it is a meaningful planning unit; do not split or "
-                "resize the work based on token length. Return plain prose only: no JSON, YAML, XML, tool/function "
-                "call, code fence, object keys, or evidence identifiers. The host owns all structure and provenance. "
-                "Do not invent API names, symbols, versions, dependencies, repository paths, or source facts. Keep "
-                "the design abstract where target facts are not established. Be concrete about actors, state, branches, "
-                "limits, failure behavior, and observable outcomes that belong to this section."
+                "Complete exactly one engineering worksheet for one requirement. "
+                "Return only the JSON object required by the supplied response schema. "
+                "Do not emit analysis, reasoning, commentary, markdown, code fences, or keys "
+                "outside that schema. The host owns the section set and provenance. "
+                "Do not invent target API names, symbols, versions, repository paths, external "
+                "facts, or evidence identifiers. Use only evidence_refs shown in the grounded "
+                "context, and use an empty constraint_evidence_refs array when evidence does not "
+                "constrain an authored design decision."
             ),
         },
         {
             "role": "user",
             "content": (
                 f"Requirement: {statement}\n"
-                f"Section: {section}\n"
-                f"Purpose: {DETAIL_FIELDS[section]}\n"
-                f"Checklist: {checklist}\n"
-                "Grounded research context (context only; do not emit evidence IDs):\n"
-                f"{_evidence_context(evidence)}\n"
-                "Earlier completed semantic sections for continuity only:\n"
-                f"{continuity}\n"
-                "Write only the complete section specification."
+                "Acceptance observations supplied by the requirement:\n"
+                f"{acceptance_text}\n"
+                "Grounded implementation evidence:\n"
+                f"{_evidence_context(evidence)}\n\n"
+                f"{worksheet_prompt(selected_sections)}\n"
+                "Fill the schema once as one internally consistent worksheet."
             ),
         },
     ]
-    with planner_operation(f"detailed_section:{section}"):
-        raw = router.generate_text(
-            "planner",
-            messages,
-            response_format="text",
-            enable_tools=False,
-        )
+
+
+def _structured_output_text(exc: BaseException) -> str:
+    return str(getattr(exc, "output", "") or "")
+
+
+def _compile_requirement_worksheet(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    selected_sections: tuple[str, ...],
+    evidence: list[Mapping[str, Any]],
+    allowed: set[str],
+) -> dict[str, Any]:
+    """Generate and validate exactly one schema-owned worksheet for one requirement."""
+
+    requirement_ref = _text(requirement.get("requirement_id"))
+    schema = worksheet_schema(selected_sections)
+    messages = _worksheet_messages(requirement, selected_sections, evidence)
+    raw = ""
     try:
-        return _normalize_section_text(raw, section)
-    except ValueError as exc:
-        raw_text = str(raw or "")
-        stripped = raw_text.strip()
+        with planner_operation("detailed_worksheet"):
+            raw = router.generate_text(
+                "planner",
+                messages,
+                response_format="json",
+                response_schema=schema,
+                enable_tools=False,
+            )
+        decoded = json.loads(raw)
+        return validate_worksheet(decoded, allowed, selected_sections)
+    except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        raw_text = raw or _structured_output_text(exc)
         emit_root_cause(
-            "detailed_section_parse_failure",
+            "detailed_worksheet_failure",
             stage="planning_state",
-            operation=f"detailed_section:{section}",
-            gate="section_output_normalization",
+            operation="detailed_worksheet",
+            gate="structured_worksheet_validation",
             result="FAIL",
             reason=f"{type(exc).__name__}: {exc}",
             details={
-                "requirement_ref": _text(requirement.get("requirement_id")),
-                "section": section,
+                "requirement_ref": requirement_ref,
+                "selected_sections": list(selected_sections),
                 "raw_output": raw_text,
                 "raw_output_chars": len(raw_text),
-                "starts_with_meta_reasoning_label": bool(
-                    _META_REASONING_LABEL_RE.match(stripped)
-                ),
-                "contains_final_output_boundary": bool(
-                    _FINAL_OUTPUT_LABEL_RE.search(stripped)
-                ),
-                "starts_with_structured_payload": stripped.startswith(("{", "[")),
+                "response_format": "json",
+                "response_schema": schema,
+                "allowed_evidence_refs": sorted(allowed),
                 "parser_rule": (
-                    "plain prose; leading reasoning/analysis labels require an explicit "
-                    "final/specification/answer boundary; structured payloads are rejected"
+                    "one JSON worksheet matching the host-owned response schema; "
+                    "all sections and evidence refs are validated by the host"
                 ),
             },
             exc=exc,
@@ -311,42 +228,9 @@ def _plain_section(
         raise
 
 
-def _compile_requirement_specifications(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-) -> dict[str, str]:
-    """Author the host-selected semantic sections once, in dependency-preserving order.
-
-    There is deliberately no token-derived batching, token escalation, repair retry, or
-    fallback path here. The selected section names are the decomposition boundary.
-    Earlier completed sections are passed forward as continuity context so a small model
-    can keep one requirement coherent without authoring a monolithic response.
-    """
-
-    specifications: dict[str, str] = {}
-    seen: set[str] = set()
-    for section in selected_sections:
-        specification = _plain_section(
-            router,
-            requirement=requirement,
-            section=section,
-            evidence=evidence,
-            prior_specifications=specifications,
-        )
-        normalized = _text(specification).casefold()
-        if normalized in seen:
-            raise ValueError(
-                f"DETAILED_PLAN_DUPLICATE_SECTION: {section} duplicated an earlier semantic section"
-            )
-        specifications[section] = specification
-        seen.add(normalized)
-    return specifications
-
-
-def _host_derived_capabilities(worksheet: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _host_derived_capabilities(
+    worksheet: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     return [
         {
             "capability": f"Preserve the {section} contract: {_text(row.get('specification'))}",
@@ -356,7 +240,9 @@ def _host_derived_capabilities(worksheet: Mapping[str, Mapping[str, Any]]) -> li
     ]
 
 
-def _host_derived_obligations(worksheet: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _host_derived_obligations(
+    worksheet: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     return [
         {
             "obligation": f"Implement and verify the {section} contract: {_text(row.get('specification'))}",
@@ -392,27 +278,22 @@ def _assemble_requirement_plan(
     requirement: Mapping[str, Any],
     requirement_ref: str,
     selected_sections: tuple[str, ...],
-    specifications: Mapping[str, str],
+    worksheet: Mapping[str, Mapping[str, Any]],
     allowed: set[str],
 ) -> dict[str, Any]:
-    worksheet_raw = {
-        section: {
-            "specification": specifications[section],
-            "constraint_evidence_refs": [],
-        }
-        for section in selected_sections
-    }
-    worksheet = validate_worksheet(worksheet_raw, allowed, selected_sections)
+    validated_worksheet = validate_worksheet(worksheet, allowed, selected_sections)
     plan = {
         "requirement_ref": requirement_ref,
         "required_detail_sections": list(selected_sections),
-        "engineering_worksheet": worksheet,
-        "implementation_capabilities": _host_derived_capabilities(worksheet),
-        "implementation_obligations": _host_derived_obligations(worksheet),
+        "engineering_worksheet": validated_worksheet,
+        "implementation_capabilities": _host_derived_capabilities(validated_worksheet),
+        "implementation_obligations": _host_derived_obligations(validated_worksheet),
         "artifact_obligations": [],
         "grounded_bindings": [],
         "reuse_candidates": [],
-        "verification_obligations": _host_derived_checks(requirement, worksheet),
+        "verification_obligations": _host_derived_checks(
+            requirement, validated_worksheet
+        ),
     }
     validate_detailed_plan_grounding(plan, allowed)
     return plan
@@ -427,17 +308,18 @@ def _compile_requirement_plan(
     selected_sections = normalize_required_sections(required_sections)
     requirement_ref = _text(requirement.get("requirement_id"))
     evidence, allowed = _requirement_grounding(state, requirement_ref)
-    specifications = _compile_requirement_specifications(
+    worksheet = _compile_requirement_worksheet(
         router,
         requirement=requirement,
         selected_sections=selected_sections,
         evidence=evidence,
+        allowed=allowed,
     )
     return _assemble_requirement_plan(
         requirement,
         requirement_ref,
         selected_sections,
-        specifications,
+        worksheet,
         allowed,
     )
 
@@ -450,7 +332,7 @@ def _compile_requirement_plans_parallel(
     *,
     workers: int,
 ) -> list[dict[str, Any]]:
-    """Run independent requirements in parallel; preserve section order inside each one."""
+    """Run independent requirement worksheets in parallel."""
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="planning-detail") as pool:
         futures = [
