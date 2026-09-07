@@ -161,7 +161,10 @@ def _read_and_verify_document(
     failures: list[dict[str, str]],
     round_index: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
-    pages = project_rag._read_evidence_pages(document)
+    try:
+        pages = project_rag._read_evidence_pages(document)
+    except Exception:
+        pages = []
     results: list[dict[str, Any]] = []
     rejected_count = 0
     domain_id = str(domain.get("domain_id") or "").strip() or "unknown"

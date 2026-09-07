@@ -423,7 +423,10 @@ def _validate_document_grounding(
     The first positional argument is intentionally ignored so current callers can be
     migrated without resurrecting the deleted agentic private validator.
     """
-    pages = project_rag._read_evidence_pages(document)
+    try:
+        pages = project_rag._read_evidence_pages(document)
+    except Exception:
+        pages = []
     allowed_refs = frozenset(
         str(page.get("page_ref") or "").strip()
         for page in pages

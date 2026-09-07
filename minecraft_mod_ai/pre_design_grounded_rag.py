@@ -12,6 +12,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -825,6 +826,7 @@ def _write(path: Path, text: str) -> None:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
+            newline="\n",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
@@ -834,21 +836,25 @@ def _write(path: Path, text: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
             name = handle.name
-        os.replace(name, path)
+
+        for attempt in range(4):
+            try:
+                os.replace(name, path)
+                break
+            except OSError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         if name:
             Path(name).unlink(missing_ok=True)
 
 
-def _materialize_domain_evidence_document(
-    domain_id: str, evidence: Mapping[str, Any]
-) -> dict[str, Any]:
-    raw = json.dumps(dict(evidence), ensure_ascii=False, sort_keys=True, default=str)
-    digest = _sha256_text(raw)
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", domain_id).strip("_") or "unknown"
-    root = _root()
-    raw_path = root / f"{safe}-{digest[7:19]}.json"
-    pages_path = root / f"{safe}-{digest[7:19]}.pages.jsonl"
+def _build_evidence_pages(
+    domain_id: str,
+    evidence: Mapping[str, Any],
+    digest: str,
+) -> tuple[list[dict[str, Any]], str]:
     units = _units(evidence)
     pages: list[dict[str, Any]] = []
 
@@ -867,29 +873,53 @@ def _materialize_domain_evidence_document(
             }
         )
 
+    total_pages = len(pages)
     for index, page in enumerate(pages):
         page.update(
             {
                 "page_index": index,
-                "page_count": len(pages),
-                "page_ref": f"{digest}#page={index + 1}/{len(pages)}",
+                "page_count": total_pages,
+                "page_ref": f"{digest}#page={index + 1}/{total_pages}",
             }
         )
 
+    page_lines: list[str] = []
+    for page in pages:
+        rendered_page = json.dumps(
+            page,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        # Escape Unicode line separators (\u2028, \u2029, \x85) so line-based readers
+        # and tools will never split a single JSONL record across lines.
+        # json.loads unescapes these sequences losslessly.
+        clean_page = (
+            rendered_page.replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+            .replace("\x85", "\\u0085")
+        )
+        page_lines.append(clean_page)
+
+    serialized = "".join(f"{line}\n" for line in page_lines)
+    return pages, serialized
+
+
+def _materialize_domain_evidence_document(
+    domain_id: str, evidence: Mapping[str, Any]
+) -> dict[str, Any]:
+    raw = json.dumps(dict(evidence), ensure_ascii=False, sort_keys=True, default=str)
+    digest = _sha256_text(raw)
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", domain_id).strip("_") or "unknown"
+    root = _root()
+    raw_path = root / f"{safe}-{digest[7:19]}.json"
+    pages_path = root / f"{safe}-{digest[7:19]}.pages.jsonl"
+
+    pages, pages_text = _build_evidence_pages(domain_id, evidence, digest)
+
     _write(raw_path, raw)
-    _write(
-        pages_path,
-        "".join(
-            json.dumps(
-                page,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\n"
-            for page in pages
-        ),
-    )
+    _write(pages_path, pages_text)
+
     return {
         "schema_version": "mmm/research-evidence-document-v2",
         "domain_id": domain_id,
@@ -899,8 +929,9 @@ def _materialize_domain_evidence_document(
         "page_count": len(pages),
         "page_partition": "claim_bearing_source_unit",
         "source_keys": sorted(str(key) for key in evidence),
-        "model_unit_count": len(units),
+        "model_unit_count": len(pages),
         "model_projection": "claim_bearing_source_bodies_only",
+        "_pages": pages,
     }
 
 
@@ -908,18 +939,63 @@ def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     expected = int(document.get("page_count") or 0)
     if expected == 0:
         return []
+
+    # 1. In-memory cache fast path
+    cached = document.get("_pages")
+    if isinstance(cached, list) and len(cached) == expected:
+        return [dict(page) for page in cached if isinstance(page, Mapping)]
+
     path = Path(str(document.get("pages_path") or "")).expanduser()
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    pages = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    if len(pages) != expected:
-        raise ValueError(
-            f"Research evidence page count mismatch: expected {expected}, got {len(pages)}"
-        )
+    raw_path = Path(str(document.get("raw_path") or "")).expanduser()
+    pages: list[dict[str, Any]] = []
+    read_ok = False
+
+    # 2. Resilient streaming read from disk (using line iteration, never splitlines)
+    if path.is_file():
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    stripped = line.strip("\r\n")
+                    if not stripped:
+                        continue
+                    record = json.loads(stripped)
+                    if isinstance(record, Mapping):
+                        pages.append(dict(record))
+            if len(pages) == expected:
+                read_ok = True
+        except (OSError, json.JSONDecodeError, ValueError):
+            pages = []
+            read_ok = False
+
+    # 3. Self-healing: if pages_path was corrupted, missing, or mismatched, re-materialize from raw_path
+    if not read_ok and raw_path.is_file():
+        try:
+            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+            evidence_dict = json.loads(raw_text)
+            if isinstance(evidence_dict, Mapping):
+                domain_id = str(document.get("domain_id") or "")
+                digest = (
+                    str(document.get("document_sha256") or "")
+                    or _sha256_text(raw_text)
+                )
+                reconstructed, pages_text = _build_evidence_pages(
+                    domain_id, evidence_dict, digest
+                )
+                _write(path, pages_text)
+                pages = reconstructed
+                read_ok = True
+        except Exception:
+            pass
+
+    # 4. Quarantine corrupted file if recovery is impossible
+    if not read_ok and not pages:
+        try:
+            if path.is_file():
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return []
+
     return pages
 
 
