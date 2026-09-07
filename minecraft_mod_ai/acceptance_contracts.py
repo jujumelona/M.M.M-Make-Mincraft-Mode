@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""Host-owned requirement acceptance contracts and typed testcase receipts.
+"""Canonical owner for requirement/public acceptance contracts and host test receipts.
+
+Every planner and production boundary must consume the public-acceptance policy defined
+here.  A requirement may legitimately expose any number of independently observable
+public checks; serialization may compose them into one stable requirement-scoped public
+statement, but it must never discard checks or reinterpret the contract downstream.
 
 Host ownership alone does not prove donor behavior. A contract may only authorize
 BEHAVIOR_VERIFIED when ``implementation_bound`` is true and the generated test directly
@@ -9,9 +14,161 @@ evidence but are deliberately capped below behavioral proof.
 """
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+CANONICAL_ACCEPTANCE_OWNER = "minecraft_mod_ai.acceptance_contracts"
+PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = (
+    "all declared provides",
+    "declared_provides",
+    "owned anchor",
+    "owned_anchor",
+    "required gates",
+    "required_gates",
+    "task integrity",
+    "task_sha256",
+    "done_predicate",
+)
+
+
+class AcceptanceContractError(ValueError):
+    """Raised when canonical public requirement acceptance is invalid."""
+
+
+def validate_public_acceptance(
+    statement: Any,
+    *,
+    error_type: type[Exception] = AcceptanceContractError,
+) -> str:
+    """Validate and return one canonical public acceptance statement.
+
+    The rule lives here so planning, production and serialization cannot drift. Callers
+    may request their own public exception type, but not their own acceptance semantics.
+    """
+
+    if not isinstance(statement, str) or not statement.strip():
+        raise error_type("public acceptance must be a non-empty string")
+    text = statement.strip()
+    folded = text.casefold()
+    matched_marker = ""
+    if "task_" in folded:
+        matched_marker = "task_"
+    else:
+        matched_marker = next(
+            (marker for marker in PUBLIC_ACCEPTANCE_INTERNAL_MARKERS if marker in folded),
+            "",
+        )
+    if matched_marker:
+        raise error_type(
+            "public acceptance contains internal task or integrity language: "
+            f"marker={matched_marker!r}; value={folded!r}"
+        )
+    return text
+
+
+def is_public_acceptance(value: Any) -> bool:
+    """Return whether ``value`` satisfies the single canonical public boundary."""
+
+    try:
+        validate_public_acceptance(value)
+    except AcceptanceContractError:
+        return False
+    return True
+
+
+# Compatibility marker used by existing runtime-integrity tests. The function itself is
+# the policy owner now; no downstream wrapper is allowed to redefine the rule.
+is_public_acceptance._mmm_production_public_acceptance_guard = True
+is_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
+
+
+def canonical_public_acceptance(
+    values: Any,
+    *,
+    reject_invalid: bool = False,
+) -> tuple[str, ...]:
+    """Normalize a public acceptance sequence without imposing an arbitrary count cap."""
+
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return ()
+    result: list[str] = []
+    for raw in values:
+        try:
+            text = validate_public_acceptance(raw)
+        except AcceptanceContractError:
+            if reject_invalid:
+                raise
+            continue
+        if text not in result:
+            result.append(text)
+    return tuple(result)
+
+
+def approved_requirements(
+    evidence_plan: Mapping[str, Any] | None,
+) -> dict[str, Mapping[str, Any]]:
+    """Return the canonical requirement authority from an evidence plan."""
+
+    if not isinstance(evidence_plan, Mapping):
+        return {}
+    request = evidence_plan.get("request_catalog")
+    values = request.get("requirements") if isinstance(request, Mapping) else None
+    if not isinstance(values, list):
+        return {}
+    return {
+        str(item.get("requirement_id")): item
+        for item in values
+        if isinstance(item, Mapping) and str(item.get("requirement_id") or "")
+    }
+
+
+def project_requirement_public_acceptance(requirement: Mapping[str, Any]) -> str:
+    """Project every valid public check into one stable requirement-scoped statement.
+
+    Downstream production currently stores one requirement acceptance reference. The
+    canonical projection therefore composes all checks deterministically instead of
+    choosing one or rejecting legitimate multi-check requirements. No check is dropped.
+    """
+
+    acceptance = canonical_public_acceptance(requirement.get("acceptance"))
+    if acceptance:
+        return "; ".join(acceptance)
+
+    observable = requirement.get("observable_behavior")
+    if isinstance(observable, Mapping):
+        given = str(observable.get("given") or "").strip()
+        when = str(observable.get("when") or "").strip()
+        then = str(observable.get("then") or "").strip()
+        if given and when and then:
+            candidate = f"Given {given}, when {when}, then {then}."
+            if is_public_acceptance(candidate):
+                return validate_public_acceptance(candidate)
+
+    capability = str(requirement.get("capability") or "").strip()
+    if capability:
+        candidate = (
+            "Verify the observable player-facing behavior for capability "
+            + capability
+            + "."
+        )
+        if is_public_acceptance(candidate):
+            return validate_public_acceptance(candidate)
+
+    span = requirement.get("source_span")
+    source_text = (
+        str(span.get("text") or "").strip() if isinstance(span, Mapping) else ""
+    )
+    if source_text:
+        candidate = "Demonstrate the observable requested behavior: " + source_text
+        if is_public_acceptance(candidate):
+            return validate_public_acceptance(candidate)
+
+    raise AcceptanceContractError(
+        f"approved requirement {requirement.get('requirement_id')} has no safe public acceptance projection"
+    )
 
 
 @dataclass(frozen=True)
