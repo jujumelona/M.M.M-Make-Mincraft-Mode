@@ -51,6 +51,9 @@ def response_schema(name):
 
 
 def response_template_prompt(name):
-    return "Return exactly this JSON schema; do not invent or omit fields: " + json.dumps(
-        response_schema(name), ensure_ascii=False, separators=(",", ":"),
+    return (
+        "Return exactly one JSON value that conforms to this fixed response schema. "
+        "Do not return the schema itself. Do not invent, rename, or omit fields. "
+        "Populate only the allowed value slots: "
+        + json.dumps(response_schema(name), ensure_ascii=False, separators=(",", ":"))
     )
