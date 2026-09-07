@@ -19,7 +19,7 @@ def _value(args: list[str], flag: str) -> str:
     return args[index + 1]
 
 
-def test_default_launch_delegates_resource_sizing_to_llama_server(monkeypatch) -> None:
+def test_default_launch_keeps_max_gpu_paths_and_native_resource_sizing(monkeypatch) -> None:
     for name in _RESOURCE_ENV:
         monkeypatch.delenv(name, raising=False)
 
@@ -32,12 +32,12 @@ def test_default_launch_delegates_resource_sizing_to_llama_server(monkeypatch) -
 
     assert _value(args, "--parallel") == "-1"
     assert _value(args, "--fit") == "on"
+    assert _value(args, "--gpu-layers") == "all"
+    assert _value(args, "--flash-attn") == "on"
     for flag in (
         "--ctx-size",
         "--batch-size",
         "--ubatch-size",
-        "--gpu-layers",
-        "--flash-attn",
         "--cache-type-k",
         "--cache-type-v",
     ):
@@ -87,9 +87,15 @@ def test_invalid_manual_overrides_fall_back_to_native_auto(monkeypatch) -> None:
     assert "--ubatch-size" not in args
 
 
-def test_mtp_variant_keeps_native_draft_gpu_placement() -> None:
+def test_mtp_variant_keeps_max_draft_gpu_offload() -> None:
     args = _variant_args(ServerVariant("mtp-2", "draft-mtp", 2))
 
-    assert args == ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
-    assert "--spec-draft-ngl" not in args
+    assert args == [
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-ngl",
+        "all",
+    ]
     assert "--spec-draft-n-min" not in args
