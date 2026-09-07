@@ -272,7 +272,6 @@ def _arguments_match_schema(arguments: Mapping[str, Any], schema: Mapping[str, A
 def _schema_validation_diagnostics(arguments: Mapping[str, Any], schema: Mapping[str, Any]) -> str:
     try:
         from jsonschema import validators
-        from jsonschema.exceptions import SchemaError
 
         schema_dict = dict(schema)
         validator_cls = validators.validator_for(schema_dict)
