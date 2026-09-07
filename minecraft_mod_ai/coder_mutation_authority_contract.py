@@ -3,9 +3,10 @@ from __future__ import annotations
 """Reconcile coder mutation authority with the canonical implementation contract.
 
 The implementation contract distinguishes existing targets (modify) from host-reserved
-targets (create-or-modify).  The task capsule must preserve that distinction: existing
-owned files are writable, but creation is authorized only for host-reserved destinations.
-Deletion is never an evidence-task coder operation.
+targets (create-or-modify). The task capsule and live tool loop must preserve that
+distinction: existing owned files are writable and require source localization, while
+creation is authorized only for host-reserved destinations. Deletion is never an
+evidence-task coder operation.
 """
 
 import copy
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 _MARKER = "_mmm_coder_mutation_authority_v1"
+_LOOP_MARKER = "_mmm_coder_target_existence_v1"
 _EXISTING_STATUSES = frozenset({"existing", "reuse", "modify", "host_existing"})
 _CREATE_OPERATIONS = frozenset(
     {
@@ -111,78 +113,163 @@ def _restore_capsule_authority(target_module: Any, capsule: Any, anchors: tuple[
     )
 
 
-def install(target_module: Any | None = None) -> None:
-    if target_module is None:
-        from . import small_model_task_capsule_contract as target_module
-
-    if getattr(target_module, _MARKER, False):
-        return
-
-    original_compile = target_module.compile_task_capsule
-    original_bind = target_module.bind_source_edit_arguments
-    original_narrow = target_module.narrow_source_edit_schema
-
-    def compile_task_capsule(module: Any):
-        try:
-            return original_compile(module)
-        except target_module.TaskCapsuleContractError as exc:
-            if "TASK_CAPSULE_PRIMARY_NOT_RESERVED" not in str(exc):
-                raise
-            reconciled = _module_with_reserved_primary(target_module, module)
-            if reconciled is None:
-                raise
-            proxy, anchors = reconciled
-            capsule = original_compile(proxy)
-            if capsule is None:
-                return None
-            return _restore_capsule_authority(target_module, capsule, anchors)
-
-    def bind_source_edit_arguments(arguments: Mapping[str, Any], capsule: Any) -> dict[str, Any]:
-        bound = original_bind(arguments, capsule)
-        operation = str(bound.get("operation") or "").strip().casefold()
-        path = str(bound.get("path") or "").strip()
-        if operation in _DELETE_OPERATIONS:
-            raise target_module.TaskCapsuleContractError(
-                "TASK_MUTATION_DELETE_FORBIDDEN: evidence-task coder may not delete files."
-            )
-        if operation in _CREATE_OPERATIONS and path not in capsule.creatable_paths:
-            raise target_module.TaskCapsuleContractError(
-                "TASK_MUTATION_CREATE_NOT_RESERVED: creation requires a host_reserved target; "
-                f"path={path!r}, creatable={list(capsule.creatable_paths)!r}."
-            )
-        return bound
-
-    def narrow_source_edit_schema(schema: Any, capsule: Any) -> Any:
-        narrowed = original_narrow(schema, capsule)
-        if not isinstance(narrowed, Mapping):
-            return narrowed
-        result = copy.deepcopy(dict(narrowed))
-        function = result.get("function")
-        parameters = function.get("parameters") if isinstance(function, dict) else None
-        properties = parameters.get("properties") if isinstance(parameters, dict) else None
-        operation = properties.get("operation") if isinstance(properties, dict) else None
-        enum = operation.get("enum") if isinstance(operation, dict) else None
-        if isinstance(enum, list):
-            blocked = set(_MODEL_DELETE_OPERATIONS)
-            if not capsule.creatable_paths:
-                blocked.update(_MODEL_CREATE_OPERATIONS)
-            operation["enum"] = [item for item in enum if str(item).casefold() not in blocked]
+def _task_owned_statuses(loop_module: Any, task: Mapping[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    anchors = task.get("owned_anchors")
+    if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
         return result
+    for anchor in anchors:
+        if not isinstance(anchor, Mapping):
+            continue
+        locator = loop_module._normalized_target_path(anchor.get("locator"))
+        path = locator.partition("#")[0].strip()
+        status = str(anchor.get("status") or "").strip().casefold()
+        if path and status:
+            result[path] = status
+    return result
 
-    compile_task_capsule.__name__ = original_compile.__name__
-    bind_source_edit_arguments.__name__ = original_bind.__name__
-    narrow_source_edit_schema.__name__ = original_narrow.__name__
-    target_module.compile_task_capsule = compile_task_capsule
-    target_module.bind_source_edit_arguments = bind_source_edit_arguments
-    target_module.narrow_source_edit_schema = narrow_source_edit_schema
-    setattr(target_module, _MARKER, True)
+
+def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | None:
+    """Resolve target existence from anchor status, never from donor reuse_action."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    module = payload.get("module")
+    task = loop_module._evidence_task_from_module(module)
+    if task is None:
+        return None
+    bindings = task.get("production_bindings")
+    if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes, bytearray)):
+        return None
+    production_bindings = tuple(item for item in bindings if isinstance(item, Mapping))
+    if not production_bindings:
+        return None
+    actions = {
+        str(item.get("reuse_action") or "").strip().casefold()
+        for item in production_bindings
+        if str(item.get("reuse_action") or "").strip()
+    }
+    if actions != {"fresh"}:
+        return None
+
+    task_statuses = _task_owned_statuses(loop_module, task)
+    for binding in production_bindings:
+        anchors = binding.get("owned_anchors")
+        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes, bytearray)):
+            continue
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping) or str(anchor.get("kind") or "") != "symbol":
+                continue
+            locator = loop_module._normalized_target_path(anchor.get("locator"))
+            target_path, separator, target_symbol = locator.partition("#")
+            target_path = target_path.strip()
+            if (
+                not target_path
+                or target_path.startswith("/")
+                or ".." in target_path.split("/")
+                or not loop_module._is_workspace_file_path(target_path)
+            ):
+                continue
+            status = str(anchor.get("status") or task_statuses.get(target_path) or "").strip().casefold()
+            if status == "host_reserved":
+                is_new_file = True
+                evidence_source = "evidence_host_reserved_owned_anchor"
+            elif status in _EXISTING_STATUSES:
+                is_new_file = False
+                evidence_source = "evidence_existing_owned_anchor"
+            else:
+                continue
+            return loop_module.TargetMutationContext(
+                target_path=target_path,
+                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
+                is_new_file=is_new_file,
+                evidence_source=evidence_source,
+            )
+    return None
 
 
-def assert_installed(target_module: Any | None = None) -> None:
+def install(target_module: Any | None = None, loop_module: Any | None = None) -> None:
     if target_module is None:
         from . import small_model_task_capsule_contract as target_module
+    if loop_module is None:
+        from . import progress_aware_tool_loop as loop_module
+
+    if not getattr(target_module, _MARKER, False):
+        original_compile = target_module.compile_task_capsule
+        original_bind = target_module.bind_source_edit_arguments
+        original_narrow = target_module.narrow_source_edit_schema
+
+        def compile_task_capsule(module: Any):
+            try:
+                return original_compile(module)
+            except target_module.TaskCapsuleContractError as exc:
+                if "TASK_CAPSULE_PRIMARY_NOT_RESERVED" not in str(exc):
+                    raise
+                reconciled = _module_with_reserved_primary(target_module, module)
+                if reconciled is None:
+                    raise
+                proxy, anchors = reconciled
+                capsule = original_compile(proxy)
+                if capsule is None:
+                    return None
+                return _restore_capsule_authority(target_module, capsule, anchors)
+
+        def bind_source_edit_arguments(arguments: Mapping[str, Any], capsule: Any) -> dict[str, Any]:
+            bound = original_bind(arguments, capsule)
+            operation = str(bound.get("operation") or "").strip().casefold()
+            path = str(bound.get("path") or "").strip()
+            if operation in _DELETE_OPERATIONS:
+                raise target_module.TaskCapsuleContractError(
+                    "TASK_MUTATION_DELETE_FORBIDDEN: evidence-task coder may not delete files."
+                )
+            if operation in _CREATE_OPERATIONS and path not in capsule.creatable_paths:
+                raise target_module.TaskCapsuleContractError(
+                    "TASK_MUTATION_CREATE_NOT_RESERVED: creation requires a host_reserved target; "
+                    f"path={path!r}, creatable={list(capsule.creatable_paths)!r}."
+                )
+            return bound
+
+        def narrow_source_edit_schema(schema: Any, capsule: Any) -> Any:
+            narrowed = original_narrow(schema, capsule)
+            if not isinstance(narrowed, Mapping):
+                return narrowed
+            result = copy.deepcopy(dict(narrowed))
+            function = result.get("function")
+            parameters = function.get("parameters") if isinstance(function, dict) else None
+            properties = parameters.get("properties") if isinstance(parameters, dict) else None
+            operation = properties.get("operation") if isinstance(properties, dict) else None
+            enum = operation.get("enum") if isinstance(operation, dict) else None
+            if isinstance(enum, list):
+                blocked = set(_MODEL_DELETE_OPERATIONS)
+                if not capsule.creatable_paths:
+                    blocked.update(_MODEL_CREATE_OPERATIONS)
+                operation["enum"] = [item for item in enum if str(item).casefold() not in blocked]
+            return result
+
+        compile_task_capsule.__name__ = original_compile.__name__
+        bind_source_edit_arguments.__name__ = original_bind.__name__
+        narrow_source_edit_schema.__name__ = original_narrow.__name__
+        target_module.compile_task_capsule = compile_task_capsule
+        target_module.bind_source_edit_arguments = bind_source_edit_arguments
+        target_module.narrow_source_edit_schema = narrow_source_edit_schema
+        setattr(target_module, _MARKER, True)
+
+    if not getattr(loop_module, _LOOP_MARKER, False):
+        loop_module._fresh_owned_symbol_context = lambda payload: _status_aware_owned_symbol_context(
+            loop_module, payload
+        )
+        setattr(loop_module, _LOOP_MARKER, True)
+
+
+def assert_installed(target_module: Any | None = None, loop_module: Any | None = None) -> None:
+    if target_module is None:
+        from . import small_model_task_capsule_contract as target_module
+    if loop_module is None:
+        from . import progress_aware_tool_loop as loop_module
     if not getattr(target_module, _MARKER, False):
         raise RuntimeError("coder mutation authority reconciliation is not installed")
+    if not getattr(loop_module, _LOOP_MARKER, False):
+        raise RuntimeError("coder target-existence localization reconciliation is not installed")
 
 
 __all__ = ["assert_installed", "install"]
