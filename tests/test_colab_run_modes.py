@@ -5,14 +5,17 @@ from pathlib import Path
 
 import pytest
 
+import minecraft_mod_ai.colab_run_modes as colab_run_modes
 from minecraft_mod_ai.colab_run_modes import (
+    AUDIT_MODE,
+    AUDIT_RELATIVE_PATH,
     DEBUG_AUDIT_RELATIVE_PATH,
-    DEBUG_MODE,
     EXISTING_MOD_MODE,
     EXISTING_PLAN_MODE,
     FULL_MODE,
     PLAN_MODE,
     RUN_MODES,
+    audit_path,
     debug_audit_path,
     resolve_plan_path,
     run_plan_dialog,
@@ -78,23 +81,23 @@ def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
     assert FULL_MODE == "Full"
     assert EXISTING_MOD_MODE == "Revise"
     assert EXISTING_PLAN_MODE == "Execute"
-    assert DEBUG_MODE == "Debug"
+    assert AUDIT_MODE == "Audit"
     assert RUN_MODES == (
         PLAN_MODE,
         FULL_MODE,
         EXISTING_MOD_MODE,
         EXISTING_PLAN_MODE,
-        DEBUG_MODE,
+        AUDIT_MODE,
     )
     assert should_build(PLAN_MODE) is False
     assert should_build(FULL_MODE) is True
     assert should_build(EXISTING_MOD_MODE) is True
     assert should_build(EXISTING_PLAN_MODE) is True
-    assert should_build(DEBUG_MODE) is False
+    assert should_build(AUDIT_MODE) is False
 
 
-def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_debug_mode() -> None:
-    expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute", "Debug"]'
+def test_canonical_notebook_has_debug_checkbox_and_audit_run_mode() -> None:
+    expected = 'RUN_MODE = "Full" #@param ["Full", "Plan", "Revise", "Execute", "Audit"]'
     legacy_labels = (
         "플랜모드",
         "풀모드",
@@ -106,14 +109,18 @@ def test_canonical_notebook_dropdown_defaults_to_full_mode_and_has_debug_mode() 
         assert notebook.is_file()
         source = _cell_source(notebook, "configuration")
         assert expected in source
-        assert "PATCH_EXISTING" not in source
+        assert 'DEBUG_MODE = False #@param {type:"boolean"}' in source
+        assert "FAST_MODE" not in source
+        assert 'RUN_MODE == "Debug"' not in source
         assert all(label not in source for label in legacy_labels)
         payload = json.loads(notebook.read_text(encoding="utf-8"))
         assert not any(cell.get("id") == "revise" for cell in payload["cells"])
 
 
-def test_debug_audit_entrypoint_is_canonical() -> None:
-    assert DEBUG_AUDIT_RELATIVE_PATH == "tools/full_project_audit.py"
+def test_audit_entrypoint_is_canonical_and_old_alias_still_resolves() -> None:
+    assert AUDIT_RELATIVE_PATH == "tools/full_project_audit.py"
+    assert DEBUG_AUDIT_RELATIVE_PATH == AUDIT_RELATIVE_PATH
+    assert audit_path("/repo") == Path("/repo/tools/full_project_audit.py")
     assert debug_audit_path("/repo") == Path("/repo/tools/full_project_audit.py")
 
 
@@ -138,6 +145,58 @@ def test_new_plan_auto_saves_without_user_confirmation(tmp_path: Path) -> None:
     assert "사용자 승인 대기 없이 제작 단계로 진행" in rendered
     assert '"items"' in rendered
     assert "39" in rendered
+
+
+def test_debug_mode_injects_fixture_and_never_calls_planner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session()
+    plan_path = tmp_path / "proposal.json"
+    written: list[tuple[Path, str, str]] = []
+
+    def fake_write(target, *, minecraft_version="Auto", loader="Auto"):
+        target = Path(target)
+        target.write_text("{}", encoding="utf-8")
+        written.append((target, minecraft_version, loader))
+        return target
+
+    monkeypatch.setattr(colab_run_modes, "write_debug_example_plan", fake_write)
+
+    result = run_plan_dialog(
+        session=session,
+        run_mode=FULL_MODE,
+        prompt="",
+        plan_path=plan_path,
+        debug_mode=True,
+        minecraft_version="1.21.8",
+        loader="fabric",
+        input_fn=_must_not_prompt,
+        print_fn=lambda *_, **__: None,
+    )
+
+    assert result.approved is True
+    assert written == [(plan_path, "1.21.8", "fabric")]
+    assert session.calls == [("load", str(plan_path))]
+    assert all(call[0] != "plan" for call in session.calls)
+    assert session.saved == []
+
+
+@pytest.mark.parametrize("run_mode", [PLAN_MODE, EXISTING_MOD_MODE, EXISTING_PLAN_MODE, AUDIT_MODE])
+def test_debug_mode_is_only_valid_with_full_run_mode(
+    tmp_path: Path,
+    run_mode: str,
+) -> None:
+    with pytest.raises(ValueError, match="RUN_MODE=Full"):
+        run_plan_dialog(
+            session=_Session(),
+            run_mode=run_mode,
+            prompt="",
+            plan_path=tmp_path / "proposal.json",
+            debug_mode=True,
+            input_fn=_must_not_prompt,
+            print_fn=lambda *_, **__: None,
+        )
 
 
 def test_plan_mode_auto_saves_but_does_not_change_build_policy(tmp_path: Path) -> None:
