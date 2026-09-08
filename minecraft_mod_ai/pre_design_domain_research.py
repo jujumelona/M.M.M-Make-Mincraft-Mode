@@ -56,6 +56,50 @@ def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _identity_text(value: Any) -> str:
+    """Normalize source/reference identity while preserving phrase boundaries."""
+    return " ".join(
+        re.findall(r"[a-z0-9]+|[가-힣]+", str(value or "").casefold())
+    )
+
+
+def _required_identity_anchors(domain: Mapping[str, Any]) -> list[str]:
+    raw = domain.get("required_anchor_terms")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        return []
+    return list(
+        dict.fromkeys(
+            text
+            for item in raw
+            if (text := " ".join(str(item or "").split()).strip())
+        )
+    )
+
+
+def _matched_source_identity_anchor(
+    unit: Mapping[str, Any], anchors: Sequence[str]
+) -> str:
+    """Require the named reference to identify the source, not merely occur as noise.
+
+    Provider snippets can share generic task words such as game/platform/system while being
+    about a completely different entity. Reference domains therefore require an exact
+    normalized reference phrase in source identity metadata (title/url/source id) before
+    semantic overlap is considered.
+    """
+    source_identity = _identity_text(
+        " ".join(
+            str(unit.get(key) or "")
+            for key in ("title", "url", "source_id")
+        )
+    )
+    padded_identity = f" {source_identity} "
+    for anchor in anchors:
+        normalized = _identity_text(anchor)
+        if normalized and f" {normalized} " in padded_identity:
+            return str(anchor)
+    return ""
+
+
 _MAX_EXCERPT_CHARS = 800
 _MAX_DOMAIN_EVIDENCE_CARDS = 4
 
@@ -159,6 +203,7 @@ def _grounded_evidence_cards(
     except Exception:
         return []
     wanted = _domain_terms(domain)
+    required_anchors = _required_identity_anchors(domain)
     cards: list[dict[str, Any]] = []
     seen_refs: set[str] = set()
     for raw in pages if isinstance(pages, Sequence) else ():
@@ -168,6 +213,11 @@ def _grounded_evidence_cards(
         unit = _source_unit(raw)
         source_content = str(unit.get("content") or "")
         if not page_ref or page_ref in seen_refs or not source_content.strip():
+            continue
+        matched_anchor = _matched_source_identity_anchor(unit, required_anchors)
+        # Identity is a hard precondition for reference research. Generic semantic overlap
+        # must never let another product/game/article resolve the named reference.
+        if required_anchors and not matched_anchor:
             continue
         excerpt, score = _exact_excerpt(source_content, wanted)
         # A materialized body is not evidence merely because it contains text. When the
@@ -187,6 +237,7 @@ def _grounded_evidence_cards(
                 "source_content_sha256": str(unit.get("content_sha256") or ""),
                 "exact_excerpt": excerpt,
                 "domain_term_overlap": score,
+                "required_identity_anchor": matched_anchor,
                 "verification": "host_exact_substring_from_materialized_source_page",
                 "semantic_claim": False,
             }
