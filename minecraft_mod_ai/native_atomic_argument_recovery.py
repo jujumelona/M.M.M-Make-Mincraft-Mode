@@ -165,9 +165,36 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _page_owned_arguments(
+    arguments: Mapping[str, Any],
+    page_schema: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep this page's fields while preserving truly unknown fields for rejection.
+
+    A page is only a transport slice of the original function schema. The model still sees
+    the original planning context and can therefore emit a property that is legal in the
+    complete schema but owned by a later page. Such a field must not make the current page
+    fail `additionalProperties: false`; its owning page remains responsible for producing
+    and validating it. Fields absent from the complete schema are deliberately retained so
+    the strict page validator still rejects genuine out-of-contract output.
+    """
+
+    page_properties = page_schema.get("properties")
+    all_properties = parameters.get("properties")
+    if not isinstance(page_properties, Mapping) or not isinstance(all_properties, Mapping):
+        return dict(arguments)
+    return {
+        str(name): value
+        for name, value in arguments.items()
+        if name in page_properties or name not in all_properties
+    }
+
+
 def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
+    parameters: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, str, str]:
     """Parse only JSON content; stale/model-authored ToolCalls never become executable."""
 
@@ -184,10 +211,16 @@ def _page_result(
     if not isinstance(parsed, Mapping):
         reason = "argument page JSON must be an object"
         return None, reason, _fingerprint(parsed)
-    normalized = dict(parsed)
+    normalized = _page_owned_arguments(dict(parsed), page_schema, parameters)
     if not forced._arguments_match_schema(normalized, page_schema):
-        diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(normalized, page_schema)
-        reason = f"argument page JSON failed the host page schema ({diag})" if diag else "argument page JSON failed the host page schema"
+        diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(
+            normalized, page_schema
+        )
+        reason = (
+            f"argument page JSON failed the host page schema ({diag})"
+            if diag
+            else "argument page JSON failed the host page schema"
+        )
         return None, reason, _fingerprint(normalized)
     return normalized, "", _fingerprint(normalized)
 
@@ -197,6 +230,7 @@ def _page_attempt(
     adapter: Any,
     request: Any,
     page_schema: Mapping[str, Any],
+    parameters: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, str, str]:
     try:
         turn = current(adapter, request)
@@ -204,7 +238,7 @@ def _page_attempt(
         cause = getattr(exc, "cause", exc)
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
         return None, reason, _fingerprint({"exception": reason})
-    return _page_result(turn, page_schema)
+    return _page_result(turn, page_schema, parameters)
 
 
 def host_selected_argument_turn(
@@ -239,6 +273,7 @@ def host_selected_argument_turn(
             adapter,
             first_request,
             page_schema,
+            parameters,
         )
         if arguments is None:
             repair_request = _request(
@@ -253,6 +288,7 @@ def host_selected_argument_turn(
                 adapter,
                 repair_request,
                 page_schema,
+                parameters,
             )
             if arguments is None:
                 fixed_point = first_fingerprint == second_fingerprint
