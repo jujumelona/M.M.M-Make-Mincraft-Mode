@@ -185,6 +185,80 @@ def _debug_target(*, minecraft_version: str, loader: str):
     return newest_adapter(loader=selected_loader)
 
 
+def _debug_task_contract(platform: Any) -> dict[str, Any]:
+    """Build the same task-local authority shape consumed by the normal custom coder path."""
+
+    from .json_stream import canonical_json_sha256
+
+    task_id = "debug_token"
+    locator = "src/main/java/dev/mmm/debugfixture/DebugToken.java#DebugToken"
+    anchor = {
+        "kind": "symbol",
+        "locator": locator,
+        "ownership": "exclusive",
+        "status": "host_reserved",
+        "module_id": ":",
+        "source_set": "main",
+    }
+    task: dict[str, Any] = {
+        "task_id": task_id,
+        "task_sha256": "",
+        "sequence": 0,
+        "semantic_outcome": (
+            "Implement one deterministic debug_token Fabric item fixture in the exact "
+            "host-owned source target so the normal coder and verification pipeline runs."
+        ),
+        "execution_role": "production",
+        "requirement_refs": ["debug_fixture_requirement"],
+        "gap_refs": [],
+        "owned_anchors": [anchor],
+        "reuse_refs": [],
+        "consumes": [],
+        "provides": ["requirement_done:debug_fixture_requirement"],
+        "depends_on": [],
+        "implementation_obligations": [
+            "Implement the debug_token item fixture using the immutable Fabric target APIs; keep all production source changes inside the owned DebugToken.java target.",
+        ],
+        "engineering_worksheet": {
+            "schema_version": "mmm/debug-engineering-worksheet-v1",
+            "objective": "Exercise the real task-local custom coding path without running the planner.",
+            "implementation": [
+                "Create the exact owned DebugToken Java source.",
+                "Use the selected Fabric/Minecraft target coordinates without changing the target.",
+                "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
+            ],
+            "boundaries": [
+                "Do not edit files outside the declared owned target.",
+                "Do not replace host verification with model self-report.",
+            ],
+            "verification": ["target_compile"],
+        },
+        "target_cell": {
+            "minecraft_version": platform.minecraft_version,
+            "loader": platform.loader,
+            "mappings": platform.yarn_mappings,
+            "java_version": platform.java_version,
+        },
+        "production_bindings": [
+            {
+                "task_ref": task_id,
+                "reuse_action": "fresh",
+                "owned_anchors": [anchor],
+            }
+        ],
+        "required_gates": ["target_compile"],
+        "acceptance": [
+            "The exact owned DebugToken.java source implements the debug_token fixture.",
+            "The selected target compile gate passes for the generated project.",
+        ],
+        "public_acceptance": [],
+        "runtime_acceptance": [],
+        "impact_probes": ["changed_symbols"],
+    }
+    task["task_sha256"] = canonical_json_sha256(task)
+    return task
+
+
 def write_debug_example_plan(
     target: str | Path,
     *,
@@ -199,6 +273,7 @@ def write_debug_example_plan(
         CompleteProposalStatus,
         ProductionModule,
     )
+    from .implementation_template_contract import build_implementation_template
     from .knowledge import evidence_catalog_for_version, evidence_snapshot_hash
     from .platform_resolver import lock_from_adapter
     from .spec import ModSpec, Proposal, ProposalStatus
@@ -239,6 +314,8 @@ def write_debug_example_plan(
         risk_approvals=(),
         approval_hash="",
     ).with_hash()
+    evidence_task = _debug_task_contract(platform)
+    coder_contract = build_implementation_template(evidence_task)
     proposal = CompleteProposal(
         schema_version="mmm/complete-proposal-v1",
         proposal_version=1,
@@ -250,20 +327,21 @@ def write_debug_example_plan(
             "goal": "Exercise implementation and verification without planner/model planning.",
             "fixture": {
                 "module_id": "debug_token",
-                "kind": "item",
+                "kind": "custom_java",
+                "semantic_kind": "item",
                 "deterministic": True,
             },
         },
         modules=(
             ProductionModule(
                 module_id="debug_token",
-                kind="item",
+                kind="custom_java",
                 config={
-                    "display_name_en": "Debug Token",
-                    "display_name_ko": "디버그 토큰",
-                    "color": "#74c7ec",
-                    "recipe": False,
+                    "summary": "Deterministic debug_token implementation fixture.",
+                    "evidence_task": evidence_task,
+                    "coder_execution_contract": coder_contract,
                 },
+                required_gates=tuple(evidence_task["required_gates"]),
             ),
         ),
         assets=(),
