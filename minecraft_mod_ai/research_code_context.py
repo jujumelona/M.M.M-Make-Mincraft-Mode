@@ -315,12 +315,18 @@ class DependencyMonitor:
         exact = {
             f"net.fabricmc:fabric-loader:{adapter.fabric_loader}",
             f"net.fabricmc.fabric-api:fabric-api:{adapter.fabric_api}",
-            f"net.fabricmc:yarn:{adapter.yarn_mappings}",
-            f"net.fabricmc:yarn:{adapter.yarn_mappings}:v2",
         }
+        if adapter.yarn_mappings:
+            exact.update(
+                {
+                    f"net.fabricmc:yarn:{adapter.yarn_mappings}",
+                    f"net.fabricmc:yarn:{adapter.yarn_mappings}:v2",
+                }
+            )
         self.allowed_coordinates.update(exact)
         self.allowed_packages.update(value.rsplit(":", 1)[0] for value in exact)
-        self.allowed_packages.add("net.fabricmc:yarn")
+        if adapter.yarn_mappings:
+            self.allowed_packages.add("net.fabricmc:yarn")
         self.allowed_plugins.add("fabric-loom")
         self.allowed_plugin_versions.add(("fabric-loom", adapter.fabric_loom))
         self.allowed_repositories.add("https://maven.fabricmc.net")
@@ -422,7 +428,7 @@ class DependencyMonitor:
                     "loom_version": adapter.fabric_loom,
                 }
             )
-            if adapter.yarn_mappings != "mojang":
+            if adapter.yarn_mappings and adapter.yarn_mappings != "mojang":
                 result["yarn_mappings"] = adapter.yarn_mappings
         return result
 
@@ -471,7 +477,7 @@ class ResearchCodeContext:
         self.minecraft_version = str(minecraft_version).strip()
         self.loader = str(loader).strip().casefold()
         self.mappings = str(mappings).strip()
-        if not self.minecraft_version or not self.loader or not self.mappings:
+        if not self.minecraft_version or not self.loader:
             raise ValueError("ResearchCodeContext requires a host-selected exact target.")
         adapter = adapter_for_target(self.minecraft_version, self.loader)
         if self.mappings != adapter.yarn_mappings:
