@@ -1,5 +1,7 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+import os
+
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .fast_mode_quality_contract_installation import install as install_fast_mode_quality_contract
@@ -7,6 +9,32 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
+
+def _configure_default_llama_parallelism() -> None:
+    """Expose scheduler width by default while leaving hard capacity to llama-server.
+
+    The managed server already owns physical slot/context fitting through its native
+    ``--parallel``/``--fit`` policy.  Keeping MMM's application-side gate at one when
+    no override is present serializes otherwise independent DAG nodes before they can
+    even reach that server.  Default the application gate to its reviewed maximum and
+    continue honoring every explicit user override.
+    """
+
+    if os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
+        return
+    raw_server_parallel = os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
+    try:
+        explicit_server_parallel = int(raw_server_parallel)
+    except ValueError:
+        explicit_server_parallel = 0
+    if explicit_server_parallel > 0:
+        active = max(1, min(8, explicit_server_parallel))
+    else:
+        active = 8
+    os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(active)
+
+
+_configure_default_llama_parallelism()
 initialize_runtime()
 from . import java_lsp as _java_lsp
 
