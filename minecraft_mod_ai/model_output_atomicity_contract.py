@@ -19,6 +19,9 @@ _MAX_SCHEMA_NODES = 140
 _MAX_SCHEMA_DEPTH = 9
 _MAX_SCHEMA_PROPERTIES = 36
 _MARKER = "_mmm_atomic_model_output_boundary"
+_SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
+    {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
+)
 
 
 def _configuration_error(message: str) -> Exception:
@@ -49,12 +52,28 @@ def _schema_metrics(value: Any, *, depth: int = 0) -> tuple[int, int, int]:
     return nodes, max_depth, properties
 
 
-def _assert_closed_object_schemas(value: Any, *, path: str = "$") -> None:
-    """Reject object schemas that allow the model to invent undeclared keys."""
+def _assert_closed_object_schemas(
+    value: Any,
+    *,
+    path: str = "$",
+    scoped_object_constraint: bool = False,
+) -> None:
+    """Reject object schemas that allow the model to invent undeclared keys.
+
+    JSON Schema applicators such as ``anyOf`` may contain ``properties`` fragments that
+    constrain the *same already-closed object instance*. Those fragments are not new
+    object schemas and therefore must not be forced to repeat ``additionalProperties``.
+    A fragment is only accepted when it is reached from a closed object scope; explicit
+    ``type: object`` schemas remain independently required to be closed everywhere.
+    """
 
     if isinstance(value, Mapping):
         schema_type = value.get("type")
-        is_object = schema_type == "object" or "properties" in value
+        has_properties = "properties" in value
+        is_object = schema_type == "object" or (
+            has_properties and not scoped_object_constraint
+        )
+
         if is_object:
             properties = value.get("properties")
             if not isinstance(properties, Mapping):
@@ -68,11 +87,36 @@ def _assert_closed_object_schemas(value: Any, *, path: str = "$") -> None:
                     f"object schema at {path} must set additionalProperties=false; "
                     "free-form model-authored object keys are forbidden"
                 )
+            closed_object_scope = True
+        elif has_properties:
+            properties = value.get("properties")
+            if not isinstance(properties, Mapping):
+                raise _configuration_error(
+                    "MODEL_JSON_TEMPLATE_REQUIRED: "
+                    f"constraint fragment at {path} must declare a properties mapping"
+                )
+            closed_object_scope = scoped_object_constraint
+        else:
+            closed_object_scope = scoped_object_constraint
+
         for key, child in value.items():
-            _assert_closed_object_schemas(child, path=f"{path}.{key}")
+            child_scope = (
+                closed_object_scope
+                if key in _SAME_INSTANCE_CONSTRAINT_KEYWORDS
+                else False
+            )
+            _assert_closed_object_schemas(
+                child,
+                path=f"{path}.{key}",
+                scoped_object_constraint=child_scope,
+            )
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, child in enumerate(value):
-            _assert_closed_object_schemas(child, path=f"{path}[{index}]")
+            _assert_closed_object_schemas(
+                child,
+                path=f"{path}[{index}]",
+                scoped_object_constraint=scoped_object_constraint,
+            )
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
