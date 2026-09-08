@@ -22,8 +22,11 @@ from .planning_detail_slots import DETAIL_RECORDS
 # ---------------------------------------------------------------------------
 # 1. submit_prompt_state contract
 # ---------------------------------------------------------------------------
+# The request-boundary model may only report ambiguities that truly require the user.
+# External facts and implementation details are host-owned research concerns; allowing a
+# small model to invent them here creates false pre-requirement blockers and unsafe search
+# routes before a concrete requirement exists.
 MODEL_UNRESOLVED_REASONS = (
-    "external_fact",
     "contradiction",
     "user_preference",
 )
