@@ -201,13 +201,7 @@ def write_debug_example_plan(
     )
     from .knowledge import evidence_catalog_for_version, evidence_snapshot_hash
     from .platform_resolver import lock_from_adapter
-    from .spec import (
-        ContentKind,
-        ContentSpec,
-        ModSpec,
-        Proposal,
-        ProposalStatus,
-    )
+    from .spec import ModSpec, Proposal, ProposalStatus
 
     adapter = _debug_target(minecraft_version=minecraft_version, loader=loader)
     platform = lock_from_adapter(adapter)
@@ -231,16 +225,7 @@ def write_debug_example_plan(
             package_name="dev.mmm.debugfixture",
             version="1.0.0",
             summary="Deterministic implementation fixture for Colab Debug Mode.",
-            contents=(
-                ContentSpec(
-                    content_id="debug_token",
-                    kind=ContentKind.ITEM,
-                    display_name_en="Debug Token",
-                    display_name_ko="디버그 토큰",
-                    color="#74c7ec",
-                    recipe=False,
-                ),
-            ),
+            contents=(),
             platform=platform,
         ),
         assumptions=(),
@@ -321,12 +306,13 @@ def run_plan_dialog(
     mode = validate_run_mode(run_mode)
     target = Path(plan_path)
 
+    if debug_mode and mode != FULL_MODE:
+        raise ValueError("Debug Mode는 RUN_MODE=Full에서만 사용할 수 있습니다.")
+
     if mode == AUDIT_MODE:
         raise RuntimeError("Audit 모드는 플랜/제작 대신 프로젝트 전체 진단만 실행합니다.")
 
     if debug_mode:
-        if mode != FULL_MODE:
-            raise ValueError("Debug Mode는 RUN_MODE=Full에서만 사용할 수 있습니다.")
         write_debug_example_plan(
             target,
             minecraft_version=minecraft_version,
