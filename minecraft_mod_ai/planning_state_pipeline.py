@@ -17,8 +17,8 @@ from .planning_detail_applicability import (
     ensure_host_detail_section_applicability,
     required_sections_by_requirement,
 )
+from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
 from .planning_state_contract import build_initial_planning_state, validate_planning_state
-from .planning_state_implementation import compile_detailed_implementation_plans
 from .planning_state_research import collect_planning_state_research
 from .planning_state_resolution import compile_researched_requirements
 from .root_cause_trace import emit_root_cause, traced_callable
@@ -362,12 +362,13 @@ def prepare_planning_state(
         input_state=state,
     )
     state = _transition(
-        "compile_detailed_implementation_plans",
-        lambda: compile_detailed_implementation_plans(
+        "compile_progress_monotone_detailed_plans",
+        lambda: compile_progress_monotone_detailed_plans(
             router,
             prompt,
             state,
             required_sections_by_requirement=section_selection,
+            checkpoint=checkpoint,
         ),
         input_state=state,
     )
