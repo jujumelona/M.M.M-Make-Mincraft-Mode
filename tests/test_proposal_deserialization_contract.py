@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import complete_spec, spec
-from minecraft_mod_ai.proposal_deserialization_contract import install
+from minecraft_mod_ai.proposal_deserialization_contract import (
+    _validate_platform_json,
+    install,
+)
 
 
 def _complete_payload() -> dict:
@@ -78,3 +81,30 @@ def test_base_proposal_list_fields_do_not_accept_string_iterables() -> None:
     }
     with pytest.raises(spec.SpecValidationError, match="assumptions must be a JSON list"):
         spec.Proposal.from_dict(payload)
+
+
+def test_native_name_platform_json_accepts_empty_mapping_coordinates() -> None:
+    _validate_platform_json(
+        {
+            "minecraft_version": "26.1",
+            "mappings_kind": "",
+            "mappings_version": "",
+            "yarn_mappings": "",
+        },
+        spec.SpecValidationError,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["mappings_kind", "mappings_version", "yarn_mappings"],
+)
+def test_mapped_platform_json_still_rejects_empty_mapping_coordinates(field: str) -> None:
+    with pytest.raises(spec.SpecValidationError, match=rf"spec\.platform\.{field}"):
+        _validate_platform_json(
+            {
+                "minecraft_version": "1.21.10",
+                field: "",
+            },
+            spec.SpecValidationError,
+        )
