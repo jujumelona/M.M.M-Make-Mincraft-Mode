@@ -4,9 +4,7 @@ import os
 
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
-from .direct_task_mutation_authority_contract import install as install_direct_task_mutation_authority
 from .fast_mode_quality_contract_installation import install as install_fast_mode_quality_contract
-from .mutation_authority_final_guard import install as install_mutation_authority_final_guard
 from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .versioned_reference_context_installation import install as install_versioned_reference_context
@@ -42,8 +40,6 @@ from . import java_lsp as _java_lsp
 
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
-install_direct_task_mutation_authority()
-install_mutation_authority_final_guard()
 install_versioned_reference_context()
 
 from .api import (
