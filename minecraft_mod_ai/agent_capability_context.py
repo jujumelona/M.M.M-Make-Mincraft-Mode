@@ -17,6 +17,7 @@ from .external_mcp_router import ExternalMCPRouter
 from .skill_catalog import (
     REVIEWED_TOOL_STAGES,
     SkillContract,
+    SkillPolicyError,
     compile_skill_catalog,
     compile_skill_contract,
 )
@@ -125,14 +126,26 @@ def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
 
 @lru_cache(maxsize=64)
 def _role_skill_contract(skill: str) -> SkillContract:
-    """Compile only a Skill that the live role policy can actually reach.
-
-    Full-catalog validation remains fail-closed in ``compile_skill_catalog`` and CI.
-    Request preparation must not make an unrelated invalid Skill a global runtime
-    dependency, otherwise one dormant contract can prevent every coder/tool turn.
-    """
+    """Compile only a Skill that the live role policy can actually reach."""
 
     return compile_skill_contract(skill)
+
+
+def _reachable_role_contracts(policy: _RolePolicySnapshot) -> tuple[SkillContract, ...]:
+    """Return valid reachable Skills while containing failures to one capability.
+
+    Full-catalog validation remains fail-closed in ``compile_skill_catalog`` and CI.
+    On the runtime request path an invalid Skill is therefore treated as unavailable,
+    not as authority to expose tools and not as a reason to disable sibling Skills.
+    """
+
+    contracts: list[SkillContract] = []
+    for skill in sorted(policy.skills):
+        try:
+            contracts.append(_role_skill_contract(skill))
+        except SkillPolicyError:
+            continue
+    return tuple(contracts)
 
 
 @lru_cache(maxsize=1)
@@ -147,7 +160,7 @@ def _compact_type_contracts() -> tuple[tuple[Any, ...], ...]:
     """Encode canonical type shapes without repeating verbose JSON field labels.
 
     Each module becomes ``(path, types, aliases)``. A type is
-    ``(name, bases, fields)`` and each field is ``name:type!`` when required or
+    ``(name, bases,fields)`` and each field is ``name:type!`` when required or
     ``name:type?`` when optional. Aliases are encoded as ``name=type``. The model keeps
     the exact names, annotations, and optionality it needs while the host retains the
     full source-derived manifest as the authority.
@@ -224,12 +237,10 @@ def _request_contracts_from_policy(
     if not policy.routes:
         return ()
 
-    contracts = tuple(
-        _role_skill_contract(skill)
-        for skill in sorted(policy.skills)
-    )
     return tuple(
-        contract for contract in contracts if selected in contract.stages
+        contract
+        for contract in _reachable_role_contracts(policy)
+        if selected in contract.stages
     )
 
 
