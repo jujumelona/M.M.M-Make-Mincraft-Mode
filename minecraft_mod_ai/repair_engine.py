@@ -70,9 +70,9 @@ class RepairEngine:
     """Diagnostics -> indexed context -> exact patch -> rebuild loop.
 
     No file-count truncation is used. The whole project is indexed and relevant files
-    are selected within an explicit byte budget. Repair remains progress-sensitive, but
-    host control owns termination: one repair call may request at most two candidates.
-    ``max_attempts`` may lower that limit, but cannot raise the host hard cap.
+    are selected within an explicit byte budget. Repair remains progress-sensitive;
+    host control owns termination through ``max_attempts``. When omitted, one repair
+    call defaults to at most two candidate patches.
     """
 
     def __init__(
@@ -106,7 +106,7 @@ class RepairEngine:
         ):
             raise RepairEngineError("max_attempts must be null or a positive integer.")
 
-        attempt_limit = min(max_attempts or 2, 2)
+        attempt_limit = max_attempts if max_attempts is not None else 2
 
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
@@ -149,7 +149,7 @@ class RepairEngine:
                         "attempts": attempt,
                         "stop_reason": (
                             "explicit_max_attempts"
-                            if max_attempts is not None and max_attempts <= 2
+                            if max_attempts is not None
                             else "hard_max_attempts"
                         ),
                         "evidence": evidence,
