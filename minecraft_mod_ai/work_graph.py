@@ -86,11 +86,22 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if missing:
             raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
     ordered = _topological_modules(selected_modules)
+    from .platform_catalog import adapter_for_lock_values
+    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
+    deterministic_module_kinds = frozenset(
+        str(kind).strip()
+        for kind in getattr(adapter, 'deterministic_module_kinds', ())
+        if str(kind).strip()
+    )
     nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
     module_node: dict[str, str] = {}
     exclusive_anchor_node: dict[str, str] = {}
     generated_nodes: list[str] = []
-    for stage, members in _module_shards(ordered, policy=policy):
+    for stage, members in _module_shards(
+        ordered,
+        policy=policy,
+        deterministic_module_kinds=deterministic_module_kinds,
+    ):
         node_id = f'generate-{stage}-{len(generated_nodes):08d}'
         member_ids = {module.module_id for module in members}
         dependencies = {'prepare-project'}
@@ -605,7 +616,11 @@ def _exclusive_anchor_keys(module: ProductionModule) -> tuple[str, ...]:
             keys.append(locator)
     return tuple(dict.fromkeys(keys))
 
-def _module_stage(module: ProductionModule) -> str:
+def _module_stage(
+    module: ProductionModule,
+    *,
+    deterministic_module_kinds: frozenset[str] | None = None,
+) -> str:
     if is_research_shard(module) or module.kind == 'research_shard':
         return 'content'
     if module.kind == 'integration':
@@ -618,12 +633,15 @@ def _module_stage(module: ProductionModule) -> str:
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
         return 'system'
-    # Only kinds implemented by ExtendedContentGenerator belong on the CPU content
-    # lane. Fluid has no deterministic generator and must use the bounded custom LLM
-    # lane, otherwise it silently consumes llama work from a CPU executor.
+    # Only kinds both implemented by ExtendedContentGenerator and explicitly
+    # reviewed by the authoritative target adapter belong on the deterministic
+    # content lane. Unsupported target/kind pairs must use target-grounded source
+    # editing instead of reaching the fail-closed mutation guard.
     extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
     if module.kind in extended_kinds:
-        return 'content'
+        if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
+            return 'content'
+        return 'custom'
     return 'custom'
 
 def _active_llm_slots() -> int:
@@ -641,9 +659,23 @@ def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
         value = default
     return max(1, min(max(1, upper), value))
 
-def _module_shards(modules: Sequence[ProductionModule], *, policy: ScalePolicy) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
+def _module_shards(
+    modules: Sequence[ProductionModule],
+    *,
+    policy: ScalePolicy,
+    deterministic_module_kinds: frozenset[str] | None = None,
+) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
     """Emit bounded dependency-ready waves while exposing safe stage parallelism."""
-    staged = [(module, _module_stage(module)) for module in modules]
+    staged = [
+        (
+            module,
+            _module_stage(
+                module,
+                deterministic_module_kinds=deterministic_module_kinds,
+            ),
+        )
+        for module in modules
+    ]
     stage_counts: dict[str, int] = {}
     for _module, stage in staged:
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
