@@ -11,13 +11,21 @@ from minecraft_mod_ai.pre_design_domain_research import _grounded_evidence_cards
 
 
 class _FakeProjectRag:
-    def __init__(self, *, title: str, url: str, source_id: str, content: str) -> None:
+    def __init__(
+        self,
+        *,
+        title: str,
+        url: str,
+        source_id: str,
+        content: str,
+        source_type: str = "wikipedia",
+    ) -> None:
         self._page = {
             "page_ref": "page://fixture",
             "content": json.dumps(
                 {
                     "source_id": source_id,
-                    "source_type": "wikipedia",
+                    "source_type": source_type,
                     "url": url,
                     "title": title,
                     "content_sha256": "sha256:fixture",
@@ -96,4 +104,45 @@ def test_named_reference_source_passes_identity_gate_and_keeps_exact_evidence() 
 
     assert len(cards) == 1
     assert cards[0]["required_identity_anchor"] == "MapleStory"
+    assert cards[0]["exact_excerpt"] == source_text
+
+
+def test_named_reference_identity_tolerates_internal_spacing_drift() -> None:
+    source_text = (
+        "MapleStory progression is organized around character levels, quests, and class "
+        "advancement systems documented for the game."
+    )
+    rag = _FakeProjectRag(
+        title="MapleStory",
+        url="https://en.wikipedia.org/wiki/MapleStory",
+        source_id="wikipedia:MapleStory",
+        content=source_text,
+    )
+    domain = _maplestory_domain()
+    domain["required_anchor_terms"] = ["Maple Story"]
+    domain["objective"] = "What documented systems, rules, and behavior define Maple Story?"
+    domain["requirements"] = ["Maple Story gameplay rules and progression"]
+    domain["queries"] = ["Maple Story documented systems behavior rules"]
+
+    cards = _grounded_evidence_cards(rag, {"pages": []}, domain)
+
+    assert len(cards) == 1
+    assert cards[0]["required_identity_anchor"] == "Maple Story"
+    assert cards[0]["exact_excerpt"] == source_text
+
+
+def test_identity_verified_encyclopedia_body_survives_zero_token_morphology_overlap() -> None:
+    source_text = "A long-running online role-playing title released internationally."
+    rag = _FakeProjectRag(
+        title="MapleStory",
+        url="https://en.wikipedia.org/wiki/MapleStory",
+        source_id="wikipedia:MapleStory",
+        source_type="reference_encyclopedia_body",
+        content=source_text,
+    )
+
+    cards = _grounded_evidence_cards(rag, {"pages": []}, _maplestory_domain())
+
+    assert len(cards) == 1
+    assert cards[0]["domain_term_overlap"] == 0
     assert cards[0]["exact_excerpt"] == source_text

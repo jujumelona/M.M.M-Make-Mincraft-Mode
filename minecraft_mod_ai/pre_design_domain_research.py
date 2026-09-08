@@ -50,9 +50,20 @@ def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
         raw = domain.get(key)
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
             values.extend(str(item) for item in raw if str(item).strip())
+
+    # Reference identity is part of relevance. Preserve the ordinary token form and also
+    # add a compact form so provider spelling differences such as "Maple Story" vs
+    # "MapleStory" (or "메이플 스토리" vs "메이플스토리") do not zero out excerpt scoring.
+    anchors = _required_identity_anchors(domain)
+    values.extend(anchors)
+
     result: set[str] = set()
     for value in values:
         result.update(_tokens(value))
+    for anchor in anchors:
+        compact = "".join(_identity_text(anchor).split())
+        if len(compact) > 1:
+            result.add(compact)
     return result
 
 
@@ -61,6 +72,41 @@ def _identity_text(value: Any) -> str:
     return " ".join(
         re.findall(r"[a-z0-9]+|[가-힣]+", str(value or "").casefold())
     )
+
+
+def _identity_tokens(value: Any) -> tuple[str, ...]:
+    return tuple(token for token in _identity_text(value).split() if token)
+
+
+def _identity_matches(anchor: Any, source_value: Any) -> bool:
+    """Match only boundary-preserving identity variants, including spacing drift.
+
+    The compact comparison is limited to complete contiguous token windows. It therefore
+    accepts the same named entity written with or without internal spaces/punctuation, but
+    does not degrade into arbitrary substring matching against unrelated source metadata.
+    """
+
+    anchor_tokens = _identity_tokens(anchor)
+    source_tokens = _identity_tokens(source_value)
+    if not anchor_tokens or not source_tokens:
+        return False
+
+    anchor_compact = "".join(anchor_tokens)
+    widths = {
+        len(anchor_tokens),
+        max(1, len(anchor_tokens) - 1),
+        len(anchor_tokens) + 1,
+    }
+    for width in sorted(widths):
+        if width > len(source_tokens):
+            continue
+        for start in range(len(source_tokens) - width + 1):
+            window = source_tokens[start : start + width]
+            if window == anchor_tokens:
+                return True
+            if len(anchor_compact) >= 4 and "".join(window) == anchor_compact:
+                return True
+    return False
 
 
 def _required_identity_anchors(domain: Mapping[str, Any]) -> list[str]:
@@ -82,20 +128,14 @@ def _matched_source_identity_anchor(
     """Require the named reference to identify the source, not merely occur as noise.
 
     Provider snippets can share generic task words such as game/platform/system while being
-    about a completely different entity. Reference domains therefore require an exact
-    normalized reference phrase in source identity metadata (title/url/source id) before
-    semantic overlap is considered.
+    about a completely different entity. Reference domains therefore require the reference
+    identity in source metadata (title/url/source id) before semantic overlap is considered.
+    Internal spacing/punctuation drift is tolerated only when complete token windows compact
+    to the same identity.
     """
-    source_identity = _identity_text(
-        " ".join(
-            str(unit.get(key) or "")
-            for key in ("title", "url", "source_id")
-        )
-    )
-    padded_identity = f" {source_identity} "
+    source_values = tuple(unit.get(key) for key in ("title", "url", "source_id"))
     for anchor in anchors:
-        normalized = _identity_text(anchor)
-        if normalized and f" {normalized} " in padded_identity:
+        if any(_identity_matches(anchor, source_value) for source_value in source_values):
             return str(anchor)
     return ""
 
@@ -223,8 +263,15 @@ def _grounded_evidence_cards(
         # A materialized body is not evidence merely because it contains text. When the
         # research domain has semantic anchors, at least one anchor must occur in the
         # selected exact excerpt. This prevents unrelated provider noise from becoming a
-        # sufficient research claim.
-        if not excerpt or (wanted and score <= 0):
+        # sufficient research claim. A verified encyclopedia body is allowed to bridge
+        # morphology/language drift after identity has already passed the hard gate.
+        identity_verified_reference_body = (
+            bool(matched_anchor)
+            and str(unit.get("source_type") or "") == "reference_encyclopedia_body"
+        )
+        if not excerpt or (
+            wanted and score <= 0 and not identity_verified_reference_body
+        ):
             continue
         seen_refs.add(page_ref)
         cards.append(
