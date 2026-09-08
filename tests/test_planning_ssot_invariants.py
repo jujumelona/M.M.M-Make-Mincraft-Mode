@@ -182,7 +182,7 @@ def test_state_integrity_rejects_unhashed_restored_state_mutation():
         validate_planning_state(state, prompt="Keep the weather compass.")
 
 
-def test_research_route_and_sources_are_host_owned_not_model_payload():
+def test_external_fact_is_host_owned_and_cannot_be_authored_by_prompt_model():
     raw = _payload(
         unresolved=[
             {
@@ -195,17 +195,15 @@ def test_research_route_and_sources_are_host_owned_not_model_payload():
             }
         ]
     )
-    state = build_initial_planning_state(
-        _Router([raw]),
-        "Keep the weather compass.",
-    )
 
-    unresolved = state["unresolved"][0]
-    assert unresolved["resolution_route"] == "external_research"
-    assert unresolved["source_kinds"] == ["web_sources"]
-    assert unresolved["blocks"] == ["requirement_selection"]
-    assert state["research_queue"][0]["source_kinds"] == ["web_sources"]
-    validate_planning_state(state, prompt="Keep the weather compass.")
+    with pytest.raises(
+        ValueError,
+        match="PROMPT_STATE_UNRESOLVED: model cannot author reason 'external_fact'",
+    ):
+        build_initial_planning_state(
+            _Router([raw]),
+            "Keep the weather compass.",
+        )
 
 
 def test_raw_prompt_cannot_bypass_grounded_planning_state_authority():
