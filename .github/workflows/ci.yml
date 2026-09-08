@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 concurrency:
@@ -70,6 +70,37 @@ jobs:
         run: node --check integrations/mineflayer/bridge.mjs
       - name: Validate canonical Colab notebook
         run: python tools/validate_colab_notebook.py
+      - name: Synchronize packaged Skill catalog
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          python tools/package_skills.py
+          if git diff --quiet -- minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills; then
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
+          git commit -m 'Sync packaged Skill catalog'
+
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo 'Failed to push synchronized Skill catalog after 3 attempts.' >&2
+              exit 1
+            fi
+
+            git fetch origin main
+            git rebase origin/main
+            python tools/package_skills.py
+            git add minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit
+            fi
+          done
       - name: Verify packaged Skill catalog
         run: |
           python tools/package_skills.py
