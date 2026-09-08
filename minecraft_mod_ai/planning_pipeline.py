@@ -125,6 +125,8 @@ class PlanningPipeline:
                     media_paths=media_paths,
                 ),
             )
+        except PlanningStageError:
+            raise
         except Exception as exc:
             raise PlanningStageError(
                 PlanningStage.DESIGN,
@@ -172,34 +174,59 @@ class PlanningPipeline:
         )
         from .reuse_planner import compile_pre_retrieval_plan
 
-        request_catalog = build_authoritative_request_catalog(
-            prompt,
-            self.router,
-            planning_state=planning_state,
+        request_catalog = _host_operation(
+            "build_authoritative_request_catalog",
+            lambda: build_authoritative_request_catalog(
+                prompt,
+                self.router,
+                planning_state=planning_state,
+            ),
         )
         with authoritative_request_scope(
             prompt,
             request_catalog,
             planning_state=planning_state,
         ):
-            design = host_design.generate_sectioned_game_design(
-                self.router,
-                prompt,
-                research={"planning_state_sha256": planning_state.get("state_sha256")},
+            design = _host_operation(
+                "generate_sectioned_game_design",
+                lambda: host_design.generate_sectioned_game_design(
+                    self.router,
+                    prompt,
+                    research={"planning_state_sha256": planning_state.get("state_sha256")},
+                ),
             )
-            design = host_design.validate_ready_design(
-                prompt,
-                host_design.canonical_game_design(design),
+            design = _host_operation(
+                "validate_ready_design",
+                lambda: host_design.validate_ready_design(
+                    prompt,
+                    host_design.canonical_game_design(design),
+                ),
             )
-            design = self._bind_existing_project(design)
+            design = _host_operation(
+                "bind_existing_project",
+                lambda: self._bind_existing_project(design),
+            )
             design = {
                 **design,
                 "_evidence_request_catalog": request_catalog,
                 "_planning_state": dict(planning_state),
             }
-            pre_retrieval_plan = compile_pre_retrieval_plan(prompt, design)
+            try:
+                pre_retrieval_plan = _host_operation(
+                    "compile_pre_retrieval_plan",
+                    lambda: compile_pre_retrieval_plan(prompt, design),
+                )
+            except Exception as exc:
+                raise PlanningStageError(
+                    PlanningStage.PRE_RETRIEVAL_PLAN,
+                    "semantic design could not be lowered into the pre-retrieval plan",
+                    cause=exc,
+                ) from exc
             design = {**design, "_pre_retrieval_plan": pre_retrieval_plan}
-            research_brief = central_research.normalize_research_brief(prompt, design)
+            research_brief = _host_operation(
+                "normalize_research_brief",
+                lambda: central_research.normalize_research_brief(prompt, design),
+            )
             design = {
                 **design,
                 "_research_brief": research_brief,
@@ -212,8 +239,14 @@ class PlanningPipeline:
                 },
             }
 
-        build_slice = host_design.deterministic_bootstrap(prompt, design)
-        proposal = _proposal_from_model_data(prompt, build_slice)
+        build_slice = _host_operation(
+            "deterministic_bootstrap",
+            lambda: host_design.deterministic_bootstrap(prompt, design),
+        )
+        proposal = _host_operation(
+            "lower_model_data_to_proposal",
+            lambda: _proposal_from_model_data(prompt, build_slice),
+        )
         if proposal.requested_prompt != prompt:
             proposal = replace(
                 proposal,
