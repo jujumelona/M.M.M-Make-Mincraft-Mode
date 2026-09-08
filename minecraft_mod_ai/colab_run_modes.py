@@ -10,25 +10,30 @@ PLAN_MODE = "Plan"
 FULL_MODE = "Full"
 EXISTING_MOD_MODE = "Revise"
 EXISTING_PLAN_MODE = "Execute"
-DEBUG_MODE = "Debug"
-DEBUG_AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
+AUDIT_MODE = "Audit"
 RUN_MODES = (
     PLAN_MODE,
     FULL_MODE,
     EXISTING_MOD_MODE,
     EXISTING_PLAN_MODE,
-    DEBUG_MODE,
+    AUDIT_MODE,
 )
 
-# Backward compatibility for already-open Colab notebooks and saved notebook copies
-# created before the UI labels were renamed to concise English names. These values
-# are accepted as input only; all runtime branching uses the canonical English mode.
+# Backward compatibility for already-open Colab notebooks and saved notebook copies.
 LEGACY_RUN_MODE_ALIASES = {
     "플랜모드": PLAN_MODE,
     "풀모드": FULL_MODE,
     "이미 만들어진 모드 수정보안모드": EXISTING_MOD_MODE,
     "이미 있는 플랜을 만드는모드": EXISTING_PLAN_MODE,
+    # The old run-mode label "Debug" meant repository audit. It is now "Audit"
+    # because DEBUG_MODE in the Colab UI means planner-bypass implementation debug.
+    "Debug": AUDIT_MODE,
 }
+
+AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
+# Compatibility aliases for callers that imported the old audit name.
+DEBUG_AUDIT_RELATIVE_PATH = AUDIT_RELATIVE_PATH
+DEBUG_MODE = "Debug"
 
 
 @dataclass(frozen=True)
@@ -47,7 +52,7 @@ def validate_run_mode(run_mode: str) -> str:
 
 
 def needs_prompt(run_mode: str) -> bool:
-    return validate_run_mode(run_mode) not in {EXISTING_PLAN_MODE, DEBUG_MODE}
+    return validate_run_mode(run_mode) not in {EXISTING_PLAN_MODE, AUDIT_MODE}
 
 
 def needs_existing_mod(run_mode: str) -> bool:
@@ -55,13 +60,16 @@ def needs_existing_mod(run_mode: str) -> bool:
 
 
 def should_build(run_mode: str) -> bool:
-    return validate_run_mode(run_mode) not in {PLAN_MODE, DEBUG_MODE}
+    return validate_run_mode(run_mode) not in {PLAN_MODE, AUDIT_MODE}
+
+
+def audit_path(repo_dir: str | Path) -> Path:
+    return Path(repo_dir) / AUDIT_RELATIVE_PATH
 
 
 def debug_audit_path(repo_dir: str | Path) -> Path:
-    """Return the canonical Debug audit entrypoint inside a repository checkout."""
-
-    return Path(repo_dir) / DEBUG_AUDIT_RELATIVE_PATH
+    """Backward-compatible alias for the repository Audit entrypoint."""
+    return audit_path(repo_dir)
 
 
 def _uploaded_file(*, suffix: str, destination: Path, purpose: str) -> Path:
@@ -154,29 +162,180 @@ def show_full_plan(reply: Any, *, print_fn: Callable[..., None] = print) -> None
     print_fn("=" * 80)
 
 
+def _debug_target(*, minecraft_version: str, loader: str):
+    from .platform_catalog import adapter_for_target, executable_loaders, newest_adapter
+
+    requested_version = str(minecraft_version or "").strip()
+    requested_loader = str(loader or "").strip().casefold()
+    if requested_version.casefold() == "auto":
+        requested_version = ""
+    if requested_loader == "auto":
+        requested_loader = ""
+
+    if requested_loader:
+        selected_loader = requested_loader
+    else:
+        available = executable_loaders()
+        if not available:
+            raise RuntimeError("Debug Mode에 사용할 실행 가능한 loader가 없습니다.")
+        selected_loader = available[0]
+
+    if requested_version:
+        return adapter_for_target(requested_version, selected_loader)
+    return newest_adapter(loader=selected_loader)
+
+
+def write_debug_example_plan(
+    target: str | Path,
+    *,
+    minecraft_version: str = "Auto",
+    loader: str = "Auto",
+) -> Path:
+    """Write one host-owned, schema-valid implementation fixture without calling an LLM planner."""
+
+    from .capabilities import capability_manifest_hash
+    from .complete_spec import (
+        CompleteProposal,
+        CompleteProposalStatus,
+        ProductionModule,
+    )
+    from .knowledge import evidence_catalog_for_version, evidence_snapshot_hash
+    from .platform_resolver import lock_from_adapter
+    from .spec import (
+        ContentKind,
+        ContentSpec,
+        ModSpec,
+        Proposal,
+        ProposalStatus,
+    )
+
+    adapter = _debug_target(minecraft_version=minecraft_version, loader=loader)
+    platform = lock_from_adapter(adapter)
+    evidence = evidence_catalog_for_version(platform.minecraft_version)
+    prompt = (
+        "M.M.M Debug Mode fixture: add one deterministic debug token item and "
+        "run the normal implementation/verification pipeline."
+    )
+    acceptance = (
+        "The generated project contains the debug_token item.",
+        "The generated Fabric project passes the normal build and validation pipeline.",
+    )
+    base = Proposal(
+        schema_version="minecraft-mod-ai/proposal-v1",
+        proposal_version=1,
+        status=ProposalStatus.AWAITING_APPROVAL,
+        requested_prompt=prompt,
+        spec=ModSpec(
+            mod_id="mmm_debug_fixture",
+            mod_name="MMM Debug Fixture",
+            package_name="dev.mmm.debugfixture",
+            version="1.0.0",
+            summary="Deterministic implementation fixture for Colab Debug Mode.",
+            contents=(
+                ContentSpec(
+                    content_id="debug_token",
+                    kind=ContentKind.ITEM,
+                    display_name_en="Debug Token",
+                    display_name_ko="디버그 토큰",
+                    color="#74c7ec",
+                    recipe=False,
+                ),
+            ),
+            platform=platform,
+        ),
+        assumptions=(),
+        exclusions=(),
+        deferred_requests=(),
+        acceptance_tests=acceptance,
+        evidence_sources=evidence,
+        evidence_snapshot_hash=evidence_snapshot_hash(evidence),
+        capability_manifest_hash=capability_manifest_hash(),
+        imported_source_snapshot_hash="",
+        risk_approvals=(),
+        approval_hash="",
+    ).with_hash()
+    proposal = CompleteProposal(
+        schema_version="mmm/complete-proposal-v1",
+        proposal_version=1,
+        status=CompleteProposalStatus.AWAITING_APPROVAL,
+        requested_prompt=prompt,
+        base_proposal=base,
+        game_design={
+            "mode": "debug_fixture",
+            "goal": "Exercise implementation and verification without planner/model planning.",
+            "fixture": {
+                "module_id": "debug_token",
+                "kind": "item",
+                "deterministic": True,
+            },
+        },
+        modules=(
+            ProductionModule(
+                module_id="debug_token",
+                kind="item",
+                config={
+                    "display_name_en": "Debug Token",
+                    "display_name_ko": "디버그 토큰",
+                    "color": "#74c7ec",
+                    "recipe": False,
+                },
+            ),
+        ),
+        assets=(),
+        acceptance_tests=acceptance,
+        external_runtime_required=False,
+        existing_input_sha256="",
+        approval_hash="",
+    ).with_hash()
+    proposal.validate()
+
+    path = Path(target).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(proposal.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
 def run_plan_dialog(
     *,
     session: Any,
     run_mode: str,
     prompt: str,
     plan_path: str | Path,
+    debug_mode: bool = False,
+    minecraft_version: str = "Auto",
+    loader: str = "Auto",
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[..., None] = print,
 ) -> PlanDialogResult:
-    """Create/load the plan and continue without a manual approval prompt.
+    """Create/load a plan and continue without a manual approval prompt.
 
-    ``input_fn`` is retained only for API compatibility with older notebooks and
-    tests; it is deliberately never called. Integrity/authorization remains
-    content-bound through the proposal hash that CompleteModAISession.build() passes
-    to the orchestrator automatically.
+    When ``debug_mode`` is enabled, the LLM planner is not called. A deterministic,
+    host-owned example CompleteProposal is written, validated by ``session.load_plan``,
+    and then returned to the normal build path.
     """
 
     del input_fn
     mode = validate_run_mode(run_mode)
     target = Path(plan_path)
 
-    if mode == DEBUG_MODE:
-        raise RuntimeError("Debug 모드는 플랜을 만들지 않고 프로젝트 진단만 실행합니다.")
+    if mode == AUDIT_MODE:
+        raise RuntimeError("Audit 모드는 플랜/제작 대신 프로젝트 전체 진단만 실행합니다.")
+
+    if debug_mode:
+        if mode != FULL_MODE:
+            raise ValueError("Debug Mode는 RUN_MODE=Full에서만 사용할 수 있습니다.")
+        write_debug_example_plan(
+            target,
+            minecraft_version=minecraft_version,
+            loader=loader,
+        )
+        reply = session.load_plan(target)
+        show_full_plan(reply, print_fn=print_fn)
+        print_fn("Debug Mode: planner 호출 없이 예제 플랜을 주입해 바로 제작 단계로 진행합니다.")
+        return PlanDialogResult(reply=reply, plan_path=target, approved=True)
 
     if mode == EXISTING_PLAN_MODE:
         reply = session.load_plan(target)
@@ -198,6 +357,8 @@ def run_plan_dialog(
 
 
 __all__ = [
+    "AUDIT_MODE",
+    "AUDIT_RELATIVE_PATH",
     "DEBUG_AUDIT_RELATIVE_PATH",
     "DEBUG_MODE",
     "EXISTING_MOD_MODE",
@@ -207,6 +368,7 @@ __all__ = [
     "PLAN_MODE",
     "RUN_MODES",
     "PlanDialogResult",
+    "audit_path",
     "debug_audit_path",
     "needs_existing_mod",
     "needs_prompt",
@@ -216,4 +378,5 @@ __all__ = [
     "should_build",
     "show_full_plan",
     "validate_run_mode",
+    "write_debug_example_plan",
 ]
