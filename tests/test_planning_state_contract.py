@@ -84,9 +84,9 @@ def test_model_cannot_author_scope_or_route_it_to_bypass_host_policy() -> None:
 
 @pytest.mark.parametrize(
     "reason",
-    ["repository_fact", "minecraft_api", "implementation_method", "compatibility"],
+    ["external_fact", "repository_fact", "minecraft_api", "implementation_method", "compatibility"],
 )
-def test_prompt_model_cannot_create_downstream_engineering_unknowns(reason: str) -> None:
+def test_prompt_model_cannot_create_host_owned_or_downstream_unknowns(reason: str) -> None:
     prompt = "우주선을 부품별로 제작하고 업그레이드하는 우주 모드"
     router = _Router(
         [
@@ -117,7 +117,6 @@ def test_prompt_model_schema_cannot_author_blocker_topology() -> None:
     unresolved = MODEL_PARAMETERS["properties"]["unresolved"]["items"]
     assert "blocks" not in unresolved["properties"]
     assert set(unresolved["properties"]["reason"]["enum"]) == {
-        "external_fact",
         "contradiction",
         "user_preference",
     }
@@ -206,21 +205,24 @@ def test_reference_wikipedia_search_uses_authored_language_before_english() -> N
 
 def test_reference_and_implementation_research_use_different_validated_routes() -> None:
     reference_state = {
+        "references": [{"name": "MapleStory"}],
         "unresolved": [{"question": "reference?", "status": "open"}],
         "research_queue": [
             {
                 "research_id": "r_001",
-                "objective": "research reference",
-                "information_needed": "reference behavior",
+                "objective": "research MapleStory reference",
+                "information_needed": "MapleStory reference behavior",
                 "source_kinds": ["reference_sources", "web_sources"],
                 "queries": ["MapleStory gameplay systems"],
                 "status": "pending",
             }
         ],
     }
-    reference_brief, reference_ids = _research_brief("MapleStory mod", reference_state)
+    reference_brief, reference_ids, unsupported = _research_brief("MapleStory mod", reference_state)
     domain = reference_brief["domains"][0]
     assert reference_ids == {"r_001"}
+    assert unsupported == {}
+    assert domain["required_anchor_terms"] == ["MapleStory"]
     assert "gameplay_reference" in domain["evidence_kinds"]
     assert domain["providers"] == ["wikipedia"]
 
@@ -243,9 +245,12 @@ def test_reference_and_implementation_research_use_different_validated_routes() 
             }
         ],
     }
-    implementation_brief, reference_ids = _research_brief("persistent progression", implementation_state)
+    implementation_brief, reference_ids, unsupported = _research_brief(
+        "persistent progression", implementation_state
+    )
     domain = implementation_brief["domains"][0]
     assert reference_ids == set()
+    assert unsupported == {}
     assert {"dependency", "source_code", "minecraft_api", "local_project"}.issubset(
         domain["evidence_kinds"]
     )
