@@ -28,7 +28,11 @@ _DEFAULT_SCOPE_POLICY = (
     "end-to-end gameplay slice that preserves the reference's distinctive loop. Never "
     "claim a full clone and never invent unevidenced reference features."
 )
-_REFERENCE_SOURCE_KINDS = frozenset({"reference_sources", "web_sources"})
+# `web_sources` is deliberately NOT a reference source. Conflating the two previously
+# routed arbitrary external-fact questions through Wikipedia and allowed unrelated pages
+# to masquerade as game/reference evidence.
+_REFERENCE_SOURCE_KINDS = frozenset({"reference_sources"})
+_GENERIC_WEB_SOURCE_KINDS = frozenset({"web_sources"})
 _PROVIDER_RECEIPT_FIELDS = (
     "provider",
     "status",
@@ -46,20 +50,37 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def _query_context(state: Mapping[str, Any], research: Mapping[str, Any]) -> dict[str, Any]:
+def _reference_names_for_research(
+    state: Mapping[str, Any], research: Mapping[str, Any]
+) -> list[str]:
+    """Return only named references explicitly anchored to this research objective."""
+    basis = " ".join(
+        part
+        for part in (
+            _text(research.get("objective")),
+            _text(research.get("information_needed")),
+        )
+        if part
+    ).casefold()
     references = state.get("references")
-    reference_names = [
-        _text(item.get("name"))
-        for item in references
-        if isinstance(item, Mapping) and _text(item.get("name"))
-    ] if isinstance(references, list) else []
+    names: list[str] = []
+    for item in references if isinstance(references, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        name = _text(item.get("name"))
+        if name and name.casefold() in basis:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _query_context(state: Mapping[str, Any], research: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "objective": _text(research.get("objective")),
         "information_needed": _text(research.get("information_needed")),
         "source_kinds": [
             _text(item) for item in research.get("source_kinds", []) if _text(item)
         ] if isinstance(research.get("source_kinds"), list) else [],
-        "reference_names": reference_names,
+        "reference_names": _reference_names_for_research(state, research),
     }
 
 
@@ -80,10 +101,19 @@ def _compile_queries(
     reference_names = context["reference_names"]
     candidates: list[str] = []
 
-    if source_kinds & _REFERENCE_SOURCE_KINDS and reference_names:
+    if source_kinds & _REFERENCE_SOURCE_KINDS:
+        # Reference research must be identity-anchored. Do not silently borrow names from
+        # unrelated references in the same request.
         for name in reference_names:
             candidates.append(f"{name} {needed or objective}")
             candidates.append(f"{name} documented systems behavior rules")
+        if not reference_names:
+            # Keep a deterministic query for diagnostics; `_research_brief` will mark the
+            # route unsupported rather than issuing retrieval without an identity anchor.
+            if objective:
+                candidates.append(objective)
+            if needed and needed != objective:
+                candidates.append(needed)
     else:
         if objective:
             candidates.append(objective)
@@ -109,10 +139,14 @@ def _compile_queries(
 
 
 def _providers_for(source_kinds: Sequence[str]) -> list[str]:
-    """Return exact HOST-owned providers; GitHub fallback remains policy-internal."""
+    """Return exact HOST-owned providers; never cross-fallback between evidence classes."""
     kinds = set(source_kinds)
     if kinds & _REFERENCE_SOURCE_KINDS:
         return ["wikipedia"]
+    if kinds and kinds <= _GENERIC_WEB_SOURCE_KINDS:
+        # There is currently no dedicated generic-web evidence provider in this pipeline.
+        # Empty means fail closed; never substitute Wikipedia or Minecraft RAG.
+        return []
 
     providers: list[str] = []
     if kinds & {"repository", "existing_mods"}:
@@ -129,6 +163,8 @@ def _evidence_kinds_for(source_kinds: Sequence[str]) -> list[str]:
     output: list[str] = []
     if kinds & _REFERENCE_SOURCE_KINDS:
         output.append("gameplay_reference")
+    elif kinds and kinds <= _GENERIC_WEB_SOURCE_KINDS:
+        output.append("external_fact")
     if kinds & {"repository", "existing_mods"}:
         output.extend(["dependency", "source_code"])
     if kinds & {"minecraft_docs", "minecraft_source"}:
@@ -151,8 +187,10 @@ def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
         research["queries"] = _compile_queries(router, state, research)
 
 
-def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, Any], set[str]]:
-    """Build the planning research brief without generic runtime normalization.
+def _research_brief(
+    prompt: str, state: Mapping[str, Any]
+) -> tuple[dict[str, Any], set[str], dict[str, str]]:
+    """Build the planning research brief with explicit source-class isolation.
 
     The provider/source route is already a host-owned consequence of planning-state
     ``source_kinds``. Passing this through central runtime wrappers would create a second
@@ -160,6 +198,7 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, An
     """
     domains: list[dict[str, Any]] = []
     reference_domain_ids: set[str] = set()
+    unsupported_domains: dict[str, str] = {}
     for raw in state.get("research_queue", []) if isinstance(state.get("research_queue"), list) else []:
         if not isinstance(raw, Mapping) or str(raw.get("status") or "") != "pending":
             continue
@@ -171,9 +210,16 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, An
                 f"PLANNING_RESEARCH_QUERY: pending research {raw.get('research_id')!r} has no compiled queries"
             )
         source_kinds = [str(item) for item in raw.get("source_kinds", [])]
+        kinds = set(source_kinds)
         domain_id = str(raw.get("research_id") or "")
-        if set(source_kinds) & _REFERENCE_SOURCE_KINDS:
-            reference_domain_ids.add(domain_id)
+        required_anchor_terms = _reference_names_for_research(state, raw)
+        if kinds & _REFERENCE_SOURCE_KINDS:
+            if required_anchor_terms:
+                reference_domain_ids.add(domain_id)
+            else:
+                unsupported_domains[domain_id] = "reference_identity_anchor_missing"
+        elif kinds and kinds <= _GENERIC_WEB_SOURCE_KINDS:
+            unsupported_domains[domain_id] = "generic_web_provider_unconfigured"
         domains.append(
             {
                 "domain_id": domain_id,
@@ -182,6 +228,7 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, An
                 "evidence_kinds": _evidence_kinds_for(source_kinds),
                 "queries": queries,
                 "providers": _providers_for(source_kinds),
+                "required_anchor_terms": required_anchor_terms,
                 "depends_on": [],
             }
         )
@@ -202,7 +249,7 @@ def _research_brief(prompt: str, state: Mapping[str, Any]) -> tuple[dict[str, An
     brief["brief_sha256"] = "sha256:" + hashlib.sha256(
         canonical_json(brief).encode("utf-8")
     ).hexdigest()
-    return brief, reference_domain_ids
+    return brief, reference_domain_ids, unsupported_domains
 
 
 def _domain_note_by_id(
@@ -299,6 +346,24 @@ def _grounded_reference_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
     return retrieve_reference_grounded_evidence(queries)
 
 
+def _blocked_note(domain_id: str, reason: str) -> dict[str, Any]:
+    """Represent a route-policy refusal as ordinary insufficient research evidence."""
+    return {
+        "domain_id": domain_id,
+        "claims": [],
+        "gaps": [reason],
+        "next_queries": [],
+        "procedures": [],
+        "sufficient": False,
+        "fixed_point": False,
+        "checkpoint": {"status": "blocked", "reason": reason},
+        "research_failures": [reason],
+        "source_body_count": 0,
+        "host_grounded_evidence_card_count": 0,
+        "evidence_extraction_status": reason,
+    }
+
+
 def collect_planning_state_research(
     router: Any,
     prompt: str,
@@ -340,7 +405,7 @@ def collect_planning_state_research(
             research["status"] = "pending"
 
     _compile_pending_queries(router, value)
-    brief, reference_domain_ids = _research_brief(prompt, value)
+    brief, reference_domain_ids, unsupported_domains = _research_brief(prompt, value)
     if not brief.get("domains"):
         return _rehash(value)
 
@@ -349,6 +414,7 @@ def collect_planning_state_research(
         for domain in brief.get("domains", [])
         if isinstance(domain, Mapping)
         and str(domain.get("domain_id") or "") not in reference_domain_ids
+        and str(domain.get("domain_id") or "") not in unsupported_domains
     ]
     minecraft_bundle: dict[str, Any] | None = None
     if minecraft_domains:
@@ -364,6 +430,11 @@ def collect_planning_state_research(
         if not isinstance(domain, Mapping):
             continue
         domain_id = str(domain.get("domain_id") or "")
+        unsupported_reason = unsupported_domains.get(domain_id)
+        if unsupported_reason:
+            provider_diagnostics_by_domain[domain_id] = []
+            notes.append(_blocked_note(domain_id, unsupported_reason))
+            continue
         if domain_id in reference_domain_ids:
             grounded = _grounded_reference_domain(domain)
         else:
