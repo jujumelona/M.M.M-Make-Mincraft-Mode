@@ -33,6 +33,15 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
+  - approval_and_fidelity
+  - path_containment
+  - exact_version_evidence
+  - requirement_traceability
+  - source_validation
+  - feature_preservation
+  - capability_receipts
+
+validation_requirements:
   - request fidelity and immutable approval hash
   - path containment and no symlinks
   - every generated identifier is valid, unique where required, and uses the approved namespace
