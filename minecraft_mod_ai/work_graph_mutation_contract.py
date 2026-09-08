@@ -13,8 +13,15 @@ def install(work_graph_module: Any) -> None:
     if not getattr(original_stage, '_mmm_final_stage_contract', False):
 
         @wraps(original_stage)
-        def final_module_stage(module: Any) -> str:
-            stage = original_stage(module)
+        def final_module_stage(
+            module: Any,
+            *,
+            deterministic_module_kinds: frozenset[str] | None = None,
+        ) -> str:
+            stage = original_stage(
+                module,
+                deterministic_module_kinds=deterministic_module_kinds,
+            )
             if getattr(module, 'kind', '') == 'integration' and (not work_graph_module.is_research_shard(module)) and (getattr(module, 'config', {}).get('integration_type') != _LOCAL_AI_SIDECAR):
                 return 'custom'
             return stage
