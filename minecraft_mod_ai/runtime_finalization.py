@@ -65,6 +65,7 @@ def finalize_runtime() -> None:
         from .context_budget_preflight import run_context_budget_preflight
         from .deep_design_execution_contract import install as install_deep_design_execution
         from .design_resolution_provenance_contract import install_design_resolution_provenance_contract
+        from .direct_task_mutation_authority_contract import install as install_direct_task_mutation_authority
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .evidence_obligation_contract import install_evidence_obligation_contract
         from .execution_feedback_exception_scope_contract import install as install_execution_feedback_exception_scope
@@ -87,6 +88,8 @@ def finalize_runtime() -> None:
         from .model_output_atomicity_contract import install as install_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
+        from .mutation_authority_final_guard import assert_installed as assert_mutation_authority_final_guard
+        from .mutation_authority_final_guard import install as install_mutation_authority_final_guard
         from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
@@ -178,6 +181,17 @@ def finalize_runtime() -> None:
 
         install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
+
+        # These two contracts are intentionally finalized last. The direct-task bridge
+        # carries the task capsule authority out-of-band, and the final guard freezes
+        # that exact target before any retrieval evidence can merge into run state.
+        install_direct_task_mutation_authority(
+            custom_module_generator_module=custom_module_generator,
+            loop_module=progress_aware_tool_loop,
+        )
+        install_mutation_authority_final_guard(progress_aware_tool_loop)
+        assert_mutation_authority_final_guard(progress_aware_tool_loop)
+
         assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         verify_installed_wrappers()
         run_context_budget_preflight()
