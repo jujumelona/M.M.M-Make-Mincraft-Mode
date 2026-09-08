@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Any
 
 from .spec import PlatformLock
+from .target_contract import uses_native_names
 
 
 def _require_dict(value: Any, field: str, error_type: type[Exception]) -> dict[str, Any]:
@@ -56,14 +57,29 @@ def _string_list(
 
 def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception]) -> None:
     typed_fields = {'resource_pack_format', 'deterministic_module_kinds'}
+    mapping_fields = {'mappings_kind', 'mappings_version', 'yarn_mappings'}
     canonical_fields = {item.name for item in fields(PlatformLock)}
     string_fields = canonical_fields - typed_fields
     unknown = sorted(set(platform) - canonical_fields)
     if unknown:
         raise error_type(f'spec.platform contains unsupported fields: {unknown[:8]}')
+
+    native_names = False
+    version = platform.get('minecraft_version')
+    if isinstance(version, str) and version.strip():
+        try:
+            native_names = uses_native_names(version)
+        except ValueError as exc:
+            raise error_type(str(exc)) from exc
+
     for key in string_fields:
         if key in platform:
-            _require_string(platform[key], f'spec.platform.{key}', error_type)
+            _require_string(
+                platform[key],
+                f'spec.platform.{key}',
+                error_type,
+                empty=native_names and key in mapping_fields,
+            )
     if 'resource_pack_format' in platform:
         value = platform['resource_pack_format']
         if type(value) is not int or value <= 0:
