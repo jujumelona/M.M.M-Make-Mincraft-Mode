@@ -18,6 +18,7 @@ from .skill_catalog import (
     REVIEWED_TOOL_STAGES,
     SkillContract,
     compile_skill_catalog,
+    compile_skill_contract,
 )
 from .tool_validation_surface_contract import _assert_unique_schema_names
 
@@ -122,6 +123,18 @@ def _stage_contracts(stage: str) -> tuple[SkillContract, ...]:
     )
 
 
+@lru_cache(maxsize=64)
+def _role_skill_contract(skill: str) -> SkillContract:
+    """Compile only a Skill that the live role policy can actually reach.
+
+    Full-catalog validation remains fail-closed in ``compile_skill_catalog`` and CI.
+    Request preparation must not make an unrelated invalid Skill a global runtime
+    dependency, otherwise one dormant contract can prevent every coder/tool turn.
+    """
+
+    return compile_skill_contract(skill)
+
+
 @lru_cache(maxsize=1)
 def _manifest_router() -> ExternalMCPRouter:
     """Reuse the immutable reviewed provider registry on model-request hot paths."""
@@ -205,13 +218,18 @@ def _request_contracts_from_policy(
     stage: str,
     policy: _RolePolicySnapshot,
 ) -> tuple[SkillContract, ...]:
-    stage_contracts = _stage_contracts(stage)
+    selected = stage.strip().lower()
     if not policy.model_role:
-        return stage_contracts
+        return _stage_contracts(selected)
     if not policy.routes:
         return ()
+
+    contracts = tuple(
+        _role_skill_contract(skill)
+        for skill in sorted(policy.skills)
+    )
     return tuple(
-        contract for contract in stage_contracts if contract.name in policy.skills
+        contract for contract in contracts if selected in contract.stages
     )
 
 
