@@ -33,15 +33,11 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - fabric.mod.json id, version, environment, entrypoint and dependency fields match the approved PlatformLock and proposal
-  - source-set and client/server entrypoint placement prevents dedicated-server loading of client-only classes
-  - every registry identifier is valid, unique and referenced by the intended registration path
-  - mixin config, access widener and resource references resolve when present and are absent when not requested
-  - Java package names, imports and mapping symbols match the exact approved mappings and Java target
-  - static validation and Java diagnostics pass for every changed core source/resource path
-  - no generated core capability is advertised as built or runtime-tested until those downstream gates execute
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - capability_receipts
 
 retry_policy:
   max_attempts: null
