@@ -4,10 +4,12 @@ from minecraft_mod_ai.planning_criterion_fragments import (
     generate_criterion_fragment,
     generate_criterion_fragments_batch,
 )
+from minecraft_mod_ai.planning_detail_template import CORE_WORKSHEET_SECTIONS
 
 
 _REQUIREMENT = {"statement": "Implement the requested behavior."}
 _SECTION = "behavior_contract"
+_SECTIONS = CORE_WORKSHEET_SECTIONS
 
 
 def _fragment(implementation: str = "Apply the requested behavior.") -> dict:
@@ -59,7 +61,7 @@ def test_single_criterion_uses_one_forced_template_call():
         router,
         requirement=_REQUIREMENT,
         criterion="The requested behavior is observable.",
-        selected_sections=(_SECTION,),
+        selected_sections=_SECTIONS,
         evidence=[],
         allowed_refs=set(),
     )
@@ -84,7 +86,7 @@ def test_no_progress_repair_is_another_forced_template_fill():
         router,
         requirement=_REQUIREMENT,
         criterion="The requested behavior is observable.",
-        selected_sections=(_SECTION,),
+        selected_sections=_SECTIONS,
         evidence=[],
         allowed_refs=set(),
     )
@@ -113,7 +115,7 @@ def test_batch_criteria_use_one_forced_batch_template_call():
         router,
         requirement=_REQUIREMENT,
         criteria={0: "Criterion zero.", 1: "Criterion one."},
-        selected_sections=(_SECTION,),
+        selected_sections=_SECTIONS,
         evidence=[],
         allowed_refs=set(),
     )
