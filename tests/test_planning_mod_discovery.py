@@ -6,6 +6,7 @@ from minecraft_mod_ai.catalog_first_grounded_rag import _domain_specs
 from minecraft_mod_ai.planning_mod_discovery import catalog_queries, discovery_receipt
 from minecraft_mod_ai.planning_state_implementation import _requirement_grounding
 from minecraft_mod_ai.planning_criterion_fragments import criterion_fragment_messages
+from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates
 
 
@@ -100,7 +101,7 @@ def test_research_to_criterion_preserves_catalog_or_blocks_unavailable_catalog(m
         return
     evidence, refs = _requirement_grounding(result, "req_001")
     assert "modrinth:space" in refs
-    messages = criterion_fragment_messages(result["decisions"][0], "Travel", ["reuse_assessment"], evidence)
+    messages = criterion_fragment_messages(result["decisions"][0], "Travel", WORKSHEET_SECTIONS, evidence)
     assert "Space Example" in messages[1]["content"]
     assert "https://modrinth.com/mod/space-example" in messages[1]["content"]
     assert "not_verified" in messages[1]["content"]
