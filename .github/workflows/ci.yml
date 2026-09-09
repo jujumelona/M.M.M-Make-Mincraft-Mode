@@ -145,6 +145,7 @@ jobs:
           tests/test_no_direct_structured_text_generation.py
           tests/test_planning_criterion_fixed_templates.py
           tests/test_planning_criterion_fragment_repair.py
+          tests/test_planning_missing_section_targeted_repair.py
           tests/test_planning_requirement_batch_runtime.py
           tests/test_planner_template_schema.py
           tests/test_planning_detail_selection.py
@@ -245,6 +246,7 @@ jobs:
               "test_no_direct_structured_text_generation.py",
               "test_planning_criterion_fixed_templates.py",
               "test_planning_criterion_fragment_repair.py",
+              "test_planning_missing_section_targeted_repair.py",
               "test_planning_requirement_batch_runtime.py",
               "test_planner_template_schema.py",
               "test_planning_detail_selection.py",
