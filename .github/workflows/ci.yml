@@ -143,6 +143,7 @@ jobs:
           python -m pytest -q
           tests/test_fixed_template_generation_boundary.py
           tests/test_no_direct_structured_text_generation.py
+          tests/test_host_selected_mutation_action.py
           tests/test_planning_criterion_fixed_templates.py
           tests/test_planning_criterion_fragment_repair.py
           tests/test_planning_missing_section_targeted_repair.py
@@ -244,6 +245,7 @@ jobs:
               "test_research_coordinator.py",
               "test_fixed_template_generation_boundary.py",
               "test_no_direct_structured_text_generation.py",
+              "test_host_selected_mutation_action.py",
               "test_planning_criterion_fixed_templates.py",
               "test_planning_criterion_fragment_repair.py",
               "test_planning_missing_section_targeted_repair.py",
