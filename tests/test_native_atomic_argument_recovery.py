@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from minecraft_mod_ai.native_atomic_argument_recovery import _page_result, _page_schema
+from minecraft_mod_ai.native_atomic_argument_recovery import (
+    _argument_pages,
+    _canonical_source_edit_operation,
+    _page_result,
+    _page_schema,
+    _source_edit_detail_schema,
+    host_selected_argument_turn,
+)
 
 
 def _parameters() -> dict[str, object]:
@@ -126,15 +133,123 @@ def test_later_page_owns_its_field_even_if_earlier_field_is_repeated() -> None:
     assert arguments == {"constraint_evidence_refs": ["constraint-1"]}
 
 
+def test_generic_argument_decomposition_keeps_existing_bounded_pages() -> None:
+    pages = _argument_pages(_parameters())
+    assert [tuple(page["properties"]) for page in pages] == [
+        ("actor", "preconditions", "inputs", "outputs"),
+        ("constraint_evidence_refs",),
+    ]
+
+
+def test_source_edit_alias_is_canonicalized_before_detail_recovery() -> None:
+    assert _canonical_source_edit_operation("create") == "create_file"
+    assert _canonical_source_edit_operation("replace") == "replace_exact"
+    assert _canonical_source_edit_operation("delete") == "delete_file"
+    assert _canonical_source_edit_operation("insert_after") == "insert_after"
+
+
+def test_create_file_detail_schema_excludes_other_operation_fields() -> None:
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+    detail = _source_edit_detail_schema(SOURCE_EDIT_SCHEMA, "create_file")
+    assert tuple(detail["properties"]) == ("path", "content")
+    assert detail["required"] == ["path", "content"]
+    assert detail["additionalProperties"] is False
+
+
+def test_replace_exact_detail_schema_keeps_only_replace_contract() -> None:
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+    detail = _source_edit_detail_schema(SOURCE_EDIT_SCHEMA, "replace_exact")
+    assert tuple(detail["properties"]) == ("path", "old", "new", "count")
+    assert detail["required"] == ["path", "old", "new"]
+
+
+def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
+    from minecraft_mod_ai.model_adapters.base import GenerationRequest, GenerationResponse
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "test source mutation",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Create DebugToken.java"},),
+        tools=(tool,),
+        tool_validation_schemas=(tool,),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+    )
+    schemas_seen: list[tuple[str, ...]] = []
+
+    def current(adapter, page_request):
+        del adapter
+        properties = tuple(page_request.response_schema["properties"])
+        schemas_seen.append(properties)
+        if properties == ("operation",):
+            # Reproduce a noisy model response: union members from unrelated operations
+            # may still appear in raw JSON, but the selector owns operation only.
+            return GenerationResponse(
+                content=json.dumps(
+                    {
+                        "operation": "create",
+                        "old": "stale",
+                        "anchor": "stale",
+                        "member": "stale",
+                    }
+                )
+            )
+        assert properties == ("path", "content")
+        return GenerationResponse(
+            content=json.dumps(
+                {
+                    "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                    "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
+                    "old": "pollution",
+                    "new": "pollution",
+                    "anchor": "pollution",
+                    "count": 7,
+                    "declaration": "pollution",
+                    "import_name": "pollution",
+                    "member": "pollution",
+                    "package_name": "pollution",
+                }
+            )
+        )
+
+    turn = host_selected_argument_turn(
+        current,
+        object(),
+        request,
+        "apply_source_edit",
+        prefix="test",
+    )
+
+    assert schemas_seen == [("operation",), ("path", "content")]
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].arguments == {
+        "operation": "create_file",
+        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
+    }
+
+
 def test_backend_boundary_reaches_canonical_owner_without_json_retry():
     import pytest
     from minecraft_mod_ai.llama_finish_reason_contract import (
-        OUTPUT_EXHAUSTED, LlamaCompletionBoundaryError,
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
     )
     from minecraft_mod_ai.native_atomic_argument_recovery import _page_attempt
+
     boundary = LlamaCompletionBoundaryError(
-        "prefill calibration unavailable", kind=OUTPUT_EXHAUSTED,
-        partial_message={"content": '{"operation":"cre'}, max_tokens=1,
+        "prefill calibration unavailable",
+        kind=OUTPUT_EXHAUSTED,
+        partial_message={"content": '{"operation":"cre'},
+        max_tokens=1,
     )
     calls = []
 
