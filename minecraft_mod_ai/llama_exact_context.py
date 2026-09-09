@@ -8,9 +8,12 @@ input-token counts are always measured for the concrete payload.
 """
 
 import threading
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 _CONTEXT_CACHE_LOCK = threading.RLock()
 _MANAGED_CONTEXT_CACHE: dict[str, int] = {}
@@ -19,6 +22,15 @@ _MANAGED_CONTEXT_CACHE: dict[str, int] = {}
 # context accounting is a later authority and must never squeeze that valid request back
 # down to the 0/1-token fragment that caused the coder continuation loop.
 _MIN_TOOL_OUTPUT_RESERVE = 128
+_TRANSIENT_HTTP_STATUS_CODES = frozenset({429, 502, 503, 504})
+_TRANSIENT_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+)
+_CONTEXT_PROBE_ATTEMPTS = 3
+_CONTEXT_PROBE_BACKOFF_SECONDS = 0.20
 
 
 @dataclass(frozen=True)
@@ -50,10 +62,45 @@ def _managed_generation_identity(server_url: str) -> str:
         return ""
 
 
+def _request_with_transient_retry(
+    request: Callable[[], Any],
+    *,
+    attempts: int = _CONTEXT_PROBE_ATTEMPTS,
+    backoff_seconds: float = _CONTEXT_PROBE_BACKOFF_SECONDS,
+) -> Any:
+    """Retry only transient llama-server readiness/transport failures.
+
+    Exact context probes run immediately before inference and therefore share the same
+    restart/readiness race as completions.  Non-transient HTTP failures remain fail-fast
+    so configuration and payload errors are never hidden by retries.
+    """
+
+    total_attempts = max(1, int(attempts))
+    last_error: BaseException | None = None
+    for attempt in range(total_attempts):
+        try:
+            response = request()
+            response.raise_for_status()
+            return response
+        except _TRANSIENT_TRANSPORT_ERRORS as exc:
+            last_error = exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _TRANSIENT_HTTP_STATUS_CODES:
+                raise
+            last_error = exc
+
+        if attempt + 1 < total_attempts:
+            time.sleep(max(0.0, float(backoff_seconds)) * (attempt + 1))
+
+    assert last_error is not None
+    raise last_error
+
+
 def _read_context_tokens(client: Any, server_url: str) -> int:
     origin = server_url.rstrip("/").removesuffix("/v1")
-    props_response = client.get(f"{origin}/props")
-    props_response.raise_for_status()
+    props_response = _request_with_transient_retry(
+        lambda: client.get(f"{origin}/props")
+    )
     props = props_response.json()
     settings = props["default_generation_settings"]
     context_tokens = int(settings["n_ctx"])
@@ -85,11 +132,12 @@ def live_context_accounting(
     client = _client(server_url)
     body = dict(payload)
     body.pop("stream", None)
-    token_response = client.post(
-        f"{server_url.rstrip('/')}/chat/completions/input_tokens",
-        json=body,
+    token_response = _request_with_transient_retry(
+        lambda: client.post(
+            f"{server_url.rstrip('/')}/chat/completions/input_tokens",
+            json=body,
+        )
     )
-    token_response.raise_for_status()
     token_payload = token_response.json()
     input_tokens = int(token_payload["input_tokens"])
     context_tokens = _context_tokens(client, server_url)

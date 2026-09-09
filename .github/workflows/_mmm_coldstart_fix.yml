@@ -79,3 +79,5 @@ jobs:
           git diff --cached --check
           git commit -m 'perf: remove first-request llama autotune cold start'
           git push origin HEAD:main
+
+# retriggered after runtime merge
