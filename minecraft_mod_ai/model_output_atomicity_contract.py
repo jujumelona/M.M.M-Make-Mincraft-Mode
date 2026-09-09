@@ -2,12 +2,13 @@ from __future__ import annotations
 
 """Global model structured-output template boundary.
 
-Every model-authored JSON response must have an explicit, closed schema. Machine-owned
-JSON remains valid for storage and transport, and generation paths may group semantic
-work units as needed. This boundary prevents raw or open-ended JSON contracts from
-silently re-entering the model path.
+Every model-authored structured response must have an explicit, closed schema. Real
+models never author JSON syntax directly: the host turns the schema into one forced
+function-argument template, receives typed arguments, serializes them, and validates the
+result. Machine-owned JSON remains valid for storage and transport.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 _INSTALLED = False
 _TEXT_MARKER = "_mmm_atomic_model_output_boundary"
 _TOOL_MARKER = "_mmm_atomic_model_tool_boundary"
+_TEMPLATE_TOOL_NAME = "submit_fixed_template"
 _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
     {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
 )
@@ -94,18 +96,13 @@ def _assert_closed_object_schemas(
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
-    """Require a closed template without arbitrary schema-size rejection.
-
-    Schema syntax depth, metadata length, and property counts do not establish whether
-    the configured model can execute a request. Keep the template contract here; actual
-    model context/output capacity is handled by the generation runtime.
-    """
+    """Require one closed fixed template without arbitrary schema-size rejection."""
 
     _assert_closed_object_schemas(schema)
 
 
 def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
-    """Compatibility predicate for closed model templates, independent of size."""
+    """Return whether the schema is a closed model-fillable template."""
 
     try:
         assert_atomic_model_schema(schema, surface="model template")
@@ -114,8 +111,89 @@ def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
     return True
 
 
+def _tool_template_schema(
+    response_schema: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Return function parameters plus whether the host must unwrap ``value``.
+
+    Function parameters are object-shaped. Existing structured callers may legitimately
+    request an array/scalar root, so the host wraps only the transport and validates the
+    unwrapped value against the caller's original schema.
+    """
+
+    schema_type = response_schema.get("type")
+    if schema_type == "object" or "properties" in response_schema:
+        return dict(response_schema), False
+    return (
+        {
+            "type": "object",
+            "properties": {"value": dict(response_schema)},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        True,
+    )
+
+
+def _semantic_prelude_required(
+    self: Any,
+    role: str,
+    kwargs: Mapping[str, Any],
+    model_router_module: Any,
+) -> bool:
+    """Keep retrieval/tool/media semantics before the final fixed-template fill."""
+
+    if tuple(kwargs.get("media_paths") or ()):
+        return True
+    enable_tools = bool(kwargs.get("enable_tools", True))
+    if not enable_tools:
+        return False
+    try:
+        config = self.registry.role(self.profile, role)
+    except Exception:
+        return False
+    stage = str(
+        kwargs.get("tool_stage")
+        or model_router_module._ROLE_TOOL_STAGE.get(role, "")
+        or ""
+    ).strip().lower()
+    enabled = getattr(self, "_tools_enabled", None)
+    if not callable(enabled):
+        return False
+    return bool(
+        enabled(
+            enable_tools=True,
+            stage=stage,
+            adapter_name=str(getattr(config, "adapter", "") or ""),
+        )
+    )
+
+
+def _template_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    semantic_output: str = "",
+) -> tuple[dict[str, Any], ...]:
+    result = tuple(dict(message) for message in messages)
+    if not semantic_output.strip():
+        return result
+    return (
+        *result,
+        {
+            "role": "system",
+            "content": (
+                "A semantic/tool/media pass has already completed. Use its result only as "
+                "content evidence for the required fixed template. Do not reproduce JSON "
+                "syntax or protocol prose yourself.\n\n"
+                "Completed semantic result:\n"
+                + semantic_output
+            ),
+        },
+    )
+
+
 def _install_router_boundary(model_router_module: Any) -> None:
-    """Install the same structured-output boundary on text JSON and native tool JSON."""
+    """Force every real structured response through fixed function arguments."""
 
     cls = model_router_module.ModelRouter
 
@@ -129,22 +207,88 @@ def _install_router_boundary(model_router_module: Any) -> None:
             messages: Sequence[Mapping[str, Any]],
             **kwargs: Any,
         ) -> str:
-            response_format = str(kwargs.get("response_format", "text") or "text").strip().casefold()
-            if response_format == "json":
-                response_schema = kwargs.get("response_schema")
-                if not isinstance(response_schema, Mapping):
-                    raise _configuration_error(
-                        "MODEL_JSON_SCHEMA_REQUIRED: "
-                        f"JSON response for role {role!r} has no explicit response_schema. "
-                        "All model-authored JSON must use a fixed schema/template."
-                    )
-                assert_atomic_model_schema(
-                    response_schema,
-                    surface=f"JSON response for role {role!r}",
+            response_format = str(
+                kwargs.get("response_format", "text") or "text"
+            ).strip().casefold()
+            if response_format != "json":
+                return current_text(self, role, messages, **kwargs)
+
+            response_schema = kwargs.get("response_schema")
+            if not isinstance(response_schema, Mapping):
+                raise _configuration_error(
+                    "MODEL_JSON_SCHEMA_REQUIRED: "
+                    f"JSON response for role {role!r} has no explicit response_schema. "
+                    "All model-authored structured output must use a fixed template."
                 )
-            return current_text(self, role, messages, **kwargs)
+            assert_atomic_model_schema(
+                response_schema,
+                surface=f"JSON response for role {role!r}",
+            )
+
+            # The deterministic mock profile is not a model and has no native function
+            # transport. Keep its existing fixture behavior while forbidding this escape
+            # hatch for every real generation adapter.
+            try:
+                config = self.registry.role(self.profile, role)
+                adapter_name = str(getattr(config, "adapter", "") or "")
+            except Exception:
+                adapter_name = ""
+            if adapter_name == "mock":
+                return current_text(self, role, messages, **kwargs)
+
+            semantic_output = ""
+            if _semantic_prelude_required(
+                self, role, kwargs, model_router_module
+            ):
+                semantic_kwargs = dict(kwargs)
+                semantic_kwargs["response_format"] = "text"
+                semantic_kwargs["response_schema"] = None
+                semantic_output = current_text(
+                    self,
+                    role,
+                    messages,
+                    **semantic_kwargs,
+                )
+
+            parameters, unwrap_value = _tool_template_schema(response_schema)
+            arguments = self.generate_tool_decision(
+                role,
+                _template_messages(
+                    messages,
+                    semantic_output=semantic_output,
+                ),
+                tool_name=_TEMPLATE_TOOL_NAME,
+                parameters=parameters,
+                description=(
+                    "Fill the host-supplied fixed response template exactly once. "
+                    "Populate only declared fields; do not answer in prose."
+                ),
+            )
+            value: Any
+            if unwrap_value:
+                if "value" not in arguments:
+                    raise _configuration_error(
+                        "MODEL_TEMPLATE_RESULT_INVALID: fixed template call omitted value"
+                    )
+                value = arguments["value"]
+            else:
+                value = arguments
+
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            from .structured_output import validate_structured_output
+
+            return validate_structured_output(
+                encoded,
+                response_format="json",
+                response_schema=response_schema,
+            )
 
         setattr(generate_text, _TEXT_MARKER, True)
+        generate_text._mmm_fixed_template_arguments_only = True  # type: ignore[attr-defined]
         cls.generate_text = generate_text
 
     if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
@@ -186,12 +330,7 @@ def _install_router_boundary(model_router_module: Any) -> None:
 
 
 def install(*, model_router_module: Any | None = None) -> None:
-    """Idempotently install all model structured-output boundaries.
-
-    Per-method markers, rather than the module flag alone, make upgrades safe when a
-    process already has one older boundary installed: a newly added surface is still
-    wrapped instead of being skipped as globally 'installed'.
-    """
+    """Idempotently install all model structured-output boundaries."""
 
     global _INSTALLED
     if model_router_module is None:
@@ -208,6 +347,10 @@ def assert_installed(*, model_router_module: Any | None = None) -> None:
     cls = model_router_module.ModelRouter
     if not getattr(cls.generate_text, _TEXT_MARKER, False):
         raise RuntimeError("model JSON response template boundary is not installed")
+    if not getattr(
+        cls.generate_text, "_mmm_fixed_template_arguments_only", False
+    ):
+        raise RuntimeError("model JSON response can still bypass fixed template arguments")
     if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
         raise RuntimeError("model native-tool template boundary is not installed")
 
