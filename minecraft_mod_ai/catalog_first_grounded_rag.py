@@ -3,11 +3,11 @@ from __future__ import annotations
 """Catalog-first provider policy for Minecraft research.
 
 Provider transport lives in ``pre_design_grounded_rag``. This module owns retrieval
-policy: discover actual Minecraft mods from CurseForge/Modrinth first, follow only their
-explicit source repository links, and use broad GitHub repository search only when the
-catalog stage produced no mod candidates at all. GitHub is an internal source/fallback
-mechanism, not a peer Minecraft catalog provider. Official/project sources remain
-separate from ecosystem discovery.
+policy: discover actual Minecraft mods from CurseForge/Modrinth first, prefer their
+explicit source repository links, and fall back to GitHub repository discovery when a
+catalog candidate has no linked source or the catalog stage is empty. GitHub remains an
+internal source-discovery mechanism, not a peer Minecraft catalog provider.
+Official/project sources remain separate from ecosystem discovery.
 """
 
 import os
@@ -110,30 +110,49 @@ def _query_bundle(
         receipts.update(catalog_receipts)
         errors.extend(catalog_errors)
 
-    # Catalog domains automatically own their source-verification/fallback policy.
-    # They do not need to advertise GitHub as a peer provider in the planning state.
+    # Catalog discovery is only the first stage. A catalog hit without source code must
+    # not terminate reuse discovery: exact project source links are preferred, then a
+    # bounded GitHub repository search is allowed to recover a source donor candidate.
     github_policy_active = catalog_allowed or "github" in allowed
     if github_policy_active:
         if catalog_records:
-            linked, receipt = backend._linked_github_sources(
+            linked, linked_receipt = backend._linked_github_sources(
                 catalog_records,
                 disabled=github_disabled,
                 disable=disable_github,
             )
             records.extend(linked)
             if linked:
-                receipt = {**dict(receipt), "policy": "exact_catalog_link_only"}
-            else:
-                receipt = {
-                    **dict(receipt),
-                    "status": (
-                        "skipped_catalog_without_linked_source"
-                        if not github_disabled()
-                        else receipt.get("status")
-                    ),
-                    "policy": "no_broad_fallback_when_catalog_has_candidates",
+                receipts["github"] = {
+                    **dict(linked_receipt),
+                    "policy": "exact_catalog_link_first",
                 }
-            receipts["github"] = receipt
+            elif github_disabled():
+                receipts["github"] = {
+                    **dict(linked_receipt),
+                    "policy": "catalog_source_discovery_disabled",
+                }
+            else:
+                try:
+                    found, fallback_receipt = backend._search_github(
+                        query,
+                        disabled=github_disabled,
+                        disable=disable_github,
+                    )
+                    records.extend(found)
+                    receipts["github"] = {
+                        **dict(fallback_receipt),
+                        "linked_source_status": _text(linked_receipt.get("status")),
+                        "policy": "catalog_candidate_source_discovery_fallback",
+                    }
+                except Exception as exc:
+                    receipt = backend._error("github", exc)
+                    receipts["github"] = {
+                        **dict(receipt),
+                        "linked_source_status": _text(linked_receipt.get("status")),
+                        "policy": "catalog_candidate_source_discovery_fallback",
+                    }
+                    errors.append(receipt)
         elif catalog_allowed:
             try:
                 found, receipt = backend._search_github(
@@ -208,21 +227,21 @@ def _query_bundle(
                     if provider in allowed
                 ],
                 "github_role": (
-                    "internal_exact_source_or_empty_catalog_fallback"
+                    "internal_exact_source_then_source_discovery_fallback"
                     if catalog_allowed
                     else (
                         "direct_repository_domain" if "github" in allowed else "not_requested"
                     )
                 ),
                 "github_broad_search": (
-                    "fallback_only_after_empty_catalog"
+                    "fallback_after_missing_linked_source_or_empty_catalog"
                     if catalog_allowed
                     else (
                         "direct_repository_domain" if "github" in allowed else "not_requested"
                     )
                 ),
                 "github_linked_source": (
-                    "exact_catalog_source_url_only" if catalog_allowed else "not_applicable"
+                    "exact_catalog_source_url_preferred" if catalog_allowed else "not_applicable"
                 ),
             },
             "github_retrieval": {
