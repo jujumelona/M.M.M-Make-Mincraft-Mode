@@ -1,0 +1,56 @@
+name: Apply Targeted Section Repair
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/scripts/apply_targeted_section_repair_migration.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-targeted-section-repair-main
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Apply exact source migration
+        run: python .github/scripts/apply_targeted_section_repair_migration.py
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Verify targeted planner regression
+        run: >-
+          python -m pytest -q
+          tests/test_planning_missing_section_targeted_repair.py
+          tests/test_planning_detail_grounding.py
+      - name: Compile touched Python
+        run: >-
+          python -m py_compile
+          minecraft_mod_ai/planning_targeted_section_repair.py
+          minecraft_mod_ai/planning_state_adaptive_implementation.py
+          tests/test_planning_missing_section_targeted_repair.py
+          tests/test_planning_detail_grounding.py
+      - name: Commit migration to main
+        run: |
+          if git diff --quiet -- minecraft_mod_ai/planning_state_adaptive_implementation.py tests/test_planning_missing_section_targeted_repair.py tests/test_planning_detail_grounding.py; then
+            echo 'No migration changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/planning_state_adaptive_implementation.py tests/test_planning_missing_section_targeted_repair.py tests/test_planning_detail_grounding.py
+          git commit -m 'fix: target missing worksheet repairs without weakening plan invariants'
+          git pull --rebase origin main
+          git push origin HEAD:main
