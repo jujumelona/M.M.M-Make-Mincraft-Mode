@@ -1,0 +1,35 @@
+name: Sync packaged Skill catalog once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sync-skill-catalog-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Regenerate packaged Skill catalog
+        run: python tools/package_skills.py
+      - name: Commit exact generated outputs
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
+          if git diff --cached --quiet; then
+            echo "Generated outputs are already synchronized."
+            exit 0
+          fi
+          git commit -m "chore: sync packaged skill catalog"
+          git push origin HEAD:main
