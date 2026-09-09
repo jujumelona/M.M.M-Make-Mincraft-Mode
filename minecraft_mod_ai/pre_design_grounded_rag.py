@@ -221,6 +221,8 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                         "project_id": project_id,
                         "slug": slug,
                         "versions": list(game_versions or []),
+                        "loaders": list(detail.get("loaders") or []),
+                        "license": detail.get("license"),
                         "source_url": str(detail.get("source_url") or ""),
                     },
                 }
@@ -358,6 +360,9 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                         "mod_id": mod_id,
                         "slug": str(row.get("slug") or ""),
                         "source_url": str(links.get("sourceUrl") or ""),
+                        "versions": sorted({str(version)
+                            for file in row.get("latestFiles", [])
+                            for version in file.get("gameVersions", [])}),
                     },
                 }
             )

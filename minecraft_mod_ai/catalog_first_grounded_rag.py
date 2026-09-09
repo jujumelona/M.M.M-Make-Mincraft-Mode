@@ -16,6 +16,8 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from .planning_mod_discovery import CATALOG_PROVIDERS
+
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -29,6 +31,21 @@ def _providers(domain: Mapping[str, Any]) -> tuple[str, ...]:
         else []
     )
     return tuple(dict.fromkeys(values))
+
+
+def _domain_specs(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+    providers = _providers(domain)
+    catalog = domain.get("catalog_queries")
+    groups = [(domain.get("queries", []), providers)]
+    if isinstance(catalog, list):
+        groups = [
+            (catalog, tuple(p for p in providers if p in CATALOG_PROVIDERS)),
+            (domain.get("queries", []), tuple(p for p in providers if p not in CATALOG_PROVIDERS)),
+        ]
+    return list(dict.fromkeys(
+        (_text(query), allowed) for queries, allowed in groups if allowed
+        for query in (queries if isinstance(queries, list) else []) if _text(query)
+    ))
 
 
 def _run_catalogs(
@@ -288,12 +305,8 @@ def forced_rag_bundle(
 
     specs: list[tuple[str, tuple[str, ...]]] = []
     for domain in domains:
-        providers = _providers(domain)
-        raw_queries = domain.get("queries")
-        for raw in raw_queries if isinstance(raw_queries, list) else []:
-            query = _text(raw)
-            key = (query, providers)
-            if query and key not in specs:
+        for key in _domain_specs(domain):
+            if key not in specs:
                 specs.append(key)
 
     by_spec: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
@@ -347,13 +360,9 @@ def forced_rag_bundle(
     for domain in domains:
         providers = _providers(domain)
         rows: list[dict[str, Any]] = []
-        raw_queries = domain.get("queries")
-        for raw in raw_queries if isinstance(raw_queries, list) else []:
-            query = _text(raw)
-            if not query:
-                continue
+        for query, query_providers in _domain_specs(domain):
             query_count += 1
-            row = dict(by_spec[(query, providers)])
+            row = dict(by_spec[(query, query_providers)])
             rows.append(row)
             external = row.get("external_rag")
             sources = external.get("sources") if isinstance(external, Mapping) else []

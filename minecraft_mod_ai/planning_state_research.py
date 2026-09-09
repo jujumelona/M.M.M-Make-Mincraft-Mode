@@ -16,6 +16,8 @@ from typing import Any
 
 from .catalog_first_grounded_rag import forced_rag_bundle
 from .planning_state_contract import validate_planning_state
+from .planning_mod_discovery import catalog_queries, discovery_receipt
+from .root_cause_trace import emit_root_cause
 from .pre_design_domain_research import research_document_domain
 from .research_reuse_candidates import (
     merge_repository_candidates,
@@ -228,6 +230,8 @@ def _research_brief(
                 "evidence_kinds": _evidence_kinds_for(source_kinds),
                 "queries": queries,
                 "providers": _providers_for(source_kinds),
+                **({"catalog_queries": catalog_queries(state, raw)}
+                   if kinds & {"repository", "existing_mods"} else {}),
                 "required_anchor_terms": required_anchor_terms,
                 "depends_on": [],
             }
@@ -425,6 +429,7 @@ def collect_planning_state_research(
         )
 
     notes: list[dict[str, Any]] = []
+    discovery_by_domain: dict[str, dict[str, Any]] = {}
     provider_diagnostics_by_domain: dict[str, list[dict[str, Any]]] = {}
     for domain in brief.get("domains", []):
         if not isinstance(domain, Mapping):
@@ -447,6 +452,16 @@ def collect_planning_state_research(
                 value.get("repository_candidates", []),
                 project_repository_candidates(domain, grounded),
             )
+            if "catalog_queries" in domain:
+                discovery = discovery_receipt(domain_id, grounded)
+                discovery_by_domain[domain_id] = discovery
+                # Emit this shallowly so the console does not hide provider outcomes
+                # behind the planning-state snapshot's depth limit.
+                emit_root_cause(
+                    "planning_mod_discovery", stage="planning_state",
+                    operation="collect_planning_state_research", result="OBSERVED",
+                    reason=discovery["status"], details=discovery,
+                )
         provider_diagnostics_by_domain[domain_id] = _provider_diagnostics(grounded)
         document = project_rag._materialize_domain_evidence_document(
             domain_id,
@@ -485,6 +500,12 @@ def collect_planning_state_research(
             and bool(note.get("claims"))
             and bool(refs)
         )
+        discovery = discovery_by_domain.get(research_id)
+        if discovery is not None:
+            research["mod_discovery"] = deepcopy(discovery)
+            sufficient = sufficient and discovery["complete"]
+            refs = list(dict.fromkeys([*refs, *(candidate["source_id"]
+                for candidate in discovery["candidates"])]))
         research["status"] = "complete" if sufficient else "blocked"
         provider_diagnostics = provider_diagnostics_by_domain.get(research_id, [])
         provider_statuses = _provider_statuses(provider_diagnostics)
@@ -495,6 +516,7 @@ def collect_planning_state_research(
                 "evidence_refs": refs,
                 "sufficient": sufficient,
                 "source": "grounded_materialized_pages",
+                **({"mod_discovery": deepcopy(discovery)} if discovery is not None else {}),
                 "diagnostics": {
                     "source_body_count": int(note.get("source_body_count") or 0),
                     "evidence_card_count": int(
@@ -538,7 +560,8 @@ def collect_planning_state_research(
                 )
             else:
                 reason = (
-                    _text(note.get("evidence_extraction_status"))
+                    (discovery["status"] if discovery is not None and not discovery["complete"] else "")
+                    or _text(note.get("evidence_extraction_status"))
                     or "insufficient_grounded_evidence"
                 )
                 value["blockers"].append(

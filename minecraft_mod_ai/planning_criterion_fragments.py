@@ -20,6 +20,7 @@ from .acceptance_contracts import (
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .planning_detail_slots import DETAIL_RECORDS
+from .planning_mod_discovery import discovery_context
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _section_description,
@@ -111,6 +112,9 @@ def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
             f"- research_ref={_text(item.get('research_ref'))}; evidence_refs=[{refs}]; "
             f"claims={claim_text or 'no claim prose'}"
         )
+        discovery = item.get("mod_discovery")
+        if isinstance(discovery, Mapping) and discovery:
+            rows.append("Catalog discovery: " + discovery_context(discovery))
     return "\n".join(rows) or "- no external constraint; author only grounded design decisions"
 
 
@@ -145,6 +149,12 @@ def criterion_fragment_messages(
                 "Do not emit analysis, markdown, extra keys, JSON Schema definitions, TODO/TBD, or invented APIs, "
                 "symbols, versions, repository paths, external facts, or evidence IDs. Keep each update concise and concrete. "
                 "Return exactly one section_updates record for every host-selected section, with no duplicate sections. "
+                "Every record MUST include all four keys: section, implementation, constraint, evidence_refs. "
+                "An empty string is still a required value; never omit its key. "
+                "In reuse_assessment, assess the supplied catalog candidates by name and evidence ID: "
+                "integration, reference, or unsuitable, with a concrete reason. A discovered mod is not "
+                "automatically compatible. Unknown versions, licenses or APIs remain unverified; never assume MIT. "
+                "If discovery reports no_results, state that outcome rather than inventing a donor. "
                 "Empty implementation or constraint strings are permitted only when this criterion genuinely has no bearing on that field. "
                 "Across the complete response, at least one selected section MUST contain a non-empty implementation or constraint; "
                 "an observable acceptance criterion must never be represented by an all-empty response."

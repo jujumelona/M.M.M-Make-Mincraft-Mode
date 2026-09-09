@@ -96,6 +96,7 @@ def _implementation_evidence(
                     ],
                     "sufficient": True,
                     "source": _text(item.get("source")),
+                    "mod_discovery": deepcopy(item.get("mod_discovery") or {}),
                 }
             )
     return rows
@@ -145,6 +146,8 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
+    from .planning_mod_discovery import discovery_context
+
     rows: list[str] = []
     for item in evidence:
         research_ref = _text(item.get("research_ref"))
@@ -158,6 +161,9 @@ def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
             f"- research_ref={research_ref}; evidence_refs=[{refs}]; "
             f"source={source or 'unspecified'}; claims={claim_text or 'no claim prose'}"
         )
+        discovery = item.get("mod_discovery")
+        if isinstance(discovery, Mapping) and discovery:
+            rows.append("Catalog discovery: " + discovery_context(discovery))
     return "\n".join(rows)
 
 

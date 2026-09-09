@@ -81,6 +81,7 @@ def _repository_from_record(record: Mapping[str, Any]) -> str:
     values = [
         record.get("repository"),
         metadata.get("repository") if isinstance(metadata, Mapping) else None,
+        metadata.get("source_url") if isinstance(metadata, Mapping) else None,
         record.get("source_id"),
         record.get("url"),
         record.get("source_url"),
