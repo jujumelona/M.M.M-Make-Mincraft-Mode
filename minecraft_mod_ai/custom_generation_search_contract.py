@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,17 @@ def _active_native_slots() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
+
+
+def _submit_with_copied_context(
+    pool: ThreadPoolExecutor,
+    function: Any,
+    /,
+    *args: Any,
+    **kwargs: Any,
+):
+    context = copy_context()
+    return pool.submit(context.run, function, *args, **kwargs)
 
 
 def _width(module: Any) -> int:
@@ -344,7 +356,10 @@ def install(custom_module_generator_module: Any) -> None:
                 max_workers=workers,
                 thread_name_prefix='mmm_custom_generate',
             ) as pool:
-                futures = [pool.submit(solve, index) for index in range(count)]
+                futures = [
+                    _submit_with_copied_context(pool, solve, index)
+                    for index in range(count)
+                ]
                 for candidate_index, future in enumerate(futures):
                     try:
                         candidates.append(future.result())
