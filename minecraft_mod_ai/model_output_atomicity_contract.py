@@ -18,7 +18,8 @@ _MAX_SCHEMA_CHARS = 12_000
 _MAX_SCHEMA_NODES = 140
 _MAX_SCHEMA_DEPTH = 9
 _MAX_SCHEMA_PROPERTIES = 36
-_MARKER = "_mmm_atomic_model_output_boundary"
+_TEXT_MARKER = "_mmm_atomic_model_output_boundary"
+_TOOL_MARKER = "_mmm_atomic_model_tool_boundary"
 _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
     {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
 )
@@ -157,42 +158,85 @@ def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
 
 
 def _install_router_boundary(model_router_module: Any) -> None:
+    """Install the same structured-output boundary on text JSON and native tool JSON."""
+
     cls = model_router_module.ModelRouter
-    if getattr(cls.generate_text, _MARKER, False):
-        return
 
-    current_text = cls.generate_text
+    if not getattr(cls.generate_text, _TEXT_MARKER, False):
+        current_text = cls.generate_text
 
-    @wraps(current_text)
-    def generate_text(
-        self: Any,
-        role: str,
-        messages: Sequence[Mapping[str, Any]],
-        **kwargs: Any,
-    ) -> str:
-        response_format = str(kwargs.get("response_format", "text") or "text").strip().casefold()
-        if response_format == "json":
-            response_schema = kwargs.get("response_schema")
-            if not isinstance(response_schema, Mapping):
+        @wraps(current_text)
+        def generate_text(
+            self: Any,
+            role: str,
+            messages: Sequence[Mapping[str, Any]],
+            **kwargs: Any,
+        ) -> str:
+            response_format = str(kwargs.get("response_format", "text") or "text").strip().casefold()
+            if response_format == "json":
+                response_schema = kwargs.get("response_schema")
+                if not isinstance(response_schema, Mapping):
+                    raise _configuration_error(
+                        "MODEL_JSON_SCHEMA_REQUIRED: "
+                        f"JSON response for role {role!r} has no explicit response_schema. "
+                        "All model-authored JSON must use a fixed schema/template."
+                    )
+                assert_atomic_model_schema(
+                    response_schema,
+                    surface=f"JSON response for role {role!r}",
+                )
+            return current_text(self, role, messages, **kwargs)
+
+        setattr(generate_text, _TEXT_MARKER, True)
+        cls.generate_text = generate_text
+
+    if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
+        current_tool_decision = cls.generate_tool_decision
+
+        @wraps(current_tool_decision)
+        def generate_tool_decision(
+            self: Any,
+            role: str,
+            messages: Sequence[Mapping[str, Any]],
+            *,
+            tool_name: str,
+            parameters: Mapping[str, Any],
+            description: str = "",
+        ) -> dict[str, Any]:
+            if not isinstance(parameters, Mapping):
                 raise _configuration_error(
                     "MODEL_JSON_SCHEMA_REQUIRED: "
-                    f"JSON response for role {role!r} has no explicit response_schema. "
-                    "All model-authored JSON must use a fixed schema/template."
+                    f"native tool decision for role {role!r} has no explicit parameters schema."
                 )
             assert_atomic_model_schema(
-                response_schema,
-                surface=f"JSON response for role {role!r}",
+                parameters,
+                surface=(
+                    f"native tool decision {str(tool_name or '').strip()!r} "
+                    f"for role {role!r}"
+                ),
             )
-        return current_text(self, role, messages, **kwargs)
+            return current_tool_decision(
+                self,
+                role,
+                messages,
+                tool_name=tool_name,
+                parameters=parameters,
+                description=description,
+            )
 
-    setattr(generate_text, _MARKER, True)
-    cls.generate_text = generate_text
+        setattr(generate_tool_decision, _TOOL_MARKER, True)
+        cls.generate_tool_decision = generate_tool_decision
 
 
 def install(*, model_router_module: Any | None = None) -> None:
+    """Idempotently install all model structured-output boundaries.
+
+    Per-method markers, rather than the module flag alone, make upgrades safe when a
+    process already has one older boundary installed: a newly added surface is still
+    wrapped instead of being skipped as globally 'installed'.
+    """
+
     global _INSTALLED
-    if _INSTALLED:
-        return
     if model_router_module is None:
         from . import model_router as model_router_module
 
@@ -204,8 +248,11 @@ def assert_installed(*, model_router_module: Any | None = None) -> None:
     if model_router_module is None:
         from . import model_router as model_router_module
 
-    if not getattr(model_router_module.ModelRouter.generate_text, _MARKER, False):
-        raise RuntimeError("model structured-output template boundary is not installed")
+    cls = model_router_module.ModelRouter
+    if not getattr(cls.generate_text, _TEXT_MARKER, False):
+        raise RuntimeError("model JSON response template boundary is not installed")
+    if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
+        raise RuntimeError("model native-tool template boundary is not installed")
 
 
 __all__ = [
