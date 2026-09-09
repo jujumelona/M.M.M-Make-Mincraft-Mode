@@ -371,7 +371,11 @@ def collect_planning_state_research(
     *,
     trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Resolve every pending host research item using its declared source route."""
+    """Resolve every pending host research item using its declared source route.
+
+    ``blocked`` and ``complete`` are terminal research states. Re-entry processes only
+    rows that are still ``pending``; it never revives blocked work automatically.
+    """
     from . import agentic_research_game_design as agentic
     from . import pre_design_grounded_rag as project_rag
     from .agent_capability_context import target_neutral_research_scope
@@ -399,10 +403,6 @@ def collect_planning_state_research(
             and unresolved.get("resolution_route") == "default_policy"
         ):
             _apply_scope_policy(value, unresolved)
-
-    for research in value.get("research_queue", []):
-        if research.get("status") == "blocked":
-            research["status"] = "pending"
 
     _compile_pending_queries(router, value)
     brief, reference_domain_ids, unsupported_domains = _research_brief(prompt, value)
