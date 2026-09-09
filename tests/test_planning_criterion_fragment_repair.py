@@ -5,6 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai.planning_criterion_fragments import generate_criterion_fragment
+from minecraft_mod_ai.planning_detail_template import CORE_WORKSHEET_SECTIONS
 
 
 class _SequenceRouter:
@@ -23,16 +24,17 @@ class _SequenceRouter:
 
 
 def _fragment(*, implementation: str = "", constraint: str = "") -> dict[str, object]:
-    return {
-        "section_updates": [
+    updates: list[dict[str, object]] = []
+    for index, section in enumerate(CORE_WORKSHEET_SECTIONS):
+        updates.append(
             {
-                "section": "behavior_contract",
-                "implementation": implementation,
-                "constraint": constraint,
+                "section": section,
+                "implementation": implementation if index == 0 else "",
+                "constraint": constraint if index == 0 else "",
                 "evidence_refs": [],
             }
-        ]
-    }
+        )
+    return {"section_updates": updates}
 
 
 def _generate(router: _SequenceRouter) -> dict[str, object]:
@@ -40,7 +42,7 @@ def _generate(router: _SequenceRouter) -> dict[str, object]:
         router,
         requirement={"statement": "Collected resources enter the player inventory."},
         criterion="Collected items are added to the player's inventory.",
-        selected_sections=("behavior_contract",),
+        selected_sections=CORE_WORKSHEET_SECTIONS,
         evidence=[],
         allowed_refs=set(),
     )
