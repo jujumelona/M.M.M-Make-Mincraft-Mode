@@ -69,16 +69,21 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
 
 
 def _real_fragment(*, evidence_ref: str | None = None) -> dict[str, object]:
-    schema = criterion_fragments.criterion_fragment_schema(adaptive.WORKSHEET_SECTIONS)
-    fragment: dict[str, object] = {}
-    for key, field_schema in schema["properties"].items():
-        if field_schema["type"] == "array":
-            fragment[key] = [evidence_ref] if evidence_ref else []
-        elif key.endswith("__implementation"):
-            fragment[key] = f"implement {key.removesuffix('__implementation').replace('_', ' ')} for this criterion"
-        else:
-            fragment[key] = f"enforce {key.removesuffix('__constraint').replace('_', ' ')} boundary for this criterion"
-    return fragment
+    return {
+        "section_updates": [
+            {
+                "section": section,
+                "implementation": (
+                    f"implement {section.replace('_', ' ')} for this acceptance criterion"
+                ),
+                "constraint": (
+                    f"enforce the {section.replace('_', ' ')} boundary for this acceptance criterion"
+                ),
+                "evidence_refs": [evidence_ref] if evidence_ref else [],
+            }
+            for section in adaptive.WORKSHEET_SECTIONS
+        ]
+    }
 
 
 def _patch_compile_boundaries(monkeypatch, requirements):
@@ -280,8 +285,14 @@ def test_full_section_criterion_schema_is_atomic_and_closed() -> None:
     schema = criterion_fragments.criterion_fragment_schema(adaptive.WORKSHEET_SECTIONS)
 
     assert schema["additionalProperties"] is False
-    assert len(schema["properties"]) == len(adaptive.WORKSHEET_SECTIONS) * 3
-    assert set(schema["required"]) == set(schema["properties"])
+    assert set(schema["properties"]) == {"section_updates"}
+    assert schema["required"] == ["section_updates"]
+    updates = schema["properties"]["section_updates"]
+    assert updates["maxItems"] == len(adaptive.WORKSHEET_SECTIONS)
+    assert updates["items"]["additionalProperties"] is False
+    assert set(updates["items"]["properties"]["section"]["enum"]) == set(
+        adaptive.WORKSHEET_SECTIONS
+    )
 
 
 def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> None:
