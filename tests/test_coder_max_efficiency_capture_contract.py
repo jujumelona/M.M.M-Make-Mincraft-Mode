@@ -264,7 +264,7 @@ def test_parallel_generation_preserves_task_authority_and_capsule_contextvars(
                 "runtime_tests": [],
             }
 
-        result = _parallel_generate(
+        _parallel_generate(
             owner,
             single_generate,
             root,
@@ -285,4 +285,3 @@ def test_parallel_generation_preserves_task_authority_and_capsule_contextvars(
     finally:
         _CURRENT_AUTHORITY.reset(auth_token)
         _CURRENT_CAPSULE.reset(cap_token)
-
