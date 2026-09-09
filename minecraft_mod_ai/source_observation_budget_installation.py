@@ -3,7 +3,7 @@ from __future__ import annotations
 """Install strict byte-bounded source-observation paging for small coder turns.
 
 ProjectIndex pages are independently bounded, but converting those pages into exact
-source observations adds provenance metadata and global anchors.  That second envelope
+source observations adds provenance metadata and global anchors. That second envelope
 must be budgeted again or a small-model request can exceed the host-selected context
 budget even though every underlying index page was valid.
 """
@@ -13,8 +13,10 @@ from types import ModuleType
 from typing import Any
 
 _MARKER = "_mmm_exact_source_observation_budget_v1"
+_CONTEXT_BUDGET_MARKER = "_mmm_atomic_source_context_budget_v1"
 _MIN_FRAGMENT_BYTES = 128
 _PAGE_RESERVE_BYTES = 128
+_ATOMIC_SOURCE_CONTEXT_BYTES = 4 * 1024
 
 
 def _utf8_fragments(text: str, max_bytes: int) -> tuple[tuple[int, bytes], ...]:
@@ -40,7 +42,11 @@ def _utf8_fragments(text: str, max_bytes: int) -> tuple[tuple[int, bytes], ...]:
     return tuple(fragments)
 
 
-def _split_records(target: ModuleType, records: list[dict[str, Any]], byte_budget: int) -> list[dict[str, Any]]:
+def _split_records(
+    target: ModuleType,
+    records: list[dict[str, Any]],
+    byte_budget: int,
+) -> list[dict[str, Any]]:
     """Make every exact-source record small enough to coexist with page metadata."""
 
     fragment_budget = max(_MIN_FRAGMENT_BYTES, min(1024, byte_budget // 5))
@@ -103,8 +109,6 @@ def _bounded_pages(
         if target._json_size(candidate) <= anchor_target:
             anchors.append(record)
 
-    # Always retain at least the strongest exact source fact when one exists.  Records
-    # were fragmented above specifically so this remains safe on tiny model budgets.
     if ranked and not anchors:
         candidate = target._observation_page_payload(
             receipt=ledger["receipt"],
@@ -121,7 +125,9 @@ def _bounded_pages(
         anchors.append(ranked[0])
 
     anchor_ids = {record["observation_id"] for record in anchors}
-    remaining = [record for record in ranked if record["observation_id"] not in anchor_ids]
+    remaining = [
+        record for record in ranked if record["observation_id"] not in anchor_ids
+    ]
     pages: list[dict[str, Any]] = []
     cursor = 0
 
@@ -143,8 +149,6 @@ def _bounded_pages(
             cursor += 1
 
         if cursor < len(remaining) and not page_records:
-            # A fragmented record still cannot coexist with the selected anchors.  Drop
-            # the weakest anchor into normal pagination rather than dropping source data.
             if anchors:
                 demoted = anchors.pop()
                 anchor_ids.discard(demoted["observation_id"])
@@ -178,11 +182,35 @@ def _bounded_pages(
     return tuple(pages)
 
 
+def _install_context_budget(target_module: ModuleType) -> None:
+    """Keep the initial source page atomic even when the live model context is huge."""
+
+    current = target_module._coder_project_context_budget
+    if bool(getattr(current, _CONTEXT_BUDGET_MARKER, False)):
+        return
+
+    @wraps(current)
+    def atomic_source_context_budget(
+        router: Any,
+        policy: Any,
+        *,
+        fast_mode: bool,
+    ) -> int:
+        live_budget = int(current(router, policy, fast_mode=fast_mode))
+        host_budget = max(1024, int(getattr(policy, "model_context_bytes", 1024)))
+        return min(_ATOMIC_SOURCE_CONTEXT_BYTES, host_budget, max(1024, live_budget))
+
+    setattr(atomic_source_context_budget, _CONTEXT_BUDGET_MARKER, True)
+    target_module._coder_project_context_budget = atomic_source_context_budget
+
+
 def install(target_module: ModuleType | None = None) -> None:
-    """Patch the canonical generator once; preserve its API and exact-source semantics."""
+    """Install the source-page and initial-context budgets exactly once."""
 
     if target_module is None:
         from . import custom_module_generator as target_module
+
+    _install_context_budget(target_module)
 
     current = target_module._observation_context_pages
     if bool(getattr(current, _MARKER, False)):
