@@ -280,19 +280,18 @@ def prepare_planning_state(
         checkpoint(deepcopy(state))
 
     if not _requirements_exist(state):
-        if state.get("research_queue"):
-            state = _transition(
-                "collect_prompt_research",
-                lambda: collect_planning_state_research_convergent(
-                    router,
-                    prompt,
-                    state,
-                    trace_metadata=trace_metadata,
-                ),
-                input_state=state,
-            )
-            if checkpoint is not None:
-                checkpoint(deepcopy(state))
+        state = _transition(
+            "collect_prompt_research",
+            lambda: collect_planning_state_research_convergent(
+                router,
+                prompt,
+                state,
+                trace_metadata=trace_metadata,
+            ),
+            input_state=state,
+        )
+        if checkpoint is not None:
+            checkpoint(deepcopy(state))
 
         state = _transition(
             "compile_researched_requirements",
