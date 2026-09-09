@@ -296,7 +296,8 @@ def _finish_requirement(
     except MissingWorksheetSections as gap:
         # A criterion may omit an unrelated section, but the requirement as a whole
         # must resolve every host-selected section. Complete only the finite gaps;
-        # retain and checkpoint the already-authored criterion contracts.
+        # retain and checkpoint the already-authored criterion contracts. Each repair
+        # exposes exactly the missing section, so the model cannot fill a different row.
         for section in gap.sections:
             with planner_operation(f"detailed_section:{job['requirement_ref']}:{section}"):
                 supplement = generate_criterion_fragment(
@@ -310,7 +311,7 @@ def _finish_requirement(
                         "reference-only evidence and missing proof. For verification, specify "
                         "observable success and rejection checks."
                     ),
-                    selected_sections=job["selected_sections"],
+                    selected_sections=(section,),
                     evidence=job["evidence"],
                     allowed_refs=job["allowed"],
                 )
