@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = ROOT / "minecraft_mod_ai"
 _METADATA_ATTRS = {"__wrapped__", "__name__", "__qualname__", "__doc__", "__module__"}
 
 
@@ -33,8 +32,9 @@ def _metadata_attribute(name: str) -> bool:
 class MutationVisitor(ast.NodeVisitor):
     """Find rebinding of imported/runtime-owned objects, not ordinary object state."""
 
-    def __init__(self, path: Path, tree: ast.Module) -> None:
+    def __init__(self, path: Path, tree: ast.Module, *, root: Path) -> None:
         self.path = path
+        self.root = root
         self.scope: list[str] = []
         self.findings: list[dict[str, Any]] = []
         self.external_names: list[set[str]] = [set()]
@@ -67,7 +67,7 @@ class MutationVisitor(ast.NodeVisitor):
     def _record(self, node: ast.AST, *, kind: str, target: str, metadata: bool = False) -> None:
         self.findings.append(
             {
-                "path": self.path.relative_to(ROOT).as_posix(),
+                "path": self.path.relative_to(self.root).as_posix(),
                 "line": int(getattr(node, "lineno", 0)),
                 "scope": ".".join(self.scope) or "<module>",
                 "kind": kind,
@@ -130,7 +130,6 @@ class MutationVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node: ast.ClassDef) -> Any:
-        # A class defined in this file is a canonical owner, not an external target.
         self.scope.append(node.name)
         self.external_names.append(set(self.external))
         self.namespace_names.append(set(self.namespaces))
@@ -224,16 +223,18 @@ class MutationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def audit() -> list[dict[str, Any]]:
+def audit(root: Path = ROOT) -> list[dict[str, Any]]:
+    root = root.resolve()
+    package = root / "minecraft_mod_ai"
     findings: list[dict[str, Any]] = []
-    for path in sorted(PACKAGE.rglob("*.py")):
+    for path in sorted(package.rglob("*.py")):
         try:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
         except (OSError, SyntaxError, UnicodeError) as exc:
             findings.append(
                 {
-                    "path": path.relative_to(ROOT).as_posix(),
+                    "path": path.relative_to(root).as_posix(),
                     "line": int(getattr(exc, "lineno", 0) or 0),
                     "scope": "<parse>",
                     "kind": "parse_error",
@@ -242,33 +243,113 @@ def audit() -> list[dict[str, Any]]:
                 }
             )
             continue
-        visitor = MutationVisitor(path, tree)
+        visitor = MutationVisitor(path, tree, root=root)
         visitor.visit(tree)
         findings.extend(visitor.findings)
     return findings
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--fail-on-behavioral", action="store_true")
-    args = parser.parse_args()
-    findings = audit()
-    behavioral = [item for item in findings if not item["metadata_only"]]
+def _behavioral(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in findings if not item["metadata_only"]]
+
+
+def mutation_identity(item: dict[str, Any]) -> tuple[str, str, str]:
+    """Stable behavioral identity: code motion alone must not consume the mutation budget."""
+    return str(item["path"]), str(item["kind"]), str(item["target"])
+
+
+def compare_behavioral_findings(
+    current_findings: list[dict[str, Any]],
+    baseline_findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return introduced and removed behavioral mutations, preserving duplicate counts."""
+    current = _behavioral(current_findings)
+    baseline = _behavioral(baseline_findings)
+
+    baseline_remaining = Counter(mutation_identity(item) for item in baseline)
+    introduced: list[dict[str, Any]] = []
+    for item in current:
+        identity = mutation_identity(item)
+        if baseline_remaining[identity]:
+            baseline_remaining[identity] -= 1
+        else:
+            introduced.append(item)
+
+    current_remaining = Counter(mutation_identity(item) for item in current)
+    removed: list[dict[str, Any]] = []
+    for item in baseline:
+        identity = mutation_identity(item)
+        if current_remaining[identity]:
+            current_remaining[identity] -= 1
+        else:
+            removed.append(item)
+    return introduced, removed
+
+
+def _payload(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    behavioral = _behavioral(findings)
     metadata = [item for item in findings if item["metadata_only"]]
-    payload = {
-        "schema_version": "mmm/runtime-mutation-audit-v2",
+    return {
+        "schema_version": "mmm/runtime-mutation-audit-v3",
         "behavioral_count": len(behavioral),
         "metadata_count": len(metadata),
-        "behavioral_by_path": dict(sorted(Counter(item["path"] for item in behavioral).items())),
+        "behavioral_by_path": dict(
+            sorted(Counter(item["path"] for item in behavioral).items())
+        ),
         "behavioral": behavioral,
         "metadata": metadata,
     }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--baseline-root", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--fail-on-behavioral", action="store_true")
+    parser.add_argument("--fail-on-new", action="store_true")
+    args = parser.parse_args()
+    if args.fail_on_new and args.baseline_root is None:
+        parser.error("--fail-on-new requires --baseline-root")
+
+    findings = audit(args.root)
+    payload = _payload(findings)
+    behavioral = payload["behavioral"]
+
+    introduced: list[dict[str, Any]] = []
+    if args.baseline_root is not None:
+        baseline_findings = audit(args.baseline_root)
+        baseline_payload = _payload(baseline_findings)
+        introduced, removed = compare_behavioral_findings(findings, baseline_findings)
+        payload.update(
+            {
+                "baseline_behavioral_count": baseline_payload["behavioral_count"],
+                "introduced_count": len(introduced),
+                "introduced": introduced,
+                "removed_count": len(removed),
+                "removed": removed,
+            }
+        )
+        print(
+            "runtime mutation delta: "
+            f"baseline={baseline_payload['behavioral_count']} "
+            f"current={payload['behavioral_count']} "
+            f"introduced={len(introduced)} removed={len(removed)}"
+        )
+        for item in introduced:
+            print(
+                f"  NEW {item['path']}:{item['line']} "
+                f"[{item['kind']}] {item['target']}"
+            )
+
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.write_text(encoded, encoding="utf-8")
     else:
         print(encoded, end="")
+
+    if args.fail_on_new and introduced:
+        return 1
     return 1 if args.fail_on_behavioral and behavioral else 0
 
 
