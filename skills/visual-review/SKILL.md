@@ -35,15 +35,14 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - every visual verdict is bound to the exact final asset/model/screenshot hash and the approved requirement it evaluates
-  - screenshot and Blockbench evidence record their producing runtime/model identity rather than being treated as context-free images
-  - visual checks cover only applicable approved dimensions such as silhouette/readability, UV/seams, clipping, animation pose/transition, GUI layout, text legibility, scale, style consistency, and accidental artifacts
-  - every defect identifies a concrete observable location and severity; unsupported aesthetic guesses are not promoted to blocking defects
-  - missing views, frames, states, or runtime scenarios remain explicitly unreviewed and cannot be converted into a pass by model judgment
-  - a later change to any reviewed asset/model/screenshot invalidates the prior visual verdict until the final hash is reviewed again
-  - runtime screenshots used for acceptance are paired with relevant runtime status/log evidence so a visually plausible crash/error state cannot pass
+  - approval_and_fidelity
+  - path_containment
+  - source_provenance
+  - external_quality_gates
+  - no_self_certification
+  - evidence_freshness
+  - capability_receipts
+  - final_receipts
 
 retry_policy:
   max_attempts: null

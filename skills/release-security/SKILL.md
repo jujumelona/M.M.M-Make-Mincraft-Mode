@@ -37,16 +37,16 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - source revision, dependency lock, resources, and JAR bytes exactly match the artifacts covered by the final validation receipts
-  - required static validation, Gradle, GameTest, runtime, visual, security, compatibility, and accessibility/performance gates are present only when applicable and none is silently skipped
-  - JAR inspection confirms the approved fabric.mod.json, compiled classes, resources, entrypoints, dependency declarations, and no unexpected executable/resource payloads
-  - every bundled third-party code, model, media, or asset dependency has closed provenance/license evidence for the approved distribution use
-  - release inputs and package contain no access tokens, credentials, machine-local secrets, workspace-external paths, or unapproved private data
-  - the release manifest binds proposal hash, source revision, PlatformLock, dependency lock, JAR/resource hashes, validator identities, and final receipt hashes
-  - package contents contain only the intended release artifacts and cannot be substituted after validation without invalidating release readiness
-  - no build, runtime, visual, security, compatibility, provenance, or installability claim exceeds the strongest fresh evidence actually present
+  - approval_and_fidelity
+  - path_containment
+  - input_hashes
+  - full_build_gates
+  - archive_safety
+  - separate_license_closure
+  - secret_handling
+  - jar_hash
+  - evidence_freshness
+  - final_receipts
 
 retry_policy:
   max_attempts: null

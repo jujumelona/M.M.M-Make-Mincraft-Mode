@@ -33,15 +33,13 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - model, texture, animation, and export resource IDs use the approved namespace and resolve to the final persisted paths
-  - bone names are unique, the parent hierarchy is acyclic, and pivots/transforms contain only finite values consistent with the approved model contract
-  - UV rectangles stay within the declared texture bounds, required faces have valid assignments, and no referenced texture is missing
-  - exported geometry/model format matches the exact approved Minecraft/GeckoLib target and does not silently switch export type
-  - every animation references existing bones, uses valid keyframes and timing, and matches the approved loop/transition behavior
-  - Blockbench execution receipts bind the final model source and export hashes; model output is not called Blockbench-validated when the tool did not execute
-  - required visual review is bound to the final model/texture/animation hashes and is invalidated by later asset changes
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - graph_acyclic
+  - external_quality_gates
+  - capability_receipts
 
 retry_policy:
   max_attempts: null

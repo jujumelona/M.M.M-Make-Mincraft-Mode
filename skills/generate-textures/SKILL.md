@@ -33,16 +33,13 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - every output decodes as the declared PNG/image format and matches the exact requested dimensions or approved Minecraft texture dimensions
-  - alpha channel and transparency behavior are valid for the intended asset class and do not contain accidental fully transparent or opaque corruption
-  - animated textures have matching .mcmeta frame dimensions, frame indices, timing and interpolation metadata; static textures do not receive spurious animation metadata
-  - resource namespace, path and filename match the approved asset ID and have no collisions
-  - every model, blockstate, item, GUI or animation reference to the generated texture resolves to the final persisted path
-  - provenance is recorded for every external reference; copyrighted game assets, logos, watermarks, or copied source pixels are rejected unless explicitly licensed for the approved use
-  - visual review checks silhouette/readability, seams or UV-facing defects when relevant, accidental text/watermark artifacts, and consistency with the approved brief
-  - generated candidates are not described as Blockbench/GeckoLib-validated unless those tools actually validate the binding
+  - approval_and_fidelity
+  - path_containment
+  - source_validation
+  - source_provenance
+  - separate_license_closure
+  - external_quality_gates
+  - capability_receipts
 
 retry_policy:
   max_attempts: 2

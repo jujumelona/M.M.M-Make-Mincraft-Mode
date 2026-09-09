@@ -37,15 +37,14 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - exact PlatformLock registry, codec, bootstrap and mapping consistency
-  - configured/placed feature, biome, dimension and structure resources conform to the exact target datapack schema
-  - every referenced registry key and resource location resolves without duplicate IDs or dangling references
-  - Java diagnostics and structured resource validation pass before build
-  - Gradle and GameTest pass for the approved worldgen slice
-  - fresh disposable-world generation verifies requested placement/registration without touching a user's real world
-  - no advertised worldgen capability lacks its required build/runtime receipt
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - full_build_gates
+  - measured_runtime_quality
+  - capability_receipts
+  - feature_preservation
 
 retry_policy:
   max_attempts: null

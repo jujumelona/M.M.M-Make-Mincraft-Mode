@@ -35,16 +35,16 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - every progression node has a stable unique ID and every prerequisite, reward, cost, class, skill, quest, or milestone reference resolves
-  - the progression dependency graph has no accidental cycles and every required milestone is reachable from an approved starting state
-  - server-authoritative progression rules prevent clients from directly granting unlocks, rewards, currency, skills, classes, or completion state
-  - non-repeatable rewards and completion transitions are idempotent; repeatable behavior exists only where explicitly approved
-  - save/reload persistence preserves approved progression state and migration/version handling fails closed on unsupported state
-  - Java imports, mappings, lifecycle hooks, persistence APIs, and dependency calls match the exact approved versions and pass Java diagnostics
-  - Gradle build and relevant GameTests pass for unlock, rejection, reward idempotency, prerequisite, and save/reload scenarios before the system is advertised as verified
-  - no requested progression capability is removed or weakened merely to satisfy a validator
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - graph_acyclic
+  - execution_boundary
+  - no_duplicate_run
+  - checkpoint_integrity
+  - full_build_gates
+  - feature_preservation
 
 retry_policy:
   max_attempts: null

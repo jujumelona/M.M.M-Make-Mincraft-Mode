@@ -45,15 +45,14 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - every launched server/client instance is disposable and isolated from the user's real Minecraft worlds, saves, accounts, and configuration
-  - launched source/JAR/dependency hashes exactly match the validated artifact and approved PlatformLock
-  - every runtime claim is backed by an explicit scenario with recorded precondition, bounded action, observable postcondition, and relevant log/status receipt
-  - Mineflayer actions remain inside the approved scenario and do not expand into unrelated exploration, destructive world edits, or unbounded automation
-  - server/client/runtime logs contain no fatal startup, registry, classloading, networking, codec, datapack, or scenario exceptions relevant to the claimed result
-  - runtime failure cannot be converted into a passing claim by model judgment, a screenshot alone, or a successful process start
-  - teardown stops spawned runtime/Mineflayer processes and persists final logs/status even after scenario failure
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - input_hashes
+  - measured_runtime_quality
+  - capability_receipts
+  - execution_boundary
+  - final_receipts
 
 retry_policy:
   max_attempts: null

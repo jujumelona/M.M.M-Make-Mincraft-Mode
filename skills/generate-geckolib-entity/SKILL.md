@@ -38,17 +38,15 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - the entity registry ID, Java entity type, attributes, spawn/data behavior and renderer binding all refer to the same approved entity contract
-  - client-only renderer/model classes are isolated from common/server entrypoints so a dedicated server cannot load client classes
-  - GeckoLib model, animation and texture resource paths resolve exactly and use the approved namespace
-  - geometry and animation JSON decode against the exact approved GeckoLib schema and every referenced bone, animation, controller state and trigger name exists
-  - animation controller transitions cannot reference missing animations or mutually impossible states introduced by generation
-  - Blockbench export dimensions, pivots, bone hierarchy and UV/texture references are internally consistent when Blockbench assets are used
-  - Java imports, mappings and GeckoLib API calls match the exact approved versions and pass Java diagnostics
-  - Gradle build and relevant GameTests pass before the entity is advertised as build/runtime verified
-  - visual review is required for approved appearance/animation requirements and is bound to the final persisted asset hashes
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - graph_acyclic
+  - full_build_gates
+  - external_quality_gates
+  - capability_receipts
+  - feature_preservation
 
 retry_policy:
   max_attempts: null

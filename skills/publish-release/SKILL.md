@@ -31,13 +31,14 @@ output_schema:
   - explicit failure reason
 
 validators:
-  - JAR bytes match the validated SHA-256
-  - game version and loader are pinned
-  - token is read only at upload time
-  - upload endpoint is HTTPS and reviewed
-  - release manifest and release-security receipt match the exact bytes being published
-  - provider/project/version target exactly matches the user's explicit distribution request
-  - no second automatic upload is attempted after an ambiguous, failed, or successful provider response
+  - approval_and_fidelity
+  - jar_hash
+  - version_lock
+  - secret_handling
+  - reviewed_https
+  - no_duplicate_run
+  - durable_ledger
+  - final_receipts
 
 retry_policy:
   max_attempts: 1

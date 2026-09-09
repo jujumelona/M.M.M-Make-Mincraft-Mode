@@ -36,19 +36,15 @@ output_schema:
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - client-only screen/render classes are isolated from common/server entrypoints and cannot be loaded by a dedicated server
-  - every custom payload has an exact registered identifier, direction, codec and handler matching the approved PlatformLock APIs
-  - serverbound actions treat all client-provided values as untrusted and revalidate player identity, permissions, distance/context, inventory/state preconditions and numeric/string bounds on the server
-  - gameplay state is mutated only by the authoritative server path; client prediction or display state cannot directly grant items, currency, progression, permissions or world changes
-  - screen-handler/property synchronization has one canonical server source of truth and does not create client/server feedback loops or stale duplicated state
-  - packet handlers do not perform blocking model, network, disk or other long-running work on the Minecraft server tick
-  - malformed, duplicate, out-of-order or unauthorized payloads fail closed without crashing or applying partial gameplay mutations
-  - payload sizes, collection lengths and user-controlled text/data are bounded by the approved contract before allocation or mutation
-  - registration order, registry IDs, Java imports and mapping symbols match the exact approved versions and pass Java diagnostics
-  - Gradle build and relevant GameTests pass, including server-authority and invalid-payload cases, before the feature is advertised as verified
-  - runtime logs contain no registration, codec, disconnect, dedicated-server classloading or handler exceptions for the validated scenario
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - execution_boundary
+  - full_build_gates
+  - measured_runtime_quality
+  - capability_receipts
+  - feature_preservation
 
 retry_policy:
   max_attempts: null
