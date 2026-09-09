@@ -12,6 +12,11 @@ from copy import deepcopy
 from typing import Any, TypeVar
 
 from .planner_trace_artifacts import repository_revision
+from .planning_convergence_contract import (
+    collect_planning_state_research_convergent,
+    compile_researched_requirements_convergent,
+    emit_planning_goal_satisfied,
+)
 from .planning_detail_applicability import (
     apply_host_detail_section_applicability,
     ensure_host_detail_section_applicability,
@@ -19,8 +24,6 @@ from .planning_detail_applicability import (
 )
 from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
 from .planning_state_contract import build_initial_planning_state, validate_planning_state
-from .planning_state_research import collect_planning_state_research
-from .planning_state_resolution import compile_researched_requirements
 from .root_cause_trace import emit_root_cause, traced_callable
 
 _T = TypeVar("_T")
@@ -271,6 +274,7 @@ def prepare_planning_state(
             input_state=state,
         )
     if state.get("plan_ready") is True:
+        emit_planning_goal_satisfied(state)
         return state
     if checkpoint is not None:
         checkpoint(deepcopy(state))
@@ -279,7 +283,7 @@ def prepare_planning_state(
         if state.get("research_queue"):
             state = _transition(
                 "collect_prompt_research",
-                lambda: collect_planning_state_research(
+                lambda: collect_planning_state_research_convergent(
                     router,
                     prompt,
                     state,
@@ -292,7 +296,7 @@ def prepare_planning_state(
 
         state = _transition(
             "compile_researched_requirements",
-            lambda: compile_researched_requirements(router, prompt, state),
+            lambda: compile_researched_requirements_convergent(router, prompt, state),
             input_state=state,
         )
         if checkpoint is not None:
@@ -333,7 +337,7 @@ def prepare_planning_state(
 
     state = _transition(
         "collect_implementation_research",
-        lambda: collect_planning_state_research(
+        lambda: collect_planning_state_research_convergent(
             router,
             prompt,
             state,
@@ -383,6 +387,7 @@ def prepare_planning_state(
             operation="final_readiness",
             message="PLANNING_STATE_NOT_READY: planning state did not reach code-ready coverage",
         )
+    emit_planning_goal_satisfied(state)
     if checkpoint is not None:
         checkpoint(deepcopy(state))
     return state
