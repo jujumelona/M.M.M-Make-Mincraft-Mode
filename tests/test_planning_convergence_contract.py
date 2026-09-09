@@ -13,7 +13,7 @@ from minecraft_mod_ai.planning_state_contract import (
 )
 
 
-PROMPT = "Build the requested behavior using an externally verified fact."
+PROMPT = "Build the requested behavior using externally verified reference semantics."
 
 
 def _rehash(state: dict) -> dict:
@@ -23,11 +23,13 @@ def _rehash(state: dict) -> dict:
 
 
 def _base_state(*, unknown_count: int = 1) -> dict:
-    unresolved = [
+    # Prompt-boundary models are not allowed to invent external_fact/research unknowns.
+    # Named references are authored input; the host deterministically creates one
+    # reference_semantics research obligation for each reference.
+    references = [
         {
-            "question": f"What external fact {index} is required?",
-            "reason": "external_fact",
-            "information_needed": f"Verify external fact {index}.",
+            "name": f"Reference {index}",
+            "what_must_be_learned": f"Verify documented semantics for Reference {index}.",
         }
         for index in range(1, unknown_count + 1)
     ]
@@ -36,9 +38,9 @@ def _base_state(*, unknown_count: int = 1) -> dict:
         {
             "goal": {"statement": "Build the requested behavior."},
             "known": [{"statement": "The requested behavior must be implemented."}],
-            "references": [],
+            "references": references,
             "scope_status": "explicit",
-            "unresolved": unresolved,
+            "unresolved": [],
         },
     )
 
