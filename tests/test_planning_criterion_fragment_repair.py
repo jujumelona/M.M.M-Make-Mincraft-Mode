@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from minecraft_mod_ai.planning_criterion_fragments import generate_criterion_fragment
+
+
+class _SequenceRouter:
+    def __init__(self, outputs: list[dict[str, object]]) -> None:
+        self._outputs = list(outputs)
+        self.calls: list[list[dict[str, str]]] = []
+
+    def generate_text(
+        self,
+        _role: str,
+        messages: list[dict[str, str]],
+        **_kwargs: object,
+    ) -> str:
+        self.calls.append(messages)
+        return json.dumps(self._outputs.pop(0))
+
+
+def _fragment(*, implementation: str = "", constraint: str = "") -> dict[str, object]:
+    return {
+        "section_updates": [
+            {
+                "section": "behavior_contract",
+                "implementation": implementation,
+                "constraint": constraint,
+                "evidence_refs": [],
+            }
+        ]
+    }
+
+
+def _generate(router: _SequenceRouter) -> dict[str, object]:
+    return generate_criterion_fragment(
+        router,
+        requirement={"statement": "Collected resources enter the player inventory."},
+        criterion="Collected items are added to the player's inventory.",
+        selected_sections=("behavior_contract",),
+        evidence=[],
+        allowed_refs=set(),
+    )
+
+
+def test_all_empty_fragment_gets_one_corrective_call() -> None:
+    router = _SequenceRouter(
+        [
+            _fragment(),
+            _fragment(implementation="After a successful collection, the collected stack is present in inventory."),
+        ]
+    )
+
+    result = _generate(router)
+
+    assert len(router.calls) == 2
+    assert result["section_updates"][0]["implementation"]
+    second_user_prompt = router.calls[1][1]["content"]
+    assert "Correction required" in second_user_prompt
+    assert "at least one selected section concrete" in second_user_prompt
+
+
+def test_second_all_empty_fragment_remains_terminal() -> None:
+    router = _SequenceRouter([_fragment(), _fragment()])
+
+    with pytest.raises(
+        ValueError,
+        match="DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content",
+    ):
+        _generate(router)
+
+    assert len(router.calls) == 2
+
+
+def test_non_no_progress_contract_error_is_not_retried() -> None:
+    router = _SequenceRouter([{"section_updates": []}])
+
+    with pytest.raises(ValueError, match="section_updates must cover every selected section"):
+        _generate(router)
+
+    assert len(router.calls) == 1
