@@ -20,13 +20,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Fix migration anchor
+      - name: Fix migration anchors
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('tools/apply_native_forced_argument_tool_fix.py')
           text = path.read_text(encoding='utf-8')
           text = text.replace('"def _fingerprint(\\n"', '"def _fingerprint("')
+          text = text.replace('"def _page_response(\\n"', '"def _page_response("')
           path.write_text(text, encoding='utf-8')
           PY
       - name: Apply migration
