@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,11 @@ from minecraft_mod_ai.model_adapters import (
     GenerationResponse,
     ModelConfigurationError,
 )
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+from minecraft_mod_ai.model_output_atomicity_contract import (
+    assert_atomic_model_schema,
+    assert_installed,
+    install,
+)
 
 
 def _large_request(name: str, *, field_count: int = 12) -> GenerationRequest:
@@ -80,6 +85,93 @@ def test_small_atomic_schema_remains_allowed() -> None:
         },
         surface="regression",
     )
+
+
+def test_native_tool_decision_uses_the_same_atomicity_boundary() -> None:
+    calls: list[str] = []
+
+    class DummyRouter:
+        def generate_text(self, role, messages, **kwargs):
+            calls.append("text")
+            return "ok"
+
+        def generate_tool_decision(
+            self,
+            role,
+            messages,
+            *,
+            tool_name,
+            parameters,
+            description="",
+        ):
+            calls.append("tool")
+            return {"ok": True}
+
+    module = SimpleNamespace(ModelRouter=DummyRouter)
+    install(model_router_module=module)
+    assert_installed(model_router_module=module)
+    oversized = {
+        "type": "object",
+        "properties": {
+            f"field_{index}": {
+                "type": "object",
+                "properties": {
+                    f"nested_{inner}": {"type": "string"}
+                    for inner in range(4)
+                },
+                "additionalProperties": False,
+            }
+            for index in range(20)
+        },
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ModelConfigurationError, match="MODEL_STRUCTURE_ATOMICITY"):
+        DummyRouter().generate_tool_decision(
+            "planner",
+            ({"role": "user", "content": "fill it"},),
+            tool_name="oversized_planner_contract",
+            parameters=oversized,
+        )
+
+    assert calls == []
+
+
+def test_native_tool_decision_allows_bounded_closed_schema() -> None:
+    calls: list[str] = []
+
+    class DummyRouter:
+        def generate_text(self, role, messages, **kwargs):
+            return "ok"
+
+        def generate_tool_decision(
+            self,
+            role,
+            messages,
+            *,
+            tool_name,
+            parameters,
+            description="",
+        ):
+            calls.append(tool_name)
+            return {"value": "ok"}
+
+    module = SimpleNamespace(ModelRouter=DummyRouter)
+    install(model_router_module=module)
+    result = DummyRouter().generate_tool_decision(
+        "planner",
+        ({"role": "user", "content": "fill it"},),
+        tool_name="bounded_planner_contract",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    assert result == {"value": "ok"}
+    assert calls == ["bounded_planner_contract"]
 
 
 def test_legacy_raw_json_argument_recovery_helpers_are_removed() -> None:
