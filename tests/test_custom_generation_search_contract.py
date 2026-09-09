@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 import pytest
@@ -49,6 +51,29 @@ def test_custom_search_auto_never_serializes_candidates_on_one_slot(monkeypatch)
         depends_on=("state", "protocol"),
     )
     assert custom_search._width(risky) == 1
+
+
+def test_custom_search_candidate_threads_inherit_isolated_contextvars() -> None:
+    marker: ContextVar[str] = ContextVar("custom_search_marker", default="missing")
+    token = marker.set("parent")
+
+    def read_then_mutate(value: str) -> tuple[str, str]:
+        inherited = marker.get()
+        marker.set(value)
+        return inherited, marker.get()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                custom_search._submit_with_copied_context(pool, read_then_mutate, "child-a"),
+                custom_search._submit_with_copied_context(pool, read_then_mutate, "child-b"),
+            ]
+            results = [future.result() for future in futures]
+
+        assert results == [("parent", "child-a"), ("parent", "child-b")]
+        assert marker.get() == "parent"
+    finally:
+        marker.reset(token)
 
 
 def test_strategy_router_only_augments_coder_role() -> None:
