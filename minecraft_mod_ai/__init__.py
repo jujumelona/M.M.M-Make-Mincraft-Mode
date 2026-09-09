@@ -5,19 +5,19 @@ import os
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .fast_mode_quality_contract_installation import install as install_fast_mode_quality_contract
+from .java_diagnostics_fallback_contract import install as install_java_diagnostics_fallback
 from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
 def _configure_default_llama_parallelism() -> None:
-    """Expose scheduler width by default while leaving hard capacity to llama-server.
+    """Use a conservative application-side width until server capacity is explicit.
 
-    The managed server already owns physical slot/context fitting through its native
-    ``--parallel``/``--fit`` policy.  Keeping MMM's application-side gate at one when
-    no override is present serializes otherwise independent DAG nodes before they can
-    even reach that server.  Default the application gate to its reviewed maximum and
-    continue honoring every explicit user override.
+    Colab and other single-slot runtimes must not fabricate eight concurrent llama
+    requests before the managed server has advertised physical parallel capacity.
+    Explicit ``MMM_LLAMA_PARALLEL`` remains authoritative and is bounded to the
+    reviewed application maximum.
     """
 
     if os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
@@ -30,7 +30,7 @@ def _configure_default_llama_parallelism() -> None:
     if explicit_server_parallel > 0:
         active = max(1, min(8, explicit_server_parallel))
     else:
-        active = 8
+        active = 1
     os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(active)
 
 
@@ -95,6 +95,7 @@ from .technology_radar import (
     technology_research_routes,
 )
 
+install_java_diagnostics_fallback(ProductionToolService)
 install_source_observation_budget()
 install_fast_mode_quality_contract()
 
