@@ -4,7 +4,7 @@ from __future__ import annotations
 
 One approved public acceptance criterion is the semantic work unit. The model only has
 to describe the worksheet sections that actually matter to that criterion. Host code
-normalizes small-model JSON drift, checkpoints useful progress, and deterministically
+normalizes small-model template drift, checkpoints useful progress, and deterministically
 assembles the canonical worksheet required by downstream coding.
 """
 
@@ -29,6 +29,8 @@ from .planning_detail_template import (
 _PROGRESS_SCHEMA = "mmm/detail-criterion-progress-v1"
 _PROGRESS_KEY = "detail_progress"
 _FRAGMENT_KEY = "section_updates"
+_CRITERION_TOOL_NAME = "submit_criterion_fragment"
+_CRITERION_BATCH_TOOL_NAME = "submit_criterion_fragments"
 _NO_PROGRESS_FRAGMENT_ERROR = (
     "DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content"
 )
@@ -129,10 +131,10 @@ def criterion_fragment_messages(
     repair_instruction = ""
     if repair_no_progress:
         repair_instruction = (
-            "\n\nCorrection required: the previous JSON contained no useful implementation "
-            "or constraint. Return at least one selected section concrete for this "
-            "acceptance criterion. Do not add unrelated sections merely to "
-            "fill a template."
+            "\n\nCorrection required: the previous template fill contained no useful "
+            "implementation or constraint. Fill at least one selected section concretely "
+            "for this acceptance criterion. Do not add unrelated sections merely to "
+            "fill the template."
         )
 
     return [
@@ -140,11 +142,11 @@ def criterion_fragment_messages(
             "role": "system",
             "content": (
                 "Complete exactly one approved public acceptance criterion as a compact engineering contract. "
-                "Return JSON only. Prefer a section_updates array. Include only worksheet sections that actually "
-                "matter to this criterion; never manufacture content for unrelated sections. Each update needs a "
-                "section name and may include implementation, constraint, and evidence_refs when those values exist. "
-                "Do not emit TODO/TBD, invented APIs, symbols, versions, repository paths, external facts, or evidence IDs. "
-                "At least one returned update must contain a concrete implementation or constraint."
+                "Fill the supplied fixed template fields; do not write serialization syntax. Include only worksheet "
+                "sections that actually matter to this criterion; never manufacture content for unrelated sections. "
+                "Each update needs a section name and may include implementation, constraint, and evidence_refs when "
+                "those values exist. Do not emit TODO/TBD, invented APIs, symbols, versions, repository paths, "
+                "external facts, or evidence IDs. At least one update must contain a concrete implementation or constraint."
             ),
         },
         {
@@ -156,8 +158,7 @@ def criterion_fragment_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Available worksheet sections; choose only relevant ones:\n"
                 f"{section_guidance}\n\n"
-                "Preferred JSON shape: {\"section_updates\":[{\"section\":\"...\","
-                "\"implementation\":\"...\",\"constraint\":\"...\",\"evidence_refs\":[]}]}"
+                "Fill section_updates using only the supplied template fields and allowed section names."
                 f"{repair_instruction}"
             ),
         },
@@ -218,15 +219,14 @@ def _raw_updates(value: Any, selected: tuple[str, ...]) -> list[dict[str, Any]]:
         if isinstance(wrapped, list):
             raw_items = wrapped
         else:
-            # Accept the common small-model drift where selected section names are emitted
-            # directly at the root instead of inside a section_updates wrapper.
+            # Accept legacy/direct worksheet-shaped payloads when loading old checkpoints.
             return [
                 _coerce_update(section, value[section])
                 for section in selected
                 if section in value
             ]
     else:
-        raise ValueError("DETAILED_PLAN_CRITERION: fragment must be a JSON object or array")
+        raise ValueError("DETAILED_PLAN_CRITERION: fragment must be an object or array")
 
     updates: list[dict[str, Any]] = []
     for raw in raw_items:
@@ -368,12 +368,12 @@ def criterion_fragment_batch_messages(
         {
             "role": "system",
             "content": (
-                "Complete the listed approved acceptance criteria for one requirement in one JSON response. "
-                "Return exactly one criterion_fragments row per supplied criterion_index. Each row keeps the "
-                "same compact section_updates contract used for a single criterion. Include only relevant "
-                "worksheet sections. Do not emit TODO/TBD, invented APIs, symbols, versions, repository paths, "
-                "external facts, or evidence IDs. Every criterion row must contain concrete implementation or "
-                "constraint content. Do not merge criteria together."
+                "Complete the listed approved acceptance criteria for one requirement by filling the supplied "
+                "fixed template. Fill exactly one criterion_fragments row per supplied criterion_index. Each row "
+                "uses the same compact section_updates fields as a single criterion. Include only relevant worksheet "
+                "sections. Do not write serialization syntax and do not emit TODO/TBD, invented APIs, symbols, versions, "
+                "repository paths, external facts, or evidence IDs. Every criterion row must contain concrete "
+                "implementation or constraint content. Do not merge criteria together."
             ),
         },
         {
@@ -386,10 +386,33 @@ def criterion_fragment_batch_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Available worksheet sections; choose only relevant ones:\n"
                 f"{section_guidance}\n\n"
-                "Return criterion_fragments with the exact supplied criterion_index values."
+                "Fill criterion_fragments with the exact supplied criterion_index values."
             ),
         },
     ]
+
+
+def _fill_criterion_template(
+    router: Any,
+    messages: list[dict[str, str]],
+    schema: dict[str, Any],
+    *,
+    batch: bool,
+) -> Mapping[str, Any]:
+    value = router.generate_tool_decision(
+        "planner",
+        messages,
+        tool_name=_CRITERION_BATCH_TOOL_NAME if batch else _CRITERION_TOOL_NAME,
+        parameters=schema,
+        description=(
+            "Fill the fixed criterion-fragment batch template with exactly one row per supplied criterion_index."
+            if batch
+            else "Fill the fixed criterion-fragment template for the supplied acceptance criterion."
+        ),
+    )
+    if not isinstance(value, Mapping):
+        raise ValueError("DETAILED_PLAN_CRITERION: fixed template arguments must be an object")
+    return value
 
 
 def generate_criterion_fragments_batch(
@@ -428,15 +451,13 @@ def generate_criterion_fragments_batch(
 
     selected = normalize_required_sections(selected_sections)
     schema = criterion_fragment_batch_schema(selected, requested)
-    raw = router.generate_text(
-        "planner",
+    decoded = _fill_criterion_template(
+        router,
         criterion_fragment_batch_messages(requirement, requested, selected, evidence),
-        response_format="json",
-        response_schema=schema,
-        enable_tools=False,
+        schema,
+        batch=True,
     )
-    decoded = json.loads(raw)
-    rows = decoded.get("criterion_fragments") if isinstance(decoded, Mapping) else None
+    rows = decoded.get("criterion_fragments")
     result: dict[int, dict[str, Any]] = {}
     if isinstance(rows, list):
         for row in rows:
@@ -467,6 +488,7 @@ def generate_criterion_fragments_batch(
         )
     return result
 
+
 def generate_criterion_fragment(
     router: Any,
     *,
@@ -478,21 +500,19 @@ def generate_criterion_fragment(
 ) -> dict[str, Any]:
     """Generate one criterion fragment with one bounded semantic repair.
 
-    A hard JSON Schema gate is intentionally not used here. The host parser accepts the
-    small set of equivalent JSON shapes we actually need, so harmless wrapper/optional-field
-    drift cannot terminate the entire planning run.
+    The model fills forced function arguments instead of authoring serialized JSON. Host
+    validation remains tolerant of legacy checkpoint shapes while current model generation
+    is syntax-independent and cannot fail merely because a small model omitted JSON syntax.
     """
 
     selected = normalize_required_sections(selected_sections)
     schema = criterion_fragment_schema(selected)
-    raw = router.generate_text(
-        "planner",
+    decoded = _fill_criterion_template(
+        router,
         criterion_fragment_messages(requirement, criterion, selected, evidence),
-        response_format="json",
-        response_schema=schema,
-        enable_tools=False,
+        schema,
+        batch=False,
     )
-    decoded = json.loads(raw)
     try:
         return validate_criterion_fragment(
             decoded,
@@ -503,8 +523,8 @@ def generate_criterion_fragment(
         if str(exc) != _NO_PROGRESS_FRAGMENT_ERROR:
             raise
 
-    repaired_raw = router.generate_text(
-        "planner",
+    repaired = _fill_criterion_template(
+        router,
         criterion_fragment_messages(
             requirement,
             criterion,
@@ -512,12 +532,11 @@ def generate_criterion_fragment(
             evidence,
             repair_no_progress=True,
         ),
-        response_format="json",
-        response_schema=schema,
-        enable_tools=False,
+        schema,
+        batch=False,
     )
     return validate_criterion_fragment(
-        json.loads(repaired_raw),
+        repaired,
         selected_sections=selected,
         allowed_refs=allowed_refs,
     )
