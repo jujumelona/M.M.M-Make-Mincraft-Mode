@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""Atomic acceptance-criterion planning contracts and deterministic worksheet assembly.
+"""Acceptance-criterion planning with tolerant model-output normalization.
 
-The model never authors the full engineering worksheet. One already-approved public
-acceptance criterion is the semantic work unit. The model emits one compact
-``section_updates`` array with exactly one bounded record for each host-selected worksheet
-section; the host validates section identity, checkpoints the fragment, and deterministically
-assembles the canonical detailed-plan worksheet required by downstream coding.
+One approved public acceptance criterion is the semantic work unit. The model only has
+to describe the worksheet sections that actually matter to that criterion. Host code
+normalizes small-model JSON drift, checkpoints useful progress, and deterministically
+assembles the canonical worksheet required by downstream coding.
 """
 
 from collections.abc import Iterable, Mapping
@@ -18,7 +17,6 @@ from .acceptance_contracts import (
     canonical_public_acceptance,
     project_requirement_public_acceptance,
 )
-from .model_output_atomicity_contract import assert_atomic_model_schema
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_mod_discovery import discovery_context
 from .planning_detail_template import (
@@ -31,7 +29,6 @@ from .planning_detail_template import (
 _PROGRESS_SCHEMA = "mmm/detail-criterion-progress-v1"
 _PROGRESS_KEY = "detail_progress"
 _FRAGMENT_KEY = "section_updates"
-_FRAGMENT_FIELDS = frozenset({"section", "implementation", "constraint", "evidence_refs"})
 _NO_PROGRESS_FRAGMENT_ERROR = (
     "DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content"
 )
@@ -49,57 +46,41 @@ def requirement_acceptance_criteria(requirement: Mapping[str, Any]) -> tuple[str
 
 
 def criterion_fragment_schema(selected_sections: Iterable[str]) -> dict[str, Any]:
-    """Return one compact schema whose topology is independent of section count.
+    """Describe the preferred compact wire shape without making it a runtime gate.
 
-    Selected section names live in an enum inside one array item schema instead of being
-    expanded into three top-level properties per section. This keeps the model contract
-    below the global atomic structured-output boundary even when all worksheet sections
-    apply, while host validation still requires exactly one update for every selected
-    section.
+    The router intentionally does not receive this as a hard response schema. Small local
+    models are allowed to omit irrelevant sections and optional fields, and host code
+    canonicalizes the result before it reaches planning state.
     """
 
     selected = normalize_required_sections(selected_sections)
-    schema = {
+    return {
         "type": "object",
-        "description": "Atomic implementation contract for one approved public acceptance criterion.",
+        "description": "Relevant implementation updates for one acceptance criterion.",
         "properties": {
             _FRAGMENT_KEY: {
                 "type": "array",
-                "description": "Exactly one concise engineering update for every host-selected worksheet section.",
                 "minItems": 1,
                 "maxItems": len(selected),
                 "items": {
                     "type": "object",
                     "properties": {
-                        "section": {
-                            "type": "string",
-                            "enum": list(selected),
-                        },
-                        "implementation": {
-                            "type": "string",
-                            "description": "Concrete implementation contract for this criterion in this section; empty only when genuinely unrelated.",
-                        },
-                        "constraint": {
-                            "type": "string",
-                            "description": "Concrete boundary, failure rule, invariant, or limit for this criterion in this section; empty only when none applies.",
-                        },
+                        "section": {"type": "string", "enum": list(selected)},
+                        "implementation": {"type": "string"},
+                        "constraint": {"type": "string"},
                         "evidence_refs": {
                             "type": "array",
                             "uniqueItems": True,
-                            "description": "Only host-supplied evidence IDs that constrain this section update.",
                             "items": {"type": "string"},
                         },
                     },
-                    "required": ["section", "implementation", "constraint", "evidence_refs"],
-                    "additionalProperties": False,
+                    "required": ["section"],
+                    "additionalProperties": True,
                 },
             }
         },
-        "required": [_FRAGMENT_KEY],
-        "additionalProperties": False,
+        "additionalProperties": True,
     }
-    assert_atomic_model_schema(schema, surface="one acceptance-criterion planning contract")
-    return schema
 
 
 def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
@@ -130,34 +111,24 @@ def criterion_fragment_messages(
     section_guidance = "\n".join(
         f"- {section}: {_section_description(section)}" for section in selected
     )
-    selected_text = ", ".join(selected)
     repair_instruction = ""
     if repair_no_progress:
         repair_instruction = (
-            "\n\nCorrection required: the previous response was structurally valid but every "
-            "implementation and constraint string was empty. Rewrite the contract from the "
-            "criterion semantics. Keep unrelated fields empty, but make at least one selected "
-            "section concrete. If an exact API is not grounded, describe the semantic state "
-            "mutation, data flow, boundary, or observable verification without inventing symbols."
+            "\n\nCorrection required: the previous JSON contained no useful implementation "
+            "or constraint. Return at least one concrete update for a section that actually "
+            "matters to this acceptance criterion. Do not add unrelated sections merely to "
+            "fill a template."
         )
     return [
         {
             "role": "system",
             "content": (
-                "Complete exactly one approved public acceptance criterion as one bounded engineering contract. "
-                "Return only the JSON object required by the supplied schema. The host assembles the larger worksheet. "
-                "Do not emit analysis, markdown, extra keys, JSON Schema definitions, TODO/TBD, or invented APIs, "
-                "symbols, versions, repository paths, external facts, or evidence IDs. Keep each update concise and concrete. "
-                "Return exactly one section_updates record for every host-selected section, with no duplicate sections. "
-                "Every record MUST include all four keys: section, implementation, constraint, evidence_refs. "
-                "An empty string is still a required value; never omit its key. "
-                "In reuse_assessment, assess the supplied catalog candidates by name and evidence ID: "
-                "integration, reference, or unsuitable, with a concrete reason. A discovered mod is not "
-                "automatically compatible. Unknown versions, licenses or APIs remain unverified; never assume MIT. "
-                "If discovery reports no_results, state that outcome rather than inventing a donor. "
-                "Empty implementation or constraint strings are permitted only when this criterion genuinely has no bearing on that field. "
-                "Across the complete response, at least one selected section MUST contain a non-empty implementation or constraint; "
-                "an observable acceptance criterion must never be represented by an all-empty response."
+                "Complete exactly one approved public acceptance criterion as a compact engineering contract. "
+                "Return JSON only. Prefer a section_updates array. Include only worksheet sections that actually "
+                "matter to this criterion; never manufacture content for unrelated sections. Each update needs a "
+                "section name and may include implementation, constraint, and evidence_refs when those values exist. "
+                "Do not emit TODO/TBD, invented APIs, symbols, versions, repository paths, external facts, or evidence IDs. "
+                "At least one returned update must contain a concrete implementation or constraint."
             ),
         },
         {
@@ -167,14 +138,89 @@ def criterion_fragment_messages(
                 f"Acceptance criterion: {criterion}\n\n"
                 "Grounded implementation evidence:\n"
                 f"{_evidence_context(evidence)}\n\n"
-                "Selected worksheet section purposes:\n"
+                "Available worksheet sections; choose only relevant ones:\n"
                 f"{section_guidance}\n\n"
-                f"Required section_updates sections, exactly once each: {selected_text}\n"
-                "For each record provide: section, implementation, constraint, evidence_refs."
+                "Preferred JSON shape: {\"section_updates\":[{\"section\":\"...\","
+                "\"implementation\":\"...\",\"constraint\":\"...\",\"evidence_refs\":[]}]}"
                 f"{repair_instruction}"
             ),
         },
     ]
+
+
+def _json_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _text(value)
+    if isinstance(value, (Mapping, list, tuple)):
+        if not value:
+            return ""
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _text(value)
+
+
+def _coerce_update(section: str, raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        return {
+            "section": section,
+            "implementation": _text(raw),
+            "constraint": "",
+            "evidence_refs": [],
+        }
+    if not isinstance(raw, Mapping):
+        return {
+            "section": section,
+            "implementation": _json_text(raw),
+            "constraint": "",
+            "evidence_refs": [],
+        }
+
+    implementation = raw.get("implementation")
+    constraint = raw.get("constraint")
+    refs = raw.get("evidence_refs", raw.get("constraint_evidence_refs", []))
+
+    if implementation is None and constraint is None:
+        # Compatibility with the old/direct worksheet-shaped model response. Preserve the
+        # authored content instead of rejecting it merely because the wrapper was omitted.
+        payload = raw.get("specification", raw)
+        implementation = _json_text(payload)
+
+    return {
+        "section": section,
+        "implementation": _json_text(implementation),
+        "constraint": _json_text(constraint),
+        "evidence_refs": refs if isinstance(refs, list) else [],
+    }
+
+
+def _raw_updates(value: Any, selected: tuple[str, ...]) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, Mapping):
+        wrapped = value.get(_FRAGMENT_KEY)
+        if isinstance(wrapped, list):
+            raw_items = wrapped
+        else:
+            # Accept the common small-model drift where selected section names are emitted
+            # directly at the root instead of inside a section_updates wrapper.
+            return [
+                _coerce_update(section, value[section])
+                for section in selected
+                if section in value
+            ]
+    else:
+        raise ValueError("DETAILED_PLAN_CRITERION: fragment must be a JSON object or array")
+
+    updates: list[dict[str, Any]] = []
+    for raw in raw_items:
+        if not isinstance(raw, Mapping):
+            continue
+        section = _text(raw.get("section"))
+        if not section:
+            continue
+        updates.append(_coerce_update(section, raw))
+    return updates
 
 
 def validate_criterion_fragment(
@@ -184,69 +230,69 @@ def validate_criterion_fragment(
     allowed_refs: set[str],
 ) -> dict[str, Any]:
     selected = normalize_required_sections(selected_sections)
-    criterion_fragment_schema(selected)
-    if not isinstance(value, Mapping) or set(value) != {_FRAGMENT_KEY}:
-        raise ValueError(
-            "DETAILED_PLAN_CRITERION: fragment must contain exactly the section_updates array"
-        )
-    raw_updates = value.get(_FRAGMENT_KEY)
-    if not isinstance(raw_updates, list):
-        raise ValueError("DETAILED_PLAN_CRITERION: section_updates must be an array")
+    selected_set = set(selected)
+    raw_updates = _raw_updates(value, selected)
 
     by_section: dict[str, dict[str, Any]] = {}
     meaningful = False
-    selected_set = set(selected)
     for raw_update in raw_updates:
-        if not isinstance(raw_update, Mapping) or set(raw_update) != _FRAGMENT_FIELDS:
-            raise ValueError(
-                "DETAILED_PLAN_CRITERION: each section update must contain exactly "
-                "section, implementation, constraint, evidence_refs"
-            )
         section = _text(raw_update.get("section"))
         if section not in selected_set:
-            raise ValueError(f"DETAILED_PLAN_CRITERION: unexpected section {section!r}")
-        if section in by_section:
-            raise ValueError(f"DETAILED_PLAN_CRITERION: duplicate section {section!r}")
+            continue
 
-        normalized_text: dict[str, str] = {}
-        for field in ("implementation", "constraint"):
-            raw = raw_update.get(field)
-            if not isinstance(raw, str):
-                raise ValueError(f"DETAILED_PLAN_CRITERION: {section}.{field} must be a string")
-            text = _text(raw)
-            if text.casefold() in _PLACEHOLDERS:
-                text = ""
-            normalized_text[field] = text
-            meaningful = meaningful or bool(text)
+        implementation = _text(raw_update.get("implementation"))
+        constraint = _text(raw_update.get("constraint"))
+        if implementation.casefold() in _PLACEHOLDERS:
+            implementation = ""
+        if constraint.casefold() in _PLACEHOLDERS:
+            constraint = ""
+        meaningful = meaningful or bool(implementation or constraint)
 
         raw_refs = raw_update.get("evidence_refs")
-        if not isinstance(raw_refs, list):
-            raise ValueError(
-                f"DETAILED_PLAN_CRITERION: {section}.evidence_refs must be an array"
-            )
         refs = list(
             dict.fromkeys(
                 _text(ref)
                 for ref in raw_refs
-                if isinstance(ref, str) and _text(ref) in allowed_refs
+                if isinstance(raw_refs, list)
+                and isinstance(ref, str)
+                and _text(ref) in allowed_refs
             )
-        )
-        by_section[section] = {
-            "section": section,
-            "implementation": normalized_text["implementation"],
-            "constraint": normalized_text["constraint"],
-            "evidence_refs": refs,
-        }
+        ) if isinstance(raw_refs, list) else []
 
-    if set(by_section) != selected_set:
-        missing = [section for section in selected if section not in by_section]
-        raise ValueError(
-            "DETAILED_PLAN_CRITERION: section_updates must cover every selected section exactly once; "
-            f"missing={missing}"
+        current = by_section.get(section)
+        if current is None:
+            by_section[section] = {
+                "section": section,
+                "implementation": implementation,
+                "constraint": constraint,
+                "evidence_refs": refs,
+            }
+            continue
+
+        # Duplicate section rows are merged rather than making otherwise-useful model work
+        # terminal. This is deterministic and does not invent semantics.
+        if implementation:
+            current["implementation"] = " | ".join(
+                part for part in (current["implementation"], implementation) if part
+            )
+        if constraint:
+            current["constraint"] = " | ".join(
+                part for part in (current["constraint"], constraint) if part
+            )
+        current["evidence_refs"] = list(
+            dict.fromkeys([*current["evidence_refs"], *refs])
         )
+
     if not meaningful:
         raise ValueError(_NO_PROGRESS_FRAGMENT_ERROR)
-    return {_FRAGMENT_KEY: [by_section[section] for section in selected]}
+
+    return {
+        _FRAGMENT_KEY: [
+            by_section[section]
+            for section in selected
+            if section in by_section
+        ]
+    }
 
 
 def generate_criterion_fragment(
@@ -258,21 +304,18 @@ def generate_criterion_fragment(
     evidence: list[Mapping[str, Any]],
     allowed_refs: set[str],
 ) -> dict[str, Any]:
-    """Generate one criterion fragment with one bounded repair for all-empty output.
+    """Generate one criterion fragment with one bounded semantic repair.
 
-    The repair is deliberately narrow: only a schema-valid fragment that contains no
-    implementation or constraint content gets one corrective call. JSON failures, section
-    contract violations, and every other error remain terminal. A second all-empty response
-    also propagates immediately, so this cannot become a count-driven or open-ended retry loop.
+    A hard JSON Schema gate is intentionally not used here. The host parser accepts the
+    small set of equivalent JSON shapes we actually need, so harmless wrapper/optional-field
+    drift cannot terminate the entire planning run.
     """
 
     selected = normalize_required_sections(selected_sections)
-    schema = criterion_fragment_schema(selected)
     raw = router.generate_text(
         "planner",
         criterion_fragment_messages(requirement, criterion, selected, evidence),
         response_format="json",
-        response_schema=schema,
         enable_tools=False,
     )
     decoded = json.loads(raw)
@@ -296,12 +339,10 @@ def generate_criterion_fragment(
             repair_no_progress=True,
         ),
         response_format="json",
-        response_schema=schema,
         enable_tools=False,
     )
-    repaired_decoded = json.loads(repaired_raw)
     return validate_criterion_fragment(
-        repaired_decoded,
+        json.loads(repaired_raw),
         selected_sections=selected,
         allowed_refs=allowed_refs,
     )
@@ -618,7 +659,9 @@ def assemble_worksheet_from_fragments(
         }
         section_refs: list[str] = []
         for index, criterion in enumerate(criteria):
-            update = updates_by_criterion[index][section]
+            update = updates_by_criterion[index].get(section)
+            if update is None:
+                continue
             implementation = _text(update["implementation"])
             constraint = _text(update["constraint"])
             _append_section_records(
