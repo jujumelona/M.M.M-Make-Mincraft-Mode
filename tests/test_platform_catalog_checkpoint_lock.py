@@ -110,3 +110,86 @@ def test_checkpoint_with_non_sha_key_does_not_inherit_parent_lock(tmp_path, monk
         match="Existing project loader could not be identified unambiguously",
     ):
         catalog.adapter_from_project(project_root)
+
+
+def test_fabric_descriptor_identifies_loader_without_platform_lock(tmp_path, monkeypatch):
+    adapter = _adapter()
+    project_root = tmp_path / "project"
+    resources = project_root / "src" / "main" / "resources"
+    resources.mkdir(parents=True)
+    (project_root / "gradle.properties").write_text(
+        "minecraft_version=1.21.4\n",
+        encoding="utf-8",
+    )
+    (resources / "fabric.mod.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "id": "debugfixture",
+                "version": "1.0.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_adapter_for_target(version: str, loader: str):
+        calls.append((version, loader))
+        return adapter
+
+    monkeypatch.setattr(catalog, "adapter_for_target", fake_adapter_for_target)
+
+    resolved = catalog.adapter_from_project(project_root)
+
+    assert resolved is adapter
+    assert calls == [("1.21.4", "fabric")]
+
+
+def test_malformed_fabric_descriptor_does_not_identify_loader(tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    resources = project_root / "src" / "main" / "resources"
+    resources.mkdir(parents=True)
+    (project_root / "gradle.properties").write_text(
+        "minecraft_version=1.21.4\n",
+        encoding="utf-8",
+    )
+    (resources / "fabric.mod.json").write_text("{not-json", encoding="utf-8")
+
+    monkeypatch.setattr(
+        catalog,
+        "adapter_for_target",
+        lambda _version, _loader: pytest.fail("malformed descriptor must not select Fabric"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Existing project loader could not be identified unambiguously",
+    ):
+        catalog.adapter_from_project(project_root)
+
+
+def test_incomplete_fabric_descriptor_does_not_identify_loader(tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    resources = project_root / "src" / "main" / "resources"
+    resources.mkdir(parents=True)
+    (project_root / "gradle.properties").write_text(
+        "minecraft_version=1.21.4\n",
+        encoding="utf-8",
+    )
+    (resources / "fabric.mod.json").write_text(
+        json.dumps({"schemaVersion": 1, "id": "debugfixture"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        catalog,
+        "adapter_for_target",
+        lambda _version, _loader: pytest.fail("incomplete descriptor must not select Fabric"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Existing project loader could not be identified unambiguously",
+    ):
+        catalog.adapter_from_project(project_root)
