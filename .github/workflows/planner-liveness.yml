@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
+      - 'minecraft_mod_ai/planning_criterion_fragments.py'
       - 'minecraft_mod_ai/planning_state_research.py'
       - 'minecraft_mod_ai/planning_state_pipeline.py'
       - 'minecraft_mod_ai/planning_convergence_contract.py'
@@ -18,6 +19,7 @@ on:
       - main
     paths:
       - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
+      - 'minecraft_mod_ai/planning_criterion_fragments.py'
       - 'minecraft_mod_ai/planning_state_research.py'
       - 'minecraft_mod_ai/planning_state_pipeline.py'
       - 'minecraft_mod_ai/planning_convergence_contract.py'
@@ -51,6 +53,7 @@ jobs:
         run: >-
           python -m py_compile
           minecraft_mod_ai/planning_state_adaptive_implementation.py
+          minecraft_mod_ai/planning_criterion_fragments.py
           minecraft_mod_ai/planning_state_research.py
           minecraft_mod_ai/planning_state_pipeline.py
           minecraft_mod_ai/planning_convergence_contract.py
