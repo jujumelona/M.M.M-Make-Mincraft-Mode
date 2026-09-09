@@ -30,6 +30,7 @@ from .planning_criterion_fragments import (
 )
 from .planning_detail_template import normalize_required_sections
 from .planning_detail_slots import DETAIL_RECORDS
+from .planning_targeted_section_repair import generate_targeted_section_fragment
 from .planning_state_contract import validate_planning_state
 from .planning_state_implementation import (
     _assemble_requirement_plan,
@@ -300,7 +301,7 @@ def _finish_requirement(
         # exposes exactly the missing section, so the model cannot fill a different row.
         for section in gap.sections:
             with planner_operation(f"detailed_section:{job['requirement_ref']}:{section}"):
-                supplement = generate_criterion_fragment(
+                supplement = generate_targeted_section_fragment(
                     router,
                     requirement=job["requirement"],
                     criterion=(
@@ -311,7 +312,8 @@ def _finish_requirement(
                         "reference-only evidence and missing proof. For verification, specify "
                         "observable success and rejection checks."
                     ),
-                    selected_sections=(section,),
+                    selected_sections=job["selected_sections"],
+                    target_section=section,
                     evidence=job["evidence"],
                     allowed_refs=job["allowed"],
                 )

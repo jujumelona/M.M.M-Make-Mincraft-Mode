@@ -124,7 +124,8 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
     )[0]
 
     assert len(router.calls) >= len(WORKSHEET_SECTIONS)
-    assert all(call["tool_name"] == "submit_fixed_template" for call in router.calls)
+    assert all(str(call["tool_name"]).startswith("submit_") for call in router.calls)
+    assert all(call["parameters"].get("type") == "object" for call in router.calls)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []

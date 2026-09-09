@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import minecraft_mod_ai.planning_state_adaptive_implementation as adaptive
+from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 
 
 def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monkeypatch) -> None:
@@ -28,14 +29,14 @@ def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monk
         requirement: dict[str, Any],
         criterion: str,
         selected_sections: tuple[str, ...],
+        target_section: str,
         evidence: list[dict[str, Any]],
         allowed_refs: set[str],
     ) -> dict[str, Any]:
         del requirement, criterion, evidence, allowed_refs
-        selection = tuple(selected_sections)
-        repair_selections.append(selection)
-        assert len(selection) == 1
-        section = selection[0]
+        assert tuple(selected_sections) == WORKSHEET_SECTIONS
+        section = target_section
+        repair_selections.append((section,))
         assert section in implementations
         return {
             "section_updates": [
@@ -48,7 +49,7 @@ def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monk
             ]
         }
 
-    monkeypatch.setattr(adaptive, "generate_criterion_fragment", generate_targeted_fragment)
+    monkeypatch.setattr(adaptive, "generate_targeted_section_fragment", generate_targeted_fragment)
     monkeypatch.setattr(
         adaptive,
         "store_criterion_progress",
@@ -85,22 +86,19 @@ def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monk
             "statement": "Collected resources enter the player inventory.",
         },
         "requirement_ref": "req_001",
-        "selected_sections": (
-            "behavior_contract",
-            "integration",
-            "persistence",
-            "reuse_assessment",
-        ),
+        "selected_sections": WORKSHEET_SECTIONS,
         "criteria": ("A successful collection adds the resource to inventory.",),
         "fragments": {
             0: {
                 "section_updates": [
                     {
-                        "section": "behavior_contract",
-                        "implementation": "A successful collection exposes the acquired resource.",
-                        "constraint": "Rejected collection leaves inventory unchanged.",
+                        "section": section,
+                        "implementation": f"Existing concrete contract for {section}.",
+                        "constraint": f"Existing concrete boundary for {section}.",
                         "evidence_refs": [],
                     }
+                    for section in WORKSHEET_SECTIONS
+                    if section not in {"integration", "persistence", "reuse_assessment"}
                 ]
             }
         },
