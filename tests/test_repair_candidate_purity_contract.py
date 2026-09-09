@@ -10,21 +10,32 @@ def test_repair_candidate_is_inert_and_defers_scope_commit() -> None:
     seen: dict[str, object] = {}
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("repair candidate generation must not author structured JSON text")
+
+        def generate_tool_decision(
+            self,
+            role,
+            messages,
+            *,
+            tool_name,
+            parameters,
+            description="",
+        ):
             seen["role"] = role
             seen["messages"] = messages
-            seen.update(kwargs)
-            return json.dumps(
-                {
-                    "operations": [
-                        {
-                            "operation": "create",
-                            "path": "src/main/java/PureCandidate.java",
-                            "content": "final class PureCandidate {}",
-                        }
-                    ]
-                }
-            )
+            seen["tool_name"] = tool_name
+            seen["parameters"] = parameters
+            seen["description"] = description
+            return {
+                "operations": [
+                    {
+                        "operation": "create",
+                        "path": "src/main/java/PureCandidate.java",
+                        "content": "final class PureCandidate {}",
+                    }
+                ]
+            }
 
     class Engine:
         def __init__(self) -> None:
@@ -64,8 +75,8 @@ def test_repair_candidate_is_inert_and_defers_scope_commit() -> None:
 
     assert operations[0]["path"] == "src/main/java/PureCandidate.java"
     assert seen["role"] == "coder"
-    assert seen["response_format"] == "json"
-    assert seen["enable_tools"] is False
+    assert seen["tool_name"] == "submit_fixed_template"
+    assert seen["parameters"]["additionalProperties"] is False
     assert engine._mmm_last_java_paths == ("winner-scope.java",)
     assert getattr(engine._request_patch, "_mmm_defers_repair_scope_commit", False)
     assert getattr(engine._request_patch, "_mmm_pure_candidate_generation", False)
