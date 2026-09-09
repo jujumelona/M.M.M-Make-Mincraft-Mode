@@ -118,7 +118,9 @@ def _run_candidate_generation(
         thread_name_prefix="mmm_custom_generate",
     ) as pool:
         pending: dict[Future[Any], tuple[int, Path]] = {
-            pool.submit(run, candidate_index, candidate_root): (candidate_index, candidate_root)
+            search_module._submit_with_copied_context(
+                pool, run, candidate_index, candidate_root
+            ): (candidate_index, candidate_root)
             for candidate_index, candidate_root in enumerate(candidate_roots)
         }
         for future in as_completed(pending):
@@ -156,7 +158,9 @@ def _evaluate_candidates(
                 candidate_root,
                 result,
                 capture,
-                pool.submit(search_module._verify_candidate, candidate_root, result),
+                search_module._submit_with_copied_context(
+                    pool, search_module._verify_candidate, candidate_root, result
+                ),
             )
             for candidate_index, candidate_root, result, capture in candidates
         ]

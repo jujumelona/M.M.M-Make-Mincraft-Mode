@@ -263,7 +263,7 @@ def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
     assert compact_task["production_bindings"] == original_task["production_bindings"]
     assert compact_task["acceptance"] == original_task["acceptance"]
     assert compact_task["coder_execution_contract"]["schema_version"] == (
-        "mmm/coder-execution-contract-v2"
+        "mmm/coder-execution-contract"
     )
 
     original_bytes = len(json.dumps(original_task).encode("utf-8"))

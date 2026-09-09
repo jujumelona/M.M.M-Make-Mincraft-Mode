@@ -198,3 +198,91 @@ def test_legacy_width_two_search_acknowledges_only_after_live_commit(
     assert (root / relative).read_text(encoding="utf-8") == (
         "package example;\nfinal class LegacySearch {}\n"
     )
+
+
+def test_parallel_generation_preserves_task_authority_and_capsule_contextvars(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from typing import Any
+    from minecraft_mod_ai.direct_task_mutation_authority_contract import _CURRENT_AUTHORITY
+    from minecraft_mod_ai.small_model_task_capsule_contract import _CURRENT_CAPSULE
+
+    monkeypatch.setenv("MMM_AGENTIC_SEARCH", "on")
+    monkeypatch.setenv("MMM_CUSTOM_SEARCH_WIDTH", "2")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    monkeypatch.setenv("MMM_CUSTOM_CANDIDATE_JDT", "off")
+
+    root = tmp_path / "project"
+    root.mkdir()
+
+    seen_authorities: list[Any] = []
+    seen_capsules: list[Any] = []
+
+    mock_authority = object()
+    mock_capsule = object()
+
+    auth_token = _CURRENT_AUTHORITY.set(mock_authority)  # type: ignore[arg-type]
+    cap_token = _CURRENT_CAPSULE.set(mock_capsule)  # type: ignore[arg-type]
+
+    try:
+        module = SimpleNamespace(
+            kind="custom_java",
+            config={"feature": "contextvar preservation"},
+            depends_on=(),
+            required_gates=(),
+        )
+        owner = SimpleNamespace(
+            router=_Router(),
+            policy=ScalePolicy(model_context_bytes=4096),
+            _cached_index=None,
+            _cached_root=None,
+            acknowledge_generation_checkpoint=lambda r: True,
+            release_generation_checkpoint=lambda r: True,
+            discard_generation_checkpoint=lambda r: True,
+        )
+        platform = adapter_for_target("1.20.1", "fabric")
+
+        def single_generate(self, project_root, *args, **kwargs):
+            seen_authorities.append(_CURRENT_AUTHORITY.get())
+            seen_capsules.append(_CURRENT_CAPSULE.get())
+            relative = "src/main/java/example/ContextVarTest.java"
+            receipt = TransactionalSourcePatcher(project_root).apply(
+                [
+                    {
+                        "operation": "create",
+                        "path": relative,
+                        "content": "package example;\nfinal class ContextVarTest {}\n",
+                    }
+                ]
+            )
+            return {
+                "schema_version": "test/custom-candidate-v1",
+                "patch_receipt": receipt,
+                "touched_paths": [relative],
+                "operation_count": 1,
+                "runtime_tests": [],
+            }
+
+        result = _parallel_generate(
+            owner,
+            single_generate,
+            root,
+            args=(),
+            kwargs={
+                "module": module,
+                "minecraft_version": platform.minecraft_version,
+                "loader": platform.loader,
+                "mappings": platform.yarn_mappings,
+            },
+            search_module=custom_search,
+        )
+
+        assert len(seen_authorities) == 2
+        assert all(a is mock_authority for a in seen_authorities)
+        assert len(seen_capsules) == 2
+        assert all(c is mock_capsule for c in seen_capsules)
+    finally:
+        _CURRENT_AUTHORITY.reset(auth_token)
+        _CURRENT_CAPSULE.reset(cap_token)
+

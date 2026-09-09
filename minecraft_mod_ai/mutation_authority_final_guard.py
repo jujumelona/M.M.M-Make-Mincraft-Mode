@@ -283,7 +283,32 @@ def install(loop_module: Any | None = None) -> None:
                     host_path = loop_module._canonical_mutation_path(host_pin.target_path)
                     if not current_pinned or current_path != host_path:
                         state.mutation_context = host_pin
-            return original_is_ready(messages, state)
+            ready = original_is_ready(messages, state)
+            if host_pin is not None:
+                with state._lock:
+                    current = state.mutation_context
+                    if current is not None:
+                        current_path = loop_module._canonical_mutation_path(
+                            getattr(current, "target_path", "")
+                        )
+                        host_path = loop_module._canonical_mutation_path(host_pin.target_path)
+                        if current_path == host_path:
+                            state.mutation_context = replace(
+                                current,
+                                writable_paths=tuple(
+                                    getattr(host_pin, "writable_paths", ()) or ()
+                                ),
+                                creatable_paths=tuple(
+                                    getattr(host_pin, "creatable_paths", ()) or ()
+                                ),
+                                target_pinned=True,
+                            )
+                        else:
+                            state.mutation_context = host_pin
+                    else:
+                        state.mutation_context = host_pin
+            return ready
+
 
         Context.merge = merge
         loop_module.is_mutation_ready = is_mutation_ready

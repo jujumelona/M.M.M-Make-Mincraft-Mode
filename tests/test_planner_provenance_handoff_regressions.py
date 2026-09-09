@@ -97,7 +97,7 @@ def test_coder_capsule_uses_only_host_compiled_execution_authority() -> None:
     compact = contract["evidence_task"]
     execution = compact["coder_execution_contract"]
 
-    assert execution["schema_version"] == "mmm/coder-execution-contract-v2"
+    assert execution["schema_version"] == "mmm/coder-execution-contract"
     assert execution["task_ref"] == "task_alpha"
     assert execution["target_constraints"]["minecraft_version"] == "1.21.1"
     assert execution["target_constraints"]["mappings"] == "mojang"

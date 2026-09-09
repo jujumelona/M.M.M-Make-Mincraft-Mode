@@ -57,7 +57,7 @@ def test_compatibility_surface_uses_one_canonical_contract_owner() -> None:
     compatibility = build_coder_execution_contract(task)
     canonical = build_implementation_template(task)
 
-    assert CODER_EXECUTION_CONTRACT_SCHEMA == SCHEMA == "mmm/coder-execution-contract-v2"
+    assert CODER_EXECUTION_CONTRACT_SCHEMA == SCHEMA == "mmm/coder-execution-contract"
     assert compatibility == canonical
     assert compatibility["task_ref"] == "task_example"
     assert [step["obligation"] for step in compatibility["implementation_steps"]] == [

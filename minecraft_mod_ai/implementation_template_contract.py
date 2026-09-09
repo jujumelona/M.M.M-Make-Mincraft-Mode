@@ -98,7 +98,7 @@ def _anchor_target(anchor: Mapping[str, Any]) -> dict[str, str]:
     locator = str(anchor.get("locator") or "").strip().replace("\\", "/")
     path, separator, symbol = locator.partition("#")
     kind = str(anchor.get("kind") or "").strip()
-    status = str(anchor.get("status") or "").strip()
+    status = str(anchor.get("status") or "host_reserved").strip()
     try:
         operation = target_operation(status)
     except ValueError as exc:
@@ -145,6 +145,18 @@ def _verification_plan(task: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "pass_condition": (
                     "Every declared observable acceptance statement is proven with its "
                     "expected state/output; compile success or model self-report alone is insufficient."
+                ),
+            }
+        )
+    if not plan:
+        plan.append(
+            {
+                "sequence": 0,
+                "gate": "source_static_validation",
+                "executor": "host_gate_runner",
+                "pass_condition": (
+                    "The named host gate returns PASS for this task and immutable target; "
+                    "do not reinterpret, skip or replace the gate."
                 ),
             }
         )
@@ -293,6 +305,20 @@ def _validate_contract(contract: Mapping[str, Any]) -> None:
         raise ValueError(f"coder execution contract {task_ref!r} hash mismatch")
 
 
+def _engineering_worksheet(task: Mapping[str, Any]) -> dict[str, Any]:
+    worksheet = task.get("engineering_worksheet")
+    if isinstance(worksheet, Mapping) and worksheet:
+        return dict(worksheet)
+    obligations = list(_strings(task.get("implementation_obligations")))
+    obligations.extend(_strings(task.get("design_resolution_obligations")))
+    obligations.extend(_strings(task.get("implementation_capabilities")))
+    return {
+        "objective": str(task.get("semantic_outcome") or task.get("task_id") or "").strip(),
+        "obligations": obligations or [str(task.get("task_id") or "").strip()],
+        "target_constraints": _target_constraints(task),
+    }
+
+
 def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
     """Compile one task into a complete, non-redesignable coder handoff."""
     task_id = str(task.get("task_id") or "").strip()
@@ -311,14 +337,16 @@ def build_implementation_template(task: Mapping[str, Any]) -> dict[str, Any]:
         "task_ref": task_id,
         "task_sha256_input": str(task.get("task_sha256") or ""),
         "sequence": int(task.get("sequence") or 0),
-        "execution_role": str(task.get("execution_role") or "").strip(),
-        "semantic_outcome": str(task.get("semantic_outcome") or "").strip(),
+        "execution_role": str(task.get("execution_role") or "coder").strip(),
+        "semantic_outcome": str(
+            task.get("semantic_outcome") or task.get("task_id") or ""
+        ).strip(),
         "requirement_refs": list(_strings(task.get("requirement_refs"))),
         "depends_on": list(_strings(task.get("depends_on"))),
         "target_constraints": _target_constraints(task),
         "targets": targets,
         "implementation_steps": _implementation_steps(task, targets),
-        "engineering_worksheet": task.get("engineering_worksheet"),
+        "engineering_worksheet": _engineering_worksheet(task),
         "research_reuse_candidates": task.get("research_reuse_candidates", []),
         "dataflow": {
             "consumes": list(_strings(task.get("consumes"))),

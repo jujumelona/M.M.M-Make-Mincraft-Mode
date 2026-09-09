@@ -64,7 +64,7 @@ def _task() -> dict[str, object]:
 def test_coder_contract_is_complete_host_owned_v2() -> None:
     contract = build_implementation_template(_task())
 
-    assert contract["schema_version"] == SCHEMA == "mmm/coder-execution-contract-v2"
+    assert contract["schema_version"] == SCHEMA == "mmm/coder-execution-contract"
     assert contract["task_ref"] == "task_ship_runtime"
     assert contract["depends_on"] == ["task_build_ship"]
     assert contract["target_constraints"] == {

@@ -55,7 +55,7 @@ def test_evidence_task_projection_preserves_task_and_adds_only_host_execution_co
         if key in projected_task:
             assert projected_task[key] == value
     contract = projected_task["coder_execution_contract"]
-    assert contract["schema_version"] == "mmm/coder-execution-contract-v2"
+    assert contract["schema_version"] == "mmm/coder-execution-contract"
     assert contract["task_ref"] == "task_example"
     assert contract["target_constraints"]["minecraft_version"] == "1.21.1"
     assert contract["implementation_steps"][0]["obligation"] == (

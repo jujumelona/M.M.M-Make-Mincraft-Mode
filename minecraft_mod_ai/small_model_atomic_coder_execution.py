@@ -262,7 +262,7 @@ def atomicize_coder_messages(
     for step_index, step in enumerate(steps):
         current = copy.deepcopy(request)
         current_module = _mapping(current.pop("module", None))
-        current_evidence = {
+        current_evidence: dict[str, Any] = {
             "task_id": _task_ref(contract, evidence_task),
             "coder_execution_contract": _atomic_contract(
                 contract,
@@ -275,6 +275,9 @@ def atomicize_coder_messages(
         task_sha = str(evidence_task.get("task_sha256") or "").strip()
         if task_sha:
             current_evidence["task_sha256"] = task_sha
+        for key in ("owned_anchors", "production_bindings", "required_gates"):
+            if key in evidence_task:
+                current_evidence[key] = copy.deepcopy(evidence_task[key])
         current_module = {
             "module_id": str(
                 current_module.get("module_id") or current_evidence["task_id"]
