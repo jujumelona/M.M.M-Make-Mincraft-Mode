@@ -1,0 +1,63 @@
+name: Planner Liveness Regression
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
+      - 'minecraft_mod_ai/planning_state_research.py'
+      - 'minecraft_mod_ai/planning_state_pipeline.py'
+      - 'minecraft_mod_ai/planning_convergence_contract.py'
+      - 'minecraft_mod_ai/planning_detail_template.py'
+      - 'minecraft_mod_ai/planning_state_implementation.py'
+      - 'tests/test_planning_progress_monotone.py'
+      - 'tests/test_planning_convergence_contract.py'
+      - '.github/workflows/planner-liveness.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
+      - 'minecraft_mod_ai/planning_state_research.py'
+      - 'minecraft_mod_ai/planning_state_pipeline.py'
+      - 'minecraft_mod_ai/planning_convergence_contract.py'
+      - 'minecraft_mod_ai/planning_detail_template.py'
+      - 'minecraft_mod_ai/planning_state_implementation.py'
+      - 'tests/test_planning_progress_monotone.py'
+      - 'tests/test_planning_convergence_contract.py'
+      - '.github/workflows/planner-liveness.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: planner-liveness-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: Monotone planning and terminal resume
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Compile planner-owned sources
+        run: >-
+          python -m py_compile
+          minecraft_mod_ai/planning_state_adaptive_implementation.py
+          minecraft_mod_ai/planning_state_research.py
+          minecraft_mod_ai/planning_state_pipeline.py
+          minecraft_mod_ai/planning_convergence_contract.py
+          tests/test_planning_progress_monotone.py
+          tests/test_planning_convergence_contract.py
+      - name: Run planner liveness regressions
+        run: >-
+          python -m pytest -q
+          tests/test_planning_progress_monotone.py
+          tests/test_planning_convergence_contract.py
