@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 from .model_response_templates import response_schema, response_template_prompt
 
 import hashlib
@@ -705,7 +707,7 @@ class CustomModuleGenerator:
             "rules": [
                 "Implement the feature directly; do not return a file-plan protocol.",
                 "Use workspace/RAG/MCP tools to retrieve exact source as needed instead of asking for the whole repository.",
-                "Apply real edits with the source-edit tool; return the final summary in the supplied JSON template.",
+                "Apply real edits with the source-edit tool; fill the final summary in the supplied fixed template.",
                 response_template_prompt("coder_summary"),
                 "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
                 "Build infrastructure, Gradle configuration and host-owned ledgers are read-only.",
@@ -741,10 +743,9 @@ class CustomModuleGenerator:
                 staged_root,
                 checkpoint_identity,
             ):
-                summary = self.router.generate_text(
+                summary = generate_fixed_template_text(self.router,
                     "coder",
                     initial_messages,
-                    response_format="json",
                     response_schema=response_schema("coder_summary"),
                     tool_stage="generation",
                     enable_tools=True,

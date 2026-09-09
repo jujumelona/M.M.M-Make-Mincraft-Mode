@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 from .model_response_templates import response_schema, response_template_prompt
 
 import json
@@ -308,7 +310,7 @@ class RepairEngine:
                 "the project context; never substitute a different target."
             ),
             "constraints": [
-                "Return exactly one JSON object with key operations.",
+                "Fill the supplied fixed template with the operations field.",
                 "Use only create, replace or edit operations.",
                 "Every non-create operation must use the supplied exact SHA-256.",
                 "Preserve the exact approved loader/version/mappings and requested functionality.",
@@ -320,7 +322,7 @@ class RepairEngine:
             "project_context": context,
         }
         try:
-            text = self.router.generate_text(
+            text = generate_fixed_template_text(self.router,
                 "coder_safe",
                 [
                     {
@@ -335,7 +337,6 @@ class RepairEngine:
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 tool_stage="quality",
-                response_format="json",
                 response_schema=response_schema("repair"),
             )
         except Exception as exc:

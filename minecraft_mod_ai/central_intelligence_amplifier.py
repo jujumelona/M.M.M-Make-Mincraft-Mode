@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 import hashlib
 import json
 import os
@@ -728,7 +730,7 @@ def build_central_committee(router: Any, prompt: str) -> dict[str, Any]:
                 "role": "system",
                 "content": (
                     "You are one independent analysis specialist supporting a weak central "
-                    "Minecraft-mod planner. Return only the compact JSON contract. Do not emit "
+                    "Minecraft-mod planner. Fill only the supplied compact fixed template. Do not emit "
                     "chain-of-thought. The user request is the sole authority. Your analysis is "
                     "advisory: detect requirements and risks but never invent features. "
                     + instruction
@@ -743,10 +745,9 @@ def build_central_committee(router: Any, prompt: str) -> dict[str, Any]:
                 ),
             },
         ]
-        raw = router.generate_text(
+        raw = generate_fixed_template_text(router,
             "planner",
             messages,
-            response_format="json",
             response_schema=_COUNCIL_SCHEMA,
             enable_tools=False,
         )
@@ -916,7 +917,7 @@ def _parallel_reviews(
                 "role": "system",
                 "content": (
                     f"You are an independent adversarial reviewer of {target}. "
-                    "Return only the JSON contract and no chain-of-thought. The original user "
+                    "Fill only the supplied fixed template and no chain-of-thought. The original user "
                     "request is authoritative; generated research/design is not. " + instruction
                 ),
             },
@@ -930,10 +931,9 @@ def _parallel_reviews(
                 ),
             },
         ]
-        raw = router.generate_text(
+        raw = generate_fixed_template_text(router,
             "coder_safe",
             messages,
-            response_format="json",
             response_schema=_REVIEW_SCHEMA,
             enable_tools=False,
         )
@@ -970,7 +970,7 @@ def _chair_synthesis(
     specialists: Sequence[Mapping[str, Any]],
     disagreement: float,
 ) -> dict[str, Any]:
-    raw = router.generate_text(
+    raw = generate_fixed_template_text(router,
         "planner",
         [
             {
@@ -979,7 +979,7 @@ def _chair_synthesis(
                     "Act as a constrained Mixture-of-Agents chair. Synthesize only statements "
                     "supported by the authoritative request or at least one specialist as a "
                     "question/risk. Never turn a speculative specialist idea into a requirement. "
-                    "Return only compact JSON and no chain-of-thought."
+                    "Fill only the supplied compact fixed template and no chain-of-thought."
                 ),
             },
             {
@@ -995,7 +995,6 @@ def _chair_synthesis(
                 ),
             },
         ],
-        response_format="json",
         response_schema=_CHAIR_SCHEMA,
         enable_tools=False,
     )
@@ -1037,7 +1036,7 @@ def _extra_disagreement_specialist(
     prompt: str,
     specialists: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    raw = router.generate_text(
+    raw = generate_fixed_template_text(router,
         "planner",
         [
             {
@@ -1045,7 +1044,7 @@ def _extra_disagreement_specialist(
                 "content": (
                     "The specialist council disagreed materially. Resolve only the disagreement "
                     "by re-reading the authoritative request. Prefer uncertainty over invention. "
-                    "Return the analysis JSON contract, no chain-of-thought."
+                    "Fill the supplied analysis fixed template; no chain-of-thought."
                 ),
             },
             {
@@ -1060,7 +1059,6 @@ def _extra_disagreement_specialist(
                 ),
             },
         ],
-        response_format="json",
         response_schema=_COUNCIL_SCHEMA,
         enable_tools=False,
     )

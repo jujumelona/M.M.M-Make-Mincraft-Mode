@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 import argparse
 import hashlib
 import json
@@ -92,17 +94,16 @@ def run_model_smoke(
         else:
             media = [media_path] if media_path is not None else []
             with router.generation_session(role):
-                text = router.generate_text(
+                text = generate_fixed_template_text(router,
                     role,
                     [
                         {
                             "role": "system",
-                            "content": "Return exactly one valid JSON object. No markdown.",
+                            "content": "Fill the supplied fixed template exactly once. No markdown.",
                         },
-                        {"role": "user", "content": "Return exactly {}."},
+                        {"role": "user", "content": "Fill the supplied empty fixed template."},
                     ],
                     media_paths=media,
-                    response_format="json",
                     response_schema={"type": "object", "properties": {}, "additionalProperties": False},
                     enable_tools=False,
                 )

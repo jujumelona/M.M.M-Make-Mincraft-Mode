@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 """Host-owned detailed-plan compilation from grounded research.
 
 Each requirement is decomposed into schema-constrained engineering worksheet sections.
@@ -333,10 +335,9 @@ def _generate_chunk(
                 raise
             # Fall back to text generation if native tool call fails or is not enabled for role
 
-    raw = router.generate_text(
+    raw = generate_fixed_template_text(router,
         "planner",
         messages,
-        response_format="json",
         response_schema=chunk_schema,
         enable_tools=False,
     )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_value
+
 """Acceptance-criterion planning with tolerant model-output normalization.
 
 One approved public acceptance criterion is the semantic work unit. The model only has
@@ -399,11 +401,13 @@ def _fill_criterion_template(
     *,
     batch: bool,
 ) -> Mapping[str, Any]:
-    value = router.generate_tool_decision(
+    value = generate_fixed_template_value(
+        router,
         "planner",
         messages,
+        response_schema=schema,
+        enable_tools=False,
         tool_name=_CRITERION_BATCH_TOOL_NAME if batch else _CRITERION_TOOL_NAME,
-        parameters=schema,
         description=(
             "Fill the fixed criterion-fragment batch template with exactly one row per supplied criterion_index."
             if batch

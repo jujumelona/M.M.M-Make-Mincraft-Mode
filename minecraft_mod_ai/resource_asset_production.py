@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 'Minecraft pixel-resource planning and real binary production.\n\nQwen plans *which* resources change and emits multiple final prompts per asset while it\nis resident.  Production later runs only those persisted jobs through the fixed\nFLUX.2 Klein 9B Q4 + PixelArt Redmond LoRA backend, then performs deterministic\nMinecraft PNG/path/reference/pack validation.  No placeholder counts as success.\n'
 import hashlib
 import json
@@ -44,7 +46,7 @@ def attach_generation_plan(router: Any, proposal: CompleteProposal) -> CompleteP
         batch = assets[offset:offset + _PROMPT_BATCH]
         schema = _prompt_response_schema(batch)
         request = {'task': 'Write the actual image-generation prompts that will be executed later. Do not describe a future plan. Do not add resources that the user did not request.', 'original_request': proposal.requested_prompt, 'target': _target_receipt(proposal.game_design), 'fixed_image_backend': {'model_id': FLUX_MODEL_ID, 'quantization': QUANTIZATION, 'lora_model_id': PIXEL_LORA_ID, 'lora_trigger': PIXEL_LORA_TRIGGER}, 'assets': [{'asset_id': asset.asset_id, 'kind': asset.kind, 'current_prompt': asset.prompt, 'target_path': asset.target_path.replace('\\', '/'), 'width': asset.width, 'height': asset.height} for asset in batch], 'rules': [f'Return exactly {_PROMPTS_PER_ASSET} distinct prompt strings for every asset_id.', f'Every prompt must begin with {PIXEL_LORA_TRIGGER!r}.', 'Prompts are low-resolution Minecraft resource assets, not screenshots or voxel scenes.', 'Preserve transparent-background intent for isolated items/icons when appropriate.', 'Do not change target paths, dimensions, asset IDs, or the fixed model/LoRA.', 'Each prompt must be independently executable and specify the requested replacement appearance.']}
-        text = router.generate_text('planner', [{'role': 'system', 'content': 'Return only the JSON object required by the schema. Produce concrete, diverse image prompts for the exact listed Minecraft resources.'}, {'role': 'user', 'content': json.dumps(request, ensure_ascii=False, sort_keys=True)}], response_format='json', response_schema=schema, tool_stage='planning')
+        text = generate_fixed_template_text(router,'planner', [{'role': 'system', 'content': 'Fill only the supplied fixed template. Produce concrete, diverse image prompts for the exact listed Minecraft resources.'}, {'role': 'user', 'content': json.dumps(request, ensure_ascii=False, sort_keys=True)}], response_schema=schema, tool_stage='planning')
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exc:

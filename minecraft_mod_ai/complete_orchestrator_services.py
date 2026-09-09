@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .fixed_template_generation import generate_fixed_template_text
+
 from .model_response_templates import response_schema, response_template_prompt
 
 import hashlib
@@ -576,7 +578,7 @@ def visual_review(
         raise CompleteProductionError(
             "Every visual-review screenshot must be a regular file."
         )
-    text = router.generate_text(
+    text = generate_fixed_template_text(router,
         "visual_critic",
         [
             {
@@ -602,7 +604,6 @@ def visual_review(
             },
         ],
         media_paths=paths,
-        response_format="json",
         response_schema=response_schema("visual_review"),
     )
     value = _extract_json(text)
