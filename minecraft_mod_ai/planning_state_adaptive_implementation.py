@@ -28,7 +28,7 @@ from .planning_criterion_fragments import (
     requirement_acceptance_criteria,
     store_criterion_progress,
 )
-from .planning_detail_template import WORKSHEET_SECTIONS, normalize_required_sections
+from .planning_detail_template import normalize_required_sections
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_state_contract import validate_planning_state
 from .planning_state_implementation import (
