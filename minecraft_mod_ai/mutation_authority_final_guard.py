@@ -18,6 +18,11 @@ from typing import Any
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _HOST_ROLES = frozenset({"system", "developer", "tool"})
+_AUTHORITY_PRIORITY = {
+    "mmm/direct-task-mutation-authority-v1": 300,
+    "mmm/small-model-task-capsule": 200,
+}
+_DEFAULT_AUTHORITY_PRIORITY = 100
 
 
 def _structured_payload(content: Any) -> Any | None:
@@ -43,6 +48,11 @@ def _explicit_mutation_target(payload: Any, loop_module: Any) -> str:
     return loop_module._canonical_mutation_path(target.get("path"))
 
 
+def _authority_priority(payload: Mapping[str, Any]) -> int:
+    schema = str(payload.get("schema_version") or "").strip()
+    return _AUTHORITY_PRIORITY.get(schema, _DEFAULT_AUTHORITY_PRIORITY)
+
+
 def _union_paths(loop_module: Any, *groups: Sequence[str]) -> tuple[str, ...]:
     result: list[str] = []
     for group in groups:
@@ -53,12 +63,21 @@ def _union_paths(loop_module: Any, *groups: Sequence[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _authority_signature(context: Any, loop_module: Any) -> tuple[Any, ...]:
+    return (
+        loop_module._canonical_mutation_path(getattr(context, "target_path", "")),
+        tuple(getattr(context, "writable_paths", ()) or ()),
+        tuple(getattr(context, "creatable_paths", ()) or ()),
+    )
+
+
 def _host_pin_from_messages(
     messages: Sequence[Mapping[str, Any]], loop_module: Any
 ) -> Any | None:
-    """Resolve one explicit host target from immutable task-owned anchors."""
+    """Resolve the strongest explicit host target, independent of wrapper message order."""
 
-    for message in messages:
+    candidates: list[tuple[int, int, Any]] = []
+    for index, message in enumerate(messages):
         if not isinstance(message, Mapping):
             continue
         role = str(message.get("role") or "").strip().casefold()
@@ -87,13 +106,36 @@ def _host_pin_from_messages(
             continue
         if not hasattr(context, "target_pinned"):
             continue
-        return replace(
+        pinned = replace(
             context,
             writable_paths=writable,
             creatable_paths=creatable,
             target_pinned=True,
         )
-    return None
+        candidates.append((_authority_priority(payload), index, pinned))
+
+    if not candidates:
+        return None
+
+    strongest = max(priority for priority, _index, _context in candidates)
+    finalists = [
+        (index, context)
+        for priority, index, context in candidates
+        if priority == strongest
+    ]
+    signatures = {
+        _authority_signature(context, loop_module)
+        for _index, context in finalists
+    }
+    if len(signatures) != 1:
+        raise RuntimeError(
+            "MUTATION_AUTHORITY_CONFLICT: equally authoritative host task receipts "
+            "disagree on the exact mutation target or writable set."
+        )
+
+    # Equal signatures are semantically identical. Choosing the last receipt makes the
+    # tie deterministic without allowing wrapper insertion order to alter authority.
+    return max(finalists, key=lambda item: item[0])[1]
 
 
 def install(loop_module: Any | None = None) -> None:
