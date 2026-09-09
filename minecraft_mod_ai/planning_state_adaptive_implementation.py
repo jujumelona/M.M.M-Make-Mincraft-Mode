@@ -1,39 +1,35 @@
 from __future__ import annotations
 
-"""Requirement-first, progress-monotone detailed planning for small local models.
+"""Acceptance-criterion, progress-monotone detailed planning for small local models.
 
-Each unfinished requirement gets one bounded whole-worksheet attempt first. Only a failed
-requirement is decomposed, and individually valid dependency-closed sections from that
-attempt are retained in memory so only missing/invalid sections are regenerated. Completed
-requirements are merged into the canonical state and checkpointed immediately.
+The host never asks the model to emit a complete worksheet or worksheet section. Each
+already-approved public acceptance criterion is one bounded model contract. Criterion
+fragments are checkpointed individually, merged deterministically into the canonical
+worksheet, and never regenerated after resume. There is no count-driven retry loop.
 """
 
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from copy import deepcopy
-import json
 from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
-from .planning_detail_template import (
-    WORKSHEET_SECTIONS,
-    normalize_required_sections,
-    validate_worksheet,
-    validate_worksheet_section,
-    worksheet_prompt,
-    worksheet_schema,
-    worksheet_section_schema,
+from .planning_criterion_fragments import (
+    assemble_worksheet_from_fragments,
+    clear_requirement_progress,
+    generate_criterion_fragment,
+    load_requirement_progress,
+    requirement_acceptance_criteria,
+    store_criterion_progress,
 )
+from .planning_detail_template import WORKSHEET_SECTIONS, normalize_required_sections
 from .planning_state_contract import validate_planning_state
 from .planning_state_implementation import (
     _assemble_requirement_plan,
-    _compile_worksheet_section,
-    _evidence_context,
     _requirement_decisions,
     _requirement_grounding,
-    _section_dependencies,
-    _section_messages,
 )
 from .root_cause_trace import emit_root_cause
 
@@ -140,11 +136,22 @@ def _terminal_detail_blockers(state: Mapping[str, Any]) -> list[Mapping[str, Any
     ]
 
 
+def _checkpoint_state(
+    state: Mapping[str, Any],
+    checkpoint: Checkpoint | None,
+) -> dict[str, Any]:
+    value = _rehash(deepcopy(dict(state)))
+    validate_planning_state(value)
+    if checkpoint is not None:
+        checkpoint(deepcopy(value))
+    return value
+
+
 def _checkpoint_terminal_blocker(
     state: Mapping[str, Any],
     *,
     requirement_ref: str,
-    section: str,
+    work_unit: str,
     reason: str,
     checkpoint: Checkpoint | None,
 ) -> dict[str, Any]:
@@ -156,13 +163,12 @@ def _checkpoint_terminal_blocker(
             "stage": _TERMINAL_DETAIL_STAGE,
             "terminal": True,
             "requirement_ref": requirement_ref,
-            "section": section,
+            "section": work_unit,
             "statement": reason,
         }
     )
     value["plan_ready"] = False
-    value = _rehash(value)
-    validate_planning_state(value)
+    value = _checkpoint_state(value, checkpoint)
     emit_root_cause(
         "detailed_planning_terminal_blocker",
         stage="planning_state",
@@ -171,288 +177,34 @@ def _checkpoint_terminal_blocker(
         reason=reason,
         details={
             "requirement_ref": requirement_ref,
-            "section": section,
+            "work_unit": work_unit,
             "terminal": True,
         },
     )
-    if checkpoint is not None:
-        checkpoint(deepcopy(value))
     return value
 
 
-def _whole_requirement_messages(
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-) -> list[dict[str, str]]:
-    acceptance = requirement.get("acceptance")
-    acceptance_rows = (
-        [_text(item) for item in acceptance if _text(item)]
-        if isinstance(acceptance, list)
-        else []
-    )
-    acceptance_text = "\n".join(f"- {row}" for row in acceptance_rows) or "- none supplied"
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Complete one host-selected engineering worksheet for exactly one requirement. "
-                "Return only the JSON object required by the supplied response schema. Do not emit "
-                "analysis, reasoning, commentary, markdown, code fences, or undeclared keys. Do not "
-                "invent target API names, symbols, versions, repository paths, external facts, or "
-                "evidence identifiers. Use only evidence_refs shown in the grounded context."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Requirement: {_text(requirement.get('statement'))}\n"
-                "Acceptance observations supplied by the requirement:\n"
-                f"{acceptance_text}\n"
-                "Grounded implementation evidence:\n"
-                f"{_evidence_context(evidence)}\n\n"
-                f"{worksheet_prompt(selected_sections)}"
-            ),
-        },
-    ]
-
-
-def _generate_whole_requirement(
+def _compile_criterion(
     router: Any,
     *,
     requirement: Mapping[str, Any],
     requirement_ref: str,
+    criterion_index: int,
+    criterion: str,
     selected_sections: tuple[str, ...],
     evidence: list[Mapping[str, Any]],
+    allowed_refs: set[str],
 ) -> dict[str, Any]:
-    messages = _whole_requirement_messages(requirement, selected_sections, evidence)
-    schema = worksheet_schema(selected_sections)
-    decoded: Mapping[str, Any] | None = None
-
-    with planner_operation(f"detailed_requirement:{requirement_ref}:whole"):
-        if hasattr(router, "generate_tool_decision"):
-            try:
-                raw_decision = router.generate_tool_decision(
-                    "planner",
-                    messages,
-                    tool_name="submit_requirement_engineering_worksheet",
-                    parameters=schema,
-                    description="Submit the complete engineering worksheet for one requirement.",
-                )
-                if isinstance(raw_decision, Mapping):
-                    decoded = raw_decision
-            except Exception as exc:
-                from .model_adapters import ModelConfigurationError
-
-                if isinstance(exc, ModelConfigurationError):
-                    raise
-                emit_root_cause(
-                    "detailed_requirement_whole_tool_fallback",
-                    stage="planning_state",
-                    operation=f"detailed_requirement:{requirement_ref}:whole",
-                    result="FALLBACK",
-                    reason=f"{type(exc).__name__}: {exc}",
-                    details={"requirement_ref": requirement_ref, "fallback": "structured_text"},
-                )
-
-        if decoded is None:
-            raw = router.generate_text(
-                "planner",
-                messages,
-                response_format="json",
-                response_schema=schema,
-                enable_tools=False,
-            )
-            parsed = json.loads(raw)
-            if not isinstance(parsed, Mapping):
-                raise ValueError("whole requirement output must be a JSON object")
-            decoded = parsed
-
-    return dict(decoded)
-
-
-def _salvage_dependency_closed_sections(
-    decoded: Mapping[str, Any],
-    *,
-    selected_sections: tuple[str, ...],
-    allowed: set[str],
-) -> dict[str, dict[str, Any]]:
-    """Keep only valid, unique sections whose direct prerequisites also survived."""
-    valid: dict[str, dict[str, Any]] = {}
-    seen_specifications: set[str] = set()
-    for section in selected_sections:
-        if section not in decoded:
-            continue
-        try:
-            row = validate_worksheet_section(decoded[section], allowed, section)
-        except (TypeError, ValueError):
-            continue
-        signature = json.dumps(
-            row["specification"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).casefold()
-        if signature in seen_specifications:
-            continue
-        seen_specifications.add(signature)
-        valid[section] = row
-
-    changed = True
-    while changed:
-        changed = False
-        for section in tuple(valid):
-            dependencies = _section_dependencies(section, selected_sections)
-            if any(dependency not in valid for dependency in dependencies):
-                del valid[section]
-                changed = True
-    return valid
-
-
-def _attempt_whole_requirement(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    requirement_ref: str,
-    selected_sections: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-    allowed: set[str],
-) -> tuple[dict[str, dict[str, Any]], str]:
-    """Return validated whole output, or the dependency-closed valid subset plus failure."""
-    try:
-        decoded = _generate_whole_requirement(
+    with planner_operation(
+        f"detailed_criterion:{requirement_ref}:{criterion_index + 1}"
+    ):
+        return generate_criterion_fragment(
             router,
             requirement=requirement,
-            requirement_ref=requirement_ref,
+            criterion=criterion,
             selected_sections=selected_sections,
             evidence=evidence,
-        )
-        try:
-            validated = validate_worksheet(decoded, allowed, selected_sections)
-            return validated, ""
-        except (TypeError, ValueError) as exc:
-            salvaged = _salvage_dependency_closed_sections(
-                decoded,
-                selected_sections=selected_sections,
-                allowed=allowed,
-            )
-            return salvaged, f"{type(exc).__name__}: {exc}"
-    except Exception as exc:
-        from .model_adapters import ModelConfigurationError
-
-        if isinstance(exc, ModelConfigurationError):
-            raise
-        return {}, f"{type(exc).__name__}: {exc}"
-
-
-def _generate_whole_section(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    section: str,
-    evidence: list[Mapping[str, Any]],
-    allowed: set[str],
-    completed: Mapping[str, Mapping[str, Any]],
-) -> dict[str, Any]:
-    messages = _section_messages(
-        requirement,
-        selected_sections,
-        section,
-        evidence,
-        completed,
-    )
-    schema = worksheet_section_schema(section)
-    decoded: Mapping[str, Any] | None = None
-
-    with planner_operation(f"detailed_section:{section}:whole"):
-        if hasattr(router, "generate_tool_decision"):
-            try:
-                raw_decision = router.generate_tool_decision(
-                    "planner",
-                    messages,
-                    tool_name=f"submit_{section}_section",
-                    parameters=schema,
-                    description=f"Submit the complete {section} engineering worksheet section.",
-                )
-                if isinstance(raw_decision, Mapping):
-                    decoded = raw_decision
-            except Exception as exc:
-                from .model_adapters import ModelConfigurationError
-
-                if isinstance(exc, ModelConfigurationError):
-                    raise
-                emit_root_cause(
-                    "detailed_section_whole_tool_fallback",
-                    stage="planning_state",
-                    operation=f"detailed_section:{section}:whole",
-                    result="FALLBACK",
-                    reason=f"{type(exc).__name__}: {exc}",
-                    details={"section": section, "fallback": "structured_text"},
-                )
-
-        if decoded is None:
-            raw = router.generate_text(
-                "planner",
-                messages,
-                response_format="json",
-                response_schema=schema,
-                enable_tools=False,
-            )
-            parsed = json.loads(raw)
-            if not isinstance(parsed, Mapping):
-                raise ValueError("whole section output must be a JSON object")
-            decoded = parsed
-
-    return validate_worksheet_section(dict(decoded), allowed, section)
-
-
-def _compile_section_adaptive(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    selected_sections: tuple[str, ...],
-    section: str,
-    evidence: list[Mapping[str, Any]],
-    allowed: set[str],
-    completed: Mapping[str, Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Retry a failed requirement at section granularity, then atomic concerns only if needed."""
-    try:
-        return _generate_whole_section(
-            router,
-            requirement=requirement,
-            selected_sections=selected_sections,
-            section=section,
-            evidence=evidence,
-            allowed=allowed,
-            completed=completed,
-        )
-    except Exception as exc:
-        from .model_adapters import ModelConfigurationError
-
-        if isinstance(exc, ModelConfigurationError):
-            raise
-        emit_root_cause(
-            "detailed_section_adaptive_decomposition",
-            stage="planning_state",
-            operation=f"detailed_section:{section}",
-            result="FALLBACK",
-            reason=f"{type(exc).__name__}: {exc}",
-            details={
-                "requirement_ref": _text(requirement.get("requirement_id")),
-                "section": section,
-                "strategy": "whole_section_then_atomic_concerns",
-            },
-        )
-        return _compile_worksheet_section(
-            router,
-            requirement=requirement,
-            selected_sections=selected_sections,
-            section=section,
-            evidence=evidence,
-            allowed=allowed,
-            completed=completed,
+            allowed_refs=allowed_refs,
         )
 
 
@@ -464,10 +216,13 @@ def _finish_requirement(
     completed_details: dict[str, Mapping[str, Any]],
     checkpoint: Checkpoint | None,
 ) -> dict[str, Any]:
-    worksheet = {
-        key: job["completed"][key]
-        for key in job["selected_sections"]
-    }
+    worksheet = assemble_worksheet_from_fragments(
+        job["requirement"],
+        selected_sections=job["selected_sections"],
+        criteria=job["criteria"],
+        fragments=job["fragments"],
+        allowed_refs=job["allowed"],
+    )
     plan = _assemble_requirement_plan(
         job["requirement"],
         job["requirement_ref"],
@@ -476,8 +231,9 @@ def _finish_requirement(
         job["allowed"],
     )
     completed_details[job["requirement_ref"]] = plan
+    cleared = clear_requirement_progress(working_state, job["requirement_ref"])
     result = _merge_completed_details(
-        working_state,
+        cleared,
         requirement_order=requirement_order,
         completed_details=completed_details,
     )
@@ -488,8 +244,10 @@ def _finish_requirement(
         result="PASS",
         details={
             "requirement_ref": job["requirement_ref"],
+            "completed_acceptance_criteria": len(job["criteria"]),
             "completed_requirements": len(completed_details),
             "total_requirements": len(requirement_order),
+            "strategy": "acceptance_criterion_fragments_to_host_worksheet",
         },
     )
     if checkpoint is not None:
@@ -505,14 +263,15 @@ def compile_progress_monotone_detailed_plans(
     required_sections_by_requirement: Mapping[str, Iterable[str]],
     checkpoint: Checkpoint | None = None,
 ) -> dict[str, Any]:
-    """Compile unfinished requirements without count-driven retries or unconditional fanout.
+    """Compile one bounded contract per unfinished public acceptance criterion.
 
-    Phase 1 has exactly one primary whole-worksheet attempt per unfinished requirement.
-    A failed whole attempt transitions once into a finite section DAG; a failed section
-    transitions once into the existing finite atomic-concern protocol. Nodes are never
-    re-enqueued. Completed requirements and terminal failures are checkpointed, so resume
-    cannot silently regenerate terminal work.
+    The ranking function is the number of unfinished canonical acceptance criteria. Every
+    successful model call removes exactly one element and checkpoints it. Failed work is
+    terminal rather than re-enqueued. Completed criteria and requirements are restored from
+    checkpoints without model calls. The only concurrency is among independent unfinished
+    criteria, bounded by the router's native model parallelism.
     """
+
     validate_planning_state(state, prompt=prompt)
     prior_terminal = _terminal_detail_blockers(state)
     if prior_terminal:
@@ -555,8 +314,12 @@ def compile_progress_monotone_detailed_plans(
         if requirement_ref in selections
         and _detail_matches_selection(detail, selections[requirement_ref])
     }
+
+    working_state: dict[str, Any] = deepcopy(dict(state))
+    for requirement_ref in completed_details:
+        working_state = clear_requirement_progress(working_state, requirement_ref)
     working_state = _merge_completed_details(
-        state,
+        working_state,
         requirement_order=requirement_order,
         completed_details=completed_details,
     )
@@ -572,6 +335,14 @@ def compile_progress_monotone_detailed_plans(
             continue
         evidence, allowed = _requirement_grounding(working_state, requirement_ref)
         selected_sections = selections[requirement_ref]
+        criteria = requirement_acceptance_criteria(requirement)
+        fragments = load_requirement_progress(
+            working_state,
+            requirement_ref=requirement_ref,
+            selected_sections=selected_sections,
+            criteria=criteria,
+            allowed_refs=allowed,
+        )
         jobs.append(
             {
                 "requirement": requirement,
@@ -579,182 +350,133 @@ def compile_progress_monotone_detailed_plans(
                 "selected_sections": selected_sections,
                 "evidence": evidence,
                 "allowed": allowed,
-                "completed": {},
-                "pending": set(),
-                "submitted": set(),
+                "criteria": criteria,
+                "fragments": fragments,
             }
         )
 
-    if jobs:
-        workers = max(1, min(len(jobs), router_native_model_parallelism(router)))
-        future_to_job: dict[Future[tuple[dict[str, dict[str, Any]], str]], int] = {}
-        remaining_whole = len(jobs)
+    # A checkpoint can contain every criterion for a requirement but not yet the assembled
+    # detail if the process died between those two host operations. Finish such work without
+    # another model call before scheduling anything new.
+    for job in jobs:
+        if len(job["fragments"]) == len(job["criteria"]):
+            working_state = _finish_requirement(
+                job,
+                working_state=working_state,
+                requirement_order=requirement_order,
+                completed_details=completed_details,
+                checkpoint=checkpoint,
+            )
+
+    pending = deque(
+        (job_index, criterion_index)
+        for job_index, job in enumerate(jobs)
+        if job["requirement_ref"] not in completed_details
+        for criterion_index in range(len(job["criteria"]))
+        if criterion_index not in job["fragments"]
+    )
+    remaining = len(pending)
+    if remaining:
+        workers = max(1, min(remaining, router_native_model_parallelism(router)))
+        future_to_node: dict[Future[dict[str, Any]], tuple[int, int]] = {}
+
         with ThreadPoolExecutor(
             max_workers=workers,
-            thread_name_prefix="planning-requirement-first",
+            thread_name_prefix="planning-acceptance-criterion",
         ) as pool:
-            for job_index, job in enumerate(jobs):
-                future = pool.submit(
-                    _attempt_whole_requirement,
-                    router,
-                    requirement=job["requirement"],
-                    requirement_ref=job["requirement_ref"],
-                    selected_sections=job["selected_sections"],
-                    evidence=job["evidence"],
-                    allowed=job["allowed"],
-                )
-                future_to_job[future] = job_index
-
-            while future_to_job:
-                done, _ = wait(tuple(future_to_job), return_when=FIRST_COMPLETED)
-                for future in sorted(done, key=lambda item: future_to_job[item]):
-                    job_index = future_to_job.pop(future)
+            while pending or future_to_node:
+                while pending and len(future_to_node) < workers:
+                    job_index, criterion_index = pending.popleft()
                     job = jobs[job_index]
-                    before = remaining_whole
-                    completed, failure = future.result()
-                    remaining_whole -= 1
-                    if remaining_whole >= before:
-                        raise RuntimeError(
-                            "DETAILED_PLAN_NO_PROGRESS: whole-requirement work did not strictly decrease"
-                        )
-                    job["completed"].update(completed)
-                    if not failure and len(completed) == len(job["selected_sections"]):
-                        working_state = _finish_requirement(
-                            job,
-                            working_state=working_state,
-                            requirement_order=requirement_order,
-                            completed_details=completed_details,
-                            checkpoint=checkpoint,
-                        )
-                        continue
-
-                    job["pending"] = set(job["selected_sections"]) - set(job["completed"])
-                    emit_root_cause(
-                        "detailed_requirement_adaptive_decomposition",
-                        stage="planning_state",
-                        operation="compile_progress_monotone_detailed_plans",
-                        result="FALLBACK",
-                        reason=failure or "whole worksheet incomplete",
-                        details={
-                            "requirement_ref": job["requirement_ref"],
-                            "retained_sections": [
-                                key for key in job["selected_sections"] if key in job["completed"]
-                            ],
-                            "fallback_sections": [
-                                key for key in job["selected_sections"] if key in job["pending"]
-                            ],
-                        },
-                    )
-
-    section_rank = {section: index for index, section in enumerate(WORKSHEET_SECTIONS)}
-    fallback_jobs = [job for job in jobs if job["pending"]]
-    remaining_sections = sum(len(job["pending"]) for job in fallback_jobs)
-
-    def ready_nodes() -> list[tuple[int, str]]:
-        ready: list[tuple[int, str]] = []
-        for job_index, job in enumerate(fallback_jobs):
-            for section in job["selected_sections"]:
-                if section not in job["pending"] or section in job["submitted"]:
-                    continue
-                dependencies = _section_dependencies(section, job["selected_sections"])
-                if all(dependency in job["completed"] for dependency in dependencies):
-                    ready.append((job_index, section))
-        return sorted(ready, key=lambda item: (section_rank[item[1]], item[0]))
-
-    if remaining_sections:
-        workers = max(1, min(remaining_sections, router_native_model_parallelism(router)))
-        future_to_node: dict[Future[dict[str, Any]], tuple[int, str]] = {}
-        with ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="planning-detail-fallback",
-        ) as pool:
-            while remaining_sections or future_to_node:
-                for job_index, section in ready_nodes():
-                    if len(future_to_node) >= workers:
-                        break
-                    job = fallback_jobs[job_index]
-                    dependencies = _section_dependencies(section, job["selected_sections"])
-                    prerequisite_snapshot = {
-                        dependency: deepcopy(job["completed"][dependency])
-                        for dependency in dependencies
-                    }
+                    criterion = job["criteria"][criterion_index]
                     future = pool.submit(
-                        _compile_section_adaptive,
+                        _compile_criterion,
                         router,
                         requirement=job["requirement"],
+                        requirement_ref=job["requirement_ref"],
+                        criterion_index=criterion_index,
+                        criterion=criterion,
                         selected_sections=job["selected_sections"],
-                        section=section,
                         evidence=job["evidence"],
-                        allowed=job["allowed"],
-                        completed=prerequisite_snapshot,
+                        allowed_refs=job["allowed"],
                     )
-                    job["submitted"].add(section)
-                    future_to_node[future] = (job_index, section)
+                    future_to_node[future] = (job_index, criterion_index)
 
                 if not future_to_node:
-                    pending = {
-                        job["requirement_ref"]: sorted(
-                            job["pending"], key=section_rank.__getitem__
-                        )
-                        for job in fallback_jobs
-                        if job["pending"]
-                    }
                     reason = (
-                        "DETAILED_PLAN_DAG_DEADLOCK: unsatisfied contracts remain but no "
-                        f"runnable section exists; {pending!r}"
+                        "DETAILED_PLAN_DAG_DEADLOCK: unfinished acceptance criteria remain "
+                        "but no runnable criterion exists"
                     )
-                    first_job = next(job for job in fallback_jobs if job["pending"])
+                    job_index, criterion_index = pending[0]
+                    job = jobs[job_index]
                     working_state = _checkpoint_terminal_blocker(
                         working_state,
-                        requirement_ref=first_job["requirement_ref"],
-                        section="dependency_dag",
+                        requirement_ref=job["requirement_ref"],
+                        work_unit=f"acceptance_criterion:{criterion_index + 1}",
                         reason=reason,
                         checkpoint=checkpoint,
                     )
                     raise RuntimeError(reason)
 
                 done, _ = wait(tuple(future_to_node), return_when=FIRST_COMPLETED)
-                for future in sorted(
-                    done,
-                    key=lambda item: (
-                        section_rank[future_to_node[item][1]],
-                        future_to_node[item][0],
-                    ),
-                ):
-                    job_index, section = future_to_node.pop(future)
-                    job = fallback_jobs[job_index]
+                for future in sorted(done, key=lambda item: future_to_node[item]):
+                    job_index, criterion_index = future_to_node.pop(future)
+                    job = jobs[job_index]
+                    criterion = job["criteria"][criterion_index]
                     try:
-                        result = future.result()
+                        fragment = future.result()
                     except Exception as exc:
-                        for pending_future in future_to_node:
-                            pending_future.cancel()
+                        for in_flight in future_to_node:
+                            in_flight.cancel()
                         reason = (
-                            "DETAILED_PLAN_BLOCKED: minimal fallback contract failed for "
-                            f"{job['requirement_ref']}/{section}: {type(exc).__name__}: {exc}"
+                            "DETAILED_PLAN_BLOCKED: atomic acceptance criterion failed without "
+                            f"valid progress for {job['requirement_ref']}/criterion_{criterion_index + 1}: "
+                            f"{type(exc).__name__}: {exc}"
                         )
                         working_state = _checkpoint_terminal_blocker(
                             working_state,
                             requirement_ref=job["requirement_ref"],
-                            section=section,
+                            work_unit=f"acceptance_criterion:{criterion_index + 1}",
                             reason=reason,
                             checkpoint=checkpoint,
                         )
                         raise RuntimeError(reason) from exc
 
-                    if section not in job["pending"]:
+                    if criterion_index in job["fragments"]:
                         raise RuntimeError(
-                            "DETAILED_PLAN_PROGRESS_INVARIANT: completed node was not pending"
+                            "DETAILED_PLAN_PROGRESS_INVARIANT: completed criterion was already checkpointed"
                         )
-                    before = remaining_sections
-                    job["completed"][section] = result
-                    job["pending"].remove(section)
-                    job["submitted"].remove(section)
-                    remaining_sections -= 1
-                    if remaining_sections >= before:
+                    before = remaining
+                    job["fragments"][criterion_index] = fragment
+                    remaining -= 1
+                    if remaining >= before:
                         raise RuntimeError(
-                            "DETAILED_PLAN_NO_PROGRESS: pending section work did not strictly decrease"
+                            "DETAILED_PLAN_NO_PROGRESS: unfinished acceptance criteria did not strictly decrease"
                         )
-                    if not job["pending"]:
+
+                    working_state = store_criterion_progress(
+                        working_state,
+                        requirement_ref=job["requirement_ref"],
+                        selected_sections=job["selected_sections"],
+                        criterion_index=criterion_index,
+                        criterion=criterion,
+                        fragment=fragment,
+                    )
+                    working_state = _checkpoint_state(working_state, checkpoint)
+                    emit_root_cause(
+                        "detailed_acceptance_criterion_checkpoint",
+                        stage="planning_state",
+                        operation="compile_progress_monotone_detailed_plans",
+                        result="PASS",
+                        details={
+                            "requirement_ref": job["requirement_ref"],
+                            "criterion_index": criterion_index + 1,
+                            "criterion_count": len(job["criteria"]),
+                            "remaining_acceptance_criteria": remaining,
+                        },
+                    )
+
+                    if len(job["fragments"]) == len(job["criteria"]):
                         working_state = _finish_requirement(
                             job,
                             working_state=working_state,
