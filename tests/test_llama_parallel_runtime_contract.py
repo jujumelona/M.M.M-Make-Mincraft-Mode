@@ -97,10 +97,17 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     adapter = _ToolAwareAdapter()
     monkeypatch.setattr(router, "_new_text_adapter", lambda config, role: adapter)
 
+    tool_schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string"}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
     tool_result = router.generate_text(
         "coder",
         ({"role": "user", "content": "repair"},),
         response_format="json",
+        response_schema=tool_schema,
         tool_stage="generation",
         enable_tools=True,
     )
@@ -134,8 +141,15 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
 
     schema = {
         "type": "object",
-        "properties": {"game_design": {"type": "object"}},
+        "properties": {
+            "game_design": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
+        },
         "required": ["game_design"],
+        "additionalProperties": False,
     }
     plain_result = router.generate_text(
         "coder",

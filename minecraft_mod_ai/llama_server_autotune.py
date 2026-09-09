@@ -658,6 +658,16 @@ def _launch_selected(
     return url
 
 
+def _request_inline_autotune_enabled() -> bool:
+    """Return whether blocking first-request tuning was explicitly requested."""
+
+    if "MMM_LLAMA_SERVER_AUTOTUNE_INLINE" in os.environ:
+        return _env_bool("MMM_LLAMA_SERVER_AUTOTUNE_INLINE", False)
+    if "MMM_LLAMA_SERVER_AUTOTUNE" in os.environ:
+        return _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", False)
+    return False
+
+
 def _baseline_decision(fingerprint: str) -> AutotuneDecision:
     return AutotuneDecision(
         fingerprint=fingerprint,
@@ -673,6 +683,27 @@ def _release_recoverable_attempt(fingerprint: str, exc: BaseException) -> None:
     """Allow a later retry only for explicitly classified transient resource failures."""
     if bool(getattr(exc, "_mmm_recoverable_resource_failure", False)):
         _ATTEMPTED_KEYS.discard(fingerprint)
+
+
+def tune_server(config: Any, request: Any, *, force: bool = False) -> AutotuneDecision:
+    """Benchmark and persist a validated winner outside the request hot path."""
+    binary = _server_binary()
+    if binary is None:
+        raise RuntimeError("native llama-server binary is unavailable")
+    with _AUTOTUNE_LOCK:
+        if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:
+            raise RuntimeError("explicit llama-server tuning must run before the managed inference server")
+        model_path = _resolve_model_path(config)
+        fingerprint = _fingerprint(config, binary, model_path)
+        if not force:
+            cached = _load_cached_decision(fingerprint)
+            if cached is not None:
+                return cached
+        decision = _benchmark(binary, model_path, config, request, fingerprint)
+        if decision is None:
+            raise RuntimeError("llama-server autotune could not validate a baseline decode")
+        _save_decision(decision)
+        return decision
 
 
 def ensure_tuned_server(config: Any, request: Any) -> str:
@@ -706,7 +737,7 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
         try:
             decision = _load_cached_decision(fingerprint)
             if decision is None:
-                if _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):
+                if _request_inline_autotune_enabled():
                     decision = _benchmark(
                         binary, model_path, config, request, fingerprint
                     )

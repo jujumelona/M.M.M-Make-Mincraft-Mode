@@ -40,7 +40,7 @@ def _stub_canonical_server_owner(monkeypatch) -> None:
     monkeypatch.setattr(
         llama_exact_context,
         "capacity_safe_payload",
-        lambda _url, payload: dict(payload),
+        lambda _url, payload, **_kwargs: dict(payload),
     )
 
 
@@ -295,50 +295,51 @@ def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch
     assert turn.tool_calls[0].arguments == {"q": "exact api"}
 
 
-def test_apply_source_edit_action_alias_is_one_decode_local_recovery(monkeypatch) -> None:
-    posts = 0
+def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(monkeypatch) -> None:
+    from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+    replies = [
+        '{"operation":"replace_exact"}',
+        '{"path":"src/main/java/Example.java","old":"before();","new":"after();"}',
+    ]
+    posts: list[dict[str, object]] = []
 
     def post(url, *, json, timeout):
-        nonlocal posts
-        posts += 1
+        del url, timeout
+        index = len(posts)
+        posts.append(dict(json))
         return _CompletionResponse(
             status_code=200,
-            payload={
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "<tool_call><function=apply_source_edit>"
-                                "<parameter=action>replace_exact</parameter>"
-                                "<parameter=path>src/main/java/Example.java</parameter>"
-                                "</function></tool_call>"
-                            )
-                        }
-                    }
-                ]
-            },
+            payload={"choices": [{"message": {"content": replies[index]}}]},
         )
 
     monkeypatch.setattr(httpx, "post", post)
-
+    source_edit_tool = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "apply one exact source edit",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
     turn = _adapter().generate_turn(
         GenerationRequest(
             messages=({"role": "user", "content": "apply one edit"},),
-            tools=(_source_edit_tool(),),
+            tools=(source_edit_tool,),
             tool_choice={
                 "type": "function",
                 "function": {"name": "apply_source_edit"},
             },
         )
     )
-
-    assert posts == 1
+    assert len(posts) == 2
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].arguments == {
         "operation": "replace_exact",
         "path": "src/main/java/Example.java",
+        "old": "before();",
+        "new": "after();",
     }
-    assert "action" not in turn.tool_calls[0].arguments
 
 
 @pytest.mark.parametrize(

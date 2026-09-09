@@ -39,6 +39,8 @@ def _pipeline_state() -> dict[str, object]:
         "research_queue": [],
         "blockers": [],
         "evidence": [],
+        "resolved": [],
+        "coverage": [],
     }
 
 
@@ -55,7 +57,7 @@ def _patch_pipeline_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         planning_state_pipeline,
-        "collect_planning_state_research",
+        "collect_planning_state_research_convergent",
         lambda _router, _prompt, value, **_kwargs: value,
     )
 
@@ -170,6 +172,7 @@ def test_pipeline_passes_requirement_owned_selection_to_detailed_planner(
         value: dict[str, object],
         *,
         required_sections_by_requirement: dict[str, tuple[str, ...]],
+        checkpoint: object = None,
     ) -> dict[str, object]:
         captured["selection"] = required_sections_by_requirement
         result = dict(value)
@@ -178,7 +181,7 @@ def test_pipeline_passes_requirement_owned_selection_to_detailed_planner(
 
     monkeypatch.setattr(
         planning_state_pipeline,
-        "compile_detailed_implementation_plans",
+        "compile_progress_monotone_detailed_plans",
         _compile,
     )
 
@@ -230,6 +233,7 @@ def test_host_resolver_receives_only_requirement_ids_and_drives_selection(
         value: dict[str, object],
         *,
         required_sections_by_requirement: dict[str, tuple[str, ...]],
+        checkpoint: object = None,
     ) -> dict[str, object]:
         captured["selection"] = required_sections_by_requirement
         result = dict(value)
@@ -238,7 +242,7 @@ def test_host_resolver_receives_only_requirement_ids_and_drives_selection(
 
     monkeypatch.setattr(
         planning_state_pipeline,
-        "compile_detailed_implementation_plans",
+        "compile_progress_monotone_detailed_plans",
         _compile,
     )
 
