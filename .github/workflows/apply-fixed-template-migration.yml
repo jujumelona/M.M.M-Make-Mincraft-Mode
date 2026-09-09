@@ -25,12 +25,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Apply migration
+      - name: Apply and AST-verify migration
         run: python tools/apply_fixed_template_migration.py
       - name: Compile migrated sources
         run: python -m compileall -q minecraft_mod_ai
-      - name: Verify no direct structured text generation remains
-        run: python -m pytest -q tests/test_no_direct_structured_text_generation.py
       - name: Commit migrated sources
         run: |
           if git diff --quiet; then
