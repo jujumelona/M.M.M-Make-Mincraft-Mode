@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from worksheet_fixtures import specification
 
-import json
-
 import pytest
 
 from minecraft_mod_ai.planning_detail_contract import (
@@ -22,9 +20,7 @@ from minecraft_mod_ai.planning_state_invariants import validate_state_links
 def _authored_worksheet() -> dict[str, dict[str, object]]:
     return {
         key: {
-            "specification": (
-                specification(key)
-            ),
+            "specification": specification(key),
             "constraint_evidence_refs": [],
         }
         for key in WORKSHEET_SECTIONS
@@ -55,26 +51,42 @@ class _StructuredRouter:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def generate_text(self, role, messages, **kwargs):
-        assert kwargs["response_format"] == "json"
-        assert kwargs["enable_tools"] is False
-        self.calls.append({"role": role, "messages": messages, **kwargs})
+    def generate_text(self, *_args, **_kwargs):
+        raise AssertionError("grounded worksheet generation must not use raw structured text")
+
+    def generate_tool_decision(
+        self,
+        role,
+        messages,
+        *,
+        tool_name,
+        parameters,
+        description="",
+    ):
+        self.calls.append(
+            {
+                "role": role,
+                "messages": messages,
+                "tool_name": tool_name,
+                "parameters": parameters,
+                "description": description,
+            }
+        )
         section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
-        schema = kwargs["response_schema"]
         full = _authored_worksheet()[section]
         payload: dict = {}
-        for prop in schema.get("properties", {}):
+        for prop in parameters.get("properties", {}):
             if prop == "constraint_evidence_refs":
                 payload[prop] = full.get(prop, [])
             elif prop == "inapplicable_concerns":
                 payload[prop] = [
                     item
                     for item in full["specification"].get("inapplicable_concerns", [])
-                    if item["concern"] in schema.get("properties", {})
+                    if item["concern"] in parameters.get("properties", {})
                 ]
             elif prop in full["specification"]:
                 payload[prop] = full["specification"][prop]
-        return json.dumps(payload)
+        return payload
 
 
 def _grounded_state() -> dict[str, object]:
@@ -103,9 +115,16 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
         "acceptance": ["Given insufficient funds, a purchase is rejected without mutation."],
     }
 
-    plan = _compile_requirement_plans_dag(router, _grounded_state(), [requirement], {"req_001": WORKSHEET_SECTIONS}, workers=1)[0]
+    plan = _compile_requirement_plans_dag(
+        router,
+        _grounded_state(),
+        [requirement],
+        {"req_001": WORKSHEET_SECTIONS},
+        workers=1,
+    )[0]
 
     assert len(router.calls) >= len(WORKSHEET_SECTIONS)
+    assert all(call["tool_name"] == "submit_fixed_template" for call in router.calls)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []
