@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from minecraft_mod_ai.planning_criterion_fragments import generate_criterion_fragment
@@ -9,18 +7,24 @@ from minecraft_mod_ai.planning_detail_template import CORE_WORKSHEET_SECTIONS
 
 
 class _SequenceRouter:
-    def __init__(self, outputs: list[dict[str, object]]) -> None:
+    def __init__(self, outputs: list[object]) -> None:
         self._outputs = list(outputs)
         self.calls: list[list[dict[str, str]]] = []
 
-    def generate_text(
+    def generate_text(self, *_args: object, **_kwargs: object) -> str:
+        raise AssertionError("criterion repair must not use raw structured text generation")
+
+    def generate_tool_decision(
         self,
         _role: str,
         messages: list[dict[str, str]],
         **_kwargs: object,
-    ) -> str:
+    ) -> object:
         self.calls.append(messages)
-        return json.dumps(self._outputs.pop(0))
+        output = self._outputs.pop(0)
+        if isinstance(output, BaseException):
+            raise output
+        return output
 
 
 def _fragment(*, implementation: str = "", constraint: str = "") -> dict[str, object]:
@@ -62,7 +66,7 @@ def test_all_empty_fragment_gets_one_corrective_call() -> None:
     assert result["section_updates"][0]["implementation"]
     second_user_prompt = router.calls[1][1]["content"]
     assert "Correction required" in second_user_prompt
-    assert "at least one selected section concrete" in second_user_prompt
+    assert "at least one selected section concretely" in second_user_prompt
 
 
 def test_second_all_empty_fragment_remains_terminal() -> None:
@@ -77,23 +81,20 @@ def test_second_all_empty_fragment_remains_terminal() -> None:
     assert len(router.calls) == 2
 
 
-def test_non_no_progress_contract_error_is_not_retried() -> None:
-    router = _SequenceRouter(["not_a_valid_json_structure"])
+def test_non_no_progress_tool_contract_error_is_not_retried() -> None:
+    router = _SequenceRouter([ValueError("forced template transport failed")])
 
-    with pytest.raises(
-        ValueError,
-        match="DETAILED_PLAN_CRITERION: fragment must be a JSON object or array",
-    ):
+    with pytest.raises(ValueError, match="forced template transport failed"):
         _generate(router)
 
     assert len(router.calls) == 1
-
 
 
 def test_omitted_required_sections_are_not_inferred_inapplicable() -> None:
     from minecraft_mod_ai.planning_criterion_fragments import (
         MissingWorksheetSections, assemble_worksheet_from_fragments,
     )
+
     with pytest.raises(MissingWorksheetSections) as caught:
         assemble_worksheet_from_fragments(
             {"statement": "Mine resources and credit currency."},
