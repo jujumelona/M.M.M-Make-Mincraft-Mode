@@ -54,6 +54,18 @@ jobs:
           budget = 433
           print(f"runtime mutation surface: behavioral={behavioral} budget={budget}")
           if behavioral > budget:
+              print("runtime mutation findings by path:")
+              for path, count in sorted(
+                  payload.get("behavioral_by_path", {}).items(),
+                  key=lambda item: (-int(item[1]), item[0]),
+              ):
+                  print(f"  {count:>3}  {path}")
+              print("runtime mutation findings:")
+              for item in payload.get("behavioral", []):
+                  print(
+                      f"  {item['path']}:{item['line']} "
+                      f"[{item['kind']}] {item['target']}"
+                  )
               raise SystemExit(
                   f"runtime mutation surface grew from reviewed budget {budget} to {behavioral}"
               )
