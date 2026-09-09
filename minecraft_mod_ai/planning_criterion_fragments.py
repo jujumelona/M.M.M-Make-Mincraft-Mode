@@ -31,6 +31,9 @@ _PROGRESS_SCHEMA = "mmm/detail-criterion-progress-v1"
 _PROGRESS_KEY = "detail_progress"
 _FRAGMENT_KEY = "section_updates"
 _FRAGMENT_FIELDS = frozenset({"section", "implementation", "constraint", "evidence_refs"})
+_NO_PROGRESS_FRAGMENT_ERROR = (
+    "DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content"
+)
 
 
 def _text(value: Any) -> str:
@@ -116,12 +119,23 @@ def criterion_fragment_messages(
     criterion: str,
     selected_sections: Iterable[str],
     evidence: list[Mapping[str, Any]],
+    *,
+    repair_no_progress: bool = False,
 ) -> list[dict[str, str]]:
     selected = normalize_required_sections(selected_sections)
     section_guidance = "\n".join(
         f"- {section}: {_section_description(section)}" for section in selected
     )
     selected_text = ", ".join(selected)
+    repair_instruction = ""
+    if repair_no_progress:
+        repair_instruction = (
+            "\n\nCorrection required: the previous response was structurally valid but every "
+            "implementation and constraint string was empty. Rewrite the contract from the "
+            "criterion semantics. Keep unrelated fields empty, but make at least one selected "
+            "section concrete. If an exact API is not grounded, describe the semantic state "
+            "mutation, data flow, boundary, or observable verification without inventing symbols."
+        )
     return [
         {
             "role": "system",
@@ -131,7 +145,9 @@ def criterion_fragment_messages(
                 "Do not emit analysis, markdown, extra keys, JSON Schema definitions, TODO/TBD, or invented APIs, "
                 "symbols, versions, repository paths, external facts, or evidence IDs. Keep each update concise and concrete. "
                 "Return exactly one section_updates record for every host-selected section, with no duplicate sections. "
-                "Empty implementation or constraint strings are permitted only when this criterion genuinely has no bearing on that field."
+                "Empty implementation or constraint strings are permitted only when this criterion genuinely has no bearing on that field. "
+                "Across the complete response, at least one selected section MUST contain a non-empty implementation or constraint; "
+                "an observable acceptance criterion must never be represented by an all-empty response."
             ),
         },
         {
@@ -145,6 +161,7 @@ def criterion_fragment_messages(
                 f"{section_guidance}\n\n"
                 f"Required section_updates sections, exactly once each: {selected_text}\n"
                 "For each record provide: section, implementation, constraint, evidence_refs."
+                f"{repair_instruction}"
             ),
         },
     ]
@@ -218,10 +235,40 @@ def validate_criterion_fragment(
             f"missing={missing}"
         )
     if not meaningful:
-        raise ValueError(
-            "DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content"
-        )
+        raise ValueError(_NO_PROGRESS_FRAGMENT_ERROR)
     return {_FRAGMENT_KEY: [by_section[section] for section in selected]}
+
+
+def _generate_criterion_fragment_once(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    criterion: str,
+    selected: tuple[str, ...],
+    evidence: list[Mapping[str, Any]],
+    allowed_refs: set[str],
+    schema: Mapping[str, Any],
+    repair_no_progress: bool,
+) -> dict[str, Any]:
+    raw = router.generate_text(
+        "planner",
+        criterion_fragment_messages(
+            requirement,
+            criterion,
+            selected,
+            evidence,
+            repair_no_progress=repair_no_progress,
+        ),
+        response_format="json",
+        response_schema=schema,
+        enable_tools=False,
+    )
+    decoded = json.loads(raw)
+    return validate_criterion_fragment(
+        decoded,
+        selected_sections=selected,
+        allowed_refs=allowed_refs,
+    )
 
 
 def generate_criterion_fragment(
@@ -233,20 +280,40 @@ def generate_criterion_fragment(
     evidence: list[Mapping[str, Any]],
     allowed_refs: set[str],
 ) -> dict[str, Any]:
+    """Generate one criterion fragment with one bounded repair for all-empty output.
+
+    The repair is deliberately narrow: only a schema-valid fragment that contains no
+    implementation or constraint content gets one corrective call. JSON failures, section
+    contract violations, and every other error remain terminal. A second all-empty response
+    also propagates immediately, so this cannot become a count-driven or open-ended retry loop.
+    """
+
     selected = normalize_required_sections(selected_sections)
     schema = criterion_fragment_schema(selected)
-    raw = router.generate_text(
-        "planner",
-        criterion_fragment_messages(requirement, criterion, selected, evidence),
-        response_format="json",
-        response_schema=schema,
-        enable_tools=False,
-    )
-    decoded = json.loads(raw)
-    return validate_criterion_fragment(
-        decoded,
-        selected_sections=selected,
+    try:
+        return _generate_criterion_fragment_once(
+            router,
+            requirement=requirement,
+            criterion=criterion,
+            selected=selected,
+            evidence=evidence,
+            allowed_refs=allowed_refs,
+            schema=schema,
+            repair_no_progress=False,
+        )
+    except ValueError as exc:
+        if str(exc) != _NO_PROGRESS_FRAGMENT_ERROR:
+            raise
+
+    return _generate_criterion_fragment_once(
+        router,
+        requirement=requirement,
+        criterion=criterion,
+        selected=selected,
+        evidence=evidence,
         allowed_refs=allowed_refs,
+        schema=schema,
+        repair_no_progress=True,
     )
 
 
