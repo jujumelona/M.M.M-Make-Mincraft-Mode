@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Acceptance-criterion, progress-monotone detailed planning for small local models.
 
-The host never asks the model to emit a complete worksheet or worksheet section. Each
-already-approved public acceptance criterion is one bounded model contract. Criterion
-fragments are checkpointed individually, merged deterministically into the canonical
-worksheet, and never regenerated after resume. There is no count-driven retry loop.
+The host keeps each approved public acceptance criterion as an independently
+validated and checkpointed semantic work unit, but unfinished criteria belonging to the
+same requirement share one model transport. This removes repeated prefill/decode overhead
+on single-slot local runtimes while preserving deterministic resume and fail-closed state.
 """
 
 from collections import deque
@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from copy import deepcopy
+from threading import RLock
 from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
@@ -22,11 +23,12 @@ from .planning_criterion_fragments import (
     MissingWorksheetSections,
     clear_requirement_progress,
     generate_criterion_fragment,
+    generate_criterion_fragments_batch,
     load_requirement_progress,
     requirement_acceptance_criteria,
     store_criterion_progress,
 )
-from .planning_detail_template import normalize_required_sections
+from .planning_detail_template import WORKSHEET_SECTIONS, normalize_required_sections
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_state_contract import validate_planning_state
 from .planning_state_implementation import (
@@ -209,7 +211,55 @@ def _compile_criterion(
     selected_sections: tuple[str, ...],
     evidence: list[Mapping[str, Any]],
     allowed_refs: set[str],
+    criteria: tuple[str, ...] | None = None,
+    batch_pending_indices: tuple[int, ...] | None = None,
+    batch_cache: dict[int, dict[str, Any]] | None = None,
+    batch_lock: Any | None = None,
 ) -> dict[str, Any]:
+    """Return one criterion while single-flighting requirement-scoped generation.
+
+    The scheduler and per-criterion checkpoints remain unchanged. On production calls,
+    the first unfinished criterion generates all unfinished criteria for its requirement
+    in one model request; sibling futures reuse that in-memory result under the same lock.
+    Tests and external callers that omit batch state retain the original atomic path.
+    """
+    if (
+        criteria is not None
+        and batch_pending_indices is not None
+        and batch_cache is not None
+        and batch_lock is not None
+    ):
+        cached = batch_cache.get(criterion_index)
+        if cached is not None:
+            return deepcopy(cached)
+        with batch_lock:
+            cached = batch_cache.get(criterion_index)
+            if cached is not None:
+                return deepcopy(cached)
+            missing = {
+                index: criteria[index]
+                for index in batch_pending_indices
+                if index not in batch_cache
+            }
+            if missing:
+                with planner_operation(f"detailed_requirement_batch:{requirement_ref}"):
+                    batch_cache.update(
+                        generate_criterion_fragments_batch(
+                            router,
+                            requirement=requirement,
+                            criteria=missing,
+                            selected_sections=selected_sections,
+                            evidence=evidence,
+                            allowed_refs=allowed_refs,
+                        )
+                    )
+            cached = batch_cache.get(criterion_index)
+            if cached is None:
+                raise RuntimeError(
+                    "DETAILED_PLAN_BATCH: requirement batch did not produce the requested criterion"
+                )
+            return deepcopy(cached)
+
     with planner_operation(
         f"detailed_criterion:{requirement_ref}:{criterion_index + 1}"
     ):
@@ -412,6 +462,11 @@ def compile_progress_monotone_detailed_plans(
                 "allowed": allowed,
                 "criteria": criteria,
                 "fragments": fragments,
+                "batch_pending_indices": tuple(
+                    index for index in range(len(criteria)) if index not in fragments
+                ),
+                "batch_cache": {},
+                "batch_lock": RLock(),
             }
         )
 
@@ -461,6 +516,10 @@ def compile_progress_monotone_detailed_plans(
                         selected_sections=job["selected_sections"],
                         evidence=job["evidence"],
                         allowed_refs=job["allowed"],
+                        criteria=job["criteria"],
+                        batch_pending_indices=job["batch_pending_indices"],
+                        batch_cache=job["batch_cache"],
+                        batch_lock=job["batch_lock"],
                     )
                     future_to_node[future] = (job_index, criterion_index)
 

@@ -311,6 +311,162 @@ def validate_criterion_fragment(
     }
 
 
+
+def criterion_fragment_batch_schema(
+    selected_sections: Iterable[str],
+    criterion_indices: Iterable[int],
+) -> dict[str, Any]:
+    """Compact requirement-scoped transport for several acceptance criteria.
+
+    The host still validates and checkpoints each criterion independently. Only the model
+    transport is batched, eliminating repeated prompt/evidence/schema prefill on single-slot
+    local runtimes.
+    """
+    selected = normalize_required_sections(selected_sections)
+    indices = tuple(dict.fromkeys(int(index) for index in criterion_indices))
+    if not indices:
+        raise ValueError("DETAILED_PLAN_BATCH: criterion indices must not be empty")
+    update_schema = deepcopy(criterion_fragment_schema(selected)["properties"][_FRAGMENT_KEY])
+    return {
+        "type": "object",
+        "properties": {
+            "criterion_fragments": {
+                "type": "array",
+                "minItems": len(indices),
+                "maxItems": len(indices),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "criterion_index": {"type": "integer", "enum": list(indices)},
+                        _FRAGMENT_KEY: update_schema,
+                    },
+                    "required": ["criterion_index", _FRAGMENT_KEY],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["criterion_fragments"],
+        "additionalProperties": False,
+    }
+
+
+def criterion_fragment_batch_messages(
+    requirement: Mapping[str, Any],
+    criteria: Mapping[int, str],
+    selected_sections: Iterable[str],
+    evidence: list[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    selected = normalize_required_sections(selected_sections)
+    section_guidance = "\n".join(
+        f"- {section}: {_section_description(section)}" for section in selected
+    )
+    criterion_rows = "\n".join(
+        f"- criterion_index={index}: {criterion}"
+        for index, criterion in sorted(criteria.items())
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Complete the listed approved acceptance criteria for one requirement in one JSON response. "
+                "Return exactly one criterion_fragments row per supplied criterion_index. Each row keeps the "
+                "same compact section_updates contract used for a single criterion. Include only relevant "
+                "worksheet sections. Do not emit TODO/TBD, invented APIs, symbols, versions, repository paths, "
+                "external facts, or evidence IDs. Every criterion row must contain concrete implementation or "
+                "constraint content. Do not merge criteria together."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Requirement: {_text(requirement.get('statement'))}\n\n"
+                "Acceptance criteria to complete:\n"
+                f"{criterion_rows}\n\n"
+                "Grounded implementation evidence shared by this requirement:\n"
+                f"{_evidence_context(evidence)}\n\n"
+                "Available worksheet sections; choose only relevant ones:\n"
+                f"{section_guidance}\n\n"
+                "Return criterion_fragments with the exact supplied criterion_index values."
+            ),
+        },
+    ]
+
+
+def generate_criterion_fragments_batch(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    criteria: Mapping[int, str],
+    selected_sections: Iterable[str],
+    evidence: list[Mapping[str, Any]],
+    allowed_refs: set[str],
+) -> dict[int, dict[str, Any]]:
+    """Generate missing criterion fragments with one requirement-scoped model call.
+
+    A malformed or omitted row falls back only for that criterion, preserving the prior
+    fail-closed single-criterion behavior without paying N model calls on the healthy path.
+    """
+    requested = {
+        int(index): _text(criterion)
+        for index, criterion in criteria.items()
+        if _text(criterion)
+    }
+    if not requested:
+        return {}
+    if len(requested) == 1:
+        index, criterion = next(iter(requested.items()))
+        return {
+            index: generate_criterion_fragment(
+                router,
+                requirement=requirement,
+                criterion=criterion,
+                selected_sections=selected_sections,
+                evidence=evidence,
+                allowed_refs=allowed_refs,
+            )
+        }
+
+    selected = normalize_required_sections(selected_sections)
+    schema = criterion_fragment_batch_schema(selected, requested)
+    raw = router.generate_text(
+        "planner",
+        criterion_fragment_batch_messages(requirement, requested, selected, evidence),
+        response_format="json",
+        response_schema=schema,
+        enable_tools=False,
+    )
+    decoded = json.loads(raw)
+    rows = decoded.get("criterion_fragments") if isinstance(decoded, Mapping) else None
+    result: dict[int, dict[str, Any]] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            index = row.get("criterion_index")
+            if not isinstance(index, int) or index not in requested or index in result:
+                continue
+            try:
+                result[index] = validate_criterion_fragment(
+                    row,
+                    selected_sections=selected,
+                    allowed_refs=allowed_refs,
+                )
+            except ValueError:
+                continue
+
+    for index, criterion in requested.items():
+        if index in result:
+            continue
+        result[index] = generate_criterion_fragment(
+            router,
+            requirement=requirement,
+            criterion=criterion,
+            selected_sections=selected,
+            evidence=evidence,
+            allowed_refs=allowed_refs,
+        )
+    return result
+
 def generate_criterion_fragment(
     router: Any,
     *,
