@@ -23,9 +23,6 @@ def _rehash(state: dict) -> dict:
 
 
 def _base_state(*, unknown_count: int = 1) -> dict:
-    # Prompt-boundary models are not allowed to invent external_fact/research unknowns.
-    # Named references are authored input; the host deterministically creates one
-    # reference_semantics research obligation for each reference.
     references = [
         {
             "name": f"Reference {index}",
@@ -48,6 +45,7 @@ def _base_state(*, unknown_count: int = 1) -> dict:
 def test_terminal_blocked_frontier_never_reopens_or_calls_research(monkeypatch):
     state = _base_state()
     state["research_queue"][0]["status"] = "blocked"
+    state["unresolved"][0]["status"] = "blocked"
     _rehash(state)
     validate_planning_state(state, prompt=PROMPT)
 
@@ -58,22 +56,24 @@ def test_terminal_blocked_frontier_never_reopens_or_calls_research(monkeypatch):
     result = convergence.collect_planning_state_research_convergent(None, PROMPT, state)
 
     assert result["research_queue"][0]["status"] == "blocked"
+    assert result["unresolved"][0]["status"] == "blocked"
     assert convergence.planning_progress_fingerprint(result) == convergence.planning_progress_fingerprint(state)
 
 
-def test_blocked_rows_are_masked_while_only_pending_delta_is_processed(monkeypatch):
+def test_blocked_rows_stay_terminal_while_only_pending_delta_is_processed(monkeypatch):
     state = _base_state(unknown_count=2)
     state["research_queue"][0]["status"] = "blocked"
+    state["unresolved"][0]["status"] = "blocked"
     _rehash(state)
 
     calls = 0
 
-    def fake_collect(router, prompt, protected, *, trace_metadata=None):
+    def fake_collect(router, prompt, current, *, trace_metadata=None):
         nonlocal calls
         calls += 1
-        assert protected["research_queue"][0]["status"] == "complete"
-        assert protected["research_queue"][1]["status"] == "pending"
-        value = deepcopy(protected)
+        assert current["research_queue"][0]["status"] == "blocked"
+        assert current["research_queue"][1]["status"] == "pending"
+        value = deepcopy(current)
         value["research_queue"][1]["status"] = "blocked"
         return _rehash(value)
 
@@ -82,35 +82,66 @@ def test_blocked_rows_are_masked_while_only_pending_delta_is_processed(monkeypat
 
     assert calls == 1
     assert [row["status"] for row in result["research_queue"]] == ["blocked", "blocked"]
+    assert [row["status"] for row in result["unresolved"]] == ["blocked", "blocked"]
+
+
+def test_semantic_fixed_point_terminalizes_pending_frontier_and_resume_makes_zero_calls(monkeypatch):
+    state = _base_state()
+    calls = 0
+
+    def no_progress(router, prompt, current, *, trace_metadata=None):
+        nonlocal calls
+        calls += 1
+        return deepcopy(current)
+
+    monkeypatch.setattr(convergence, "collect_planning_state_research", no_progress)
+    terminal = convergence.collect_planning_state_research_convergent(None, PROMPT, state)
+
+    assert calls == 1
+    assert terminal["research_queue"][0]["status"] == "blocked"
+    assert terminal["unresolved"][0]["status"] == "blocked"
+
+    resumed = convergence.collect_planning_state_research_convergent(None, PROMPT, terminal)
+    assert calls == 1
+    assert convergence.planning_progress_fingerprint(resumed) == convergence.planning_progress_fingerprint(terminal)
+
+
+def test_evidence_wording_churn_does_not_count_as_progress():
+    left = _base_state()
+    right = deepcopy(left)
+    left["evidence"] = [
+        {
+            "research_ref": "r_001",
+            "claims": [{"claim": "First wording."}],
+            "evidence_refs": ["source:1"],
+            "sufficient": True,
+            "source": "grounded_materialized_pages",
+        }
+    ]
+    right["evidence"] = [
+        {
+            "research_ref": "r_001",
+            "claims": [{"claim": "Same evidence, different wording."}],
+            "evidence_refs": ["source:1"],
+            "sufficient": True,
+            "source": "grounded_materialized_pages",
+        }
+    ]
+
+    assert convergence.planning_progress_fingerprint(left) == convergence.planning_progress_fingerprint(right)
 
 
 def test_research_cannot_create_out_of_universe_obligation():
     before = _base_state()
     after = deepcopy(before)
-    after["unresolved"].append(
-        {
-            "unresolved_id": "u_999",
-            "question": "invented",
-            "reason": "external_fact",
-            "blocks": ["requirement_selection"],
-            "information_needed": "invented",
-            "resolution_route": "external_research",
-            "source_kinds": list(ROUTE_SOURCES["external_research"]),
-            "status": "open",
-            "research_ref": "r_999",
-        }
-    )
-    after["research_queue"].append(
-        {
-            "research_id": "r_999",
-            "resolves": ["u_999"],
-            "objective": "invented",
-            "information_needed": "invented",
-            "source_kinds": list(ROUTE_SOURCES["external_research"]),
-            "queries": [],
-            "status": "pending",
-        }
-    )
+    invented_unknown = deepcopy(before["unresolved"][0])
+    invented_unknown["unresolved_id"] = "u_999"
+    invented_unknown["research_ref"] = "r_999"
+    invented_research = deepcopy(before["research_queue"][0])
+    invented_research["research_id"] = "r_999"
+    invented_research["resolves"] = ["u_999"]
+    after["unresolved"].append(invented_unknown)
+    after["research_queue"].append(invented_research)
 
     with pytest.raises(convergence.PlanningConvergenceError, match="PLANNING_OUT_OF_UNIVERSE_OBLIGATION"):
         convergence.assert_research_transition_monotone(before, after)
@@ -126,7 +157,7 @@ def test_terminal_research_status_cannot_move_back_to_pending():
         convergence.assert_research_transition_monotone(before, after)
 
 
-def test_requirement_boundary_freezes_exactly_one_implementation_obligation_per_requirement(monkeypatch):
+def test_requirement_boundary_freezes_exactly_one_blocking_implementation_obligation_per_requirement(monkeypatch):
     state = _base_state()
     state["unresolved"][0]["status"] = "resolved"
     state["research_queue"][0]["status"] = "complete"
@@ -194,6 +225,12 @@ def test_requirement_boundary_freezes_exactly_one_implementation_obligation_per_
     monkeypatch.setattr(convergence, "compile_researched_requirements", fake_compile)
     result = convergence.compile_researched_requirements_convergent(None, PROMPT, state)
 
-    assert [row["requirement_id"] for row in result["decisions"] if row.get("decision_type") == "requirement"] == ["req_001"]
+    requirements = [
+        row["requirement_id"]
+        for row in result["decisions"]
+        if row.get("decision_type") == "requirement"
+    ]
+    assert requirements == ["req_001"]
     assert result["unresolved"][-1]["requirement_ref"] == "req_001"
+    assert result["unresolved"][-1]["blocks"] == ["implementation_plan"]
     assert result["research_queue"][-1]["requirement_ref"] == "req_001"
