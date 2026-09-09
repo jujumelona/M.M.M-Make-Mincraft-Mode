@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from minecraft_mod_ai import planning_criterion_fragments as criterion_fragments
 from minecraft_mod_ai import planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai import planning_state_research as research
 
@@ -65,6 +66,19 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
         "requirement_ref": requirement_ref,
         "criterion_index": criterion_index,
     }
+
+
+def _real_fragment(*, evidence_ref: str | None = None) -> dict[str, object]:
+    schema = criterion_fragments.criterion_fragment_schema(adaptive.WORKSHEET_SECTIONS)
+    fragment: dict[str, object] = {}
+    for key, field_schema in schema["properties"].items():
+        if field_schema["type"] == "array":
+            fragment[key] = [evidence_ref] if evidence_ref else []
+        elif key.endswith("__implementation"):
+            fragment[key] = f"implement {key.removesuffix('__implementation').replace('_', ' ')} for this criterion"
+        else:
+            fragment[key] = f"enforce {key.removesuffix('__constraint').replace('_', ' ')} boundary for this criterion"
+    return fragment
 
 
 def _patch_compile_boundaries(monkeypatch, requirements):
@@ -260,6 +274,66 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
             required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
         )
     assert calls == calls_before_resume
+
+
+def test_full_section_criterion_schema_is_atomic_and_closed() -> None:
+    schema = criterion_fragments.criterion_fragment_schema(adaptive.WORKSHEET_SECTIONS)
+
+    assert schema["additionalProperties"] is False
+    assert len(schema["properties"]) == len(adaptive.WORKSHEET_SECTIONS) * 3
+    assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> None:
+    requirement = _requirements(1)[0]
+    criteria = criterion_fragments.requirement_acceptance_criteria(requirement)
+    fragment = _real_fragment(evidence_ref="ev_001")
+    stored = criterion_fragments.store_criterion_progress(
+        _base_state(),
+        requirement_ref="req_1",
+        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        criterion_index=0,
+        criterion=criteria[0],
+        fragment=fragment,
+    )
+
+    restored = criterion_fragments.load_requirement_progress(
+        stored,
+        requirement_ref="req_1",
+        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        criteria=criteria,
+        allowed_refs={"ev_001"},
+    )
+
+    assert set(restored) == {0}
+    assert restored[0] == criterion_fragments.validate_criterion_fragment(
+        fragment,
+        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        allowed_refs={"ev_001"},
+    )
+
+
+def test_real_criterion_fragments_assemble_canonical_all_section_worksheet() -> None:
+    requirement = _requirements(1, acceptance_count=2)[0]
+    criteria = criterion_fragments.requirement_acceptance_criteria(requirement)
+    fragments = {
+        index: _real_fragment(evidence_ref="ev_001")
+        for index, _criterion in enumerate(criteria)
+    }
+
+    worksheet = criterion_fragments.assemble_worksheet_from_fragments(
+        requirement,
+        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        criteria=criteria,
+        fragments=fragments,
+        allowed_refs={"ev_001"},
+    )
+
+    assert tuple(worksheet) == tuple(adaptive.WORKSHEET_SECTIONS)
+    for section in adaptive.WORKSHEET_SECTIONS:
+        assert worksheet[section]["constraint_evidence_refs"] == ["ev_001"]
+        assert isinstance(worksheet[section]["specification"], dict)
+        assert worksheet[section]["specification"]["inapplicable_concerns"]
 
 
 def test_blocked_research_stays_terminal_on_reentry(monkeypatch):
