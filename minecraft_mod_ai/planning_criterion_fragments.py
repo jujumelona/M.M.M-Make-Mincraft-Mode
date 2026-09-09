@@ -239,38 +239,6 @@ def validate_criterion_fragment(
     return {_FRAGMENT_KEY: [by_section[section] for section in selected]}
 
 
-def _generate_criterion_fragment_once(
-    router: Any,
-    *,
-    requirement: Mapping[str, Any],
-    criterion: str,
-    selected: tuple[str, ...],
-    evidence: list[Mapping[str, Any]],
-    allowed_refs: set[str],
-    schema: Mapping[str, Any],
-    repair_no_progress: bool,
-) -> dict[str, Any]:
-    raw = router.generate_text(
-        "planner",
-        criterion_fragment_messages(
-            requirement,
-            criterion,
-            selected,
-            evidence,
-            repair_no_progress=repair_no_progress,
-        ),
-        response_format="json",
-        response_schema=schema,
-        enable_tools=False,
-    )
-    decoded = json.loads(raw)
-    return validate_criterion_fragment(
-        decoded,
-        selected_sections=selected,
-        allowed_refs=allowed_refs,
-    )
-
-
 def generate_criterion_fragment(
     router: Any,
     *,
@@ -290,30 +258,42 @@ def generate_criterion_fragment(
 
     selected = normalize_required_sections(selected_sections)
     schema = criterion_fragment_schema(selected)
+    raw = router.generate_text(
+        "planner",
+        criterion_fragment_messages(requirement, criterion, selected, evidence),
+        response_format="json",
+        response_schema=schema,
+        enable_tools=False,
+    )
+    decoded = json.loads(raw)
     try:
-        return _generate_criterion_fragment_once(
-            router,
-            requirement=requirement,
-            criterion=criterion,
-            selected=selected,
-            evidence=evidence,
+        return validate_criterion_fragment(
+            decoded,
+            selected_sections=selected,
             allowed_refs=allowed_refs,
-            schema=schema,
-            repair_no_progress=False,
         )
     except ValueError as exc:
         if str(exc) != _NO_PROGRESS_FRAGMENT_ERROR:
             raise
 
-    return _generate_criterion_fragment_once(
-        router,
-        requirement=requirement,
-        criterion=criterion,
-        selected=selected,
-        evidence=evidence,
+    repaired_raw = router.generate_text(
+        "planner",
+        criterion_fragment_messages(
+            requirement,
+            criterion,
+            selected,
+            evidence,
+            repair_no_progress=True,
+        ),
+        response_format="json",
+        response_schema=schema,
+        enable_tools=False,
+    )
+    repaired_decoded = json.loads(repaired_raw)
+    return validate_criterion_fragment(
+        repaired_decoded,
+        selected_sections=selected,
         allowed_refs=allowed_refs,
-        schema=schema,
-        repair_no_progress=True,
     )
 
 
