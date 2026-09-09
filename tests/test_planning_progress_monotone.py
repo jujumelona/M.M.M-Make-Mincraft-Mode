@@ -12,23 +12,31 @@ class _Router:
     pass
 
 
-def _requirements(count: int = 1) -> list[dict[str, object]]:
+def _requirements(
+    count: int = 1,
+    *,
+    acceptance_count: int = 1,
+) -> list[dict[str, object]]:
     return [
         {
             "requirement_id": f"req_{index}",
             "statement": f"requirement {index}",
-            "acceptance": [f"acceptance {index}"],
+            "acceptance": [
+                f"acceptance {index}.{criterion_index}"
+                for criterion_index in range(1, acceptance_count + 1)
+            ],
         }
         for index in range(1, count + 1)
     ]
 
 
-def _base_state(*, blockers=None, decisions=None) -> dict[str, object]:
+def _base_state(*, blockers=None, decisions=None, detail_progress=None) -> dict[str, object]:
     return {
         "decisions": list(decisions or []),
         "coverage": [],
         "unresolved": [],
         "blockers": list(blockers or []),
+        "detail_progress": list(detail_progress or []),
         "state_sha256": "test",
     }
 
@@ -52,6 +60,13 @@ def _plan(requirement_ref: str, selected_sections, worksheet) -> dict[str, objec
     }
 
 
+def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
+    return {
+        "requirement_ref": requirement_ref,
+        "criterion_index": criterion_index,
+    }
+
+
 def _patch_compile_boundaries(monkeypatch, requirements):
     monkeypatch.setattr(adaptive, "validate_planning_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(adaptive, "_requirement_decisions", lambda _state: requirements)
@@ -63,6 +78,11 @@ def _patch_compile_boundaries(monkeypatch, requirements):
     monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 8)
     monkeypatch.setattr(
         adaptive,
+        "assemble_worksheet_from_fragments",
+        lambda *args, **kwargs: _worksheet(),
+    )
+    monkeypatch.setattr(
+        adaptive,
         "_assemble_requirement_plan",
         lambda _requirement, requirement_ref, selected, worksheet, _allowed: _plan(
             requirement_ref, selected, worksheet
@@ -70,21 +90,25 @@ def _patch_compile_boundaries(monkeypatch, requirements):
     )
 
 
-def test_normal_path_attempts_each_unfinished_requirement_once_without_section_fanout(monkeypatch):
-    requirements = _requirements(3)
+def test_normal_path_runs_once_per_unfinished_acceptance_criterion_without_section_fanout(monkeypatch):
+    requirements = _requirements(3, acceptance_count=2)
     _patch_compile_boundaries(monkeypatch, requirements)
-    calls: list[str] = []
+    calls: list[tuple[str, int, str]] = []
 
-    def whole_attempt(_router, *, requirement_ref, **_kwargs):
-        calls.append(requirement_ref)
-        return _worksheet(), ""
+    def compile_criterion(
+        _router,
+        *,
+        requirement_ref,
+        criterion_index,
+        criterion,
+        selected_sections,
+        **_kwargs,
+    ):
+        assert tuple(selected_sections) == tuple(adaptive.WORKSHEET_SECTIONS)
+        calls.append((requirement_ref, criterion_index, criterion))
+        return _fragment(requirement_ref, criterion_index)
 
-    monkeypatch.setattr(adaptive, "_attempt_whole_requirement", whole_attempt)
-    monkeypatch.setattr(
-        adaptive,
-        "_compile_section_adaptive",
-        lambda *args, **kwargs: pytest.fail("normal path must not create section fallback calls"),
-    )
+    monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
 
     result = adaptive.compile_progress_monotone_detailed_plans(
         _Router(),
@@ -95,28 +119,31 @@ def test_normal_path_attempts_each_unfinished_requirement_once_without_section_f
         },
     )
 
-    assert sorted(calls) == ["req_1", "req_2", "req_3"]
-    assert len(calls) == len(requirements)
+    assert len(calls) == 6
+    assert {(req, index) for req, index, _criterion in calls} == {
+        (f"req_{req_index}", criterion_index)
+        for req_index in range(1, 4)
+        for criterion_index in range(2)
+    }
     assert result["plan_ready"] is True
 
 
-def test_partial_whole_result_keeps_valid_section_and_falls_back_only_for_missing_sections(monkeypatch):
-    requirements = _requirements(1)
+def test_checkpointed_criterion_progress_reuses_completed_work_and_runs_only_missing_criteria(monkeypatch):
+    requirements = _requirements(1, acceptance_count=3)
     _patch_compile_boundaries(monkeypatch, requirements)
-    whole_calls = 0
-    fallback_calls: list[str] = []
+    calls: list[int] = []
 
-    def whole_attempt(*_args, **_kwargs):
-        nonlocal whole_calls
-        whole_calls += 1
-        return {"behavior_contract": _row("behavior_contract")}, "invalid remainder"
+    monkeypatch.setattr(
+        adaptive,
+        "load_requirement_progress",
+        lambda *args, **kwargs: {0: _fragment("req_1", 0)},
+    )
 
-    def fallback(_router, *, section, **_kwargs):
-        fallback_calls.append(section)
-        return _row(section)
+    def compile_criterion(_router, *, requirement_ref, criterion_index, **_kwargs):
+        calls.append(criterion_index)
+        return _fragment(requirement_ref, criterion_index)
 
-    monkeypatch.setattr(adaptive, "_attempt_whole_requirement", whole_attempt)
-    monkeypatch.setattr(adaptive, "_compile_section_adaptive", fallback)
+    monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
 
     result = adaptive.compile_progress_monotone_detailed_plans(
         _Router(),
@@ -125,33 +152,40 @@ def test_partial_whole_result_keeps_valid_section_and_falls_back_only_for_missin
         required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
     )
 
-    assert whole_calls == 1
-    assert "behavior_contract" not in fallback_calls
-    assert set(fallback_calls) == set(adaptive.WORKSHEET_SECTIONS) - {"behavior_contract"}
-    assert len(fallback_calls) == len(adaptive.WORKSHEET_SECTIONS) - 1
+    assert sorted(calls) == [1, 2]
     assert result["plan_ready"] is True
 
 
-def test_dependency_salvage_discards_sections_whose_prerequisite_failed(monkeypatch):
-    decoded = {
-        "behavior_contract": _row("behavior_contract"),
-        "state_model": _row("state_model"),
-        "algorithm": _row("algorithm"),
-    }
+def test_each_successful_criterion_is_checkpointed_before_requirement_assembly(monkeypatch):
+    requirements = _requirements(1, acceptance_count=3)
+    _patch_compile_boundaries(monkeypatch, requirements)
+    monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 1)
+    checkpoints: list[dict[str, object]] = []
 
-    def validate(value, _allowed, section):
-        if section == "state_model":
-            raise ValueError("broken state model")
-        return deepcopy(value)
-
-    monkeypatch.setattr(adaptive, "validate_worksheet_section", validate)
-    salvaged = adaptive._salvage_dependency_closed_sections(
-        decoded,
-        selected_sections=("behavior_contract", "state_model", "algorithm"),
-        allowed=set(),
+    monkeypatch.setattr(
+        adaptive,
+        "_compile_criterion",
+        lambda _router, *, requirement_ref, criterion_index, **_kwargs: _fragment(
+            requirement_ref, criterion_index
+        ),
     )
 
-    assert set(salvaged) == {"behavior_contract"}
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(),
+        "prompt",
+        _base_state(),
+        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        checkpoint=lambda state: checkpoints.append(deepcopy(state)),
+    )
+
+    progress_counts = [
+        len(state.get("detail_progress", []))
+        for state in checkpoints
+        if state.get("detail_progress")
+    ]
+    assert progress_counts == [1, 2, 3]
+    assert result["detail_progress"] == []
+    assert result["plan_ready"] is True
 
 
 def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
@@ -168,7 +202,7 @@ def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
 
     monkeypatch.setattr(
         adaptive,
-        "_attempt_whole_requirement",
+        "_compile_criterion",
         lambda *args, **kwargs: pytest.fail("completed requirement must not call the model"),
     )
 
@@ -183,25 +217,19 @@ def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
     assert len(result["coverage"]) == 1
 
 
-def test_minimal_fallback_failure_is_checkpointed_terminal_and_resume_makes_zero_calls(monkeypatch):
-    requirements = _requirements(1)
+def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero_calls(monkeypatch):
+    requirements = _requirements(1, acceptance_count=2)
     _patch_compile_boundaries(monkeypatch, requirements)
-    whole_calls = 0
-    fallback_calls = 0
+    calls = 0
     checkpoints: list[dict[str, object]] = []
 
-    def whole_attempt(*_args, **_kwargs):
-        nonlocal whole_calls
-        whole_calls += 1
-        return {}, "whole output invalid"
+    def fail_criterion(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise ValueError("atomic criterion made no valid progress")
 
-    def fallback(*_args, **_kwargs):
-        nonlocal fallback_calls
-        fallback_calls += 1
-        raise ValueError("minimal contract made no valid progress")
-
-    monkeypatch.setattr(adaptive, "_attempt_whole_requirement", whole_attempt)
-    monkeypatch.setattr(adaptive, "_compile_section_adaptive", fallback)
+    monkeypatch.setattr(adaptive, "_compile_criterion", fail_criterion)
+    monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 1)
 
     with pytest.raises(RuntimeError, match="DETAILED_PLAN_BLOCKED"):
         adaptive.compile_progress_monotone_detailed_plans(
@@ -212,8 +240,7 @@ def test_minimal_fallback_failure_is_checkpointed_terminal_and_resume_makes_zero
             checkpoint=lambda state: checkpoints.append(deepcopy(state)),
         )
 
-    assert whole_calls == 1
-    assert fallback_calls == 1
+    assert calls == 1
     assert checkpoints
     terminal = checkpoints[-1]
     terminal_rows = [
@@ -222,8 +249,9 @@ def test_minimal_fallback_failure_is_checkpointed_terminal_and_resume_makes_zero
         if row.get("stage") == "detailed_planning" and row.get("terminal") is True
     ]
     assert len(terminal_rows) == 1
+    assert terminal_rows[0]["section"] == "acceptance_criterion:1"
 
-    calls_before_resume = (whole_calls, fallback_calls)
+    calls_before_resume = calls
     with pytest.raises(RuntimeError, match="terminal detailed-planning blocker"):
         adaptive.compile_progress_monotone_detailed_plans(
             _Router(),
@@ -231,7 +259,7 @@ def test_minimal_fallback_failure_is_checkpointed_terminal_and_resume_makes_zero
             terminal,
             required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
         )
-    assert (whole_calls, fallback_calls) == calls_before_resume
+    assert calls == calls_before_resume
 
 
 def test_blocked_research_stays_terminal_on_reentry(monkeypatch):
