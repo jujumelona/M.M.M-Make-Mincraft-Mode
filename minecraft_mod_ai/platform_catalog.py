@@ -8,6 +8,7 @@ Candidate discovery is deliberately bounded: platform selection must never crawl
 an entire historical Minecraft catalogue and fail one version at a time.
 """
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -293,12 +294,41 @@ def _project_platform_lock(root: Path) -> Path | None:
     return None
 
 
+def _fabric_descriptor_identifies_project(root: Path) -> bool:
+    """Use only a valid local Fabric descriptor as loader evidence.
+
+    This is deliberately narrower than scanning Gradle scripts or parent directories.
+    A regular ``fabric.mod.json`` with the required descriptor identity fields is
+    authoritative evidence that the staged project targets Fabric even when host
+    runtime metadata was excluded from a generation checkpoint.
+    """
+
+    descriptor = root / "src" / "main" / "resources" / "fabric.mod.json"
+    if not descriptor.is_file() or descriptor.is_symlink():
+        return False
+    try:
+        raw = json.loads(descriptor.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    schema_version = raw.get("schemaVersion")
+    mod_id = raw.get("id")
+    version = raw.get("version")
+    return (
+        type(schema_version) is int
+        and schema_version >= 1
+        and isinstance(mod_id, str)
+        and bool(mod_id.strip())
+        and isinstance(version, str)
+        and bool(version.strip())
+    )
+
+
 def adapter_from_project(project_root: str | Path) -> TargetContract:
     root = Path(project_root).expanduser().resolve()
     lock_file = _project_platform_lock(root)
     if lock_file is not None:
-        import json
-
         raw = json.loads(lock_file.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("Generated platform lock must be an object.")
@@ -327,7 +357,9 @@ def adapter_from_project(project_root: str | Path) -> TargetContract:
     minecraft_version = properties.get("minecraft_version", "").strip()
     loader = properties.get("loader", "").strip().casefold()
     if not loader:
-        if properties.get("loader_version") and properties.get("fabric_version"):
+        if (
+            properties.get("loader_version") and properties.get("fabric_version")
+        ) or _fabric_descriptor_identifies_project(root):
             loader = "fabric"
         else:
             raise ValueError("Existing project loader could not be identified unambiguously.")
