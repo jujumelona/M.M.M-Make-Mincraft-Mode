@@ -78,9 +78,13 @@ def test_second_all_empty_fragment_remains_terminal() -> None:
 
 
 def test_non_no_progress_contract_error_is_not_retried() -> None:
-    router = _SequenceRouter([{"section_updates": []}])
+    router = _SequenceRouter(["not_a_valid_json_structure"])
 
-    with pytest.raises(ValueError, match="section_updates must cover every selected section"):
+    with pytest.raises(
+        ValueError,
+        match="DETAILED_PLAN_CRITERION: fragment must be a JSON object or array",
+    ):
         _generate(router)
 
     assert len(router.calls) == 1
+

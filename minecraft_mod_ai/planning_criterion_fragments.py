@@ -46,41 +46,56 @@ def requirement_acceptance_criteria(requirement: Mapping[str, Any]) -> tuple[str
 
 
 def criterion_fragment_schema(selected_sections: Iterable[str]) -> dict[str, Any]:
-    """Describe the preferred compact wire shape without making it a runtime gate.
+    """Return one compact schema whose topology is independent of section count.
 
-    The router intentionally does not receive this as a hard response schema. Small local
-    models are allowed to omit irrelevant sections and optional fields, and host code
-    canonicalizes the result before it reaches planning state.
+    Selected section names live in an enum inside one array item schema instead of being
+    expanded into three top-level properties per section. This keeps the model contract
+    below the global atomic structured-output boundary even when all worksheet sections
+    apply, while host validation still requires exactly one update for every selected
+    section.
     """
 
     selected = normalize_required_sections(selected_sections)
     return {
         "type": "object",
-        "description": "Relevant implementation updates for one acceptance criterion.",
+        "description": "Atomic implementation contract for one approved public acceptance criterion.",
         "properties": {
             _FRAGMENT_KEY: {
                 "type": "array",
+                "description": "Concise engineering updates for host-selected worksheet sections.",
                 "minItems": 1,
                 "maxItems": len(selected),
                 "items": {
                     "type": "object",
                     "properties": {
-                        "section": {"type": "string", "enum": list(selected)},
-                        "implementation": {"type": "string"},
-                        "constraint": {"type": "string"},
+                        "section": {
+                            "type": "string",
+                            "enum": list(selected),
+                        },
+                        "implementation": {
+                            "type": "string",
+                            "description": "Concrete implementation contract for this criterion in this section; empty only when genuinely unrelated.",
+                        },
+                        "constraint": {
+                            "type": "string",
+                            "description": "Concrete boundary, failure rule, invariant, or limit for this criterion in this section; empty only when none applies.",
+                        },
                         "evidence_refs": {
                             "type": "array",
                             "uniqueItems": True,
+                            "description": "Only host-supplied evidence IDs that constrain this section update.",
                             "items": {"type": "string"},
                         },
                     },
                     "required": ["section"],
-                    "additionalProperties": True,
+                    "additionalProperties": False,
                 },
             }
         },
-        "additionalProperties": True,
+        "required": [_FRAGMENT_KEY],
+        "additionalProperties": False,
     }
+
 
 
 def _evidence_context(evidence: list[Mapping[str, Any]]) -> str:
@@ -115,10 +130,11 @@ def criterion_fragment_messages(
     if repair_no_progress:
         repair_instruction = (
             "\n\nCorrection required: the previous JSON contained no useful implementation "
-            "or constraint. Return at least one concrete update for a section that actually "
-            "matters to this acceptance criterion. Do not add unrelated sections merely to "
+            "or constraint. Return at least one selected section concrete for this "
+            "acceptance criterion. Do not add unrelated sections merely to "
             "fill a template."
         )
+
     return [
         {
             "role": "system",
@@ -312,10 +328,12 @@ def generate_criterion_fragment(
     """
 
     selected = normalize_required_sections(selected_sections)
+    schema = criterion_fragment_schema(selected)
     raw = router.generate_text(
         "planner",
         criterion_fragment_messages(requirement, criterion, selected, evidence),
         response_format="json",
+        response_schema=schema,
         enable_tools=False,
     )
     decoded = json.loads(raw)
@@ -339,6 +357,7 @@ def generate_criterion_fragment(
             repair_no_progress=True,
         ),
         response_format="json",
+        response_schema=schema,
         enable_tools=False,
     )
     return validate_criterion_fragment(
@@ -346,6 +365,7 @@ def generate_criterion_fragment(
         selected_sections=selected,
         allowed_refs=allowed_refs,
     )
+
 
 
 def load_requirement_progress(
