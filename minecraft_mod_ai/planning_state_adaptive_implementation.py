@@ -11,6 +11,7 @@ worksheet, and never regenerated after resume. There is no count-driven retry lo
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from copy import deepcopy
 from typing import Any
 
@@ -390,6 +391,7 @@ def compile_progress_monotone_detailed_plans(
                     job = jobs[job_index]
                     criterion = job["criteria"][criterion_index]
                     future = pool.submit(
+                        copy_context().run,
                         _compile_criterion,
                         router,
                         requirement=job["requirement"],

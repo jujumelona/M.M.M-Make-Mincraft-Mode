@@ -195,6 +195,17 @@ def _latest_post_argument_semantic_failure(
     return None
 
 
+def _forced_tool_name(tool_choice: Any) -> str:
+    if isinstance(tool_choice, Mapping):
+        function = tool_choice.get("function")
+        if isinstance(function, Mapping):
+            return str(function.get("name") or "").strip()
+        name = tool_choice.get("name")
+        if isinstance(name, str):
+            return name.strip()
+    return ""
+
+
 def _install_semantic_generation_boundary(loop_module: Any) -> None:
     if getattr(loop_module, _SEMANTIC_BOUNDARY_MARKER, False):
         return
@@ -210,22 +221,38 @@ def _install_semantic_generation_boundary(loop_module: Any) -> None:
             failure = _latest_post_argument_semantic_failure(messages)
             if failure is not None:
                 code, reason = failure
-                emit = getattr(loop_module, "emit_root_cause", None)
-                if callable(emit):
-                    emit(
-                        "post_argument_semantic_failure",
-                        stage="generation",
-                        operation="semantic_failure_boundary",
-                        gate="tool_result_phase",
-                        result="FAIL",
-                        reason=code,
-                        details={"failure_code": code, "error": reason},
+                tool_choice = kwargs.get("tool_choice")
+                if tool_choice is None and len(args) > 6:
+                    tool_choice = args[6]
+                if tool_choice is None and "request" in kwargs:
+                    tool_choice = getattr(kwargs["request"], "tool_choice", None)
+                elif tool_choice is None and len(args) > 3:
+                    tool_choice = getattr(args[3], "tool_choice", None)
+
+                forced = _forced_tool_name(tool_choice)
+                is_host_directed = bool(forced or tool_choice == "required")
+
+                if code == "PHASE_PROTOCOL_VIOLATION" and is_host_directed:
+                    # The host explicitly scheduled this action for the updated phase;
+                    # this is an authorized phase transition, not a repeated unguided retry.
+                    pass
+                else:
+                    emit = getattr(loop_module, "emit_root_cause", None)
+                    if callable(emit):
+                        emit(
+                            "post_argument_semantic_failure",
+                            stage="generation",
+                            operation="semantic_failure_boundary",
+                            gate="tool_result_phase",
+                            result="FAIL",
+                            reason=code,
+                            details={"failure_code": code, "error": reason},
+                        )
+                    raise loop_module.ModelConfigurationError(
+                        "POST_ARGUMENT_SEMANTIC_FAILURE: "
+                        f"{code}: {reason}; outer adjudication/replan required. "
+                        "Refusing to regenerate tool arguments for an already-executed semantic rejection."
                     )
-                raise loop_module.ModelConfigurationError(
-                    "POST_ARGUMENT_SEMANTIC_FAILURE: "
-                    f"{code}: {reason}; outer adjudication/replan required. "
-                    "Refusing to regenerate tool arguments for an already-executed semantic rejection."
-                )
         return original_generate(*args, **kwargs)
 
     loop_module._generate_turn_with_context_recovery = generate_with_semantic_boundary

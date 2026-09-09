@@ -12,6 +12,7 @@ are already known and schema-valid; otherwise the fixed argument-page contract i
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from functools import wraps
 from typing import Any
 
@@ -54,6 +55,17 @@ def _selected_schema(request: Any, name: str) -> Mapping[str, Any]:
             f"Host-selected tool {name!r} does not resolve to exactly one exposed schema."
         )
     return selected[0]
+
+
+def _single_tool_request(request: Any, name: str) -> Any:
+    selected = (_selected_schema(request, name),)
+    return replace(
+        request,
+        tools=selected,
+        tool_validation_schemas=selected,
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
 
 
 def _parameters(schema: Mapping[str, Any]) -> Mapping[str, Any]:

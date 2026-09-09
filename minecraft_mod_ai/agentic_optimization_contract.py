@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -263,7 +264,7 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
             else:
                 workers = min(2, len(generated))
                 with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='mmm_repair_verify') as pool:
-                    futures = [(candidate_index, operations, pool.submit(_verify_repair_candidate, self, root, operations, evidence)) for candidate_index, operations in generated]
+                    futures = [(candidate_index, operations, pool.submit(copy_context().run, _verify_repair_candidate, self, root, operations, evidence)) for candidate_index, operations in generated]
                     evaluations = []
                     for candidate_index, operations, future in futures:
                         score, verifier = future.result()

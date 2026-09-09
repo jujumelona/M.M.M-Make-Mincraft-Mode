@@ -11,6 +11,7 @@ reasoning-label parsing.
 
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from copy import deepcopy
 import json
 from typing import Any
@@ -609,6 +610,7 @@ def _compile_requirement_plans_dag(
                     for dependency in dependencies
                 }
                 future = pool.submit(
+                    copy_context().run,
                     _compile_worksheet_section,
                     router,
                     requirement=job["requirement"],

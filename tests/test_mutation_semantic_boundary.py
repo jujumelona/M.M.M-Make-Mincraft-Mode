@@ -131,3 +131,78 @@ def test_argument_error_code_is_not_misclassified_as_semantic_execution_failure(
 
     assert result == "generated"
     assert len(calls) == 1
+
+
+def test_post_argument_phase_violation_allows_host_directed_turn() -> None:
+    calls: list[dict[str, object]] = []
+    loop = _fake_loop(calls)
+    guard.install(loop)
+
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": json.dumps(
+                {
+                    "ok": False,
+                    "tool": "apply_source_edit",
+                    "failure_code": "PHASE_PROTOCOL_VIOLATION",
+                    "error": "Agent attempted tool 'apply_source_edit' outside its allowed phase 'OBSERVE'",
+                }
+            ),
+        },
+    ]
+
+    result = loop._generate_turn_with_context_recovery(
+        object(),
+        config=None,
+        adapter=None,
+        request=None,
+        messages=messages,
+        media_paths=(),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+
+    assert result == "generated"
+    assert len(calls) == 1
+
+
+def test_post_argument_semantic_failure_rejects_even_when_host_directed() -> None:
+    calls: list[dict[str, object]] = []
+    loop = _fake_loop(calls)
+    guard.install(loop)
+
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": json.dumps(
+                {
+                    "ok": False,
+                    "tool": "apply_source_edit",
+                    "failure_code": "MUTATION_TARGET_DRIFT",
+                    "error": "host semantic rejection",
+                }
+            ),
+        },
+    ]
+
+    with pytest.raises(
+        loop.ModelConfigurationError,
+        match=r"POST_ARGUMENT_SEMANTIC_FAILURE: MUTATION_TARGET_DRIFT",
+    ):
+        loop._generate_turn_with_context_recovery(
+            object(),
+            config=None,
+            adapter=None,
+            request=None,
+            messages=messages,
+            media_paths=(),
+            tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+            parallel_tool_calls=False,
+        )
+
+    assert calls == []
