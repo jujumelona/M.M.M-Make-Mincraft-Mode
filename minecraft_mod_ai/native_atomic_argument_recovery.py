@@ -3,9 +3,10 @@ from __future__ import annotations
 """Bounded argument-only recovery for a host-selected action.
 
 The host has already selected the semantic action before this module runs. Recovery must
-therefore not ask a small model to select a tool again. Each bounded page is requested as
-a JSON object constrained by the page's argument schema, model-returned tool calls are
-ignored, and the host constructs the final ToolCall only after every page validates.
+therefore not ask a small model to select a semantic action again. Each bounded page is
+exposed as exactly one forced native function whose parameters are the page schema. The
+host consumes only the returned ToolCall.arguments mapping, merges validated pages, and
+constructs the final ToolCall. Model-authored JSON text is never parsed on this path.
 """
 
 import hashlib
@@ -166,6 +167,7 @@ def _messages(
     page_index: int,
     page_count: int,
     page_schema: Mapping[str, Any],
+    action_name: str,
     repair_error: str = "",
 ) -> tuple[dict[str, Any], ...]:
     messages = [
@@ -179,27 +181,21 @@ def _messages(
         if isinstance(properties, Mapping)
         else "arguments"
     )
-    schema_hint = json.dumps(
-        dict(page_schema),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
     instruction = (
-        f"The host already selected the action. Supply argument page {page_index}/{page_count} "
-        f"as one JSON object containing only these fields: {fields}. "
-        f"Exact page JSON schema: {schema_hint}. "
-        "Do not choose or name a tool. Do not emit prose, YAML, XML, or a code fence. "
+        f"The host already selected action {action_name!r}. "
+        f"Call that required function exactly once for argument page {page_index}/{page_count}. "
+        f"Fill only these argument fields: {fields}. "
+        "Do not answer in prose and do not serialize a JSON object into message content. "
         "The host owns action selection, merges bounded pages, validates the complete object, "
-        "and constructs the final tool call."
+        "and constructs the final executable tool call."
     )
     if repair_error:
         instruction += (
-            " Repair the arguments only. The previous argument object was invalid. Validation: "
-            + repair_error[:_MAX_REPAIR_ERROR_CHARS]
+            " Repair the function arguments only. The previous forced-call arguments were invalid. "
+            "Validation: " + repair_error[:_MAX_REPAIR_ERROR_CHARS]
         )
     messages.append({"role": "user", "content": instruction})
     return tuple(messages)
-
 
 def _request(
     request: Any,
@@ -207,17 +203,29 @@ def _request(
     page_index: int,
     page_count: int,
     page_schema: Mapping[str, Any],
+    action_name: str,
     repair_error: str = "",
 ) -> Any:
-    # The boundary is checked per model-authored page, never against the host-owned
-    # original container. A single oversized nested field therefore fails closed before
-    # generation rather than falling back to an unconstrained response.
+    # The atomic boundary is checked per native function-argument page, never against
+    # the host-owned original container. The model fills fields through ToolCall.arguments;
+    # message content is deliberately not a structured-output transport.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
     assert_atomic_model_schema(
         page_schema,
-        surface="host-selected argument page",
+        surface="host-selected forced-function argument page",
     )
+    page_tool = {
+        "type": "function",
+        "function": {
+            "name": action_name,
+            "description": (
+                f"Fill host-selected argument page {page_index}/{page_count}. "
+                "Return values only through function arguments."
+            ),
+            "parameters": dict(page_schema),
+        },
+    }
     return replace(
         request,
         messages=_messages(
@@ -225,16 +233,16 @@ def _request(
             page_index=page_index,
             page_count=page_count,
             page_schema=page_schema,
+            action_name=action_name,
             repair_error=repair_error,
         ),
-        tools=(),
-        tool_validation_schemas=(),
-        tool_choice=None,
+        tools=(page_tool,),
+        tool_validation_schemas=(page_tool,),
+        tool_choice={"type": "function", "function": {"name": action_name}},
         parallel_tool_calls=False,
-        response_format="json",
-        response_schema=dict(page_schema),
+        response_format="text",
+        response_schema=None,
     )
-
 
 def _fingerprint(value: Any) -> str:
     try:
@@ -280,35 +288,45 @@ def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
+    action_name: str,
 ) -> tuple[dict[str, Any] | None, str, str]:
-    """Parse only JSON content; stale/model-authored ToolCalls never become executable."""
+    """Consume only one native forced ToolCall; message content is never parsed as JSON."""
 
     forced = _forced_module()
-    raw = str(getattr(turn, "content", "") or "").strip()
-    if not raw:
-        reason = "argument page returned no JSON object"
-        return None, reason, _fingerprint({"content": raw})
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        reason = f"argument page was not valid JSON: {exc}"
-        return None, reason, _fingerprint({"content": raw})
-    if not isinstance(parsed, Mapping):
-        reason = "argument page JSON must be an object"
-        return None, reason, _fingerprint(parsed)
-    normalized = _page_owned_arguments(dict(parsed), page_schema, parameters)
+    calls = tuple(getattr(turn, "tool_calls", ()) or ())
+    matches = tuple(call for call in calls if str(getattr(call, "name", "")) == action_name)
+    if len(calls) != 1 or len(matches) != 1:
+        reason = (
+            f"argument page must return exactly one forced {action_name!r} tool call; "
+            f"received {len(calls)} tool call(s)"
+        )
+        return None, reason, _fingerprint(
+            {
+                "tool_calls": [
+                    {
+                        "name": str(getattr(call, "name", "")),
+                        "arguments": getattr(call, "arguments", None),
+                    }
+                    for call in calls
+                ]
+            }
+        )
+    raw_arguments = getattr(matches[0], "arguments", None)
+    if not isinstance(raw_arguments, Mapping):
+        reason = "forced argument page tool call did not expose an arguments object"
+        return None, reason, _fingerprint({"arguments": raw_arguments})
+    normalized = _page_owned_arguments(dict(raw_arguments), page_schema, parameters)
     if not forced._arguments_match_schema(normalized, page_schema):
         diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(
             normalized, page_schema
         )
         reason = (
-            f"argument page JSON failed the host page schema ({diag})"
+            f"forced argument page failed the host page schema ({diag})"
             if diag
-            else "argument page JSON failed the host page schema"
+            else "forced argument page failed the host page schema"
         )
         return None, reason, _fingerprint(normalized)
     return normalized, "", _fingerprint(normalized)
-
 
 def _page_attempt(
     current: Any,
@@ -316,6 +334,7 @@ def _page_attempt(
     request: Any,
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
+    action_name: str,
 ) -> tuple[dict[str, Any] | None, str, str]:
     try:
         turn = current(adapter, request)
@@ -324,14 +343,13 @@ def _page_attempt(
         from .generation_output_budget import GenerationOutputBudgetError
 
         # Backend/context failures belong to the canonical recovery owner. Retrying
-        # them as invalid JSON loses their type, cause and preserved partial receipt.
+        # them as invalid arguments loses their type, cause and preserved partial receipt.
         if completion_boundary_error(exc) is not None or isinstance(exc, GenerationOutputBudgetError):
             raise
         cause = getattr(exc, "cause", exc)
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
         return None, reason, _fingerprint({"exception": reason})
-    return _page_result(turn, page_schema, parameters)
-
+    return _page_result(turn, page_schema, parameters, action_name)
 
 def _recover_page(
     current: Any,
@@ -351,6 +369,7 @@ def _recover_page(
         page_index=page_index,
         page_count=page_count,
         page_schema=page_schema,
+        action_name=action_name,
     )
     arguments, error, first_fingerprint = _page_attempt(
         current,
@@ -358,6 +377,7 @@ def _recover_page(
         first_request,
         page_schema,
         parameters,
+        action_name,
     )
     if arguments is not None:
         return arguments
@@ -367,6 +387,7 @@ def _recover_page(
         page_index=page_index,
         page_count=page_count,
         page_schema=page_schema,
+        action_name=action_name,
         repair_error=error,
     )
     arguments, repair_error, second_fingerprint = _page_attempt(
@@ -375,21 +396,21 @@ def _recover_page(
         repair_request,
         page_schema,
         parameters,
+        action_name,
     )
     if arguments is not None:
         return arguments
 
     fixed_point = first_fingerprint == second_fingerprint
     suffix = (
-        "repeated-invalid argument-page fixed point"
+        "repeated-invalid forced argument-page fixed point"
         if fixed_point
-        else "bounded argument-page repair exhausted"
+        else "bounded forced argument-page repair exhausted"
     )
     raise ModelConfigurationError(
         f"Host-selected action {action_name!r} {suffix} on page "
         f"{page_index}/{page_count}; error={repair_error or error}."
     )
-
 
 def _recover_source_edit_arguments(
     current: Any,
@@ -456,7 +477,7 @@ def host_selected_argument_turn(
     *,
     prefix: str = "host_action",
 ) -> Any:
-    """Recover one already-selected action through bounded argument-only JSON pages."""
+    """Recover one already-selected action through bounded forced-function pages."""
 
     from .model_adapters import ModelConfigurationError
 
