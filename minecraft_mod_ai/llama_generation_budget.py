@@ -64,10 +64,11 @@ def apply_generation_budget(
     payload: Mapping[str, Any],
     *,
     config: Any,
+    structured_output: bool = False,
 ) -> dict[str, Any]:
     """Apply the common finite output policy; ``-1`` is never a transport value."""
 
-    return apply_payload_generation_budget(payload, config=config)
+    return apply_payload_generation_budget(payload, config=config, structured_output=structured_output)
 
 
 def _schema_shape(value: Any, *, depth: int = 0) -> tuple[int, int, int, int, int]:
@@ -222,7 +223,10 @@ def install(hardware_module: Any) -> None:
     @wraps(current)
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         raw_payload = current(adapter, request)
-        bounded = apply_generation_budget(raw_payload, config=adapter.config)
+        bounded = apply_generation_budget(
+            raw_payload, config=adapter.config,
+            structured_output=getattr(request, "response_format", None) == "json",
+        )
 
         decision_kind = _planning_decision_json_fallback(request)
         if decision_kind:

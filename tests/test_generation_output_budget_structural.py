@@ -92,3 +92,38 @@ def test_explicit_static_output_ceiling_is_never_raised_by_floor() -> None:
     bounded = apply_payload_generation_budget(payload, config=_StaticConfig())
 
     assert bounded["max_tokens"] == 1024
+
+
+def test_host_validated_json_page_retains_budget_without_wire_grammar() -> None:
+    # Qwen3.5 removes wire JSON constraints and native tools before this boundary.
+    payload = {"messages": [{"role": "user", "content": "x" * 112_616}], "max_tokens": 1}
+    bounded = apply_payload_generation_budget(
+        payload, config=_DynamicConfig(), structured_output=True,
+    )
+    assert bounded["max_tokens"] >= 4096
+    assert "tools" not in bounded
+    assert "response_format" not in bounded
+
+
+def test_static_json_page_limit_is_respected() -> None:
+    bounded = apply_payload_generation_budget(
+        {"messages": [{"role": "user", "content": "x" * 112_616}]},
+        config=_StaticConfig(), structured_output=True,
+    )
+    assert bounded["max_tokens"] == 1024
+
+
+def test_llama_budget_uses_request_contract_when_qwen_removes_grammar() -> None:
+    from types import SimpleNamespace
+    from minecraft_mod_ai.llama_generation_budget import install
+    hardware = SimpleNamespace(_server_payload=lambda adapter, request: {
+        "messages": [{"role": "user", "content": "x" * 112_616}],
+        "max_tokens": 1,
+    })
+    install(hardware)
+    request = SimpleNamespace(tools=(), response_format="json", response_schema={
+        "type": "object", "properties": {"operation": {"type": "string"}},
+    })
+    payload = hardware._server_payload(SimpleNamespace(config=_DynamicConfig()), request)
+    assert payload["max_tokens"] >= 4096
+    assert "response_format" not in payload

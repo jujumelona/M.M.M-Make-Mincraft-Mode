@@ -28,7 +28,7 @@ def _stub_exact_context_capacity(monkeypatch) -> None:
     monkeypatch.setattr(
         llama_exact_context,
         "capacity_safe_payload",
-        lambda _url, payload: dict(payload),
+        lambda _url, payload, **_kwargs: dict(payload),
     )
 
 

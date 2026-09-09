@@ -88,3 +88,19 @@ def test_non_no_progress_contract_error_is_not_retried() -> None:
 
     assert len(router.calls) == 1
 
+
+
+def test_omitted_required_sections_are_not_inferred_inapplicable() -> None:
+    from minecraft_mod_ai.planning_criterion_fragments import (
+        MissingWorksheetSections, assemble_worksheet_from_fragments,
+    )
+    with pytest.raises(MissingWorksheetSections) as caught:
+        assemble_worksheet_from_fragments(
+            {"statement": "Mine resources and credit currency."},
+            selected_sections=CORE_WORKSHEET_SECTIONS,
+            criteria=("Mining credits currency.",),
+            fragments={0: _fragment(implementation="Credit currency once after server-confirmed mining.")},
+            allowed_refs=set(),
+        )
+    assert "reuse_assessment" in caught.value.sections
+    assert "verification" in caught.value.sections

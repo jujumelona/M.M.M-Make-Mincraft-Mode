@@ -126,12 +126,12 @@ def _structural_tool_call_is_compact(tools: Sequence[Any]) -> bool:
     return bool(names and names <= _STRUCTURAL_COMPACT_TOOLS)
 
 
-def _structural_tool_floor(config: Any, tools: Sequence[Any]) -> int:
-    if not tools:
+def _structural_tool_floor(config: Any, tools: Sequence[Any], *, structured_output: bool = False) -> int:
+    if not tools and not structured_output:
         return 1
     target = (
         _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS
-        if _structural_tool_call_is_compact(tools)
+        if structured_output or _structural_tool_call_is_compact(tools)
         else _MIN_GENERAL_TOOL_OUTPUT_TOKENS
     )
     return max(1, min(target, tool_action_token_budget(config)))
@@ -143,6 +143,7 @@ def _assert_structural_budget_viable(
     budget: int,
     *,
     source: str,
+    structured_output: bool = False,
 ) -> None:
     """Fail before a structurally useless fragment reaches model inference.
 
@@ -152,7 +153,7 @@ def _assert_structural_budget_viable(
     reasonably encode one scalar tool action.
     """
 
-    if not tools:
+    if not tools and not structured_output:
         return
     viable = min(
         _MIN_VIABLE_STRUCTURAL_TOOL_OUTPUT_TOKENS,
@@ -206,12 +207,13 @@ def generation_output_token_budget(
     *,
     input_tokens: int = 0,
     tools: Sequence[Any] = (),
+    structured_output: bool = False,
 ) -> int:
     """Return one finite decode budget without starving a forced structural action."""
 
     ceiling = _configured_output_ceiling(config)
     context = effective_context_tokens(config)
-    floor = _structural_tool_floor(config, tools)
+    floor = _structural_tool_floor(config, tools, structured_output=structured_output)
 
     if ceiling is not None:
         # Explicit static ceilings are host-authoritative. We reject only a truly
@@ -221,6 +223,7 @@ def generation_output_token_budget(
             tools,
             ceiling,
             source="configured output ceiling",
+            structured_output=structured_output,
         )
         budget = ceiling
     elif context > 0:
@@ -248,6 +251,7 @@ def generation_output_token_budget(
         tools,
         int(budget),
         source="computed output budget",
+        structured_output=structured_output,
     )
     return max(1, int(budget))
 
@@ -274,10 +278,19 @@ def payload_input_token_estimate(payload: Mapping[str, Any]) -> int:
     )
 
 
+def payload_requires_structured_output(payload: Mapping[str, Any]) -> bool:
+    """JSON argument pages remain structural even after native tools are removed."""
+    response_format = payload.get("response_format")
+    return isinstance(response_format, Mapping) and response_format.get("type") in {
+        "json_object", "json_schema",
+    }
+
+
 def apply_payload_generation_budget(
     payload: Mapping[str, Any],
     *,
     config: Any,
+    structured_output: bool = False,
 ) -> dict[str, Any]:
     """Apply the common finite output budget to one OpenAI-compatible payload."""
 
@@ -289,11 +302,13 @@ def apply_payload_generation_budget(
         and not isinstance(raw_tools, (str, bytes, bytearray))
         else ()
     )
+    structured_output = structured_output or payload_requires_structured_output(bounded)
     input_tokens = payload_input_token_estimate(bounded)
     budget = generation_output_token_budget(
         config,
         input_tokens=input_tokens,
         tools=tools,
+        structured_output=structured_output,
     )
 
     context = effective_context_tokens(config)
@@ -302,7 +317,7 @@ def apply_payload_generation_budget(
         # source edit below the amount needed to finish its function arguments. If the
         # real server context is tighter, llama_finish_reason_contract reports typed
         # CONTEXT_PRESSURE and the canonical tool loop compacts observations.
-        floor = _structural_tool_floor(config, tools)
+        floor = _structural_tool_floor(config, tools, structured_output=structured_output)
         estimated_remaining = context - input_tokens - _CONTEXT_GUARD_TOKENS
         remaining = max(floor, estimated_remaining, 1)
         budget = min(budget, remaining)
@@ -317,6 +332,7 @@ def apply_payload_generation_budget(
             tools,
             requested,
             source="request max_tokens",
+            structured_output=structured_output,
         )
         budget = min(budget, requested)
 
@@ -325,6 +341,7 @@ def apply_payload_generation_budget(
         tools,
         int(budget),
         source="final payload budget",
+        structured_output=structured_output,
     )
     bounded["max_tokens"] = max(1, int(budget))
     return bounded

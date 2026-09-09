@@ -43,10 +43,13 @@ def _base_state(*, blockers=None, decisions=None, detail_progress=None) -> dict[
 
 
 def _row(section: str) -> dict[str, object]:
-    return {
-        "specification": {"section": section},
-        "constraint_evidence_refs": [],
-    }
+    return criterion_fragments.assemble_worksheet_from_fragments(
+        {"statement": "Collect resources."},
+        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        criteria=("Collected items enter inventory.",),
+        fragments={0: _real_fragment()},
+        allowed_refs=set(),
+    )[section]
 
 
 def _worksheet() -> dict[str, dict[str, object]]:
@@ -382,3 +385,49 @@ def test_blocked_research_stays_terminal_on_reentry(monkeypatch):
     result = research.collect_planning_state_research(_Router(), "prompt", state)
 
     assert result["research_queue"][0]["status"] == "blocked"
+
+
+def test_missing_requirement_sections_are_generated_and_checkpointed(monkeypatch):
+    requirements = _requirements()
+    _patch_compile_boundaries(monkeypatch, requirements)
+    monkeypatch.setattr(adaptive, "assemble_worksheet_from_fragments",
+                        criterion_fragments.assemble_worksheet_from_fragments)
+    fragment = _real_fragment()
+    fragment["section_updates"] = [row for row in fragment["section_updates"]
+                                   if row["section"] not in {"reuse_assessment", "verification"}]
+    monkeypatch.setattr(adaptive, "_compile_criterion", lambda *a, **kw: deepcopy(fragment))
+    calls = []
+    evidence = [{"research_ref": "r_1", "claims": ["A donor exists but compatibility is unverified."]}]
+    monkeypatch.setattr(adaptive, "_requirement_grounding", lambda *a: (evidence, set()))
+
+    def complete(_router, **kwargs):
+        assert kwargs["evidence"] == evidence
+        section = "reuse_assessment" if "section reuse_assessment" in kwargs["criterion"] else "verification"
+        calls.append(section)
+        return {"section_updates": [row for row in _real_fragment()["section_updates"]
+                                    if row["section"] == section]}
+
+    monkeypatch.setattr(adaptive, "generate_criterion_fragment", complete)
+    checkpoints = []
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(), "prompt", _base_state(),
+        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        checkpoint=lambda state: checkpoints.append(deepcopy(state)),
+    )
+    assert calls == ["reuse_assessment", "verification"]
+    assert result["plan_ready"] is True
+    worksheet = result["decisions"][0]["engineering_worksheet"]
+    assert worksheet["reuse_assessment"]["specification"]["verdicts"]
+    assert worksheet["verification"]["specification"]["success_cases"]
+    assert any(len(row.get("detail_progress", [])) == 1 for row in checkpoints)
+
+
+def test_resume_rejects_legacy_plan_with_vacuous_required_section():
+    worksheet = _worksheet()
+    detail = _plan("req_1", adaptive.WORKSHEET_SECTIONS, worksheet)
+    assert adaptive._detail_matches_selection(detail, adaptive.WORKSHEET_SECTIONS)
+    spec = detail["engineering_worksheet"]["verification"]["specification"]
+    for concern in list(spec):
+        if concern != "inapplicable_concerns":
+            spec[concern] = []
+    assert not adaptive._detail_matches_selection(detail, adaptive.WORKSHEET_SECTIONS)

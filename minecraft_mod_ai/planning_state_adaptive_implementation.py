@@ -19,6 +19,7 @@ from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_criterion_fragments import (
     assemble_worksheet_from_fragments,
+    MissingWorksheetSections,
     clear_requirement_progress,
     generate_criterion_fragment,
     load_requirement_progress,
@@ -26,6 +27,7 @@ from .planning_criterion_fragments import (
     store_criterion_progress,
 )
 from .planning_detail_template import WORKSHEET_SECTIONS, normalize_required_sections
+from .planning_detail_slots import DETAIL_RECORDS
 from .planning_state_contract import validate_planning_state
 from .planning_state_implementation import (
     _assemble_requirement_plan,
@@ -69,7 +71,19 @@ def _detail_matches_selection(
     selected_sections: tuple[str, ...],
 ) -> bool:
     raw = detail.get("required_detail_sections")
-    return isinstance(raw, list) and tuple(raw) == selected_sections
+    if not isinstance(raw, list) or tuple(raw) != selected_sections:
+        return False
+    worksheet = detail.get("engineering_worksheet")
+    if not isinstance(worksheet, Mapping):
+        return False
+    for section in selected_sections:
+        row = worksheet.get(section)
+        specification = row.get("specification") if isinstance(row, Mapping) else None
+        if not isinstance(specification, Mapping) or not any(
+            specification.get(concern) for concern in DETAIL_RECORDS[section]
+        ):
+            return False
+    return True
 
 
 def _merge_completed_details(
@@ -211,19 +225,64 @@ def _compile_criterion(
 
 def _finish_requirement(
     job: dict[str, Any],
+    router: Any,
     *,
     working_state: Mapping[str, Any],
     requirement_order: tuple[str, ...],
     completed_details: dict[str, Mapping[str, Any]],
     checkpoint: Checkpoint | None,
 ) -> dict[str, Any]:
-    worksheet = assemble_worksheet_from_fragments(
-        job["requirement"],
-        selected_sections=job["selected_sections"],
-        criteria=job["criteria"],
-        fragments=job["fragments"],
-        allowed_refs=job["allowed"],
-    )
+    def assemble() -> dict[str, Any]:
+        return assemble_worksheet_from_fragments(
+            job["requirement"],
+            selected_sections=job["selected_sections"],
+            criteria=job["criteria"],
+            fragments=job["fragments"],
+            allowed_refs=job["allowed"],
+        )
+
+    try:
+        worksheet = assemble()
+    except MissingWorksheetSections as gap:
+        # A criterion may omit an unrelated section, but the requirement as a whole
+        # must resolve every host-selected section. Complete only the finite gaps;
+        # retain and checkpoint the already-authored criterion contracts.
+        for section in gap.sections:
+            with planner_operation(f"detailed_section:{job['requirement_ref']}:{section}"):
+                supplement = generate_criterion_fragment(
+                    router,
+                    requirement=job["requirement"],
+                    criterion=(
+                        "Resolve the missing required worksheet section " + section
+                        + " across these acceptance criteria: " + "; ".join(job["criteria"])
+                        + ". Return a concrete implementation or constraint for this section. "
+                        "For reuse, assess the supplied candidates and distinguish verified reuse, "
+                        "reference-only evidence and missing proof. For verification, specify "
+                        "observable success and rejection checks."
+                    ),
+                    selected_sections=job["selected_sections"],
+                    evidence=job["evidence"],
+                    allowed_refs=job["allowed"],
+                )
+            updates = [row for row in supplement["section_updates"]
+                       if row["section"] == section and
+                       (_text(row.get("implementation")) or _text(row.get("constraint")))]
+            if not updates:
+                raise MissingWorksheetSections([section])
+            fragment = deepcopy(job["fragments"][0])
+            fragment["section_updates"] = [row for row in fragment["section_updates"]
+                                           if row["section"] != section] + updates
+            job["fragments"][0] = fragment
+            working_state = store_criterion_progress(
+                working_state,
+                requirement_ref=job["requirement_ref"],
+                selected_sections=job["selected_sections"],
+                criterion_index=0,
+                criterion=job["criteria"][0],
+                fragment=fragment,
+            )
+            working_state = _checkpoint_state(working_state, checkpoint)
+        worksheet = assemble()
     plan = _assemble_requirement_plan(
         job["requirement"],
         job["requirement_ref"],
@@ -363,6 +422,7 @@ def compile_progress_monotone_detailed_plans(
         if len(job["fragments"]) == len(job["criteria"]):
             working_state = _finish_requirement(
                 job,
+                router,
                 working_state=working_state,
                 requirement_order=requirement_order,
                 completed_details=completed_details,
@@ -481,6 +541,7 @@ def compile_progress_monotone_detailed_plans(
                     if len(job["fragments"]) == len(job["criteria"]):
                         working_state = _finish_requirement(
                             job,
+                            router,
                             working_state=working_state,
                             requirement_order=requirement_order,
                             completed_details=completed_details,

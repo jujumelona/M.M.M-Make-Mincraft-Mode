@@ -124,3 +124,37 @@ def test_later_page_owns_its_field_even_if_earlier_field_is_repeated() -> None:
 
     assert error == ""
     assert arguments == {"constraint_evidence_refs": ["constraint-1"]}
+
+
+def test_backend_boundary_reaches_canonical_owner_without_json_retry():
+    import pytest
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED, LlamaCompletionBoundaryError,
+    )
+    from minecraft_mod_ai.native_atomic_argument_recovery import _page_attempt
+    boundary = LlamaCompletionBoundaryError(
+        "prefill calibration unavailable", kind=OUTPUT_EXHAUSTED,
+        partial_message={"content": '{"operation":"cre'}, max_tokens=1,
+    )
+    calls = []
+
+    def current(adapter, request):
+        calls.append(request)
+        raise boundary
+
+    with pytest.raises(LlamaCompletionBoundaryError) as caught:
+        _page_attempt(current, None, object(), {}, {})
+    assert caught.value is boundary
+    assert caught.value.partial_message["content"] == '{"operation":"cre'
+    assert len(calls) == 1
+
+
+def test_cancellation_is_not_rewritten_as_invalid_arguments():
+    import pytest
+    from minecraft_mod_ai.native_atomic_argument_recovery import _page_attempt
+
+    def cancel(adapter, request):
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        _page_attempt(cancel, None, object(), {}, {})

@@ -111,3 +111,20 @@ def test_managed_restart_invalidates_cached_context(monkeypatch):
         {"messages": [{"role": "user", "content": "hello"}]},
     )
     assert client.props_calls == 2
+
+
+def test_host_validated_argument_page_cannot_be_squeezed_to_fragment(monkeypatch):
+    import pytest
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        CONTEXT_PRESSURE, LlamaCompletionBoundaryError,
+    )
+    client = _Client()
+    _uncached(monkeypatch, client)
+    with pytest.raises(LlamaCompletionBoundaryError) as caught:
+        capacity_safe_payload(
+            "http://127.0.0.1:8910/v1",
+            {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 4096},
+            structured_output=True,
+        )
+    assert caught.value.kind == CONTEXT_PRESSURE
+    assert caught.value.prompt_tokens == 37

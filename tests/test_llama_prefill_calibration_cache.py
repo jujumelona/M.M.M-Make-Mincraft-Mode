@@ -18,7 +18,7 @@ def _isolate_prefill_tests_from_exact_context_network(monkeypatch):
     monkeypatch.setattr(
         exact_context,
         "capacity_safe_payload",
-        lambda _server_url, payload: dict(payload),
+        lambda _server_url, payload, **_kwargs: dict(payload),
     )
 
 

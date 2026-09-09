@@ -234,7 +234,14 @@ def _page_attempt(
 ) -> tuple[dict[str, Any] | None, str, str]:
     try:
         turn = current(adapter, request)
-    except BaseException as exc:
+    except Exception as exc:
+        from .llama_finish_reason_contract import completion_boundary_error
+        from .generation_output_budget import GenerationOutputBudgetError
+
+        # Backend/context failures belong to the canonical recovery owner. Retrying
+        # them as invalid JSON loses their type, cause and preserved partial receipt.
+        if completion_boundary_error(exc) is not None or isinstance(exc, GenerationOutputBudgetError):
+            raise
         cause = getattr(exc, "cause", exc)
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
         return None, reason, _fingerprint({"exception": reason})

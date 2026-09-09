@@ -134,6 +134,7 @@ def _plain_semantic_completion(
         adapter,
         server_url,
         _server_payload(adapter, request),
+        structured_output=request.response_format == "json",
     )
     _report_server_connection(server_url)
     turn = _plain_generation_response(message)
@@ -152,6 +153,7 @@ def _plain_semantic_completion(
         adapter,
         server_url,
         _server_payload(adapter, continuation_request),
+        structured_output=continuation_request.response_format == "json",
     )
     continued = _plain_generation_response(continued_message)
     if not _has_semantic_action(continued):
@@ -484,6 +486,8 @@ def _completion_message_with_prefill(
     adapter: LlamaCppAdapter,
     server_url: str,
     payload: Mapping[str, Any],
+    *,
+    structured_output: bool = False,
 ) -> Mapping[str, Any]:
     from ..llama_finish_reason_contract import (
         _CONTEXT_ERROR,
@@ -551,7 +555,9 @@ def _completion_message_with_prefill(
     from ..llama_exact_context import capacity_safe_payload
 
     while True:
-        current_payload = capacity_safe_payload(server_url, current_payload)
+        current_payload = capacity_safe_payload(
+            server_url, current_payload, structured_output=structured_output,
+        )
         try:
             final_message = _completion_message(server_url, current_payload)
         except RuntimeError as exc:

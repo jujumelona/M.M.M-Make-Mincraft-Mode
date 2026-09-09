@@ -642,6 +642,17 @@ def _append_section_records(
         raise ValueError(f"DETAILED_PLAN_CRITERION: unsupported section {section!r}")
 
 
+class MissingWorksheetSections(ValueError):
+    """Host-selected sections cannot be declared inapplicable by omission."""
+
+    def __init__(self, sections: Iterable[str]) -> None:
+        self.sections = tuple(sections)
+        super().__init__(
+            "DETAILED_PLAN_MISSING_SECTIONS: no authored contract for "
+            + ", ".join(self.sections)
+        )
+
+
 def assemble_worksheet_from_fragments(
     requirement: Mapping[str, Any],
     *,
@@ -672,6 +683,16 @@ def assemble_worksheet_from_fragments(
         }
         for index in range(len(criteria))
     }
+
+    covered = {
+        update["section"]
+        for fragment in validated_fragments.values()
+        for update in fragment[_FRAGMENT_KEY]
+        if _text(update.get("implementation")) or _text(update.get("constraint"))
+    }
+    missing = [section for section in selected if section not in covered]
+    if missing:
+        raise MissingWorksheetSections(missing)
 
     for section in selected:
         specification: dict[str, list[dict[str, str]]] = {
