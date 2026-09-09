@@ -1,6 +1,7 @@
 ---
 name: generate-worldgen
 description: Generate only explicitly requested mod-owned structures, biomes, dimensions and feature resources inside the Fabric project.
+schema_version: mmm/skill-v2
 ---
 
 activate_when:
@@ -31,16 +32,19 @@ allowed_tools:
 output_schema:
   - schema_version
   - status
-  - changed_paths or read-only findings
+  - changed_paths
   - exact evidence and receipt hashes
   - unresolved gates and explicit failure reason
 
 validators:
-  - request fidelity and immutable approval hash
-  - path containment and no symlinks
-  - loader/version/mapping consistency
-  - Java diagnostics and structured resource validation where applicable
-  - no advertised capability without its required build/runtime gate
+  - approval_and_fidelity
+  - path_containment
+  - version_lock
+  - source_validation
+  - full_build_gates
+  - measured_runtime_quality
+  - capability_receipts
+  - feature_preservation
 
 retry_policy:
   max_attempts: null
@@ -65,7 +69,7 @@ forbidden_actions:
 exit_conditions:
   success:
     - Generated worldgen code and data remain inside the approved Fabric source project.
-    - Datapack schemas, Gradle, GameTest and fresh disposable-world checks pass.
+    - Datapack schemas, registry references, Gradle, GameTest and fresh disposable-world checks pass.
     - Outputs and hashes are persisted.
   blocked:
     - Required MCP, model, dependency, approval or runtime is unavailable.

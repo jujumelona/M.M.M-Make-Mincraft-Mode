@@ -51,7 +51,7 @@ activate_when:
   - Planning must choose between Java in-process, localhost sidecar, remote API, or offline build-time inference.
 inputs:
   - original user request and request-derived research domains
-  - exact the exact approved Minecraft version, loader, mappings, and Java target target
+  - exact approved Minecraft version, loader, mappings, and Java target
   - current hardware, network, privacy, language and latency constraints
 required_rag:
   - exact target-version Minecraft implementation evidence
