@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Fix migration anchors
+      - name: Fix migration anchors and invariant assertion
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -28,6 +28,10 @@ jobs:
           text = path.read_text(encoding='utf-8')
           text = text.replace('"def _fingerprint(\\n"', '"def _fingerprint("')
           text = text.replace('"def _page_response(\\n"', '"def _page_response("')
+          text = text.replace(
+              'assert "Do not serialize a JSON object" in source',
+              'assert \'response_format="text"\' in source\n    assert "tool_choice={" in source',
+          )
           path.write_text(text, encoding='utf-8')
           PY
       - name: Apply migration
