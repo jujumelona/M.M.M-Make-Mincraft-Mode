@@ -4,6 +4,8 @@ from typing import Any
 
 from minecraft_mod_ai.catalog_first_grounded_rag import _query_bundle
 from minecraft_mod_ai.planning_state_resolution import _normalize_requirement_rows
+from minecraft_mod_ai.pre_design_research_pipeline import _grounded_domain_evidence
+from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates
 
 
 def test_requirement_normalization_preserves_distinct_acceptance_contracts() -> None:
@@ -103,9 +105,8 @@ class _CatalogBackend:
         return {"provider": provider, "status": "error", "error": str(exc)}
 
 
-def test_catalog_hit_without_source_link_falls_back_to_github_donor_discovery() -> None:
+def _catalog_query_bundle() -> tuple[_CatalogBackend, dict[str, Any]]:
     backend = _CatalogBackend()
-
     bundle = _query_bundle(
         backend,
         object(),
@@ -114,6 +115,11 @@ def test_catalog_hit_without_source_link_falls_back_to_github_donor_discovery() 
         github_disabled=lambda: False,
         disable_github=lambda: None,
     )
+    return backend, bundle
+
+
+def test_catalog_hit_without_source_link_falls_back_to_github_donor_discovery() -> None:
+    backend, bundle = _catalog_query_bundle()
 
     sources = bundle["external_rag"]["sources"]
     provider = bundle["external_rag"]["providers"]["github"]
@@ -124,3 +130,30 @@ def test_catalog_hit_without_source_link_falls_back_to_github_donor_discovery() 
         bundle["external_rag"]["provider_policy"]["github_broad_search"]
         == "fallback_after_missing_linked_source_or_empty_catalog"
     )
+
+
+def test_discovered_github_donor_is_promoted_to_repository_candidate() -> None:
+    _, query_bundle = _catalog_query_bundle()
+    research_bundle = {
+        "domains": [
+            {
+                "domain_id": "r_001",
+                "queries": [query_bundle],
+            }
+        ]
+    }
+    grounded = _grounded_domain_evidence("r_001", research_bundle)
+    domain = {
+        "domain_id": "r_001",
+        "objective": "Find reusable implementation for a Minecraft glider.",
+        "requirements": ["Reusable glider implementation source"],
+        "queries": ["minecraft glider implementation"],
+        "evidence_kinds": ["dependency", "source_code"],
+    }
+
+    candidates = project_repository_candidates(domain, grounded)
+
+    assert candidates
+    assert candidates[0]["repository"] == "example/glider"
+    assert candidates[0]["source_reuse_authority"] == "verification_required"
+    assert candidates[0]["reference_only"] is True
