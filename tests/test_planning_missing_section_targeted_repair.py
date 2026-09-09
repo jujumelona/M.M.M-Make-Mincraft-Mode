@@ -5,10 +5,22 @@ from typing import Any
 import minecraft_mod_ai.planning_state_adaptive_implementation as adaptive
 
 
-def test_missing_worksheet_section_repair_exposes_only_the_missing_section(monkeypatch) -> None:
-    """A gap repair must not let a small model answer an unrelated worksheet section."""
+def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monkeypatch) -> None:
+    """Reproduce the integration/persistence/reuse gap from the local-model planner crash."""
 
     repair_selections: list[tuple[str, ...]] = []
+    implementations = {
+        "integration": (
+            "Route the accepted resource-farming result through the requirement-owned "
+            "integration boundary before exposing the observable result."
+        ),
+        "persistence": (
+            "Persist requirement-owned progression only after the accepted state transition commits."
+        ),
+        "reuse_assessment": (
+            "Treat supplied repository candidates as reference-only unless the host evidence proves reuse."
+        ),
+    }
 
     def generate_targeted_fragment(
         _router: Any,
@@ -22,16 +34,15 @@ def test_missing_worksheet_section_repair_exposes_only_the_missing_section(monke
         del requirement, criterion, evidence, allowed_refs
         selection = tuple(selected_sections)
         repair_selections.append(selection)
-        assert selection == ("integration",)
+        assert len(selection) == 1
+        section = selection[0]
+        assert section in implementations
         return {
             "section_updates": [
                 {
-                    "section": "integration",
-                    "implementation": (
-                        "Route the accepted resource-farming result through the requirement-owned "
-                        "integration boundary before exposing the observable result."
-                    ),
-                    "constraint": "Do not publish a partial integration result after rejection.",
+                    "section": section,
+                    "implementation": implementations[section],
+                    "constraint": f"Do not commit an invalid {section} result.",
                     "evidence_refs": [],
                 }
             ]
@@ -74,7 +85,12 @@ def test_missing_worksheet_section_repair_exposes_only_the_missing_section(monke
             "statement": "Collected resources enter the player inventory.",
         },
         "requirement_ref": "req_001",
-        "selected_sections": ("behavior_contract", "integration"),
+        "selected_sections": (
+            "behavior_contract",
+            "integration",
+            "persistence",
+            "reuse_assessment",
+        ),
         "criteria": ("A successful collection adds the resource to inventory.",),
         "fragments": {
             0: {
@@ -102,7 +118,13 @@ def test_missing_worksheet_section_repair_exposes_only_the_missing_section(monke
         checkpoint=None,
     )
 
-    assert repair_selections == [("integration",)]
+    assert repair_selections == [
+        ("integration",),
+        ("persistence",),
+        ("reuse_assessment",),
+    ]
     assert "req_001" in completed
     worksheet = completed["req_001"]["engineering_worksheet"]
     assert worksheet["integration"]["specification"]["responsibilities"]
+    assert worksheet["persistence"]["specification"]["stored_state"]
+    assert worksheet["reuse_assessment"]["specification"]["verdicts"]
