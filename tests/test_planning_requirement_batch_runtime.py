@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from threading import RLock
 from types import SimpleNamespace
 
@@ -13,40 +12,40 @@ from minecraft_mod_ai import planning_state_adaptive_implementation as adaptive
 class _BatchRouter:
     def __init__(self) -> None:
         self.calls = 0
+        self.tool_names: list[str] = []
 
     def generate_text(self, *_args, **_kwargs):
-        self.calls += 1
-        return json.dumps(
-            {
-                "criterion_fragments": [
-                    {
-                        "criterion_index": 0,
-                        "section_updates": [
-                            {
-                                "section": "behavior_contract",
-                                "implementation": "implement criterion zero",
-                                "constraint": "reject invalid zero state",
-                                "evidence_refs": [],
-                            }
-                        ],
-                    },
-                    {
-                        "criterion_index": 1,
-                        "section_updates": [
-                            {
-                                "section": "behavior_contract",
-                                "implementation": "implement criterion one",
-                                "constraint": "reject invalid one state",
-                                "evidence_refs": [],
-                            }
-                        ],
-                    },
-                ]
-            }
-        )
+        raise AssertionError("planner batch must not use raw structured text generation")
 
-    def generate_tool_decision(self, *_args, **_kwargs):
-        raise AssertionError("planner should use JSON text")
+    def generate_tool_decision(self, *_args, tool_name, **_kwargs):
+        self.calls += 1
+        self.tool_names.append(tool_name)
+        return {
+            "criterion_fragments": [
+                {
+                    "criterion_index": 0,
+                    "section_updates": [
+                        {
+                            "section": "behavior_contract",
+                            "implementation": "implement criterion zero",
+                            "constraint": "reject invalid zero state",
+                            "evidence_refs": [],
+                        }
+                    ],
+                },
+                {
+                    "criterion_index": 1,
+                    "section_updates": [
+                        {
+                            "section": "behavior_contract",
+                            "implementation": "implement criterion one",
+                            "constraint": "reject invalid one state",
+                            "evidence_refs": [],
+                        }
+                    ],
+                },
+            ]
+        }
 
 
 install(model_router_module=SimpleNamespace(ModelRouter=_BatchRouter))
@@ -63,6 +62,7 @@ def test_requirement_batch_generates_multiple_criteria_in_one_model_call():
         allowed_refs=set(),
     )
     assert router.calls == 1
+    assert router.tool_names == ["submit_criterion_fragments"]
     assert set(result) == {0, 1}
 
 
@@ -93,5 +93,6 @@ def test_compile_criterion_single_flights_sibling_criteria():
         **common,
     )
     assert router.calls == 1
+    assert router.tool_names == ["submit_criterion_fragments"]
     assert first != second
     assert set(cache) == {0, 1}
