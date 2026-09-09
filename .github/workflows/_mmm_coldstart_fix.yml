@@ -1,0 +1,81 @@
+name: MMM cold-start bottleneck fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/_mmm_coldstart_fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply root-cause cold-start fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('minecraft_mod_ai/llama_server_autotune.py')
+          text = source_path.read_text(encoding='utf-8')
+
+          anchor = '''def _baseline_decision(fingerprint: str) -> AutotuneDecision:\n'''
+          if anchor not in text:
+              raise SystemExit('baseline decision anchor not found')
+
+          helper = '''def _request_inline_autotune_enabled() -> bool:\n    \"\"\"Return whether a user explicitly opted into blocking first-request tuning.\n\n    A cache miss must not benchmark multiple full model launches on the latency-critical\n    request path.  The legacy switch remains an explicit compatibility opt-in, while\n    fresh installs default to one safe baseline launch.\n    \"\"\"\n\n    if \"MMM_LLAMA_SERVER_AUTOTUNE_INLINE\" in os.environ:\n        return _env_bool(\"MMM_LLAMA_SERVER_AUTOTUNE_INLINE\", False)\n    if \"MMM_LLAMA_SERVER_AUTOTUNE\" in os.environ:\n        return _env_bool(\"MMM_LLAMA_SERVER_AUTOTUNE\", False)\n    return False\n\n\n'''
+          if 'def _request_inline_autotune_enabled()' not in text:
+              text = text.replace(anchor, helper + anchor, 1)
+
+          old = 'if _env_bool("MMM_LLAMA_SERVER_AUTOTUNE", True):'
+          new = 'if _request_inline_autotune_enabled():'
+          if old not in text and new not in text:
+              raise SystemExit('inline autotune branch not found')
+          text = text.replace(old, new, 1)
+
+          ensure_anchor = '''def ensure_tuned_server(config: Any, request: Any) -> str:\n'''
+          if ensure_anchor not in text:
+              raise SystemExit('ensure_tuned_server anchor not found')
+
+          tune_function = '''def tune_server(config: Any, request: Any, *, force: bool = False) -> AutotuneDecision:\n    \"\"\"Measure and persist a validated decode winner outside the request hot path.\n\n    Setup/warmup code may call this explicitly.  Ordinary inference uses the cached\n    winner when present and never pays multi-launch benchmarking cost on a cold miss.\n    \"\"\"\n    binary = _server_binary()\n    if binary is None:\n        raise RuntimeError(\"native llama-server binary is unavailable\")\n\n    with _AUTOTUNE_LOCK:\n        if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:\n            raise RuntimeError(\n                \"explicit llama-server tuning must run before the managed inference server\"\n            )\n        model_path = _resolve_model_path(config)\n        fingerprint = _fingerprint(config, binary, model_path)\n        if not force:\n            cached = _load_cached_decision(fingerprint)\n            if cached is not None:\n                return cached\n        decision = _benchmark(binary, model_path, config, request, fingerprint)\n        if decision is None:\n            raise RuntimeError(\n                \"llama-server autotune could not validate a baseline decode\"\n            )\n        _save_decision(decision)\n        return decision\n\n\n'''
+          if 'def tune_server(config: Any, request: Any' not in text:
+              text = text.replace(ensure_anchor, tune_function + ensure_anchor, 1)
+
+          source_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_llama_autotune_cache_efficiency.py')
+          tests = test_path.read_text(encoding='utf-8')
+          marker = 'def test_cold_request_cache_miss_does_not_benchmark'
+          if marker not in tests:
+              tests += '''\n\ndef _stub_cold_runtime(monkeypatch, fingerprint: str = \"cold-fingerprint\"):\n    monkeypatch.setattr(autotune, \"_MANAGED_PROCESS\", None)\n    monkeypatch.setattr(autotune, \"_MANAGED_URL\", None)\n    monkeypatch.setattr(autotune, \"_MANAGED_KEY\", None)\n    autotune._ATTEMPTED_KEYS.clear()\n    monkeypatch.delenv(\"LLAMA_SERVER_URL\", raising=False)\n    monkeypatch.delenv(\"MMM_LLAMA_SERVER_AUTOTUNE\", raising=False)\n    monkeypatch.delenv(\"MMM_LLAMA_SERVER_AUTOTUNE_INLINE\", raising=False)\n    monkeypatch.setattr(autotune, \"_external_server_is_ready\", lambda: False)\n    monkeypatch.setattr(autotune, \"_server_binary\", lambda: \"/tmp/llama-server\")\n    monkeypatch.setattr(autotune, \"_resolve_model_path\", lambda _config: \"/tmp/model.gguf\")\n    monkeypatch.setattr(\n        autotune, \"_fingerprint\", lambda _config, _binary, _path: fingerprint\n    )\n    return SimpleNamespace(model_id=\"repo/model\", extra={}, max_context=8192)\n\n\ndef test_cold_request_cache_miss_does_not_benchmark(monkeypatch) -> None:\n    config = _stub_cold_runtime(monkeypatch)\n    monkeypatch.setattr(autotune, \"_load_cached_decision\", lambda _fingerprint: None)\n\n    def unexpected_benchmark(*_args, **_kwargs):\n        raise AssertionError(\"cold request must not benchmark model variants\")\n\n    launched = {}\n    monkeypatch.setattr(autotune, \"_benchmark\", unexpected_benchmark)\n    monkeypatch.setattr(\n        autotune,\n        \"_launch_selected\",\n        lambda _binary, _path, _config, selected: launched.setdefault(\"selected\", selected)\n        and \"http://127.0.0.1:8910/v1\",\n    )\n\n    assert autotune.ensure_tuned_server(config, object()).endswith(\"/v1\")\n    assert launched[\"selected\"].name == \"baseline\"\n\n\ndef test_cold_request_uses_cached_validated_winner(monkeypatch) -> None:\n    fingerprint = \"cached-fingerprint\"\n    config = _stub_cold_runtime(monkeypatch, fingerprint)\n    cached = _decision(fingerprint, \"mtp-3\")\n    monkeypatch.setattr(autotune, \"_load_cached_decision\", lambda _fingerprint: cached)\n    monkeypatch.setattr(\n        autotune,\n        \"_benchmark\",\n        lambda *_args, **_kwargs: (_ for _ in ()).throw(\n            AssertionError(\"cache hit must not benchmark\")\n        ),\n    )\n    launched = {}\n    monkeypatch.setattr(\n        autotune,\n        \"_launch_selected\",\n        lambda _binary, _path, _config, selected: launched.setdefault(\"selected\", selected)\n        and \"http://127.0.0.1:8910/v1\",\n    )\n\n    autotune.ensure_tuned_server(config, object())\n    assert launched[\"selected\"].name == \"mtp-3\"\n\n\ndef test_explicit_tune_server_owns_benchmark_and_cache_write(monkeypatch) -> None:\n    fingerprint = \"explicit-tune\"\n    config = _stub_cold_runtime(monkeypatch, fingerprint)\n    decision = _decision(fingerprint, \"mtp-2\")\n    monkeypatch.setattr(autotune, \"_load_cached_decision\", lambda _fingerprint: None)\n    calls = {\"benchmark\": 0, \"saved\": []}\n\n    def benchmark(*_args, **_kwargs):\n        calls[\"benchmark\"] += 1\n        return decision\n\n    monkeypatch.setattr(autotune, \"_benchmark\", benchmark)\n    monkeypatch.setattr(autotune, \"_save_decision\", calls[\"saved\"].append)\n\n    assert autotune.tune_server(config, object()) is decision\n    assert calls == {\"benchmark\": 1, \"saved\": [decision]}\n\n\ndef test_legacy_inline_autotune_requires_explicit_opt_in(monkeypatch) -> None:\n    config = _stub_cold_runtime(monkeypatch, \"inline-opt-in\")\n    monkeypatch.setenv(\"MMM_LLAMA_SERVER_AUTOTUNE\", \"1\")\n    monkeypatch.setattr(autotune, \"_load_cached_decision\", lambda _fingerprint: None)\n    decision = _decision(\"inline-opt-in\", \"mtp-1\")\n    calls = {\"benchmark\": 0}\n\n    def benchmark(*_args, **_kwargs):\n        calls[\"benchmark\"] += 1\n        return decision\n\n    monkeypatch.setattr(autotune, \"_benchmark\", benchmark)\n    monkeypatch.setattr(autotune, \"_save_decision\", lambda _decision: None)\n    monkeypatch.setattr(\n        autotune,\n        \"_launch_selected\",\n        lambda *_args, **_kwargs: \"http://127.0.0.1:8910/v1\",\n    )\n\n    autotune.ensure_tuned_server(config, object())\n    assert calls[\"benchmark\"] == 1\n'''
+              test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Focused cold-start and runtime contract tests
+        run: >-
+          pytest -q
+          tests/test_llama_autotune_cache_efficiency.py
+          tests/test_qwen35_t4_decode_search.py
+          tests/test_llama_cache_reuse_efficiency.py
+          tests/test_runtime_bootstrap_clean.py
+          tests/test_runtime_efficiency_contract.py
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          rm .github/workflows/_mmm_coldstart_fix.yml
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add minecraft_mod_ai/llama_server_autotune.py tests/test_llama_autotune_cache_efficiency.py .github/workflows/_mmm_coldstart_fix.yml
+          git diff --cached --check
+          git commit -m 'perf: remove first-request llama autotune cold start'
+          git push origin HEAD:main
