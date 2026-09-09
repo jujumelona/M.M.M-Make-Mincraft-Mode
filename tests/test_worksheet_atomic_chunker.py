@@ -16,7 +16,7 @@ from worksheet_fixtures import row
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     chunks = pack_section_concerns(section)
-    assert len(chunks) >= 2
+    assert len(chunks) == 1
     for index, concern_group in enumerate(chunks):
         is_first = index == 0
         schema = worksheet_chunk_schema(section, concern_group, include_evidence=is_first)

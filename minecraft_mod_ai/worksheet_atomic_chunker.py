@@ -2,10 +2,8 @@ from __future__ import annotations
 
 """Dedicated atomic worksheet chunker and host deterministic merger.
 
-Small models cannot reliably emit the complete engineering worksheet in one structured
-response. The host therefore packs as many consecutive concerns as the global model
-atomicity contract permits, while preserving a loose model-facing schema and a strict
-canonical host validation boundary.
+The host packs consecutive concerns with a closed model-facing schema and a strict
+canonical host validation boundary. Schema size does not impose a generation limit.
 """
 
 from collections.abc import Mapping, Sequence
@@ -59,11 +57,10 @@ def pack_section_concerns(
     *,
     max_chunk_size: int | None = None,
 ) -> list[tuple[str, ...]]:
-    """Pack the largest deterministic concern groups allowed by model atomicity.
+    """Pack deterministic concern groups with a closed model template.
 
     ``max_chunk_size`` is only an optional compatibility/test upper bound. Production
-    packing has no arbitrary concern-count target: the global schema atomicity contract
-    decides where each chunk must end.
+    packing has no arbitrary concern-count or schema-size target.
     """
     key = _normalize_section_name(section)
     concerns = tuple(DETAIL_RECORDS[key].keys())

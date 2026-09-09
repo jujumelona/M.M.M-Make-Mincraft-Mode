@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-"""Global small-model structured-output boundary.
+"""Global model structured-output template boundary.
 
 Every model-authored JSON response must have an explicit, closed schema. Machine-owned
-JSON remains valid for storage and transport, while host-owned containers may still be
-large because they are decomposed before model generation. This boundary prevents raw
-or open-ended JSON contracts from silently re-entering the model path.
+JSON remains valid for storage and transport, and generation paths may group semantic
+work units as needed. This boundary prevents raw or open-ended JSON contracts from
+silently re-entering the model path.
 """
 
-import json
 from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
 _INSTALLED = False
-_MAX_SCHEMA_CHARS = 12_000
-_MAX_SCHEMA_NODES = 140
-_MAX_SCHEMA_DEPTH = 9
-_MAX_SCHEMA_PROPERTIES = 36
 _TEXT_MARKER = "_mmm_atomic_model_output_boundary"
 _TOOL_MARKER = "_mmm_atomic_model_tool_boundary"
 _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
@@ -29,28 +24,6 @@ def _configuration_error(message: str) -> Exception:
     from .model_adapters import ModelConfigurationError
 
     return ModelConfigurationError(message)
-
-
-def _schema_metrics(value: Any, *, depth: int = 0) -> tuple[int, int, int]:
-    nodes = 1
-    max_depth = depth
-    properties = 0
-    if isinstance(value, Mapping):
-        raw_properties = value.get("properties")
-        if isinstance(raw_properties, Mapping):
-            properties += len(raw_properties)
-        for child in value.values():
-            child_nodes, child_depth, child_properties = _schema_metrics(child, depth=depth + 1)
-            nodes += child_nodes
-            max_depth = max(max_depth, child_depth)
-            properties += child_properties
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for child in value:
-            child_nodes, child_depth, child_properties = _schema_metrics(child, depth=depth + 1)
-            nodes += child_nodes
-            max_depth = max(max_depth, child_depth)
-            properties += child_properties
-    return nodes, max_depth, properties
 
 
 def _assert_closed_object_schemas(
@@ -121,40 +94,24 @@ def _assert_closed_object_schemas(
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
-    """Require one bounded, closed template for a model-authored JSON payload."""
+    """Require a closed template without arbitrary schema-size rejection.
+
+    Schema syntax depth, metadata length, and property counts do not establish whether
+    the configured model can execute a request. Keep the template contract here; actual
+    model context/output capacity is handled by the generation runtime.
+    """
 
     _assert_closed_object_schemas(schema)
-    encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    nodes, depth, properties = _schema_metrics(schema)
-    if (
-        len(encoded) > _MAX_SCHEMA_CHARS
-        or nodes > _MAX_SCHEMA_NODES
-        or depth > _MAX_SCHEMA_DEPTH
-        or properties > _MAX_SCHEMA_PROPERTIES
-    ):
-        raise _configuration_error(
-            "MODEL_STRUCTURE_ATOMICITY: "
-            f"{surface} is too large for one model-authored structured payload "
-            f"(chars={len(encoded)}, nodes={nodes}, depth={depth}, properties={properties}). "
-            "The host must own the container and decompose generation into bounded semantic units."
-        )
 
 
 def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
-    """Return whether one schema is bounded and closed enough for model generation."""
+    """Compatibility predicate for closed model templates, independent of size."""
 
     try:
-        _assert_closed_object_schemas(schema)
+        assert_atomic_model_schema(schema, surface="model template")
     except Exception:
         return False
-    encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    nodes, depth, properties = _schema_metrics(schema)
-    return (
-        len(encoded) <= _MAX_SCHEMA_CHARS
-        and nodes <= _MAX_SCHEMA_NODES
-        and depth <= _MAX_SCHEMA_DEPTH
-        and properties <= _MAX_SCHEMA_PROPERTIES
-    )
+    return True
 
 
 def _install_router_boundary(model_router_module: Any) -> None:
