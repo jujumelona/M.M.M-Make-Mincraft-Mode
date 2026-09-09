@@ -262,10 +262,41 @@ def adapter_for_lock_values(value: Any) -> TargetContract:
     return adapter
 
 
+def _project_platform_lock(root: Path) -> Path | None:
+    """Resolve the authoritative lock for a project or an MMM generation checkpoint.
+
+    Checkpoints intentionally exclude ``.minecraft_ai`` runtime state. They are still
+    derived from one generated project, so an exact host-owned checkpoint path may use
+    that project's sibling platform lock. No arbitrary ancestor search is permitted.
+    """
+
+    direct = root / ".minecraft_ai" / "platform-lock.json"
+    if direct.is_file() and not direct.is_symlink():
+        return direct
+
+    if root.name != "project":
+        return None
+    checkpoint_root = root.parent
+    checkpoint_directory = checkpoint_root.parent
+    metadata_root = checkpoint_directory.parent
+    key = checkpoint_root.name
+    if (
+        checkpoint_directory.name != ".mmm-custom-checkpoints"
+        or metadata_root.name != ".minecraft_ai"
+        or len(key) != 64
+        or any(character not in "0123456789abcdef" for character in key)
+    ):
+        return None
+    inherited = metadata_root / "platform-lock.json"
+    if inherited.is_file() and not inherited.is_symlink():
+        return inherited
+    return None
+
+
 def adapter_from_project(project_root: str | Path) -> TargetContract:
     root = Path(project_root).expanduser().resolve()
-    lock_file = root / ".minecraft_ai" / "platform-lock.json"
-    if lock_file.is_file() and not lock_file.is_symlink():
+    lock_file = _project_platform_lock(root)
+    if lock_file is not None:
         import json
 
         raw = json.loads(lock_file.read_text(encoding="utf-8"))
