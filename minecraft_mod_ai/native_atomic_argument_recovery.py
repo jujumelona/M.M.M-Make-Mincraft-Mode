@@ -16,6 +16,25 @@ from typing import Any
 
 _MAX_PAGE_PROPERTIES = 4
 _MAX_REPAIR_ERROR_CHARS = 1200
+_SOURCE_EDIT_TOOL = "apply_source_edit"
+_SOURCE_EDIT_OPERATION_ALIASES = {
+    "create": "create_file",
+    "replace": "replace_exact",
+    "delete": "delete_file",
+}
+_SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "replace_exact": (("path", "old", "new", "count"), ("path", "old", "new")),
+    "insert_before": (("path", "anchor", "content", "count"), ("path", "anchor", "content")),
+    "insert_after": (("path", "anchor", "content", "count"), ("path", "anchor", "content")),
+    "create_file": (("path", "content"), ("path", "content")),
+    "delete_file": (("path",), ("path",)),
+    "create_java_type": (
+        ("path", "package_name", "declaration"),
+        ("path", "package_name", "declaration"),
+    ),
+    "add_java_import": (("path", "import_name"), ("path", "import_name")),
+    "insert_java_member": (("path", "member"), ("path", "member")),
+}
 
 
 def _forced_module() -> Any:
@@ -73,6 +92,72 @@ def _argument_pages(parameters: Mapping[str, Any]) -> tuple[dict[str, Any], ...]
         _page_schema(parameters, names[index : index + _MAX_PAGE_PROPERTIES])
         for index in range(0, len(names), _MAX_PAGE_PROPERTIES)
     )
+
+
+def _source_edit_selector_schema(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    properties = parameters.get("properties")
+    if parameters.get("type") != "object" or not isinstance(properties, Mapping):
+        raise ValueError(
+            "HOST_ARGUMENT_DECOMPOSITION: apply_source_edit parameters must be an object schema"
+        )
+    operation_schema = properties.get("operation")
+    if not isinstance(operation_schema, Mapping):
+        raise ValueError(
+            "HOST_ARGUMENT_DECOMPOSITION: apply_source_edit schema is missing operation"
+        )
+    page: dict[str, Any] = {
+        "type": "object",
+        "properties": {"operation": dict(operation_schema)},
+        "required": ["operation"],
+        "additionalProperties": False,
+    }
+    for keyword in ("$defs", "definitions"):
+        definitions = parameters.get(keyword)
+        if isinstance(definitions, Mapping):
+            page[keyword] = dict(definitions)
+    return page
+
+
+def _canonical_source_edit_operation(value: Any) -> str:
+    operation = str(value or "").strip()
+    return _SOURCE_EDIT_OPERATION_ALIASES.get(operation, operation)
+
+
+def _source_edit_detail_schema(
+    parameters: Mapping[str, Any],
+    operation: str,
+) -> dict[str, Any]:
+    contract = _SOURCE_EDIT_OPERATION_FIELDS.get(operation)
+    if contract is None:
+        raise ValueError(
+            f"HOST_ARGUMENT_DECOMPOSITION: unsupported apply_source_edit operation {operation!r}"
+        )
+    properties = parameters.get("properties")
+    if not isinstance(properties, Mapping):
+        raise ValueError(
+            "HOST_ARGUMENT_DECOMPOSITION: apply_source_edit parameters must expose properties"
+        )
+    names, required = contract
+    missing = [name for name in names if name not in properties]
+    if missing:
+        raise ValueError(
+            "HOST_ARGUMENT_DECOMPOSITION: apply_source_edit schema is missing canonical fields: "
+            + ", ".join(missing)
+        )
+    page: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            name: dict(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+            for name in names
+        },
+        "required": list(required),
+        "additionalProperties": False,
+    }
+    for keyword in ("$defs", "definitions"):
+        definitions = parameters.get(keyword)
+        if isinstance(definitions, Mapping):
+            page[keyword] = dict(definitions)
+    return page
 
 
 def _messages(
@@ -248,6 +333,121 @@ def _page_attempt(
     return _page_result(turn, page_schema, parameters)
 
 
+def _recover_page(
+    current: Any,
+    adapter: Any,
+    request: Any,
+    *,
+    page_index: int,
+    page_count: int,
+    page_schema: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    action_name: str,
+) -> dict[str, Any]:
+    from .model_adapters import ModelConfigurationError
+
+    first_request = _request(
+        request,
+        page_index=page_index,
+        page_count=page_count,
+        page_schema=page_schema,
+    )
+    arguments, error, first_fingerprint = _page_attempt(
+        current,
+        adapter,
+        first_request,
+        page_schema,
+        parameters,
+    )
+    if arguments is not None:
+        return arguments
+
+    repair_request = _request(
+        request,
+        page_index=page_index,
+        page_count=page_count,
+        page_schema=page_schema,
+        repair_error=error,
+    )
+    arguments, repair_error, second_fingerprint = _page_attempt(
+        current,
+        adapter,
+        repair_request,
+        page_schema,
+        parameters,
+    )
+    if arguments is not None:
+        return arguments
+
+    fixed_point = first_fingerprint == second_fingerprint
+    suffix = (
+        "repeated-invalid argument-page fixed point"
+        if fixed_point
+        else "bounded argument-page repair exhausted"
+    )
+    raise ModelConfigurationError(
+        f"Host-selected action {action_name!r} {suffix} on page "
+        f"{page_index}/{page_count}; error={repair_error or error}."
+    )
+
+
+def _recover_source_edit_arguments(
+    current: Any,
+    adapter: Any,
+    request: Any,
+    parameters: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recover the discriminator first, then only fields owned by that operation.
+
+    SOURCE_EDIT_SCHEMA is deliberately a flat model-facing union. Treating that union as
+    independent transport pages lets irrelevant optional fields from other operations become
+    valid page output and leak into the merged call. The runtime semantic validator then has
+    to reject an object the host itself assembled. Resolve the operation first and narrow the
+    second page to its canonical semantic contract instead.
+    """
+
+    from .model_adapters import ModelConfigurationError
+
+    try:
+        selector_schema = _source_edit_selector_schema(parameters)
+    except ValueError as exc:
+        raise ModelConfigurationError(str(exc)) from exc
+    selector = _recover_page(
+        current,
+        adapter,
+        request,
+        page_index=1,
+        page_count=2,
+        page_schema=selector_schema,
+        parameters=parameters,
+        action_name=_SOURCE_EDIT_TOOL,
+    )
+    operation = _canonical_source_edit_operation(selector.get("operation"))
+    try:
+        detail_schema = _source_edit_detail_schema(parameters, operation)
+    except ValueError as exc:
+        raise ModelConfigurationError(str(exc)) from exc
+    details = _recover_page(
+        current,
+        adapter,
+        request,
+        page_index=2,
+        page_count=2,
+        page_schema=detail_schema,
+        parameters=parameters,
+        action_name=_SOURCE_EDIT_TOOL,
+    )
+    merged = {"operation": operation, **details}
+
+    forced = _forced_module()
+    if not forced._arguments_match_schema(merged, parameters):
+        raise ModelConfigurationError(
+            "HOST_ARGUMENT_DECOMPOSITION: discriminated apply_source_edit arguments "
+            "failed the original schema"
+        )
+    return merged
+
+
 def host_selected_argument_turn(
     current: Any,
     adapter: Any,
@@ -262,6 +462,11 @@ def host_selected_argument_turn(
 
     forced = _forced_module()
     parameters = forced._parameters(forced._selected_schema(request, name))
+
+    if name == _SOURCE_EDIT_TOOL:
+        merged = _recover_source_edit_arguments(current, adapter, request, parameters)
+        return forced._response_for_call(name, merged, prefix=prefix)
+
     try:
         pages = _argument_pages(parameters)
     except ValueError as exc:
@@ -269,45 +474,16 @@ def host_selected_argument_turn(
 
     merged: dict[str, Any] = {}
     for page_index, page_schema in enumerate(pages, start=1):
-        first_request = _request(
+        arguments = _recover_page(
+            current,
+            adapter,
             request,
             page_index=page_index,
             page_count=len(pages),
             page_schema=page_schema,
+            parameters=parameters,
+            action_name=name,
         )
-        arguments, error, first_fingerprint = _page_attempt(
-            current,
-            adapter,
-            first_request,
-            page_schema,
-            parameters,
-        )
-        if arguments is None:
-            repair_request = _request(
-                request,
-                page_index=page_index,
-                page_count=len(pages),
-                page_schema=page_schema,
-                repair_error=error,
-            )
-            arguments, repair_error, second_fingerprint = _page_attempt(
-                current,
-                adapter,
-                repair_request,
-                page_schema,
-                parameters,
-            )
-            if arguments is None:
-                fixed_point = first_fingerprint == second_fingerprint
-                suffix = (
-                    "repeated-invalid argument-page fixed point"
-                    if fixed_point
-                    else "bounded argument-page repair exhausted"
-                )
-                raise ModelConfigurationError(
-                    f"Host-selected action {name!r} {suffix} on page "
-                    f"{page_index}/{len(pages)}; error={repair_error or error}."
-                )
         overlap = set(merged).intersection(arguments)
         if overlap:
             raise ModelConfigurationError(
