@@ -277,12 +277,17 @@ def _normalize_requirement_rows(
     if not normalized:
         normalized = _fallback_requirement_rows(state, prompt)
 
-    # Duplicate prose is harmless; collapse it instead of raising another planner error.
+    # Collapse only exact semantic duplicates. Equal player-facing prose can still
+    # represent distinct capabilities or independently testable acceptance contracts.
     deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
     for row in normalized:
-        key = _text(row.get("statement")).casefold()
-        if key and key not in seen:
+        key = (
+            _text(row.get("statement")).casefold(),
+            _text(row.get("semantic_capability")).casefold(),
+            tuple(text.casefold() for text in _strings(row.get("acceptance"))),
+        )
+        if key not in seen:
             seen.add(key)
             deduped.append(row)
     return deduped
@@ -421,6 +426,11 @@ def compile_researched_requirements(
         )
 
     requirement_rows = _normalize_requirement_rows(raw, state, prompt)
+    raw_requirement_count = (
+        len(raw.get("requirements", []))
+        if isinstance(raw, Mapping) and isinstance(raw.get("requirements"), list)
+        else 0
+    )
     emit_root_cause(
         "planner_requirement_normalization",
         stage="planning_state",
@@ -428,6 +438,8 @@ def compile_researched_requirements(
         result="FALLBACK" if generation_error is not None or raw is None else "PASS",
         details={
             "raw_output": raw,
+            "raw_requirement_count": raw_requirement_count,
+            "normalized_requirement_count": len(requirement_rows),
             "normalized_requirements": requirement_rows,
             "generation_error": (
                 f"{type(generation_error).__name__}: {generation_error}"
