@@ -1,0 +1,44 @@
+name: Apply fixed-template migration
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - tools/apply_fixed_template_migration.py
+      - .github/workflows/apply-fixed-template-migration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-fixed-template-migration-main
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply migration
+        run: python tools/apply_fixed_template_migration.py
+      - name: Compile migrated sources
+        run: python -m compileall -q minecraft_mod_ai
+      - name: Verify no direct structured text generation remains
+        run: python -m pytest -q tests/test_no_direct_structured_text_generation.py
+      - name: Commit migrated sources
+        run: |
+          if git diff --quiet; then
+            echo "Migration produced no source changes" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai
+          git commit -m "fix: migrate all structured model output to fixed tools"
+          git push origin HEAD:main
