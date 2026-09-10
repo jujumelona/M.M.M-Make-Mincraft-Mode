@@ -33,7 +33,7 @@ def test_rejects_unsafe_or_ambiguous_paths():
     assert safety._inferred_config_anchors(config) == ("file://safe/out.txt",)
 
 
-def test_builtin_generators_keep_shared_collision_domains():
+def test_builtin_generators_keep_only_required_shared_collision_domains():
     content = SimpleNamespace(kind="item")
     integration = SimpleNamespace(kind="integration")
     entity = SimpleNamespace(kind="entity")
@@ -41,7 +41,7 @@ def test_builtin_generators_keep_shared_collision_domains():
 
     assert safety._builtin_shared_anchors(content, "content")
     assert safety._builtin_shared_anchors(integration, "content") == ()
-    assert safety._builtin_shared_anchors(entity, "entity")
+    assert safety._builtin_shared_anchors(entity, "entity") == ()
     assert safety._builtin_shared_anchors(system, "system")
 
 
