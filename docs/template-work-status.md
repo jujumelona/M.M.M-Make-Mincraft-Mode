@@ -29,9 +29,20 @@ Implemented and connected:
   creating a permanent semantic blocker. Resume requires invoking the pipeline again; this
   does not promise an automatic retry or a completed real-model run.
 
-Latest verification: 35 focused tests pass across record execution/resume, authored criterion
+- Missing-section repair now fills each exact criterion/section gap instead of placing an
+  aggregate repair into criterion zero. Existing authored sections remain intact. Repairs
+  use the same record checkpoint/replay path and validate the returned section before saving
+  its assembled fragment. Removed the synthetic all-criteria repair prompt.
+
+Latest verification: 41 focused tests pass across record execution/resume, authored criterion
 contracts, concurrent checkpoints, worksheet assembly/repair and legacy checkpoint handling.
-The old missing-section repair fixture now supplies authored records rather than prose.
+Old repair fixtures now supply authored records; explicit regressions reject prose output
+and empty completion without silently rewriting or automatically retrying them.
+
+Checkpoint for continuation: the baseline was `28f46c4c`; `b347fa95` adds normal-path record
+resume and removes requirement batching. The subsequent repair change closes missing-section
+resume and fixes criterion ownership. Public remote publication was blocked by automatic
+approval review; these changes are locally committed pending destination/payload approval.
 
 Remaining work (do not describe the whole migration as complete):
 
@@ -41,8 +52,8 @@ Remaining work (do not describe the whole migration as complete):
   mapping; infer neither a runtime owner from a model file nor state scope from a broad flag.
 - Add evidence-backed feature decomposition and deterministic atomicity routing, distinguishing
   missing information from multiple responsibilities and preventing non-progress recursion.
-- Extend individual record checkpoints to the legacy missing-section repair path and the
-  other stages as they are migrated. The normal criterion path is connected.
+- Connect record checkpoints to the other stages as their dispatch is migrated. Normal
+  criterion generation and missing-section repair are connected.
 - Narrow record input context to declared dependencies and retrieved evidence slices.
 - Give every Minecraft responsibility a typed input/output contract and an individually
   executable proof predicate. Current manifests describe tasks; they do not certify semantic

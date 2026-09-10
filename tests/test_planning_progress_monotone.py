@@ -394,7 +394,7 @@ def test_missing_requirement_sections_are_generated_and_checkpointed(monkeypatch
 
     def complete(_router, **kwargs):
         assert kwargs["evidence"] == evidence
-        section = "reuse_assessment" if "section reuse_assessment" in kwargs["criterion"] else "verification"
+        section = kwargs["target_section"]
         calls.append(section)
         return {"section_updates": [row for row in _real_fragment()["section_updates"]
                                     if row["section"] == section]}

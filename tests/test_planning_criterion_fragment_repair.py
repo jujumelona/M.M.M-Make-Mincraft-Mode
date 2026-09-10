@@ -27,20 +27,6 @@ class _SequenceRouter:
         return output
 
 
-def _fragment(*, implementation: str = "", constraint: str = "") -> dict[str, object]:
-    updates: list[dict[str, object]] = []
-    for index, section in enumerate(CORE_WORKSHEET_SECTIONS):
-        updates.append(
-            {
-                "section": section,
-                "implementation": implementation if index == 0 else "",
-                "constraint": constraint if index == 0 else "",
-                "evidence_refs": [],
-            }
-        )
-    return {"section_updates": updates}
-
-
 def _generate(router: _SequenceRouter) -> dict[str, object]:
     return generate_criterion_fragment(
         router,
@@ -52,33 +38,21 @@ def _generate(router: _SequenceRouter) -> dict[str, object]:
     )
 
 
-def test_all_empty_fragment_gets_one_corrective_call() -> None:
-    router = _SequenceRouter(
-        [
-            _fragment(),
-            _fragment(implementation="After a successful collection, the collected stack is present in inventory."),
-        ]
-    )
-
-    result = _generate(router)
-
-    assert len(router.calls) == 2
-    assert result["section_updates"][0]["implementation"]
-    second_user_prompt = router.calls[1][1]["content"]
-    assert "Correction required" in second_user_prompt
-    assert "at least one selected section concretely" in second_user_prompt
-
-
-def test_second_all_empty_fragment_remains_terminal() -> None:
-    router = _SequenceRouter([_fragment(), _fragment()])
-
-    with pytest.raises(
-        ValueError,
-        match="DETAILED_PLAN_NO_PROGRESS: acceptance criterion produced no implementation content",
-    ):
+def test_legacy_prose_response_is_rejected_without_rewriting_or_retry() -> None:
+    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+    router = _SequenceRouter([{"section_updates": [{"section": "behavior_contract",
+        "implementation": "Add the collected stack to inventory.", "constraint": "",
+        "evidence_refs": []}]}])
+    with pytest.raises(StructuredOutputValidationError):
         _generate(router)
+    assert len(router.calls) == 1
 
-    assert len(router.calls) == 2
+
+def test_empty_concern_completion_is_terminal_without_a_record() -> None:
+    router = _SequenceRouter([{"status": "done", "record": None, "reason": "", "evidence_refs": []}])
+    with pytest.raises(ValueError, match="TEMPLATE_STATUS"):
+        _generate(router)
+    assert len(router.calls) == 1
 
 
 def test_non_no_progress_tool_contract_error_is_not_retried() -> None:
@@ -95,12 +69,19 @@ def test_omitted_required_sections_are_not_inferred_inapplicable() -> None:
         MissingWorksheetSections, assemble_worksheet_from_fragments,
     )
 
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+    section = "behavior_contract"
+    specification = {concern: [{field: f"authored {field}" for field in fields.split()}]
+                     for concern, fields in DETAIL_RECORDS[section].items()}
+    specification["inapplicable_concerns"] = []
+    fragment = {"section_updates": [{"section": section, "specification": specification,
+                                     "constraint_evidence_refs": []}]}
     with pytest.raises(MissingWorksheetSections) as caught:
         assemble_worksheet_from_fragments(
             {"statement": "Mine resources and credit currency."},
             selected_sections=CORE_WORKSHEET_SECTIONS,
             criteria=("Mining credits currency.",),
-            fragments={0: _fragment(implementation="Credit currency once after server-confirmed mining.")},
+            fragments={0: fragment},
             allowed_refs=set(),
         )
     assert "reuse_assessment" in caught.value.sections

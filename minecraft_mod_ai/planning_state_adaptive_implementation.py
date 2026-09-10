@@ -26,6 +26,7 @@ from .planning_criterion_fragments import (
     load_requirement_progress,
     requirement_acceptance_criteria,
     store_criterion_progress,
+    validate_criterion_fragment,
 )
 from .planning_detail_template import normalize_required_sections
 from .planning_detail_slots import DETAIL_RECORDS
@@ -249,49 +250,54 @@ def _finish_requirement(
             allowed_refs=job["allowed"],
         )
 
+    def save_repair_record(binding, responses):
+        nonlocal working_state
+        candidate = deepcopy(dict(working_state))
+        candidate.setdefault("template_progress", {})[binding] = deepcopy(responses)
+        working_state = _checkpoint_state(candidate, checkpoint)
+
     try:
         worksheet = assemble()
     except MissingWorksheetSections as gap:
-        # A criterion may omit an unrelated section, but the requirement as a whole
-        # must resolve every host-selected section. Complete only the finite gaps;
-        # retain and checkpoint the already-authored criterion contracts. Each repair
-        # exposes exactly the missing section, so the model cannot fill a different row.
-        for section in gap.sections:
-            with planner_operation(f"detailed_section:{job['requirement_ref']}:{section}"):
-                supplement = generate_targeted_section_fragment(
-                    router,
-                    requirement=job["requirement"],
-                    criterion=(
-                        "Resolve the missing required worksheet section " + section
-                        + " across these acceptance criteria: " + "; ".join(job["criteria"])
-                        + ". Return a concrete implementation or constraint for this section. "
-                        "For reuse, assess the supplied candidates and distinguish verified reuse, "
-                        "reference-only evidence and missing proof. For verification, specify "
-                        "observable success and rejection checks."
-                    ),
-                    selected_sections=job["selected_sections"],
-                    target_section=section,
-                    evidence=job["evidence"],
+        # Repair the exact criterion/section gap. Do not overwrite another criterion
+        # or combine multiple acceptance criteria into a synthetic model request.
+        for index, criterion in enumerate(job["criteria"]):
+            for section in gap.sections:
+                fragment = deepcopy(job["fragments"][index])
+                if any(row["section"] == section for row in fragment["section_updates"]):
+                    continue
+                with planner_operation(
+                    f"detailed_section:{job['requirement_ref']}:{index + 1}:{section}"
+                ):
+                    supplement = generate_targeted_section_fragment(
+                        router,
+                        requirement=job["requirement"],
+                        criterion=criterion,
+                        selected_sections=job["selected_sections"],
+                        target_section=section,
+                        evidence=job["evidence"],
+                        allowed_refs=job["allowed"],
+                        progress=working_state.get("template_progress", {}),
+                        checkpoint=save_repair_record,
+                    )
+                validated = validate_criterion_fragment(
+                    supplement, selected_sections=job["selected_sections"],
                     allowed_refs=job["allowed"],
                 )
-            updates = [row for row in supplement["section_updates"]
-                       if row["section"] == section and
-                       isinstance(row.get("specification"), Mapping)]
-            if not updates:
-                raise MissingWorksheetSections([section])
-            fragment = deepcopy(job["fragments"][0])
-            fragment["section_updates"] = [row for row in fragment["section_updates"]
-                                           if row["section"] != section] + updates
-            job["fragments"][0] = fragment
-            working_state = store_criterion_progress(
-                working_state,
-                requirement_ref=job["requirement_ref"],
-                selected_sections=job["selected_sections"],
-                criterion_index=0,
-                criterion=job["criteria"][0],
-                fragment=fragment,
-            )
-            working_state = _checkpoint_state(working_state, checkpoint)
+                updates = validated["section_updates"]
+                if len(updates) != 1 or updates[0]["section"] != section:
+                    raise ValueError("DETAILED_PLAN_TARGET_SECTION: repair changed another section")
+                fragment["section_updates"].extend(updates)
+                job["fragments"][index] = fragment
+                working_state = store_criterion_progress(
+                    working_state,
+                    requirement_ref=job["requirement_ref"],
+                    selected_sections=job["selected_sections"],
+                    criterion_index=index,
+                    criterion=criterion,
+                    fragment=fragment,
+                )
+                working_state = _checkpoint_state(working_state, checkpoint)
         worksheet = assemble()
     plan = _assemble_requirement_plan(
         job["requirement"],
