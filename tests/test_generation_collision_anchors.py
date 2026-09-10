@@ -37,12 +37,23 @@ def test_builtin_generators_keep_only_required_shared_collision_domains():
     content = SimpleNamespace(kind="item")
     integration = SimpleNamespace(kind="integration")
     entity = SimpleNamespace(kind="entity")
-    system = SimpleNamespace(kind="quest")
+    quest = SimpleNamespace(kind="quest")
+    economy = SimpleNamespace(kind="economy")
+    skill = SimpleNamespace(kind="skill")
+    klass = SimpleNamespace(kind="class")
 
     assert safety._builtin_shared_anchors(content, "content")
     assert safety._builtin_shared_anchors(integration, "content") == ()
     assert safety._builtin_shared_anchors(entity, "entity") == ()
-    assert safety._builtin_shared_anchors(system, "system")
+
+    quest_anchor = safety._builtin_shared_anchors(quest, "system")
+    economy_anchor = safety._builtin_shared_anchors(economy, "system")
+    assert quest_anchor
+    assert economy_anchor
+    assert quest_anchor != economy_anchor
+    assert safety._builtin_shared_anchors(skill, "system") == safety._builtin_shared_anchors(
+        klass, "system"
+    )
 
 
 def test_cpu_generation_width_accepts_explicit_host_capacity(monkeypatch):
