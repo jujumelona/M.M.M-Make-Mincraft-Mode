@@ -2,8 +2,7 @@ id: design/content_scale
 slot_id: content_scale
 task: "Define the content footprint in terms of items, blocks, and entities."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent content."
 record_schema:
   type: object
   properties:
