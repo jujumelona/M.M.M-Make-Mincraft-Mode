@@ -115,14 +115,19 @@ def _inferred_config_anchors(config: Any) -> tuple[str, ...]:
 
 
 def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
-    """Model shared files that built-in generators are known to read/merge/rewrite."""
+    """Model only generators whose pre-commit state merge is genuinely shared.
+
+    GeckoLib entity generation deliberately has no stage-wide anchor here: geometry,
+    animations, Java sources and per-entity directory records are entity-local. Its
+    remaining shared writes (dependency metadata, entrypoints and root registrars) are
+    already serialized by project_edit atomic write helpers, so different entity nodes
+    may prepare concurrently and queue only at the short commit boundary.
+    """
     kind = str(getattr(module, "kind", ""))
     if stage == "content" and kind != "integration":
         return ("mmm://builtin/content/shared-registration",)
     if stage == "system":
         return ("mmm://builtin/system/shared-runtime",)
-    if stage == "entity":
-        return ("mmm://builtin/entity/shared-runtime",)
     return ()
 
 
@@ -142,7 +147,7 @@ def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
         anchors = tuple(dict.fromkeys((*explicit, *inferred, *shared)))
         if anchors:
             return anchors
-        if stage in {"content", "system", "entity"}:
+        if stage in {"content", "system"}:
             return (f"mmm://unscoped-stage/{stage}",)
         return ()
 
