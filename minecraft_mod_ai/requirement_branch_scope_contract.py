@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import evidence_first_planning as _planning
-from .structural_minecraft_runtime_contract import install as install_structural_runtime
 from .translation_runtime import translate_requirement
 
 _INSTALLED = False
@@ -153,7 +152,6 @@ def install_requirement_branch_scope_contract() -> None:
     if _INSTALLED:
         return
     _planning._branch_predicates = _scoped_branch_predicates
-    install_structural_runtime(_planning)
     _INSTALLED = True
 
 

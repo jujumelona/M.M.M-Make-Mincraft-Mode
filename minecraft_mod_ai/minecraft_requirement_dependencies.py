@@ -11,7 +11,6 @@ absent features are never invented merely because another template can consume t
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .minecraft_template_catalog import selected_predecessor_capabilities
 
 
 def _strings(value: Any) -> tuple[str, ...]:
@@ -72,43 +71,18 @@ def bind_selected_feature_dependencies(
     if any(not isinstance(item, dict) for item in requirements):
         raise ValueError("host feature dependency binding requires requirement objects")
 
-    selected_capabilities = tuple(
-        str(item.get("capability") or "").strip().casefold()
-        for item in requirements
-        if str(item.get("capability") or "").strip()
-    )
-    requirement_ids_by_capability: dict[str, list[str]] = {}
-    for item in requirements:
-        requirement_id = str(item.get("requirement_id") or "").strip()
-        capability = str(item.get("capability") or "").strip().casefold()
-        if not requirement_id or not capability:
-            raise ValueError(
-                "host feature dependency binding requires requirement_id and capability"
-            )
-        requirement_ids_by_capability.setdefault(capability, []).append(requirement_id)
-
     dependency_map: dict[str, tuple[str, ...]] = {}
     dependency_capability_map: dict[str, tuple[str, ...]] = {}
+    by_id = {str(item.get("requirement_id") or ""): item for item in requirements}
+    if "" in by_id or len(by_id) != len(requirements):
+        raise ValueError("requirement dependencies need unique nonempty requirement IDs")
     for item in requirements:
         requirement_id = str(item["requirement_id"])
-        capability = str(item["capability"]).casefold()
-        predecessor_capabilities = selected_predecessor_capabilities(
-            capability,
-            selected_capabilities,
-        )
-        derived_refs = tuple(
-            dependency_id
-            for predecessor in predecessor_capabilities
-            for dependency_id in requirement_ids_by_capability.get(predecessor, ())
-            if dependency_id != requirement_id
-        )
-        dependencies = tuple(
-            dict.fromkeys((*_strings(item.get("depends_on")), *derived_refs))
-        )
+        dependencies = _strings(item.get("depends_on"))
         dependency_map[requirement_id] = dependencies
-        dependency_capability_map[requirement_id] = tuple(
-            dict.fromkeys(predecessor_capabilities)
-        )
+        dependency_capability_map[requirement_id] = tuple(dict.fromkeys(
+            str(by_id[ref].get("capability") or "") for ref in dependencies if ref in by_id
+        ))
 
     known_ids = set(dependency_map)
     for requirement_id, dependencies in dependency_map.items():
@@ -132,7 +106,7 @@ def bind_selected_feature_dependencies(
         unlock["required_capabilities"] = list(predecessor_capabilities)
         unlock.setdefault("optional_requirement_refs", [])
         unlock.setdefault("optional_capabilities", [])
-        unlock["policy"] = "host_feature_model_and_authored_state_only"
+        unlock["policy"] = "explicit_requirement_dependencies_only"
         item["unlock_policy"] = unlock
         item["dependency_provenance"] = {
             "owner": "host_minecraft_feature_model",

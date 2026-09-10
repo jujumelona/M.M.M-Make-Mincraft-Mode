@@ -19,17 +19,11 @@ from typing import Any
 
 from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
 
-from .minecraft_template_catalog import (
-    FEATURE_DATAGEN,
-    FEATURE_MIXIN,
-    FEATURE_NETWORK,
-    FEATURE_WORLDGEN,
-    RESEARCH_BASIS,
-    TEMPLATE_CATALOG_SCHEMA,
-    profile_for_capability,
-    requirement_branch_features,
+from .structural_minecraft_runtime_contract import (
+    RESEARCH_BASIS, TEMPLATE_CATALOG_SCHEMA, _compile_tasks, _required_gates,
+    _requirement_branch_features as requirement_branch_features,
 )
-from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep, steps_for_profile
+from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep
 from .platform_resolver import compile_target_decision
 from .root_cause_trace import emit_root_cause
 
@@ -561,43 +555,6 @@ def _active(branches: Mapping[str, Mapping[str, Any]], name: str) -> bool:
     return isinstance(value, Mapping) and value.get("status") == "ACTIVE"
 
 
-def _required_gates(
-    capability: str,
-    branches: Mapping[str, Mapping[str, Any]],
-    *,
-    semantic_type: str = "gameplay_mechanic",
-    step: TemplateStep | None = None,
-) -> tuple[str, ...]:
-    profile = profile_for_capability(capability, semantic_type=semantic_type)
-    features = set(
-        step.branch_features if step is not None else profile.branch_features
-    )
-    gates = ["source_static_validation", "target_compile"]
-    if FEATURE_DATAGEN in features:
-        gates.append("generated_resource_validation")
-    if FEATURE_NETWORK in features:
-        gates.append("network_protocol_validation")
-    if FEATURE_WORLDGEN in features:
-        gates.append("worldgen_runtime_validation")
-    if FEATURE_MIXIN in features or (
-        semantic_type == "software_quality" and _active(branches, "needs_mixin")
-    ):
-        gates.extend(("behavior_equivalence", "performance_regression"))
-    return tuple(dict.fromkeys(gates))
-
-
-def _semantic_steps(
-    capability: str,
-    branches: Mapping[str, Mapping[str, Any]],
-    *,
-    semantic_type: str = "gameplay_mechanic",
-) -> tuple[TemplateStep, ...]:
-    del branches
-    return steps_for_profile(
-        profile_for_capability(capability, semantic_type=semantic_type)
-    )
-
-
 def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
     inventory = _mapping(
         game_design.get("_existing_project_inventory")
@@ -767,7 +724,7 @@ def _rewrite_root(
 ) -> tuple[TemplateStep, ...]:
     return tuple(
         TemplateStep(
-            name=step.name,
+            name=step.name, template_id=step.template_id,
             outcome=step.outcome,
             consumes=tuple(
                 dict.fromkeys(
@@ -799,7 +756,7 @@ def _loader_leaf_steps(
         if capability in step.provides:
             rewritten.append(
                 TemplateStep(
-                    name=step.name,
+                    name=step.name, template_id=step.template_id,
                     outcome=step.outcome,
                     consumes=step.consumes,
                     provides=tuple(
@@ -889,191 +846,6 @@ def _bind_consumes_dependencies(
     return tuple(bound)
 
 
-def _compile_tasks(
-    gaps: Sequence[Mapping[str, Any]],
-    reuse: Sequence[Mapping[str, Any]],
-    target: Mapping[str, Any],
-    branches: Mapping[str, Mapping[str, Any]],
-    ownership: Mapping[str, Any],
-    *,
-    root_provides: set[str] | None = None,
-    emit_trace: bool = True,
-) -> tuple[dict[str, Any], ...]:
-    roots = set(root_provides or {ROOT_PROVIDE})
-    reuse_by_req = {str(item["requirement_ref"]): item for item in reuse}
-    tasks: list[dict[str, Any]] = []
-    if emit_trace:
-        emit_root_cause(
-            "implementation_decomposition_start",
-            stage="planning",
-            operation="compile_tasks",
-            gate="requirement_to_codeplan",
-            result="START",
-            details={
-                "gaps": gaps,
-                "reuse_decisions": reuse,
-                "target": target,
-                "branches": branches,
-                "ownership": ownership,
-                "root_provides": sorted(roots),
-                "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA,
-            },
-        )
-
-    for gap in gaps:
-        requirement_ref = str(gap["requirement_ref"])
-        capability = str(gap.get("capability") or gap["missing_provides"][0]).casefold()
-        semantic_type = str(gap.get("semantic_type") or "gameplay_mechanic")
-        profile = profile_for_capability(capability, semantic_type=semantic_type)
-        required_provide = str(gap["missing_provides"][0])
-        decision = reuse_by_req.get(requirement_ref, {})
-        steps: tuple[TemplateStep, ...] = _semantic_steps(
-            capability,
-            branches,
-            semantic_type=semantic_type,
-        )
-
-        dependency_refs = tuple(
-            dict.fromkeys(_strings(gap.get("depends_on_requirements")))
-        )
-        if dependency_refs:
-            steps = _rewrite_root(
-                steps,
-                prerequisites=tuple(_requirement_done(dep) for dep in dependency_refs),
-            )
-
-        if _active(branches, "needs_loader_leaf"):
-            steps = _loader_leaf_steps(capability, steps)
-
-        rewritten: list[TemplateStep] = []
-        for step in steps:
-            provides = tuple(
-                required_provide if item == capability else item
-                for item in step.provides
-            )
-            if required_provide in provides:
-                provides = tuple(
-                    dict.fromkeys((*provides, _requirement_done(requirement_ref)))
-                )
-            rewritten.append(
-                TemplateStep(
-                    name=step.name,
-                    outcome=step.outcome,
-                    consumes=step.consumes,
-                    provides=provides,
-                    anchor_kinds=step.anchor_kinds,
-                    branch_features=step.branch_features,
-                )
-            )
-        steps = tuple(rewritten)
-
-        for index, step in enumerate(steps):
-            task_id = _stable_id(
-                "task",
-                f"{capability}_{step.name}",
-                {"gap": gap["gap_id"], "index": index},
-            )
-            active_predicates = [
-                branch
-                for branch, value in branches.items()
-                if value.get("status") == "ACTIVE" and _step_uses_branch(step, branch)
-            ]
-            acceptance = [
-                f"{task_id}: all declared provides exist and all owned anchors pass their integrity checks"
-            ]
-            if required_provide in step.provides:
-                acceptance.extend(
-                    str(item)
-                    for item in gap.get("acceptance", ())
-                    if _is_public_acceptance(item)
-                )
-            task: dict[str, Any] = {
-                "task_id": task_id,
-                "semantic_outcome": step.outcome,
-                "engineering_worksheet": gap.get("engineering_worksheet"),
-                "research_reuse_candidates": gap.get("research_reuse_candidates", []),
-                "gap_refs": [gap["gap_id"]],
-                "requirement_refs": [requirement_ref],
-                "target_cell": dict(target.get("coordinates") or {}),
-                "owned_anchors": _anchors(capability, step, task_id, ownership),
-                "reuse_refs": list(
-                    dict.fromkeys(
-                        [
-                            *list(decision.get("component_refs") or ()),
-                            *list(decision.get("source_refs") or ()),
-                        ]
-                    )
-                ),
-                "consumes": list(step.consumes),
-                "provides": list(step.provides),
-                "depends_on": [],
-                "conditional_predicates": active_predicates,
-                "required_gates": list(
-                    _required_gates(
-                        capability,
-                        branches,
-                        semantic_type=semantic_type,
-                        step=step,
-                    )
-                ),
-                "acceptance": list(dict.fromkeys(acceptance)),
-                "done_predicate": {
-                    "operator": "all",
-                    "checks": [
-                        "owned_anchor_hashes_recorded",
-                        "declared_provides_observed",
-                        "required_gates_passed",
-                    ],
-                },
-                "impact_probes": [
-                    "changed_symbols",
-                    "changed_resource_ids_and_references",
-                    "dependency_and_source_set_edges",
-                    "affected_tests_and_acceptance_bindings",
-                ],
-                "template_id": profile.template_id,
-                "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA,
-                "template_features": sorted(profile.features),
-                "state": "pending",
-                "task_sha256": "",
-            }
-            task["task_sha256"] = _hash_without(task, "task_sha256")
-            tasks.append(task)
-            if emit_trace:
-                emit_root_cause(
-                    "implementation_task_compiled",
-                    stage="planning",
-                    operation="compile_tasks",
-                    gate="task_contract",
-                    result="PASS",
-                    details={
-                        "task": task,
-                        "step_index": index,
-                        "step_count": len(steps),
-                        "template_id": profile.template_id,
-                    },
-                )
-
-    bound = _bind_consumes_dependencies(
-        tasks,
-        root_provides=roots,
-        emit_trace=emit_trace,
-    )
-    if emit_trace:
-        emit_root_cause(
-            "implementation_decomposition_result",
-            stage="planning",
-            operation="compile_tasks",
-            gate="requirement_to_codeplan",
-            result="PASS",
-            details={
-                "tasks": bound,
-                "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA,
-            },
-        )
-    return bound
-
-
 def _topological(tasks: Sequence[Mapping[str, Any]]) -> list[str]:
     ids = [str(item.get("task_id") or "") for item in tasks]
     if any(not _ID_RE.fullmatch(item) for item in ids) or len(ids) != len(set(ids)):
@@ -1131,6 +903,8 @@ def _gap_record(
             requirement.get("implementation_capabilities") or ()
         ),
         "artifact_obligations": list(requirement.get("artifact_obligations") or ()),
+        "implementation_surfaces": list(requirement.get("implementation_surfaces") or ()),
+        "minecraft_structure": dict(requirement.get("minecraft_structure") or {}),
         "design_resolution_obligations": list(
             requirement.get("design_resolution_obligations") or ()
         ),
@@ -1329,8 +1103,8 @@ def compile_evidence_first_plan(
         "template_catalog": {
             "schema_version": TEMPLATE_CATALOG_SCHEMA,
             "architecture_owner": "host",
-            "selection_policy": "canonical_capability_to_exact_or_category_template",
-            "small_model_role": "bounded_semantic_classification_and_user_specific_values_only",
+            "selection_policy": "explicit_structural_artifacts_to_responsibility_templates",
+            "small_model_role": "authored_behavior_and_structural_obligations_only",
             "research_basis": list(RESEARCH_BASIS),
         },
         "root_provides": sorted(root_provides),
@@ -1585,8 +1359,8 @@ def validate_evidence_first_plan(
     expected_template_catalog = {
         "schema_version": TEMPLATE_CATALOG_SCHEMA,
         "architecture_owner": "host",
-        "selection_policy": "canonical_capability_to_exact_or_category_template",
-        "small_model_role": "bounded_semantic_classification_and_user_specific_values_only",
+        "selection_policy": "explicit_structural_artifacts_to_responsibility_templates",
+        "small_model_role": "authored_behavior_and_structural_obligations_only",
         "research_basis": list(RESEARCH_BASIS),
     }
     if _canonical(template_catalog) != _canonical(expected_template_catalog):
@@ -1664,13 +1438,7 @@ def validate_evidence_first_plan(
                 f"Task {task_id} must bind exactly one requirement for template validation."
             )
         task_requirement = task_requirements[0]
-        profile = profile_for_capability(
-            str(task_requirement.get("capability") or ""),
-            semantic_type=str(
-                task_requirement.get("semantic_type") or "gameplay_mechanic"
-            ),
-        )
-        if task.get("template_id") != profile.template_id:
+        if task.get("template_id") != "structural_artifact_pipeline":
             raise EvidencePlanError(f"Task {task_id} template identity changed.")
     if covered_gaps != gap_ids:
         raise EvidencePlanError(

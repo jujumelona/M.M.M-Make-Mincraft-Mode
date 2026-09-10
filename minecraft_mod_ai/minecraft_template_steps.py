@@ -14,11 +14,12 @@ ROOT_PROVIDE = "translation:artifact_dependency_graph"
 @dataclass(frozen=True)
 class TemplateStep:
     name: str
-    template_id: str
     outcome: str
     consumes: tuple[str, ...]
     provides: tuple[str, ...]
     anchor_kinds: tuple[str, ...]
+    template_id: str = ""
+    branch_features: tuple[str, ...] = ()
 
 
 def responsibility_ids_for_artifact(artifact_kind: str) -> tuple[str, ...]:

@@ -12,19 +12,14 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from .minecraft_template_catalog import (
-    CUSTOM_CAPABILITY_SENTINEL,
-    capability_catalog_for_model,
-    semantic_capability_choices,
-)
+CUSTOM_CAPABILITY_SENTINEL = "custom"
+
 from .planner_operation import planner_operation
 from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
 from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 from .root_cause_trace import emit_root_cause
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
-_SEMANTIC_CAPABILITY_CHOICES = semantic_capability_choices()
-_SEMANTIC_CAPABILITY_CHOICE_SET = frozenset(_SEMANTIC_CAPABILITY_CHOICES)
 _REQUIREMENT_PARAMETERS: dict[str, Any] = SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
 
 
@@ -261,7 +256,7 @@ def _normalize_requirement_rows(
             if not statement:
                 continue
             semantic_capability = _text(item.get("semantic_capability")).casefold()
-            if semantic_capability not in _SEMANTIC_CAPABILITY_CHOICE_SET:
+            if not semantic_capability:
                 semantic_capability = CUSTOM_CAPABILITY_SENTINEL
             acceptance = _strings(item.get("acceptance"))
             if not acceptance:
@@ -350,12 +345,12 @@ def compile_researched_requirements(
         "Compile independently testable, player-visible requirements from the supplied "
         "task semantics. Do not output or reason about host IDs, evidence IDs, hashes, "
         "receipts, provenance keys, files, classes, registrations, or invented APIs. "
-        "Choose a semantic capability from the supplied catalog when it clearly fits; "
-        f"otherwise use '{CUSTOM_CAPABILITY_SENTINEL}'. Missing balance values or detailed "
+        "Use a short descriptive semantic capability label for bookkeeping only; "
+        "it must not choose Minecraft artifacts or architecture. Missing balance values or detailed "
         "mechanics are later design work. Return behavior statements and observable "
         "acceptance conditions only."
     )
-    catalog = capability_catalog_for_model()
+    catalog = {}
     overhead_bytes = len(system_content.encode("utf-8")) + len(
         json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     )
@@ -366,7 +361,6 @@ def compile_researched_requirements(
     )
     user_payload = {
         "task": context,
-        "semantic_capability_catalog": catalog,
         "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
     }
     messages = [

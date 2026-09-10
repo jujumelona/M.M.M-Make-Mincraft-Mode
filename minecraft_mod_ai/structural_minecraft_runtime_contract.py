@@ -5,20 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .minecraft_template_catalog import (
-    FEATURE_DATAGEN,
-    FEATURE_MIXIN,
-    FEATURE_NETWORK,
-    FEATURE_WORLDGEN,
-    TEMPLATE_CATALOG_SCHEMA,
-)
 from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep
 from .structural_artifact_mapping import branch_features_for_artifacts
 from .task_template_catalog import load_template
 from .translation_runtime import translate_requirement
 
-_PLANNING: Any | None = None
-_INSTALLED = False
+TEMPLATE_CATALOG_SCHEMA = "mmm/structural-minecraft-tasks"
+RESEARCH_BASIS = ()
 
 
 def _capability(requirement: Mapping[str, Any]) -> str:
@@ -30,9 +23,9 @@ def _capability(requirement: Mapping[str, Any]) -> str:
     return str(raw or "structural_requirement").strip().casefold().removeprefix("capability:")
 
 
-def _append(steps, capability, previous, *, name, outcome, anchor_kinds=("symbol", "test"), branch_features=()):
+def _append(steps, capability, previous, *, name, outcome, anchor_kinds=("symbol", "test"), branch_features=(), template_id=None):
     output = f"{name}:{capability}"
-    steps.append(TemplateStep(name=name, outcome=outcome, consumes=(previous,), provides=(output,), anchor_kinds=tuple(anchor_kinds), branch_features=tuple(branch_features)))
+    steps.append(TemplateStep(name=name, template_id=template_id or f"feature/{name}", outcome=outcome, consumes=(previous,), provides=(output,), anchor_kinds=tuple(anchor_kinds), branch_features=tuple(branch_features)))
     return output
 
 
@@ -51,7 +44,7 @@ def structural_steps_for_requirement(requirement: Mapping[str, Any]) -> tuple[Te
         ("output", "Expose only the declared observable output"),
         ("failure", "Implement only the declared rejection and preserved-state behavior"),
     ):
-        previous = _append(steps, capability, previous, name=name, outcome=f"{outcome} for {capability}")
+        previous = _append(steps, capability, previous, name=name, outcome=f"{outcome} for {capability}", template_id="feature/rules" if name == "failure" else f"feature/{name}")
 
     for artifact in translation.artifact_kinds:
         manifest = load_template(f"minecraft/{artifact}")
@@ -73,13 +66,14 @@ def structural_steps_for_requirement(requirement: Mapping[str, Any]) -> tuple[Te
                 capability,
                 previous,
                 name=str(identifier).replace("/", "_"),
+                template_id=str(identifier),
                 outcome=f"{outcome} for {capability}",
                 anchor_kinds=tuple(task.get("anchor_kinds") or ("symbol", "test")),
                 branch_features=artifact_branches,
             )
 
-    previous = _append(steps, capability, previous, name="integration", outcome=f"Connect only the declared producer and consumer interfaces for {capability}")
-    steps.append(TemplateStep(name="runtime_scenario", outcome=f"Verify the declared observable acceptance scenarios for {capability}", consumes=(previous,), provides=(capability,), anchor_kinds=("test",), branch_features=()))
+    previous = _append(steps, capability, previous, name="integration", template_id="integration/feature_connect", outcome=f"Connect only the declared producer and consumer interfaces for {capability}")
+    steps.append(TemplateStep(name="runtime_scenario", template_id="validation/runtime_test", outcome=f"Verify the declared observable acceptance scenarios for {capability}", consumes=(previous,), provides=(capability,), anchor_kinds=("test",), branch_features=()))
     return tuple(steps)
 
 
@@ -87,22 +81,19 @@ def _required_gates(capability, branches, *, semantic_type="gameplay_mechanic", 
     del capability
     features = set(step.branch_features if step is not None else ())
     gates = ["source_static_validation", "target_compile"]
-    if FEATURE_DATAGEN in features:
+    if "needs_datagen" in features:
         gates.append("generated_resource_validation")
-    if FEATURE_NETWORK in features:
+    if "needs_network" in features:
         gates.append("network_protocol_validation")
-    if FEATURE_WORLDGEN in features:
+    if "needs_worldgen" in features:
         gates.append("worldgen_runtime_validation")
-    planning = _PLANNING
-    if FEATURE_MIXIN in features or (semantic_type == "software_quality" and planning is not None and planning._active(branches, "needs_mixin")):
+    if "needs_mixin" in features or (semantic_type == "software_quality" and branches.get("needs_mixin", {}).get("status") == "ACTIVE"):
         gates.extend(("behavior_equivalence", "performance_regression"))
     return tuple(dict.fromkeys(gates))
 
 
 def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=None, emit_trace=True):
-    planning = _PLANNING
-    if planning is None:
-        raise RuntimeError("STRUCTURAL_RUNTIME: contract is not installed")
+    from . import evidence_first_planning as planning
     roots = set(root_provides or {ROOT_PROVIDE})
     reuse_by_req = {str(item["requirement_ref"]): item for item in reuse}
     tasks = []
@@ -126,7 +117,7 @@ def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=No
             provides = tuple(required_provide if item == capability else item for item in step.provides)
             if required_provide in provides:
                 provides = tuple(dict.fromkeys((*provides, planning._requirement_done(requirement_ref))))
-            rewritten.append(TemplateStep(name=step.name, outcome=step.outcome, consumes=step.consumes, provides=provides, anchor_kinds=step.anchor_kinds, branch_features=step.branch_features))
+            rewritten.append(TemplateStep(name=step.name, template_id=step.template_id, outcome=step.outcome, consumes=step.consumes, provides=provides, anchor_kinds=step.anchor_kinds, branch_features=step.branch_features))
         steps = tuple(rewritten)
         for index, step in enumerate(steps):
             task_id = planning._stable_id("task", f"{capability}_{step.name}", {"gap": gap["gap_id"], "index": index})
@@ -163,13 +154,6 @@ def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=No
     return planning._bind_consumes_dependencies(tasks, root_provides=roots, emit_trace=emit_trace)
 
 
-def _name_only_route_disabled(*args, **kwargs):
-    del args, kwargs
-    planning = _PLANNING
-    error = planning.EvidencePlanError if planning is not None else ValueError
-    raise error("STRUCTURAL_REQUIREMENT_REQUIRED: capability names cannot choose Minecraft task topology")
-
-
 def _requirement_branch_features(requirement):
     translation = translate_requirement(requirement)
     if translation.unresolved_inputs:
@@ -177,17 +161,5 @@ def _requirement_branch_features(requirement):
     return translation.branch_features
 
 
-def install(planning_module):
-    global _PLANNING, _INSTALLED
-    _PLANNING = planning_module
-    if _INSTALLED:
-        return
-    planning_module._compile_tasks = _compile_tasks
-    planning_module._semantic_steps = _name_only_route_disabled
-    planning_module._required_gates = _required_gates
-    planning_module.requirement_branch_features = _requirement_branch_features
-    planning_module.profile_for_capability = _name_only_route_disabled
-    _INSTALLED = True
 
-
-__all__ = ["install", "structural_steps_for_requirement"]
+__all__ = ["structural_steps_for_requirement"]

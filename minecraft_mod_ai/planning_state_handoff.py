@@ -13,11 +13,9 @@ from typing import Any
 
 from . import evidence_first_planning as _evidence
 from .acceptance_contracts import canonical_public_acceptance
-from .minecraft_template_catalog import semantic_capability_choices
 from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
 
-_SEMANTIC_CAPABILITY_CHOICES = frozenset(semantic_capability_choices())
 
 
 def _text(value: Any) -> str:
@@ -150,7 +148,7 @@ def _implementation_queries(state: Mapping[str, Any], requirement_ref: str) -> l
 
 def _semantic_capability(requirement: Mapping[str, Any]) -> str:
     capability = _text(requirement.get("semantic_capability")).casefold()
-    if capability not in _SEMANTIC_CAPABILITY_CHOICES:
+    if not capability:
         raise ValueError(
             "PLANNING_HANDOFF_CAPABILITY: requirement has no valid canonical semantic "
             f"capability: {capability or '<empty>'}"
