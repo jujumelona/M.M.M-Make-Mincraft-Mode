@@ -1,0 +1,13 @@
+id: validation/unit_test
+input:
+  unit_tests:
+  target_cell:
+task:
+  run_unit_tests:
+rules:
+  - Execute tests for pure or isolated responsibilities before integration claims.
+output:
+  passed:
+  failures:
+proof:
+  predicate: passed is true only when every required unit test passes

@@ -1,0 +1,14 @@
+id: asset/texture_plan
+input:
+  texture_requirement:
+  visual_evidence:
+task:
+  define_texture_contract:
+rules:
+  - Preserve only evidenced or explicitly authored visual properties.
+  - Leave unknown dimensions or source details unresolved.
+output:
+  texture_contract:
+  unresolved_properties:
+proof:
+  predicate: every fixed texture property is evidence-backed or explicitly authored

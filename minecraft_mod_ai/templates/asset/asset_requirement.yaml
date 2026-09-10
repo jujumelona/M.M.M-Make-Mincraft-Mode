@@ -1,0 +1,13 @@
+id: asset/asset_requirement
+input:
+  atomic_feature:
+  resource_mapping:
+task:
+  identify_one_asset_need:
+rules:
+  - Emit only assets required by observable behavior or explicit presentation requirements.
+  - Do not add decorative assets by convention.
+output:
+  asset_requirements:
+proof:
+  predicate: every asset requirement traces to one explicit feature or resource requirement

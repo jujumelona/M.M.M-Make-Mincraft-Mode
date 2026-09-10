@@ -1,0 +1,13 @@
+id: validation/static_check
+input:
+  generated_project:
+  static_rules:
+task:
+  run_static_checks:
+rules:
+  - Check syntax-independent contracts, ownership boundaries, identifiers, and forbidden patterns.
+output:
+  passed:
+  failed_checks:
+proof:
+  predicate: passed is true only when every required static check passes

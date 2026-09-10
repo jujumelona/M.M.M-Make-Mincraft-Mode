@@ -1,0 +1,14 @@
+id: integration/feature_connect
+input:
+  atomic_features:
+  feature_connections:
+task:
+  connect_feature_interfaces:
+rules:
+  - Connect only explicit feature interfaces and dependencies.
+  - Keep internal state ownership inside its owning feature.
+output:
+  feature_edges:
+  unresolved_connections:
+proof:
+  predicate: every feature edge matches an explicit connection contract

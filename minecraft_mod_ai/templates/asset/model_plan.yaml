@@ -1,0 +1,14 @@
+id: asset/model_plan
+input:
+  model_requirement:
+  visual_evidence:
+task:
+  define_model_contract:
+rules:
+  - Separate geometry, transforms, parent/reference, and texture bindings.
+  - Do not infer unseen geometry.
+output:
+  model_contract:
+  unresolved_properties:
+proof:
+  predicate: every fixed model property is evidence-backed or explicitly authored

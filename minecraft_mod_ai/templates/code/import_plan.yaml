@@ -1,0 +1,14 @@
+id: code/import_plan
+input:
+  code_unit:
+  referenced_symbols:
+task:
+  resolve_imports:
+rules:
+  - Import only symbols actually referenced by the unit.
+  - Resolve ambiguity against verified target bindings.
+output:
+  imports:
+  unresolved_symbols:
+proof:
+  predicate: every import maps to one referenced verified symbol

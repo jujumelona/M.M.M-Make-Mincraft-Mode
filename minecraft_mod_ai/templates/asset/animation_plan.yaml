@@ -1,0 +1,14 @@
+id: asset/animation_plan
+input:
+  animation_requirement:
+  visual_evidence:
+task:
+  define_animation_contract:
+rules:
+  - Preserve state trigger, timing, loop policy, and affected parts separately.
+  - Do not infer motion absent from evidence or authored design.
+output:
+  animation_contract:
+  unresolved_properties:
+proof:
+  predicate: every animation property has an explicit source or design authority

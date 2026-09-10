@@ -1,0 +1,14 @@
+id: validation/compile
+input:
+  generated_project:
+  target_cell:
+task:
+  run_target_compile_gate:
+rules:
+  - Use the resolved target build path.
+  - Preserve compiler output as evidence.
+output:
+  passed:
+  diagnostics:
+proof:
+  predicate: passed is true only when target compilation exits successfully

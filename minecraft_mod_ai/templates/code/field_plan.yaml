@@ -1,0 +1,14 @@
+id: code/field_plan
+input:
+  class_contract:
+  state_requirement:
+task:
+  define_required_field:
+rules:
+  - Emit a field only for state owned by this class.
+  - Preserve type, default, lifecycle, and mutability constraints when known.
+output:
+  field_contract:
+  unresolved_type:
+proof:
+  predicate: every field has an explicit state owner and purpose

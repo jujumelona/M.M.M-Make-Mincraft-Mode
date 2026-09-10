@@ -1,0 +1,13 @@
+id: asset/resource_validation
+input:
+  generated_resource:
+  resource_contract:
+task:
+  validate_resource_against_contract:
+rules:
+  - Check path, identifier, references, syntax, and required properties independently.
+output:
+  valid:
+  failed_checks:
+proof:
+  predicate: valid is true only when every declared resource check passes

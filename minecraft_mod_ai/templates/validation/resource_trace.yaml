@@ -1,0 +1,15 @@
+id: validation/resource_trace
+input:
+  resource_requirements:
+  generated_resources:
+  resource_validation_receipts:
+task:
+  trace_resources_to_validation:
+rules:
+  - Required resources must exist and validate; extra resources must have an owner.
+output:
+  traces:
+  missing_resources:
+  unowned_resources:
+proof:
+  predicate: every required resource is validated and every emitted resource has an owner

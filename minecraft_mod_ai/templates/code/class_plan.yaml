@@ -1,0 +1,13 @@
+id: code/class_plan
+input:
+  file_target:
+  responsibility:
+task:
+  define_one_class_responsibility:
+rules:
+  - Keep class scope limited to the supplied responsibility.
+  - Reuse an existing owner when verified instead of duplicating it.
+output:
+  class_contract:
+proof:
+  predicate: the class contract has one primary responsibility and a verified file owner

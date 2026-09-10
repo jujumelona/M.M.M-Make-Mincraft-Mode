@@ -1,0 +1,14 @@
+id: code/file_plan
+input:
+  artifact_responsibility:
+  owned_anchor:
+task:
+  choose_one_file_target:
+rules:
+  - Plan only the file that owns the supplied responsibility.
+  - Do not create unrelated files.
+output:
+  file_target:
+  ownership_reason:
+proof:
+  predicate: the target file has one explicit responsibility owner
