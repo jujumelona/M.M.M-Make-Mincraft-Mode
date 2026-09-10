@@ -130,3 +130,33 @@ def test_validation_failure_blocks_dependent(monkeypatch):
     else:
         raise AssertionError("expected validation failure")
     assert not dependent_started.is_set()
+
+
+def test_slow_validation_overlaps_unrelated_generation(monkeypatch):
+    validating = threading.Event()
+    sibling_saw_validation = threading.Event()
+    release_validation = threading.Event()
+
+    def fake_execute(job, **kwargs):
+        if job.job_id == "sibling":
+            assert validating.wait(2)
+            sibling_saw_validation.set()
+            release_validation.set()
+        return {"status": "PASS"}
+
+    def validator(job, receipt):
+        if job.job_id == "producer":
+            validating.set()
+            assert release_validation.wait(2)
+        return True
+
+    monkeypatch.setattr(executor, "_execute_one", fake_execute)
+    monkeypatch.setenv("MMM_ARTIFACT_MAX_WORKERS", "1")
+    monkeypatch.setenv("MMM_ARTIFACT_VALIDATION_WORKERS", "1")
+
+    result = executor.execute_artifact_graph(
+        [_job("producer"), _job("sibling")],
+        context={"artifact_validator": validator},
+    )
+    assert sibling_saw_validation.is_set()
+    assert result["completed_jobs"] == ["producer", "sibling"]
