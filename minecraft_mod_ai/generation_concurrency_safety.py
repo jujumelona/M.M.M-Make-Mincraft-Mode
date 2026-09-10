@@ -147,6 +147,16 @@ def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
     return ()
 
 
+def _configure_pipeline_granularity() -> None:
+    """Expose entity generation/review as independent DAG nodes by default.
+
+    The work graph already provides an explicit environment override. Setting only the
+    absent default here removes the built-in two-entity serial loop without overriding
+    an operator's intentional batching choice.
+    """
+    os.environ.setdefault("MMM_ENTITY_PIPELINE_SHARD_SIZE", "1")
+
+
 def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
     """Resolve explicit, inferred and built-in collision domains; fail closed last."""
     current = work_graph_module._exclusive_anchor_keys
@@ -218,6 +228,7 @@ def install() -> None:
             return
         from . import custom_module_generator, project_index, work_graph
 
+        _configure_pipeline_granularity()
         _install_custom_generator_lock(custom_module_generator)
         _install_project_index_snapshot_lock(project_index)
         _install_exact_anchor_fallback(work_graph)
