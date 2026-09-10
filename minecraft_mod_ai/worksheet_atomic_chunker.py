@@ -11,7 +11,10 @@ from copy import deepcopy
 import json
 from typing import Any
 
-from .model_output_atomicity_contract import assert_atomic_model_schema, is_atomic_model_schema
+from .model_output_atomicity_contract import (
+    _assert_closed_object_schemas,
+    is_atomic_model_schema,
+)
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import (
     _PLACEHOLDERS,
@@ -93,9 +96,9 @@ def pack_section_concerns(
                 single,
                 include_evidence=is_first,
             )
-            assert_atomic_model_schema(
+            _assert_closed_object_schemas(
                 single_schema,
-                surface=f"worksheet chunk {key}.{single[0]}",
+                path=f"worksheet chunk {key}.{single[0]}",
             )
             chosen = single
 

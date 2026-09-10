@@ -1,0 +1,31 @@
+id: fabric/block/key
+artifact: java_fragment
+target:
+  file: src/main/java/{{package_path}}/registry/ModBlockIds.java
+  anchor: "/* MMM:block_keys */"
+requires:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+produces:
+  - block_key_symbol
+ai_slots: []
+render:
+  language: java
+  body: |
+    public static final ResourceKey<Block> {{java_constant}}_KEY =
+        ResourceKey.create(Registries.BLOCK, Identifier.of("{{mod_id}}", "{{registry_path}}"));
+validators:
+  - java_parse
+fixture:
+  input:
+    mod_id: space
+    package_path: com/foo/space
+    java_constant: LUNITE_ORE
+    registry_path: lunite_ore
+  expected_contains:
+    - "ResourceKey.create"
+    - "Registries.BLOCK"
+    - "LUNITE_ORE_KEY"
+    - "lunite_ore"

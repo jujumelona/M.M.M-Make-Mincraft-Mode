@@ -1,0 +1,33 @@
+id: fabric/loot/block_drop
+artifact: json_resource
+target:
+  file: src/main/resources/data/{{mod_id}}/loot_tables/blocks/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+  - drop_item
+produces:
+  - block_loot_table_ref
+ai_slots: []
+render:
+  language: json
+  body:
+    type: "minecraft:block"
+    pools:
+      - rolls: 1
+        entries:
+          - type: "minecraft:item"
+            name: "{{mod_id}}:{{drop_item}}"
+        conditions:
+          - condition: "minecraft:survives_explosion"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunite_ore
+    drop_item: raw_lunite
+  expected_contains:
+    - "minecraft:block"
+    - "space:raw_lunite"
+    - "minecraft:survives_explosion"

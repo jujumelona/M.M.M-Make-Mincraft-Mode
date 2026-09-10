@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.reuse_template_pipeline import (
     REUSE_SEQUENCE,
     evaluate_feature_reuse,

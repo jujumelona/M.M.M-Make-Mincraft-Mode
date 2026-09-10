@@ -1,0 +1,25 @@
+id: fabric/item/client_item
+artifact: json_resource
+target:
+  file: src/main/resources/assets/{{mod_id}}/items/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+produces:
+  - client_item_ref
+ai_slots: []
+render:
+  language: json
+  body:
+    model:
+      type: "minecraft:model"
+      model: "{{mod_id}}:item/{{registry_path}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: raw_lunite
+  expected_contains:
+    - "minecraft:model"
+    - "space:item/raw_lunite"

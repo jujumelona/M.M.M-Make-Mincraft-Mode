@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import pytest
 
 from minecraft_mod_ai.artifact_job import ArtifactJob

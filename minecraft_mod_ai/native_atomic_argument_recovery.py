@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-_MAX_PAGE_PROPERTIES = 4
+_MAX_PAGE_PROPERTIES = 3
 _MAX_REPAIR_ERROR_CHARS = 1200
 _SOURCE_EDIT_TOOL = "apply_source_edit"
 _SOURCE_EDIT_OPERATION_ALIASES = {

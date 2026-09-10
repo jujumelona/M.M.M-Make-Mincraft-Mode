@@ -1,0 +1,25 @@
+id: fabric/block/model_cube_all
+artifact: json_resource
+target:
+  file: src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+produces:
+  - block_model_ref
+ai_slots: []
+render:
+  language: json
+  body:
+    parent: "minecraft:block/cube_all"
+    textures:
+      all: "{{mod_id}}:block/{{registry_path}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunite_ore
+  expected_contains:
+    - "minecraft:block/cube_all"
+    - "space:block/lunite_ore"

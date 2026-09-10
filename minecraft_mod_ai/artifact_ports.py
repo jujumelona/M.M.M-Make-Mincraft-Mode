@@ -16,6 +16,8 @@ class PortKind(str, Enum):
     SCREEN_HANDLER_TYPE = "SCREEN_HANDLER_TYPE"
     PAYLOAD_TYPE = "PAYLOAD_TYPE"
     TRANSLATION_KEY = "TRANSLATION_KEY"
+    CLIENT_ITEM_REF = "CLIENT_ITEM_REF"
+    GENERIC = "GENERIC"
 
 
 class PortConnectionError(ValueError):
@@ -88,6 +90,18 @@ class PortRegistry:
                 f"conflicting with {port.to_dict()}"
             )
         self._ports[port.name] = port
+
+    def register(
+        self,
+        name: str,
+        value: Any,
+        kind: PortKind | str = PortKind.GENERIC,
+        target_type: str = "Any",
+    ) -> TypedPort:
+        port_kind = PortKind(kind) if isinstance(kind, str) else kind
+        port = TypedPort(name=name, port_kind=port_kind, target_type=target_type, value=value)
+        self.publish(port)
+        return port
 
     def resolve(
         self,

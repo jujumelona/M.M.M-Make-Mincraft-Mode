@@ -125,7 +125,12 @@ def assert_strict_atomicity_bounds(
                 assert_strict_atomicity_bounds(child, surface=surface, path=f"{path}.{k}", depth=depth + 1)
         if value.get("type") == "array":
             max_items = value.get("maxItems")
-            if max_items is not None and max_items > MAX_MODEL_ARRAY_ITEMS:
+            if max_items is None:
+                raise _configuration_error(
+                    f"MODEL_ATOMICITY_ARRAY_UNBOUNDED: Array schema at {path} must declare 'maxItems' <= "
+                    f"{MAX_MODEL_ARRAY_ITEMS} for {surface}"
+                )
+            if max_items > MAX_MODEL_ARRAY_ITEMS:
                 raise _configuration_error(
                     f"MODEL_ATOMICITY_ARRAY_EXCEEDED: maxItems={max_items} exceeds "
                     f"MAX_MODEL_ARRAY_ITEMS={MAX_MODEL_ARRAY_ITEMS} at {path} for {surface}"
@@ -133,18 +138,32 @@ def assert_strict_atomicity_bounds(
             if "items" in value and isinstance(value["items"], Mapping):
                 assert_strict_atomicity_bounds(value["items"], surface=surface, path=f"{path}[]", depth=depth + 1)
         if value.get("type") == "string":
-            max_len = value.get("maxLength")
-            if max_len is not None and max_len > MAX_MODEL_STRING_CHARS:
-                raise _configuration_error(
-                    f"MODEL_ATOMICITY_STRING_EXCEEDED: maxLength={max_len} exceeds "
-                    f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
-                )
+            if "enum" not in value:
+                max_len = value.get("maxLength")
+                if max_len is None:
+                    raise _configuration_error(
+                        f"MODEL_ATOMICITY_STRING_UNBOUNDED: String schema at {path} must declare 'maxLength' <= "
+                        f"{MAX_MODEL_STRING_CHARS} for {surface}"
+                    )
+                if max_len > MAX_MODEL_STRING_CHARS:
+                    raise _configuration_error(
+                        f"MODEL_ATOMICITY_STRING_EXCEEDED: maxLength={max_len} exceeds "
+                        f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
+                    )
+            else:
+                for opt in value.get("enum", ()):
+                    if len(str(opt)) > MAX_MODEL_STRING_CHARS:
+                        raise _configuration_error(
+                            f"MODEL_ATOMICITY_STRING_EXCEEDED: enum option {opt!r} length exceeds "
+                            f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
+                        )
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
-    """Require one closed fixed template without arbitrary schema-size rejection."""
+    """Require one closed fixed template with strict physical and structural bounds."""
 
     _assert_closed_object_schemas(schema)
+    assert_strict_atomicity_bounds(schema, surface=surface)
 
 
 def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:

@@ -18,7 +18,7 @@ import json
 from threading import RLock
 from typing import Any
 
-from .minecraft_template_steps import responsibility_ids_for_artifact, steps_for_artifact
+from .minecraft_template_steps import responsibility_ids_for_artifact
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_criterion_fragments import (

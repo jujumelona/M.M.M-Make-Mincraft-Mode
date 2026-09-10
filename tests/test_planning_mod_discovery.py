@@ -6,7 +6,6 @@ from minecraft_mod_ai.catalog_first_grounded_rag import _domain_specs
 from minecraft_mod_ai.planning_mod_discovery import catalog_queries, discovery_receipt
 from minecraft_mod_ai.planning_state_implementation import _requirement_grounding
 import json
-from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates
 
 

@@ -30,25 +30,64 @@ def test_expand_item_and_explicit_stack_limit_without_defaults():
             source_clause="stack limit is 16",
         ),
     ]
-    jobs = expand_facts_to_jobs(
-        facts, mod_id="space", package_name="com.foo.space"
-    )
-    assert [job.template_id for job in jobs] == [
-        "fabric/item/register_basic",
-        "fabric/item/model_basic",
-        "fabric/item/lang_en",
-        "fabric/item/settings_max_stack",
-    ]
-    register = jobs[0]
-    assert register.produces == (
+
+    jobs = expand_facts_to_jobs(facts, mod_id="space", package_name="com.foo.space")
+
+    assert len(jobs) == 7
+    template_ids = [j.template_id for j in jobs]
+    assert "fabric/item/key" in template_ids
+    assert "fabric/item/register_basic" in template_ids
+    assert "fabric/item/client_item" in template_ids
+    assert "fabric/item/model_basic" in template_ids
+    assert "fabric/item/lang_en" in template_ids
+    assert "fabric/item/initializer" in template_ids
+    assert "fabric/item/settings_max_stack" in template_ids
+
+    key_job = next(j for j in jobs if j.template_id == "fabric/item/key")
+    assert key_job.target_path == "src/main/java/com/foo/space/registry/ModItemIds.java"
+
+    register_job = next(j for j in jobs if j.template_id == "fabric/item/register_basic")
+    assert register_job.target_path == "src/main/java/com/foo/space/registry/ModItems.java"
+    assert register_job.produces == (
         "raw_lunite.registry_id",
         "raw_lunite.java_symbol",
     )
-    model = jobs[1]
-    assert model.requires == ("raw_lunite.registry_id",)
-    stack = jobs[-1]
-    assert stack.requires == ("raw_lunite.java_symbol",)
-    assert stack.deterministic_inputs["stack_limit"] == 16
+
+    model_job = next(j for j in jobs if j.template_id == "fabric/item/model_basic")
+    assert model_job.requires == ("raw_lunite.registry_id",)
+
+    stack_job = next(j for j in jobs if j.template_id == "fabric/item/settings_max_stack")
+    assert stack_job.requires == ("raw_lunite.java_symbol",)
+    assert stack_job.deterministic_inputs["stack_limit"] == 16
+
+
+def test_expand_facts_for_block_and_drop():
+    facts = [
+        PromptFact(
+            fact_id="fact_001",
+            fact_type=FactType.BLOCK_EXISTS,
+            subject="lunite_ore",
+            source_clause="lunite ore block exists",
+        ),
+        PromptFact(
+            fact_id="fact_002",
+            fact_type=FactType.BLOCK_DROP,
+            subject="lunite_ore",
+            object="raw_lunite",
+            source_clause="drops raw lunite",
+        ),
+    ]
+
+    jobs = expand_facts_to_jobs(facts, mod_id="space", package_name="com.foo.space")
+
+    template_ids = [j.template_id for j in jobs]
+    assert "fabric/block/key" in template_ids
+    assert "fabric/block/register_basic" in template_ids
+    assert "fabric/block/blockstate_basic" in template_ids
+    assert "fabric/block/model_cube_all" in template_ids
+    assert "fabric/block/lang_en" in template_ids
+    assert "fabric/block/initializer" in template_ids
+    assert "fabric/loot/block_drop" in template_ids
 
 
 def test_missing_numeric_fact_is_not_replaced_by_magic_default():
@@ -74,9 +113,10 @@ def test_unimplemented_fact_fails_closed_instead_of_referencing_missing_template
             [
                 PromptFact(
                     fact_id="fact_001",
-                    fact_type=FactType.BLOCK_EXISTS,
-                    subject="lunite_ore",
-                    source_clause="lunite ore block exists",
+                    fact_type=FactType.ITEM_DURABILITY,
+                    subject="raw_lunite",
+                    value=100,
+                    source_clause="durability is 100",
                 )
             ],
             mod_id="space",

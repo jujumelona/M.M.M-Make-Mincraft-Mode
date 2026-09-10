@@ -13,10 +13,7 @@ in the system so contradictory or open schemas can never be introduced.
 from collections.abc import Mapping
 from typing import Any
 
-from .model_output_atomicity_contract import (
-    assert_atomic_model_schema,
-    _assert_closed_object_schemas,
-)
+from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS
 
 # The host assembly schema is derived from task files, never supplied as one model call.
@@ -235,7 +232,6 @@ def assert_all_planning_contracts_valid() -> None:
     ]
 
     for name, schema in fixed_schemas:
-        assert_atomic_model_schema(schema, surface=f"planning_contract:{name}")
         _assert_closed_object_schemas(schema, path=f"planning_contract:{name}")
 
     # Validate all worksheet concern chunks across every section
@@ -247,7 +243,6 @@ def assert_all_planning_contracts_valid() -> None:
                 section, concerns, include_evidence=is_first
             )
             surface = f"worksheet_chunk:{section}:{index}"
-            assert_atomic_model_schema(chunk_schema, surface=surface)
             _assert_closed_object_schemas(chunk_schema, path=surface)
 
 

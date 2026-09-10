@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.research_template_pipeline import (
     RESEARCH_SEQUENCE,
     execute_research_template,

@@ -1,0 +1,37 @@
+id: fabric/block/register_basic
+artifact: java_fragment
+target:
+  file: src/main/java/{{package_path}}/registry/ModBlocks.java
+  anchor: "/* MMM:block_registry */"
+requires:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+produces:
+  - block_registry_id
+  - block_symbol
+ai_slots: []
+render:
+  language: java
+  body: |
+    public static final Block {{java_constant}} =
+        Registry.register(
+            BuiltInRegistries.BLOCK,
+            ModBlockIds.{{java_constant}}_KEY,
+            new Block(BlockBehaviour.Properties.of().setId(ModBlockIds.{{java_constant}}_KEY)/* MMM:block_properties:{{registry_path}} */)
+        );
+validators:
+  - java_parse
+fixture:
+  input:
+    mod_id: space
+    package_path: com/foo/space
+    java_constant: LUNITE_ORE
+    registry_path: lunite_ore
+  expected_contains:
+    - "Registry.register"
+    - "BuiltInRegistries.BLOCK"
+    - "ModBlockIds.LUNITE_ORE_KEY"
+    - "lunite_ore"
+    - "LUNITE_ORE"

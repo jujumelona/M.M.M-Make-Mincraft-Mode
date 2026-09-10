@@ -1,0 +1,25 @@
+id: fabric/block/lang_en
+artifact: json_fragment
+target:
+  file: src/main/resources/assets/{{mod_id}}/lang/en_us.json
+requires:
+  - mod_id
+  - registry_path
+  - display_name
+produces:
+  - block_translation_key
+ai_slots: []
+render:
+  language: json
+  body:
+    "block.{{mod_id}}.{{registry_path}}": "{{display_name}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunite_ore
+    display_name: Lunite Ore
+  expected_contains:
+    - "block.space.lunite_ore"
+    - "Lunite Ore"

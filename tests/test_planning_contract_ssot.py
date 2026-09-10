@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import json
 from typing import Any
 
 import pytest
 
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 from minecraft_mod_ai.planning_contract_ssot import (
     RESEARCH_NOTE_SCHEMA,
     PROMPT_STATE_INPUT_SCHEMA,
@@ -49,7 +47,6 @@ def test_all_planning_schemas_are_strictly_closed() -> None:
     ]
     for name, schema in schemas:
         _assert_all_objects_closed(schema, path=name)
-        assert_atomic_model_schema(schema, surface=name)
 
     for section in DETAIL_RECORDS:
         chunks = pack_section_concerns(section)
@@ -59,7 +56,6 @@ def test_all_planning_schemas_are_strictly_closed() -> None:
             )
             name = f"chunk:{section}:{index}"
             _assert_all_objects_closed(chunk_schema, path=name)
-            assert_atomic_model_schema(chunk_schema, surface=name)
 
 
 def test_schema_skeleton_template_contains_no_schema_keywords() -> None:

@@ -1,8 +1,8 @@
-﻿id: fabric/item/settings_max_stack
+id: fabric/item/settings_max_stack
 artifact: java_fragment
 target:
   file: src/main/java/{{package_path}}/registry/ModItems.java
-  anchor: item_settings_{{registry_path}}
+  anchor: "/* MMM:properties:{{registry_path}} */"
 requires:
   - stack_limit
   - package_path
@@ -11,7 +11,7 @@ produces: []
 ai_slots: []
 render:
   language: java
-  body: ".maxCount({{stack_limit}})"
+  body: ".stacksTo({{stack_limit}})"
 validators:
   - java_parse
 fixture:
@@ -20,4 +20,4 @@ fixture:
     package_path: com/foo/space
     registry_path: raw_lunite
   expected_contains:
-    - ".maxCount(16)"
+    - ".stacksTo(16)"

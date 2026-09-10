@@ -4,7 +4,6 @@ from copy import deepcopy
 import pytest
 
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
-from minecraft_mod_ai import planning_criterion_fragments as criterion_fragments
 from minecraft_mod_ai import planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai.minecraft_template_steps import responsibility_ids_for_artifact
 

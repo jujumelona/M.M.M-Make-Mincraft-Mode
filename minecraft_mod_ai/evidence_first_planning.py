@@ -17,10 +17,12 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
+from .acceptance_contracts import is_public_acceptance
+
+_is_public_acceptance = is_public_acceptance
 
 from .structural_minecraft_runtime_contract import (
-    RESEARCH_BASIS, TEMPLATE_CATALOG_SCHEMA, _compile_tasks, _required_gates,
+    RESEARCH_BASIS, TEMPLATE_CATALOG_SCHEMA, _compile_tasks,
     _requirement_branch_features as requirement_branch_features,
 )
 from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep
@@ -1437,7 +1439,6 @@ def validate_evidence_first_plan(
             raise EvidencePlanError(
                 f"Task {task_id} must bind exactly one requirement for template validation."
             )
-        task_requirement = task_requirements[0]
         if task.get("template_id") != "structural_artifact_pipeline":
             raise EvidencePlanError(f"Task {task_id} template identity changed.")
     if covered_gaps != gap_ids:

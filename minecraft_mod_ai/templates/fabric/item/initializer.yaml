@@ -1,0 +1,21 @@
+id: fabric/item/initializer
+artifact: java_fragment
+target:
+  file: src/main/java/{{package_path}}/{{main_class}}.java
+  anchor: "/* MMM:init */"
+requires:
+  - package_path
+  - main_class
+produces: []
+ai_slots: []
+render:
+  language: java
+  body: "ModItems.initialize();"
+validators:
+  - java_parse
+fixture:
+  input:
+    package_path: com/foo/space
+    main_class: SpaceMod
+  expected_contains:
+    - "ModItems.initialize();"

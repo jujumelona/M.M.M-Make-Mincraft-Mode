@@ -18,12 +18,26 @@ class ArtifactExpansionError(ValueError):
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
 _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
     FactType.ITEM_EXISTS: (
+        "fabric/item/key",
         "fabric/item/register_basic",
+        "fabric/item/client_item",
         "fabric/item/model_basic",
         "fabric/item/lang_en",
+        "fabric/item/initializer",
     ),
     FactType.ITEM_STACK_LIMIT: (
         "fabric/item/settings_max_stack",
+    ),
+    FactType.BLOCK_EXISTS: (
+        "fabric/block/key",
+        "fabric/block/register_basic",
+        "fabric/block/blockstate_basic",
+        "fabric/block/model_cube_all",
+        "fabric/block/lang_en",
+        "fabric/block/initializer",
+    ),
+    FactType.BLOCK_DROP: (
+        "fabric/loot/block_drop",
     ),
 }
 
@@ -100,6 +114,7 @@ def expand_facts_to_jobs(
     *,
     mod_id: str,
     package_name: str,
+    main_class: str = "",
 ) -> list[ArtifactJob]:
     """Lower only explicitly supported facts; never invent a fallback implementation."""
     validate_expansion_catalog()
@@ -110,6 +125,7 @@ def expand_facts_to_jobs(
 
     jobs: list[ArtifactJob] = []
     seen_job_ids: set[str] = set()
+    main_class_val = main_class or "".join(part.capitalize() for part in mod_id.split("_")) + "Mod"
 
     for fact in facts:
         template_ids = FACT_EXPANSIONS.get(fact.fact_type)
@@ -136,23 +152,33 @@ def expand_facts_to_jobs(
                 "registry_path": subject,
                 "java_constant": constant,
                 "subject": subject,
+                "main_class": main_class_val,
             }
             target_path = ""
             anchor = ""
             requires: list[str] = []
             produces: list[str] = []
 
-            if template_id == "fabric/item/register_basic":
+            if template_id == "fabric/item/key":
+                target_path = f"src/main/java/{pkg_path}/registry/ModItemIds.java"
+                anchor = "/* MMM:item_keys */"
+                produces = [f"{subject}.key_symbol"]
+            elif template_id == "fabric/item/register_basic":
                 target_path = f"src/main/java/{pkg_path}/registry/ModItems.java"
-                anchor = "mod_items_registry"
+                anchor = "/* MMM:item_registry */"
+                requires = [f"{subject}.key_symbol"]
                 produces = [f"{subject}.registry_id", f"{subject}.java_symbol"]
             elif template_id == "fabric/item/settings_max_stack":
                 target_path = f"src/main/java/{pkg_path}/registry/ModItems.java"
-                anchor = f"item_settings_{subject}"
+                anchor = f"/* MMM:properties:{subject} */"
                 deterministic_inputs["stack_limit"] = _require_integer_value(
                     fact, minimum=1, maximum=64
                 )
                 requires = [f"{subject}.java_symbol"]
+            elif template_id == "fabric/item/client_item":
+                target_path = f"src/main/resources/assets/{mod_id}/items/{subject}.json"
+                requires = [f"{subject}.registry_id"]
+                produces = [f"{subject}.client_item_ref"]
             elif template_id == "fabric/item/model_basic":
                 target_path = (
                     f"src/main/resources/assets/{mod_id}/models/item/{subject}.json"
@@ -166,6 +192,38 @@ def expand_facts_to_jobs(
                 )
                 requires = [f"{subject}.registry_id"]
                 produces = [f"{subject}.translation_key"]
+            elif template_id == "fabric/item/initializer":
+                target_path = f"src/main/java/{pkg_path}/{main_class_val}.java"
+                anchor = "/* MMM:init */"
+                requires = [f"{subject}.java_symbol"]
+            elif template_id == "fabric/block/key":
+                target_path = f"src/main/java/{pkg_path}/registry/ModBlockIds.java"
+                anchor = "/* MMM:block_keys */"
+                produces = [f"{subject}.block_key_symbol"]
+            elif template_id == "fabric/block/register_basic":
+                target_path = f"src/main/java/{pkg_path}/registry/ModBlocks.java"
+                anchor = "/* MMM:block_registry */"
+                requires = [f"{subject}.block_key_symbol"]
+                produces = [f"{subject}.block_registry_id", f"{subject}.block_symbol"]
+            elif template_id == "fabric/block/blockstate_basic":
+                target_path = f"src/main/resources/assets/{mod_id}/blockstates/{subject}.json"
+                requires = [f"{subject}.block_registry_id"]
+            elif template_id == "fabric/block/model_cube_all":
+                target_path = f"src/main/resources/assets/{mod_id}/models/block/{subject}.json"
+                requires = [f"{subject}.block_registry_id"]
+            elif template_id == "fabric/block/lang_en":
+                target_path = f"src/main/resources/assets/{mod_id}/lang/en_us.json"
+                deterministic_inputs["display_name"] = " ".join(part.capitalize() for part in subject.split("_"))
+                requires = [f"{subject}.block_registry_id"]
+            elif template_id == "fabric/block/initializer":
+                target_path = f"src/main/java/{pkg_path}/{main_class_val}.java"
+                anchor = "/* MMM:init */"
+                requires = [f"{subject}.block_symbol"]
+            elif template_id == "fabric/loot/block_drop":
+                target_path = f"src/main/resources/data/{mod_id}/loot_tables/blocks/{subject}.json"
+                drop_item = fact.object or subject
+                deterministic_inputs["drop_item"] = drop_item
+                requires = [f"{subject}.block_registry_id", f"{drop_item}.registry_id"]
             else:
                 raise ArtifactExpansionError(
                     f"ARTIFACT_EXPANSION_INTERNAL: unhandled validated leaf {template_id!r}"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +19,10 @@ from minecraft_mod_ai.model_output_atomicity_contract import (
 
 
 def _large_request(name: str, *, field_count: int = 12) -> GenerationRequest:
-    properties = {f"field_{index}": {"type": "string"} for index in range(field_count)}
+    properties = {
+        f"field_{index}": {"type": "string", "maxLength": 64}
+        for index in range(field_count)
+    }
     schema = {
         "type": "function",
         "function": {
@@ -44,43 +46,52 @@ def _large_request(name: str, *, field_count: int = 12) -> GenerationRequest:
 
 
 def _valid_page_response(request: GenerationRequest) -> GenerationResponse:
-    assert request.response_format == "json"
-    assert isinstance(request.response_schema, dict)
-    assert request.tools == ()
-    assert request.tool_validation_schemas == ()
-    assert request.tool_choice is None
-    page_properties = request.response_schema["properties"]
-    assert len(page_properties) <= 4
+    from minecraft_mod_ai.model_adapters.base import ToolCall
+
+    assert request.response_format == "text"
+    assert request.response_schema is None
+    assert len(request.tools) == 1
+    page_tool = request.tools[0]
+    action_name = page_tool["function"]["name"]
+    page_properties = page_tool["function"]["parameters"]["properties"]
+    assert len(page_properties) <= 3
     return GenerationResponse(
-        content=json.dumps(
-            {name: f"value-{name}" for name in page_properties},
-            sort_keys=True,
+        tool_calls=(
+            ToolCall(
+                id="call_test",
+                name=action_name,
+                arguments={name: f"value-{name}" for name in page_properties},
+            ),
         )
     )
 
 
-def test_large_closed_model_schema_is_allowed() -> None:
+def test_large_closed_model_schema_is_rejected() -> None:
     schema = {
         "type": "object",
         "properties": {
             f"field_{index}": {
                 "type": "object",
-                "properties": {f"nested_{inner}": {"type": "string"} for inner in range(4)},
+                "properties": {
+                    f"nested_{inner}": {"type": "string", "maxLength": 64}
+                    for inner in range(4)
+                },
                 "additionalProperties": False,
             }
             for index in range(20)
         },
         "additionalProperties": False,
     }
-    assert_atomic_model_schema(schema, surface="regression")
-    assert is_atomic_model_schema(schema)
+    with pytest.raises(ModelConfigurationError):
+        assert_atomic_model_schema(schema, surface="regression")
+    assert not is_atomic_model_schema(schema)
 
 
 def test_small_atomic_schema_remains_allowed() -> None:
     assert_atomic_model_schema(
         {
             "type": "object",
-            "properties": {"value": {"type": "string"}},
+            "properties": {"value": {"type": "string", "maxLength": 64}},
             "required": ["value"],
             "additionalProperties": False,
         },
@@ -117,7 +128,7 @@ def test_native_tool_decision_uses_the_same_atomicity_boundary() -> None:
             f"field_{index}": {
                 "type": "object",
                 "properties": {
-                    f"nested_{inner}": {"type": "string"}
+                    f"nested_{inner}": {"type": "string", "maxLength": 64}
                     for inner in range(4)
                 },
                 "additionalProperties": False,
@@ -127,14 +138,14 @@ def test_native_tool_decision_uses_the_same_atomicity_boundary() -> None:
         "additionalProperties": False,
     }
 
-    result = DummyRouter().generate_tool_decision(
-        "planner",
-        ({"role": "user", "content": "fill it"},),
-        tool_name="oversized_planner_contract",
-        parameters=oversized,
-    )
-    assert result == {"ok": True}
-    assert calls == ["tool"]
+    with pytest.raises(ModelConfigurationError):
+        DummyRouter().generate_tool_decision(
+            "planner",
+            ({"role": "user", "content": "fill it"},),
+            tool_name="oversized_planner_contract",
+            parameters=oversized,
+        )
+    assert calls == []
 
 
 def test_native_tool_decision_allows_bounded_closed_schema() -> None:
@@ -164,7 +175,7 @@ def test_native_tool_decision_allows_bounded_closed_schema() -> None:
         tool_name="bounded_planner_contract",
         parameters={
             "type": "object",
-            "properties": {"value": {"type": "string"}},
+            "properties": {"value": {"type": "string", "maxLength": 64}},
             "required": ["value"],
             "additionalProperties": False,
         },
@@ -195,15 +206,15 @@ def test_large_host_owned_argument_container_is_decomposed_into_bounded_json_pag
         "large_host_action",
     )
 
-    assert len(observed) == 3
+    assert len(observed) == 4
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0].name == "large_host_action"
     assert response.tool_calls[0].arguments == {
         f"field_{index}": f"value-field_{index}" for index in range(12)
     }
-    assert all(turn.response_format == "json" for turn in observed)
-    assert all(isinstance(turn.response_schema, dict) for turn in observed)
-    assert all(turn.tools == () for turn in observed)
+    assert all(turn.response_format == "text" for turn in observed)
+    assert all(turn.response_schema is None for turn in observed)
+    assert all(len(turn.tools) == 1 for turn in observed)
 
 
 def test_mutation_recovery_uses_the_same_bounded_argument_only_json_pages() -> None:
@@ -224,19 +235,20 @@ def test_mutation_recovery_uses_the_same_bounded_argument_only_json_pages() -> N
     assert len(observed) == 3
     assert response.tool_calls[0].name == "generic_mutation_action"
     assert response.tool_calls[0].id.startswith("host_mutation_")
-    assert all(turn.response_format == "json" for turn in observed)
-    assert all(isinstance(turn.response_schema, dict) for turn in observed)
-    assert all(turn.tools == () for turn in observed)
+    assert all(turn.response_format == "text" for turn in observed)
+    assert all(turn.response_schema is None for turn in observed)
+    assert all(len(turn.tools) == 1 for turn in observed)
 
 
 def test_invalid_json_page_repair_stays_argument_only_and_schema_bounded() -> None:
-    request = _large_request("repairable_action", field_count=4)
+    request = _large_request("repairable_action", field_count=3)
     observed: list[GenerationRequest] = []
 
     def current(_adapter: object, page_request: GenerationRequest) -> GenerationResponse:
         observed.append(page_request)
         if len(observed) == 1:
-            return GenerationResponse(content="not-json")
+            from minecraft_mod_ai.model_adapters.base import ToolCall
+            return GenerationResponse(tool_calls=(ToolCall(id="call_bad", name="repairable_action", arguments={"bad": 1}),))
         return _valid_page_response(page_request)
 
     response = forced.host_selected_argument_turn(
@@ -248,15 +260,15 @@ def test_invalid_json_page_repair_stays_argument_only_and_schema_bounded() -> No
 
     assert len(observed) == 2
     assert response.tool_calls[0].name == "repairable_action"
-    assert all(turn.response_format == "json" for turn in observed)
-    assert all(isinstance(turn.response_schema, dict) for turn in observed)
-    assert all(turn.tools == () for turn in observed)
-    assert "Repair the arguments only" in observed[1].messages[-1]["content"]
+    assert all(turn.response_format == "text" for turn in observed)
+    assert all(turn.response_schema is None for turn in observed)
+    assert all(len(turn.tools) == 1 for turn in observed)
+    assert "Repair the function arguments only" in observed[1].messages[-1]["content"]
 
 
-def test_large_nested_field_reaches_generation_and_preserves_arguments() -> None:
+def test_oversized_single_nested_field_fails_closed_before_model_generation() -> None:
     nested_properties = {
-        f"nested_{index}": {"type": "string"} for index in range(40)
+        f"nested_{index}": {"type": "string", "maxLength": 64} for index in range(40)
     }
     schema = {
         "type": "function",
@@ -286,53 +298,68 @@ def test_large_nested_field_reaches_generation_and_preserves_arguments() -> None
     )
     calls = 0
 
-    def current(_adapter: object, page_request: GenerationRequest) -> GenerationResponse:
+    def current(_adapter: object, _page_request: GenerationRequest) -> GenerationResponse:
         nonlocal calls
         calls += 1
-        assert_atomic_model_schema(page_request.response_schema, surface="nested field")
-        return GenerationResponse(content=json.dumps({
-            "payload": {key: "value" for key in nested_properties}
-        }))
+        raise AssertionError("oversized page must be rejected before generation")
 
-    response = forced.host_selected_argument_turn(
-        current, object(), request, "oversized_nested_action",
-    )
-    assert calls == 1
-    assert response.tool_calls[0].arguments == {
-        "payload": {key: "value" for key in nested_properties}
-    }
+    with pytest.raises(ModelConfigurationError):
+        forced.host_selected_argument_turn(
+            current,
+            object(),
+            request,
+            "oversized_nested_action",
+        )
+    assert calls == 0
 
 
-@pytest.mark.parametrize("kind", ["depth", "chars", "nodes", "properties"])
-def test_schema_metadata_does_not_limit_model_generation(kind):
-    schema = {
-        "type": "object", "properties": {"value": {"type": "string"}},
-        "additionalProperties": False,
-    }
+@pytest.mark.parametrize("kind", ["depth", "properties", "unbounded_string", "unbounded_array"])
+def test_schema_violating_bounds_is_rejected(kind):
     if kind == "depth":
-        for _ in range(12):
-            schema = {"type": "object", "properties": {"child": schema},
-                      "additionalProperties": False}
-    elif kind == "chars":
-        schema["description"] = "x" * 13000
-    elif kind == "nodes":
-        schema["properties"]["value"]["enum"] = [str(i) for i in range(150)]
+        schema = {
+            "type": "object",
+            "properties": {
+                "level1": {
+                    "type": "object",
+                    "properties": {
+                        "level2": {
+                            "type": "object",
+                            "properties": {"level3": {"type": "string", "maxLength": 32}},
+                            "additionalProperties": False,
+                        }
+                    },
+                    "additionalProperties": False,
+                }
+            },
+            "additionalProperties": False,
+        }
+    elif kind == "properties":
+        schema = {
+            "type": "object",
+            "properties": {f"field_{i}": {"type": "string", "maxLength": 32} for i in range(10)},
+            "additionalProperties": False,
+        }
+    elif kind == "unbounded_string":
+        schema = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": False,
+        }
     else:
-        schema["properties"] = {f"field_{i}": {"type": "string"} for i in range(40)}
-    observed = []
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 32},
+                }
+            },
+            "additionalProperties": False,
+        }
 
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            observed.append(kwargs["response_schema"])
-            return "{}"
-
-        def generate_tool_decision(self, *args, **kwargs):
-            raise AssertionError("unexpected tool call")
-
-    install(model_router_module=SimpleNamespace(ModelRouter=Router))
-    Router().generate_text("planner", [], response_format="json", response_schema=schema)
-    assert observed == [schema]
-    assert is_atomic_model_schema(schema)
+    with pytest.raises(ModelConfigurationError):
+        assert_atomic_model_schema(schema, surface=f"bound-violation-{kind}")
+    assert not is_atomic_model_schema(schema)
 
 
 def test_open_object_template_still_rejected():

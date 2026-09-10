@@ -1,0 +1,24 @@
+id: fabric/block/blockstate_basic
+artifact: json_resource
+target:
+  file: src/main/resources/assets/{{mod_id}}/blockstates/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+produces:
+  - blockstate_ref
+ai_slots: []
+render:
+  language: json
+  body:
+    variants:
+      "":
+        model: "{{mod_id}}:block/{{registry_path}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunite_ore
+  expected_contains:
+    - "space:block/lunite_ore"
