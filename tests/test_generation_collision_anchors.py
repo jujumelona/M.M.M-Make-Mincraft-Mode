@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import generation_concurrency_safety as safety
 
 
@@ -41,3 +43,18 @@ def test_builtin_generators_keep_shared_collision_domains():
     assert safety._builtin_shared_anchors(integration, "content") == ()
     assert safety._builtin_shared_anchors(entity, "entity")
     assert safety._builtin_shared_anchors(system, "system")
+
+
+def test_cpu_generation_width_accepts_explicit_host_capacity(monkeypatch):
+    scheduler = SimpleNamespace(_cpu_capacity=lambda: 4)
+    safety._install_cpu_capacity_policy(scheduler)
+    monkeypatch.setenv("MMM_CPU_IO_WORKERS", "12")
+    assert scheduler._cpu_capacity() == 12
+
+
+def test_cpu_generation_width_fails_closed_on_invalid_value(monkeypatch):
+    scheduler = SimpleNamespace(_cpu_capacity=lambda: 4)
+    safety._install_cpu_capacity_policy(scheduler)
+    monkeypatch.setenv("MMM_CPU_IO_WORKERS", "0")
+    with pytest.raises(ValueError, match="MMM_CPU_IO_WORKERS"):
+        scheduler._cpu_capacity()
