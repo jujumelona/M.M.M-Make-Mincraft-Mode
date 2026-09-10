@@ -12,11 +12,20 @@ from minecraft_mod_ai.evidence_first_planning import (
     _sha,
     build_request_catalog,
     compile_evidence_first_plan,
+    requirement_branch_features,
     validate_evidence_first_plan,
 )
-from minecraft_mod_ai.minecraft_template_catalog import requirement_branch_features
 from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.project_inventory import inspect_project_inventory
+
+
+_CAPABILITY_ARTIFACTS = {
+    "automation.machine": ("block_entity", "saved_data", "network_payload"),
+    "network.action_sync": ("network_payload",),
+    "ui.menu": ("menu", "screen"),
+    "trade.transaction": ("menu",),
+    "quest.state": ("saved_data",),
+}
 
 
 def _request_catalog(prompt: str, *capabilities: str) -> dict[str, object]:
@@ -51,7 +60,7 @@ def _request_catalog(prompt: str, *capabilities: str) -> dict[str, object]:
                 "artifact_task_ids": [],
                 "semantic_type": "gameplay_mechanic",
                 "unlock_policy": {},
-                "artifact_obligations": [],
+                "artifact_obligations": [{"kind": k} for k in _CAPABILITY_ARTIFACTS.get(capability, ())],
                 "design_resolution_obligations": [],
                 "runtime_acceptance": [acceptance],
                 "semantic_status": "RESOLVED",
