@@ -58,11 +58,13 @@ jobs:
           if missing:
               raise SystemExit(f'packaged contract snapshot missing canonical Skills: {missing}')
 
-          def extract_inputs(raw: str, name: str) -> list[str]:
+          def extract_list(raw: str, section: str, name: str, *, required: bool = True) -> list[str]:
               lines = raw.splitlines()
-              start = next((i for i, line in enumerate(lines) if line == 'inputs:'), None)
+              start = next((i for i, line in enumerate(lines) if line == f'{section}:'), None)
               if start is None:
-                  raise SystemExit(f'{name}: inputs section missing')
+                  if required:
+                      raise SystemExit(f'{name}: {section} section missing')
+                  return []
               items: list[str] = []
               for line in lines[start + 1:]:
                   if line and not line[0].isspace() and not line.startswith('```'):
@@ -74,8 +76,8 @@ jobs:
                       items.append(stripped[2:].strip())
                   elif items:
                       items[-1] += ' ' + stripped
-              if not items or any(not item for item in items):
-                  raise SystemExit(f'{name}: inputs section is empty')
+              if required and (not items or any(not item for item in items)):
+                  raise SystemExit(f'{name}: {section} section is empty')
               return items
 
           for name in names:
@@ -84,7 +86,8 @@ jobs:
               contract = contracts[name]
               if not isinstance(contract, dict):
                   raise SystemExit(f'{name}: invalid compiled contract')
-              inputs = extract_inputs(raw, name)
+              inputs = extract_list(raw, 'inputs', name)
+              source_validators = extract_list(raw, 'validators', name, required=False)
               retry = contract.get('retry')
               approvals = contract.get('approvals')
               exit_contract = contract.get('exit')
@@ -97,7 +100,7 @@ jobs:
                   'inputs': inputs,
                   'required_rag': contract['required_rag'],
                   'allowed_tools': tools,
-                  'validators': contract['validators'],
+                  'validators': source_validators or contract['validators'],
                   'retry_policy': {
                       'max_attempts': retry.get('max_attempts'),
                       'strategy': retry.get('strategy'),
@@ -146,4 +149,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add skills minecraft_mod_ai/skill_catalog.py minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills .github/workflows
           git commit -m 'Restore full canonical Skill catalog'
+          git pull --rebase origin main
           git push origin HEAD:main
