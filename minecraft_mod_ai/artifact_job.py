@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """Concrete ArtifactJob representation for leaf-level generation units."""
 
@@ -38,7 +38,7 @@ class ArtifactJob:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ArtifactJob:
+    def from_dict(cls, data: dict[str, Any]) -> "ArtifactJob":
         return cls(
             job_id=str(data["job_id"]),
             template_id=str(data["template_id"]),
