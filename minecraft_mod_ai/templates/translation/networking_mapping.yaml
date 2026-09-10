@@ -1,0 +1,22 @@
+id: translation/networking_mapping
+input:
+  atomic_feature:
+  authority_boundary:
+  synchronization_requirement:
+
+task:
+  map_network_payload_responsibilities:
+
+rules:
+  - Emit networking only when data crosses a logical-side or player synchronization boundary.
+  - Preserve direction, validation owner, payload purpose, and synchronization trigger.
+  - Never create a packet because a gameplay category usually has one.
+
+output:
+  payload_artifacts:
+  directions:
+  validation_requirements:
+  unresolved_inputs:
+
+proof:
+  predicate: every payload has an explicit boundary, direction, and authority reason
