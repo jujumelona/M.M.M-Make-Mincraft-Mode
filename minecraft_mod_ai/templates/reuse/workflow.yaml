@@ -1,0 +1,18 @@
+﻿id: reuse/workflow
+execution: sequence
+steps:
+- reuse/query_build
+- reuse/official_docs
+- reuse/official_examples
+- reuse/existing_mods
+- reuse/repository_search
+- reuse/file_search
+- reuse/class_search
+- reuse/method_search
+- reuse/dependency_search
+- reuse/license_check
+- reuse/compatibility_check
+- reuse/direct_reuse
+- reuse/pattern_reuse
+- reuse/adaptation
+- reuse/integration
