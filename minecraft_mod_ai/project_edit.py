@@ -7,7 +7,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .project_write_lock import project_write_lock
+from .project_write_lock import project_path_write_locks, project_write_lock
 from .source_patch import TransactionalSourcePatcher, sha256_bytes
 
 
@@ -39,7 +39,7 @@ def _read_utf8_with_digest(path: Path) -> tuple[str, str]:
 
 
 def _atomic_shared_edit(function):
-    """Lock only shared read/merge/commit edits, not expensive generation work."""
+    """Lock only shared read/merge/commit edits whose target set is not fixed up front."""
 
     @wraps(function)
     def wrapped(info: FabricProjectInfo, *args: Any, **kwargs: Any):
@@ -319,53 +319,53 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
     return TransactionalSourcePatcher(info.root).apply(operations)
 
 
-@_atomic_shared_edit
 def ensure_client_entrypoint(
     info: FabricProjectInfo,
     *,
     entrypoint: str,
 ) -> dict[str, Any]:
-    metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
-    raw = json.loads(metadata_text)
-    entrypoints = raw.setdefault("entrypoints", {})
-    if not isinstance(entrypoints, dict):
-        raise ProjectEditError(
-            "fabric.mod.json entrypoints must be an object."
-        )
-    client = entrypoints.setdefault("client", [])
-    if not isinstance(client, list):
-        raise ProjectEditError(
-            "fabric.mod.json client entrypoints must be a list."
-        )
-    existing = {
-        item if isinstance(item, str) else item.get("value")
-        for item in client
-        if isinstance(item, (str, dict))
-    }
-    if entrypoint in existing:
-        return {
-            "status": "UNCHANGED",
-            "path": str(info.fabric_mod_json),
+    relative = "src/main/resources/fabric.mod.json"
+    with project_path_write_locks(info.root, (relative,)):
+        metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
+        raw = json.loads(metadata_text)
+        entrypoints = raw.setdefault("entrypoints", {})
+        if not isinstance(entrypoints, dict):
+            raise ProjectEditError(
+                "fabric.mod.json entrypoints must be an object."
+            )
+        client = entrypoints.setdefault("client", [])
+        if not isinstance(client, list):
+            raise ProjectEditError(
+                "fabric.mod.json client entrypoints must be a list."
+            )
+        existing = {
+            item if isinstance(item, str) else item.get("value")
+            for item in client
+            if isinstance(item, (str, dict))
         }
-    client.append(entrypoint)
-    return TransactionalSourcePatcher(info.root).apply(
-        [
-            {
-                "operation": "replace",
-                "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": metadata_sha256,
-                "content": json.dumps(
-                    raw,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
+        if entrypoint in existing:
+            return {
+                "status": "UNCHANGED",
+                "path": str(info.fabric_mod_json),
             }
-        ]
-    )
+        client.append(entrypoint)
+        return TransactionalSourcePatcher(info.root).apply(
+            [
+                {
+                    "operation": "replace",
+                    "path": relative,
+                    "expected_sha256": metadata_sha256,
+                    "content": json.dumps(
+                        raw,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                }
+            ]
+        )
 
 
-@_atomic_shared_edit
 def ensure_dependency(
     info: FabricProjectInfo,
     *,
@@ -373,110 +373,122 @@ def ensure_dependency(
     dependency_line: str,
     marker: str,
 ) -> dict[str, Any]:
-    build = info.root / "build.gradle"
-    if not build.is_file() or build.is_symlink():
-        raise ProjectEditError("build.gradle is missing.")
-    text, text_sha256 = _read_utf8_with_digest(build)
-    changed = text
-    repository_marker = f"// MMM:{marker}:repository"
-    if repository_block.strip() and repository_marker not in changed:
-        match = re.search(r"repositories\s*\{", changed)
-        if not match:
-            changed += (
-                "\nrepositories {\n    "
-                + repository_marker
-                + "\n"
-                + _indent(repository_block.strip(), 4)
-                + "\n}\n"
-            )
-        else:
+    relative = "build.gradle"
+    build = info.root / relative
+    with project_path_write_locks(info.root, (relative,)):
+        if not build.is_file() or build.is_symlink():
+            raise ProjectEditError("build.gradle is missing.")
+        text, text_sha256 = _read_utf8_with_digest(build)
+        changed = text
+        repository_marker = f"// MMM:{marker}:repository"
+        if repository_block.strip() and repository_marker not in changed:
+            match = re.search(r"repositories\s*\{", changed)
+            if not match:
+                changed += (
+                    "\nrepositories {\n    "
+                    + repository_marker
+                    + "\n"
+                    + _indent(repository_block.strip(), 4)
+                    + "\n}\n"
+                )
+            else:
+                position = match.end()
+                changed = (
+                    changed[:position]
+                    + "\n    "
+                    + repository_marker
+                    + "\n"
+                    + _indent(repository_block.strip(), 4)
+                    + changed[position:]
+                )
+        dependency_marker = f"// MMM:{marker}:dependency"
+        if dependency_marker not in changed:
+            match = re.search(r"dependencies\s*\{", changed)
+            if not match:
+                raise ProjectEditError(
+                    "Could not locate dependencies block."
+                )
             position = match.end()
             changed = (
                 changed[:position]
                 + "\n    "
-                + repository_marker
-                + "\n"
-                + _indent(repository_block.strip(), 4)
+                + dependency_marker
+                + "\n    "
+                + dependency_line.strip()
                 + changed[position:]
             )
-    dependency_marker = f"// MMM:{marker}:dependency"
-    if dependency_marker not in changed:
-        match = re.search(r"dependencies\s*\{", changed)
-        if not match:
-            raise ProjectEditError(
-                "Could not locate dependencies block."
-            )
-        position = match.end()
-        changed = (
-            changed[:position]
-            + "\n    "
-            + dependency_marker
-            + "\n    "
-            + dependency_line.strip()
-            + changed[position:]
-        )
-    if changed == text:
-        return {
-            "status": "UNCHANGED",
-            "path": str(build),
-        }
-    return TransactionalSourcePatcher(info.root).apply(
-        [
-            {
-                "operation": "replace",
-                "path": "build.gradle",
-                "expected_sha256": text_sha256,
-                "content": changed,
+        if changed == text:
+            return {
+                "status": "UNCHANGED",
+                "path": str(build),
             }
-        ]
-    )
+        return TransactionalSourcePatcher(info.root).apply(
+            [
+                {
+                    "operation": "replace",
+                    "path": relative,
+                    "expected_sha256": text_sha256,
+                    "content": changed,
+                }
+            ]
+        )
 
 
-@_atomic_shared_edit
 def write_text_files(
     info: FabricProjectInfo,
     files: dict[str, str],
     *,
     replace_existing: bool = False,
 ) -> dict[str, Any]:
-    operations: list[dict[str, Any]] = []
-    for relative, content in sorted(files.items()):
-        path = info.root / relative
-        if path.exists():
-            if not path.is_file() or path.is_symlink():
-                raise ProjectEditError(
-                    f"Generated target is not a regular file: {relative}"
-                )
-            current, current_sha256 = _read_utf8_with_digest(path)
-            if current == content:
-                continue
-            if not replace_existing:
-                raise ProjectEditError(
-                    f"Generated target already exists: {relative}"
-                )
-            operations.append(
-                {
-                    "operation": "replace",
-                    "path": relative,
-                    "expected_sha256": current_sha256,
-                    "content": content,
-                }
-            )
-        else:
-            operations.append(
-                {
-                    "operation": "create",
-                    "path": relative,
-                    "content": content,
-                }
-            )
-    if not operations:
+    if not files:
         return {
             "schema_version": "mmm/source-patch-receipt-v1",
             "status": "UNCHANGED",
             "operations": [],
         }
-    return TransactionalSourcePatcher(info.root).apply(operations)
+    # The target set is exact before any project state is read, so this operation
+    # needs only path-scoped serialization. Keeping the pre-read and the transactional
+    # commit under the same path set preserves SHA preconditions without blocking
+    # unrelated generated files elsewhere in the project.
+    with project_path_write_locks(info.root, files):
+        operations: list[dict[str, Any]] = []
+        for relative, content in sorted(files.items()):
+            path = info.root / relative
+            if path.exists():
+                if not path.is_file() or path.is_symlink():
+                    raise ProjectEditError(
+                        f"Generated target is not a regular file: {relative}"
+                    )
+                current, current_sha256 = _read_utf8_with_digest(path)
+                if current == content:
+                    continue
+                if not replace_existing:
+                    raise ProjectEditError(
+                        f"Generated target already exists: {relative}"
+                    )
+                operations.append(
+                    {
+                        "operation": "replace",
+                        "path": relative,
+                        "expected_sha256": current_sha256,
+                        "content": content,
+                    }
+                )
+            else:
+                operations.append(
+                    {
+                        "operation": "create",
+                        "path": relative,
+                        "content": content,
+                    }
+                )
+        if not operations:
+            return {
+                "schema_version": "mmm/source-patch-receipt-v1",
+                "status": "UNCHANGED",
+                "operations": [],
+            }
+        return TransactionalSourcePatcher(info.root).apply(operations)
 
 
 def _indent(text: str, spaces: int) -> str:
