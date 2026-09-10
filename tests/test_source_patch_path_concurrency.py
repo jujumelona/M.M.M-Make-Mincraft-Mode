@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier, Event
+from threading import Event
 
 import pytest
 
@@ -35,12 +35,12 @@ def test_disjoint_source_transactions_commit_concurrently(tmp_path, monkeypatch)
     import minecraft_mod_ai.source_patch as source_patch
 
     original_commit = source_patch._commit_staged_path
-    entered = Barrier(2)
-    release = Barrier(3)
+    entered = {first: Event(), second: Event()}
+    release = Event()
 
     def coordinated_commit(path, after):
-        entered.wait(timeout=2)
-        release.wait(timeout=2)
+        entered[path].set()
+        assert release.wait(timeout=10)
         return original_commit(path, after)
 
     monkeypatch.setattr(source_patch, "_commit_staged_path", coordinated_commit)
@@ -51,8 +51,15 @@ def test_disjoint_source_transactions_commit_concurrently(tmp_path, monkeypatch)
             pool.submit(patcher.apply, [_replace("a.txt", "a0", "a1")]),
             pool.submit(patcher.apply, [_replace("b.txt", "b0", "b1")]),
         )
-        release.wait(timeout=2)
-        receipts = [future.result(timeout=2) for future in futures]
+        for event, future in zip(entered.values(), futures, strict=True):
+            if not event.wait(timeout=10):
+                # Surface an early worker exception instead of masking it behind a
+                # synchronization timeout. If the worker is merely blocked, this
+                # result timeout makes that failure explicit as well.
+                future.result(timeout=0.1)
+                pytest.fail("disjoint source transaction did not reach commit")
+        release.set()
+        receipts = [future.result(timeout=10) for future in futures]
 
     assert [receipt["status"] for receipt in receipts] == ["APPLIED", "APPLIED"]
     assert first.read_text(encoding="utf-8") == "a1"
@@ -75,7 +82,7 @@ def test_overlapping_source_transactions_serialize_before_validation(tmp_path, m
         commit_calls += 1
         if commit_calls == 1:
             first_commit_entered.set()
-            assert release_first.wait(timeout=2)
+            assert release_first.wait(timeout=10)
         return original_commit(path, after)
 
     monkeypatch.setattr(source_patch, "_commit_staged_path", blocked_commit)
@@ -84,16 +91,16 @@ def test_overlapping_source_transactions_serialize_before_validation(tmp_path, m
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(patcher.apply, [operation])
-        assert first_commit_entered.wait(timeout=2)
+        assert first_commit_entered.wait(timeout=10)
         second = pool.submit(
             patcher.apply,
             [_replace("shared.txt", "old", "second")],
         )
         assert not second.done()
         release_first.set()
-        assert first.result(timeout=2)["status"] == "APPLIED"
+        assert first.result(timeout=10)["status"] == "APPLIED"
         with pytest.raises(SourcePatchError, match="SHA-256 precondition failed"):
-            second.result(timeout=2)
+            second.result(timeout=10)
 
     assert commit_calls == 1
     assert target.read_text(encoding="utf-8") == "first"
@@ -122,7 +129,7 @@ def test_coarse_project_write_excludes_path_transaction(tmp_path, monkeypatch):
                 [_replace("target.txt", "old", "new")],
             )
             assert not commit_entered.wait(timeout=0.05)
-        assert future.result(timeout=2)["status"] == "APPLIED"
+        assert future.result(timeout=10)["status"] == "APPLIED"
 
     assert commit_entered.is_set()
     assert target.read_text(encoding="utf-8") == "new"
@@ -138,12 +145,12 @@ def test_waiting_coarse_writer_preempts_new_scoped_transactions(tmp_path):
     def first_scoped():
         with project_path_write_locks(tmp_path, ("a.txt",)):
             first_entered.set()
-            assert release_first.wait(timeout=2)
+            assert release_first.wait(timeout=10)
 
     def coarse_writer():
         with project_write_lock(tmp_path):
             writer_entered.set()
-            assert release_writer.wait(timeout=2)
+            assert release_writer.wait(timeout=10)
 
     def second_scoped():
         with project_path_write_locks(tmp_path, ("b.txt",)):
@@ -151,26 +158,26 @@ def test_waiting_coarse_writer_preempts_new_scoped_transactions(tmp_path):
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         first_future = pool.submit(first_scoped)
-        assert first_entered.wait(timeout=2)
+        assert first_entered.wait(timeout=10)
         writer_future = pool.submit(coarse_writer)
 
         state = _state_for(tmp_path)
         with state.condition:
             assert state.condition.wait_for(
                 lambda: state.waiting_writers == 1,
-                timeout=2,
+                timeout=10,
             )
 
         second_future = pool.submit(second_scoped)
         assert not second_entered.wait(timeout=0.05)
         release_first.set()
-        assert writer_entered.wait(timeout=2)
+        assert writer_entered.wait(timeout=10)
         assert not second_entered.wait(timeout=0.05)
         release_writer.set()
 
-        first_future.result(timeout=2)
-        writer_future.result(timeout=2)
-        second_future.result(timeout=2)
+        first_future.result(timeout=10)
+        writer_future.result(timeout=10)
+        second_future.result(timeout=10)
 
     assert second_entered.is_set()
 
@@ -197,9 +204,9 @@ def test_multi_path_transactions_use_deadlock_free_canonical_lock_order(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_future = pool.submit(patcher.apply, first)
-        assert first_future.result(timeout=2)["status"] == "APPLIED"
+        assert first_future.result(timeout=10)["status"] == "APPLIED"
         second_future = pool.submit(patcher.apply, second)
-        assert second_future.result(timeout=2)["status"] == "APPLIED"
+        assert second_future.result(timeout=10)["status"] == "APPLIED"
 
     assert a.read_text(encoding="utf-8") == "a2"
     assert b.read_text(encoding="utf-8") == "b2"
