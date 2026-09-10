@@ -3,8 +3,9 @@ from __future__ import annotations
 """Deterministic dependency executor for already-expanded ArtifactJobs."""
 
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 from .artifact_job import ArtifactJob
@@ -62,6 +63,46 @@ def _execute_one(
     )
 
 
+def _validate_completed_job(
+    job: ArtifactJob,
+    receipt: dict[str, Any],
+    *,
+    context: dict[str, Any] | None,
+    base_dir: Any,
+) -> None:
+    """Validate a completed artifact immediately while sibling generation continues."""
+    if receipt.get("status") != "PASS":
+        raise ArtifactGraphError(
+            f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
+        )
+
+    materialization = receipt.get("materialization")
+    if isinstance(materialization, dict):
+        raw_path = materialization.get("path")
+        if raw_path:
+            path = Path(str(raw_path))
+            if not path.is_absolute() and base_dir is not None:
+                path = Path(base_dir) / path
+            if not path.exists():
+                raise ArtifactGraphError(
+                    f"ARTIFACT_OUTPUT_MISSING: {job.job_id!r} materialized {path} but it does not exist"
+                )
+
+    validator: Callable[[ArtifactJob, dict[str, Any]], Any] | None = None
+    if isinstance(context, dict):
+        candidate = context.get("artifact_validator")
+        if callable(candidate):
+            validator = candidate
+    if validator is not None:
+        validation = validator(job, receipt)
+        if validation is False:
+            raise ArtifactGraphError(f"ARTIFACT_VALIDATION_FAILED: {job.job_id!r}")
+        if isinstance(validation, dict) and validation.get("status") not in {None, "PASS"}:
+            raise ArtifactGraphError(
+                f"ARTIFACT_VALIDATION_FAILED: {job.job_id!r} returned {validation.get('status')!r}"
+            )
+
+
 def execute_artifact_graph(
     jobs: Iterable[ArtifactJob],
     *,
@@ -70,7 +111,7 @@ def execute_artifact_graph(
     port_registry: PortRegistry | None = None,
     base_dir: Any = None,
 ) -> dict[str, Any]:
-    """Run each dependency-ready wave concurrently, preserving deterministic receipts."""
+    """Run dependency-ready waves concurrently and validate jobs as they finish."""
     pending = list(jobs)
     if len({job.job_id for job in pending}) != len(pending):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
@@ -102,19 +143,26 @@ def execute_artifact_graph(
             }
             raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
-        # Jobs in one wave have all dependencies satisfied before the wave starts.
-        # Execute them concurrently, then commit receipts in original graph order so
-        # scheduling jitter never changes externally visible output ordering.
+        # Each completion is validated immediately. Slow siblings keep generating while
+        # the main thread validates finished outputs, removing the old wave-wide
+        # generation -> validation barrier. Receipts are still committed in graph order.
         wave_results: dict[str, dict[str, Any]] = {}
         if len(runnable) == 1:
             job = runnable[0]
-            wave_results[job.job_id] = _execute_one(
+            receipt = _execute_one(
                 job,
                 context=context,
                 router=router,
                 registry=registry,
                 base_dir=base_dir,
             )
+            _validate_completed_job(
+                job,
+                receipt,
+                context=context,
+                base_dir=base_dir,
+            )
+            wave_results[job.job_id] = receipt
         else:
             with ThreadPoolExecutor(
                 max_workers=_parallelism(len(runnable)),
@@ -134,7 +182,14 @@ def execute_artifact_graph(
                 try:
                     for future in as_completed(futures):
                         job = futures[future]
-                        wave_results[job.job_id] = future.result()
+                        receipt = future.result()
+                        _validate_completed_job(
+                            job,
+                            receipt,
+                            context=context,
+                            base_dir=base_dir,
+                        )
+                        wave_results[job.job_id] = receipt
                 except BaseException:
                     for future in futures:
                         future.cancel()
@@ -142,10 +197,6 @@ def execute_artifact_graph(
 
         for job in runnable:
             receipt = wave_results[job.job_id]
-            if receipt.get("status") != "PASS":
-                raise ArtifactGraphError(
-                    f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
-                )
             receipts.append(receipt)
             completed.append(job.job_id)
             pending.remove(job)
