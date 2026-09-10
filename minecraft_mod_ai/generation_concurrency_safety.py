@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
@@ -64,6 +65,64 @@ def _install_custom_generator_lock(custom_module_generator_module: Any) -> None:
     generate._mmm_instance_generation_serialized = True  # type: ignore[attr-defined]
     generate.__wrapped__ = current  # type: ignore[attr-defined]
     cls.generate = generate
+
+
+def _project_index_scan_workers(count: int) -> int:
+    if count <= 1:
+        return 1
+    raw = os.environ.get("MMM_PROJECT_INDEX_WORKERS", "").strip()
+    if raw:
+        try:
+            requested = int(raw)
+        except ValueError as exc:
+            raise ValueError("MMM_PROJECT_INDEX_WORKERS must be a positive integer") from exc
+        if requested < 1:
+            raise ValueError("MMM_PROJECT_INDEX_WORKERS must be a positive integer")
+    else:
+        requested = min(8, max(2, os.cpu_count() or 2))
+    return min(count, requested)
+
+
+def _install_project_index_parallel_scan(project_index_module: Any) -> None:
+    """Parallelize independent initial file hashing/tokenization without reordering."""
+    cls = project_index_module.ProjectIndex
+    current = cls._scan
+    if getattr(current, "_mmm_bounded_parallel_scan", False):
+        return
+
+    @wraps(current)
+    def scan(self: Any):
+        paths = tuple(
+            path
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file() and not path.is_symlink()
+        )
+        configured = bool(os.environ.get("MMM_PROJECT_INDEX_WORKERS", "").strip())
+        # Thread startup dominates tiny source trees. An explicit host setting opts
+        # into parallel execution even for small projects, which also makes the
+        # concurrency boundary directly testable.
+        if len(paths) < 16 and not configured:
+            return current(self)
+        workers = _project_index_scan_workers(len(paths))
+        if workers <= 1:
+            return current(self)
+
+        def index_one(path: Any):
+            relative = path.relative_to(self.root)
+            return self._indexed_file(relative.as_posix(), path)
+
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="mmm-project-index",
+        ) as pool:
+            # Executor.map preserves the deterministic lexical path order while file
+            # reads, hashes and tokenization happen concurrently.
+            indexed = tuple(pool.map(index_one, paths))
+        return tuple(item for item in indexed if item is not None)
+
+    scan._mmm_bounded_parallel_scan = True  # type: ignore[attr-defined]
+    scan.__wrapped__ = current  # type: ignore[attr-defined]
+    cls._scan = scan
 
 
 def _install_project_index_snapshot_lock(project_index_module: Any) -> None:
@@ -238,6 +297,7 @@ def install() -> None:
 
         _configure_pipeline_granularity()
         _install_custom_generator_lock(custom_module_generator)
+        _install_project_index_parallel_scan(project_index)
         _install_project_index_snapshot_lock(project_index)
         _install_exact_anchor_fallback(work_graph)
         _replace_stage_locks_with_anchor_fencing(work_graph)
