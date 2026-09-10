@@ -21,6 +21,17 @@ _PATH_LIST_KEYS = frozenset({
     "paths", "target_paths", "source_paths", "output_paths", "files",
     "touched_paths", "written_files",
 })
+_SYSTEM_PACK_BY_KIND = {
+    "quest": "quest-system",
+    "class": "class-skill-system",
+    "skill": "class-skill-system",
+    "economy": "economy-shop",
+    "shop": "economy-shop",
+    "gui": "gui-networking",
+    "networking": "gui-networking",
+    "party": "party-guild",
+    "guild": "party-guild",
+}
 
 
 def _lock_for(instance: Any, attribute: str) -> threading.RLock:
@@ -119,15 +130,20 @@ def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
 
     GeckoLib entity generation deliberately has no stage-wide anchor here: geometry,
     animations, Java sources and per-entity directory records are entity-local. Its
-    remaining shared writes (dependency metadata, entrypoints and root registrars) are
-    already serialized by project_edit atomic write helpers, so different entity nodes
-    may prepare concurrently and queue only at the short commit boundary.
+    remaining shared writes are already serialized by project_edit atomic helpers.
+
+    System state merge is pack-local, not stage-global. Modules in the same pack must
+    remain ordered because they read/merge that pack's record directory, while distinct
+    packs can prepare in parallel and meet only at the short shared-file commit lock.
     """
     kind = str(getattr(module, "kind", ""))
     if stage == "content" and kind != "integration":
         return ("mmm://builtin/content/shared-registration",)
     if stage == "system":
-        return ("mmm://builtin/system/shared-runtime",)
+        pack = _SYSTEM_PACK_BY_KIND.get(kind)
+        if pack:
+            return (f"mmm://builtin/system/pack/{pack}",)
+        return ("mmm://builtin/system/unclassified",)
     return ()
 
 
@@ -147,8 +163,8 @@ def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
         anchors = tuple(dict.fromkeys((*explicit, *inferred, *shared)))
         if anchors:
             return anchors
-        if stage in {"content", "system"}:
-            return (f"mmm://unscoped-stage/{stage}",)
+        if stage == "content":
+            return ("mmm://unscoped-stage/content",)
         return ()
 
     exclusive_anchor_keys._mmm_unscoped_fallback = True  # type: ignore[attr-defined]
