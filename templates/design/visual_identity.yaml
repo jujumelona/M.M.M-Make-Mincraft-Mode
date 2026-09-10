@@ -1,9 +1,8 @@
 id: design/visual_identity
 slot_id: visual_identity
-task: "Define art style, palette, and particle aesthetic for this mod."
+task: "Define the explicitly required art style, palette, and particle aesthetic for this mod."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent palette, art direction, particles, or mechanics."
 record_schema:
   type: object
   properties:
