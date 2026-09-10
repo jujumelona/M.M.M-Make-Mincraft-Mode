@@ -1,0 +1,25 @@
+﻿id: fabric/item/model_basic
+artifact: json_resource
+target:
+  file: src/main/resources/assets/{{mod_id}}/models/item/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+produces:
+  - model_ref
+ai_slots: []
+render:
+  language: json
+  body:
+    parent: "minecraft:item/generated"
+    textures:
+      layer0: "{{mod_id}}:item/{{registry_path}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: raw_lunite
+  expected_contains:
+    - "minecraft:item/generated"
+    - "space:item/raw_lunite"

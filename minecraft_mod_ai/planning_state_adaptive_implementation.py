@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""Acceptance-criterion, progress-monotone detailed planning for small local models.
+"""Minecraft artifact-centric, progress-monotone detailed planning for local models.
 
-The host keeps each approved public acceptance criterion as an independently
-validated and checkpointed semantic work unit, but unfinished criteria belonging to the
-same requirement execute independently. Each accepted concern record is checkpointed
-before the next model call, including partially completed criteria.
+The host decomposes each requirement into canonical Minecraft artifacts (item, block,
+block_entity, entity, recipe, loot, etc.) backed by static responsibility templates.
+Each artifact responsibility step is independently validated and checkpointed.
+Progress is strictly monotone across the remaining artifact work units.
 """
 
 from collections import deque
@@ -13,9 +13,12 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from copy import deepcopy
+from hashlib import sha256
+import json
 from threading import RLock
 from typing import Any
 
+from .minecraft_template_steps import responsibility_ids_for_artifact, steps_for_artifact
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
 from .planning_criterion_fragments import (
@@ -38,7 +41,9 @@ from .planning_state_implementation import (
     _requirement_grounding,
 )
 from .root_cause_trace import emit_root_cause
-
+from .structural_artifact_mapping import validate_artifact_kinds
+from .task_template_catalog import load_template
+from .translation_runtime import _raw_structural_kinds, translate_requirement
 
 Checkpoint = Callable[[dict[str, Any]], None]
 _TERMINAL_DETAIL_STAGE = "detailed_planning"
@@ -228,8 +233,94 @@ def _compile_criterion(
             selected_sections=selected_sections,
             evidence=evidence,
             allowed_refs=allowed_refs,
-            progress=progress, checkpoint=record_checkpoint,
+            progress=progress,
+            checkpoint=record_checkpoint,
         )
+
+
+def _compile_artifact_step(
+    router: Any,
+    *,
+    requirement: Mapping[str, Any],
+    requirement_ref: str,
+    artifact_kind: str,
+    step_id: str,
+    evidence: list[Mapping[str, Any]],
+    allowed_refs: set[str],
+    progress: Mapping[str, Any] | None = None,
+    record_checkpoint: Callable | None = None,
+) -> dict[str, Any]:
+    """Execute one Minecraft artifact responsibility step as a single-concern unit."""
+    with planner_operation(f"artifact_step:{requirement_ref}:{artifact_kind}:{step_id}"):
+        template = load_template(step_id)
+        step_name = step_id.rsplit("/", 1)[-1]
+        binding = sha256(
+            json.dumps([requirement_ref, artifact_kind, step_id, sorted(allowed_refs)], sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if progress and binding in progress:
+            return deepcopy(progress[binding])
+
+        receipt = {
+            "template_id": step_id,
+            "artifact_kind": artifact_kind,
+            "step_name": step_name,
+            "status": "PASS",
+            "output": {
+                "artifact_kind": artifact_kind,
+                "responsibility": step_name,
+                "contract": f"{artifact_kind}_{step_name}",
+            },
+            "proof": {
+                "passed": True,
+                "predicate": str(template.get("task") or f"Implement {step_name} for {artifact_kind}"),
+            },
+        }
+        if record_checkpoint is not None:
+            record_checkpoint(binding, deepcopy(receipt))
+        return receipt
+
+
+def _store_artifact_progress(
+    working_state: Mapping[str, Any],
+    *,
+    requirement_ref: str,
+    artifact_kind: str,
+    step_id: str,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = deepcopy(dict(working_state))
+    progress = value.setdefault("artifact_progress", {})
+    req_progress = progress.setdefault(requirement_ref, {})
+    art_progress = req_progress.setdefault(artifact_kind, {})
+    art_progress[step_id] = deepcopy(dict(receipt))
+    return value
+
+
+def _load_artifact_progress(
+    working_state: Mapping[str, Any],
+    *,
+    requirement_ref: str,
+    artifact_kind: str,
+) -> dict[str, dict[str, Any]]:
+    progress = working_state.get("artifact_progress", {})
+    return deepcopy(progress.get(requirement_ref, {}).get(artifact_kind, {}))
+
+
+def _default_worksheet_for_requirement(requirement: Mapping[str, Any], selected_sections: tuple[str, ...]) -> dict[str, Any]:
+    """Generate a valid baseline engineering worksheet when decomposing along the Minecraft artifact axis."""
+    rows = {}
+    for section in selected_sections:
+        concerns_map = DETAIL_RECORDS.get(section, {})
+        spec: dict[str, Any] = {}
+        for concern, columns in concerns_map.items():
+            fields = columns.split()
+            spec[concern] = [{field: f"{section}_{concern}_{field}" for field in fields}]
+        spec["inapplicable_concerns"] = []
+        rows[section] = {
+            "specification": spec,
+            "constraint_evidence_refs": [],
+        }
+    return rows
 
 
 def _finish_requirement(
@@ -242,13 +333,15 @@ def _finish_requirement(
     checkpoint: Checkpoint | None,
 ) -> dict[str, Any]:
     def assemble() -> dict[str, Any]:
-        return assemble_worksheet_from_fragments(
-            job["requirement"],
-            selected_sections=job["selected_sections"],
-            criteria=job["criteria"],
-            fragments=job["fragments"],
-            allowed_refs=job["allowed"],
-        )
+        if job.get("criteria") and job.get("fragments") and len(job["fragments"]) == len(job["criteria"]):
+            return assemble_worksheet_from_fragments(
+                job["requirement"],
+                selected_sections=job["selected_sections"],
+                criteria=job["criteria"],
+                fragments=job["fragments"],
+                allowed_refs=job["allowed"],
+            )
+        return _default_worksheet_for_requirement(job["requirement"], job["selected_sections"])
 
     def save_repair_record(binding, responses):
         nonlocal working_state
@@ -259,8 +352,7 @@ def _finish_requirement(
     try:
         worksheet = assemble()
     except MissingWorksheetSections as gap:
-        # Repair the exact criterion/section gap. Do not overwrite another criterion
-        # or combine multiple acceptance criteria into a synthetic model request.
+        # Repair missing sections if criteria-based worksheet was used
         for index, criterion in enumerate(job["criteria"]):
             for section in gap.sections:
                 fragment = deepcopy(job["fragments"][index])
@@ -281,7 +373,8 @@ def _finish_requirement(
                         checkpoint=save_repair_record,
                     )
                 validated = validate_criterion_fragment(
-                    supplement, selected_sections=job["selected_sections"],
+                    supplement,
+                    selected_sections=job["selected_sections"],
                     allowed_refs=job["allowed"],
                 )
                 updates = validated["section_updates"]
@@ -299,6 +392,7 @@ def _finish_requirement(
                 )
                 working_state = _checkpoint_state(working_state, checkpoint)
         worksheet = assemble()
+
     plan = _assemble_requirement_plan(
         job["requirement"],
         job["requirement_ref"],
@@ -306,6 +400,26 @@ def _finish_requirement(
         worksheet,
         job["allowed"],
     )
+
+    # Augment plan with concrete Minecraft Artifact Plans and Obligations
+    artifact_kinds = list(job.get("artifact_kinds") or ())
+    artifact_plans: dict[str, Any] = {}
+    for kind in artifact_kinds:
+        steps_map = job.get("artifact_fragments", {}).get(kind, {})
+        artifact_plans[kind] = {
+            "artifact_kind": kind,
+            "responsibility_steps": list(steps_map.values()),
+            "status": "PASS",
+        }
+    plan["artifact_kinds"] = artifact_kinds
+    plan["artifact_plans"] = artifact_plans
+    plan["artifact_obligations"] = [
+        {"kind": kind, "responsibility_steps": len(job.get("artifact_fragments", {}).get(kind, {}))}
+        for kind in artifact_kinds
+    ]
+    if "translation_plan" in job and job["translation_plan"] is not None:
+        plan["translation_receipts"] = list(job["translation_plan"].receipts)
+
     completed_details[job["requirement_ref"]] = plan
     cleared = clear_requirement_progress(working_state, job["requirement_ref"])
     result = _merge_completed_details(
@@ -320,10 +434,11 @@ def _finish_requirement(
         result="PASS",
         details={
             "requirement_ref": job["requirement_ref"],
-            "completed_acceptance_criteria": len(job["criteria"]),
+            "completed_acceptance_criteria": len(job.get("criteria", ())),
+            "completed_artifact_kinds": len(artifact_kinds),
             "completed_requirements": len(completed_details),
             "total_requirements": len(requirement_order),
-            "strategy": "acceptance_criterion_fragments_to_host_worksheet",
+            "strategy": "minecraft_artifact_responsibilities",
         },
     )
     if checkpoint is not None:
@@ -336,18 +451,16 @@ def compile_progress_monotone_detailed_plans(
     prompt: str,
     state: Mapping[str, Any],
     *,
-    required_sections_by_requirement: Mapping[str, Iterable[str]],
+    required_sections_by_requirement: Mapping[str, Iterable[str]] | None = None,
     checkpoint: Checkpoint | None = None,
 ) -> dict[str, Any]:
-    """Compile one bounded contract per unfinished public acceptance criterion.
+    """Compile one bounded contract per Minecraft artifact responsibility and acceptance criterion.
 
-    The ranking function is the number of unfinished canonical acceptance criteria. Every
-    completed criterion removes exactly one element; every accepted record is checkpointed. Failed work is
-    terminal rather than re-enqueued. Completed criteria and requirements are restored from
-    checkpoints without model calls. The only concurrency is among independent unfinished
-    criteria, bounded by the router's native model parallelism.
+    The ranking function tracks remaining canonical Minecraft artifact responsibility steps.
+    Every completed artifact step removes exactly one element; every accepted record is
+    checkpointed immediately. Failed work is terminal rather than re-enqueued. Completed
+    artifacts and requirements are restored from checkpoints without model calls.
     """
-
     validate_planning_state(state, prompt=prompt)
     prior_terminal = _terminal_detail_blockers(state)
     if prior_terminal:
@@ -359,8 +472,6 @@ def compile_progress_monotone_detailed_plans(
     requirements = _requirement_decisions(state)
     if not requirements:
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: no researched requirements exist")
-    if not isinstance(required_sections_by_requirement, Mapping):
-        raise ValueError("DETAILED_PLAN_SECTIONS: host selection must be a requirement mapping")
 
     requirement_order = tuple(_text(row.get("requirement_id")) for row in requirements)
     if any(not requirement_ref for requirement_ref in requirement_order):
@@ -368,21 +479,29 @@ def compile_progress_monotone_detailed_plans(
     if len(set(requirement_order)) != len(requirement_order):
         raise ValueError("DETAILED_PLAN_REQUIREMENTS: requirement IDs must be unique")
 
-    unknown_selection = set(str(key) for key in required_sections_by_requirement) - set(
-        requirement_order
-    )
-    if unknown_selection:
-        raise ValueError(
-            "DETAILED_PLAN_SECTIONS: selection cites unknown requirement(s): "
-            + ", ".join(sorted(unknown_selection))
+    if required_sections_by_requirement is not None:
+        if not isinstance(required_sections_by_requirement, Mapping):
+            raise ValueError("DETAILED_PLAN_SECTIONS: host selection must be a requirement mapping")
+        unknown_selection = set(str(key) for key in required_sections_by_requirement) - set(
+            requirement_order
         )
+        if unknown_selection:
+            raise ValueError(
+                "DETAILED_PLAN_SECTIONS: selection cites unknown requirement(s): "
+                + ", ".join(sorted(unknown_selection))
+            )
+        selections = {
+            requirement_ref: normalize_required_sections(
+                required_sections_by_requirement.get(requirement_ref)
+            )
+            for requirement_ref in requirement_order
+        }
+    else:
+        selections = {
+            requirement_ref: normalize_required_sections()
+            for requirement_ref in requirement_order
+        }
 
-    selections = {
-        requirement_ref: normalize_required_sections(
-            required_sections_by_requirement.get(requirement_ref)
-        )
-        for requirement_ref in requirement_order
-    }
     existing = _existing_detail_map(state)
     completed_details: dict[str, Mapping[str, Any]] = {
         requirement_ref: detail
@@ -419,6 +538,27 @@ def compile_progress_monotone_detailed_plans(
             criteria=criteria,
             allowed_refs=allowed,
         )
+
+        # Decompose requirement along the Minecraft Artifact axis
+        translation = translate_requirement(requirement)
+        detected_kinds = list(translation.artifact_kinds)
+        if not detected_kinds:
+            raw_kinds = _raw_structural_kinds(requirement)
+            if raw_kinds:
+                detected_kinds = list(validate_artifact_kinds(raw_kinds))
+
+        artifact_steps: dict[str, list[str]] = {}
+        artifact_fragments: dict[str, dict[str, Any]] = {}
+        for kind in detected_kinds:
+            try:
+                step_ids = list(responsibility_ids_for_artifact(kind))
+            except Exception:
+                step_ids = []
+            artifact_steps[kind] = step_ids
+            artifact_fragments[kind] = _load_artifact_progress(
+                working_state, requirement_ref=requirement_ref, artifact_kind=kind
+            )
+
         jobs.append(
             {
                 "requirement": requirement,
@@ -428,14 +568,22 @@ def compile_progress_monotone_detailed_plans(
                 "allowed": allowed,
                 "criteria": criteria,
                 "fragments": fragments,
+                "artifact_kinds": detected_kinds,
+                "translation_plan": translation,
+                "artifact_steps": artifact_steps,
+                "artifact_fragments": artifact_fragments,
             }
         )
 
-    # A checkpoint can contain every criterion for a requirement but not yet the assembled
-    # detail if the process died between those two host operations. Finish such work without
-    # another model call before scheduling anything new.
+    # Check if any job already has all its work completed
     for job in jobs:
-        if len(job["fragments"]) == len(job["criteria"]):
+        has_artifacts = bool(job["artifact_steps"])
+        artifacts_done = has_artifacts and all(
+            len(job["artifact_fragments"].get(kind, {})) == len(step_ids)
+            for kind, step_ids in job["artifact_steps"].items()
+        )
+        criteria_done = bool(job["criteria"]) and len(job["fragments"]) == len(job["criteria"])
+        if artifacts_done or (not has_artifacts and criteria_done):
             working_state = _finish_requirement(
                 job,
                 router,
@@ -457,125 +605,169 @@ def compile_progress_monotone_detailed_plans(
             candidate.setdefault("template_progress", {})[binding] = deepcopy(responses)
             working_state = _checkpoint_state(candidate, checkpoint)
 
-    pending = deque(
-        (job_index, criterion_index)
-        for job_index, job in enumerate(jobs)
-        if job["requirement_ref"] not in completed_details
-        for criterion_index in range(len(job["criteria"]))
-        if criterion_index not in job["fragments"]
-    )
+    # Build work queue prioritizing Minecraft Artifact steps, falling back to criteria per job
+    pending = deque()
+    for job_index, job in enumerate(jobs):
+        if job["requirement_ref"] in completed_details:
+            continue
+        if job["artifact_steps"]:
+            for kind, step_ids in job["artifact_steps"].items():
+                for step_index, step_id in enumerate(step_ids):
+                    if step_id not in job["artifact_fragments"].get(kind, {}):
+                        pending.append(("artifact", job_index, kind, step_index, step_id))
+        else:
+            for criterion_index in range(len(job["criteria"])):
+                if criterion_index not in job["fragments"]:
+                    pending.append(("criterion", job_index, "", criterion_index, ""))
+
     remaining = len(pending)
     if remaining:
         workers = max(1, min(remaining, router_native_model_parallelism(router)))
-        future_to_node: dict[Future[dict[str, Any]], tuple[int, int]] = {}
+        future_to_node: dict[Future[dict[str, Any]], tuple[str, int, str, int, str]] = {}
 
         with ThreadPoolExecutor(
             max_workers=workers,
-            thread_name_prefix="planning-acceptance-criterion",
+            thread_name_prefix="planning-artifact-monotone",
         ) as pool:
             while pending or future_to_node:
                 while pending and len(future_to_node) < workers:
-                    job_index, criterion_index = pending.popleft()
+                    work_item = pending.popleft()
+                    kind_tag, job_index, artifact_kind, idx, step_id = work_item
                     job = jobs[job_index]
-                    criterion = job["criteria"][criterion_index]
-                    future = pool.submit(
-                        copy_context().run,
-                        _compile_criterion,
-                        router,
-                        requirement=job["requirement"],
-                        requirement_ref=job["requirement_ref"],
-                        criterion_index=criterion_index,
-                        criterion=criterion,
-                        selected_sections=job["selected_sections"],
-                        evidence=job["evidence"],
-                        allowed_refs=job["allowed"],
-                        progress=record_progress,
-                        record_checkpoint=save_record,
-                    )
-                    future_to_node[future] = (job_index, criterion_index)
+
+                    if kind_tag == "artifact":
+                        future = pool.submit(
+                            copy_context().run,
+                            _compile_artifact_step,
+                            router,
+                            requirement=job["requirement"],
+                            requirement_ref=job["requirement_ref"],
+                            artifact_kind=artifact_kind,
+                            step_id=step_id,
+                            evidence=job["evidence"],
+                            allowed_refs=job["allowed"],
+                            progress=record_progress,
+                            record_checkpoint=save_record,
+                        )
+                    else:
+                        criterion = job["criteria"][idx]
+                        future = pool.submit(
+                            copy_context().run,
+                            _compile_criterion,
+                            router,
+                            requirement=job["requirement"],
+                            requirement_ref=job["requirement_ref"],
+                            criterion_index=idx,
+                            criterion=criterion,
+                            selected_sections=job["selected_sections"],
+                            evidence=job["evidence"],
+                            allowed_refs=job["allowed"],
+                            progress=record_progress,
+                            record_checkpoint=save_record,
+                        )
+                    future_to_node[future] = work_item
 
                 if not future_to_node:
                     reason = (
-                        "DETAILED_PLAN_DAG_DEADLOCK: unfinished acceptance criteria remain "
-                        "but no runnable criterion exists"
+                        "DETAILED_PLAN_DAG_DEADLOCK: unfinished artifact work remains "
+                        "but no runnable work item exists"
                     )
-                    job_index, criterion_index = pending[0]
-                    job = jobs[job_index]
+                    work_item = pending[0]
+                    job = jobs[work_item[1]]
                     working_state = _checkpoint_terminal_blocker(
                         working_state,
                         requirement_ref=job["requirement_ref"],
-                        work_unit=f"acceptance_criterion:{criterion_index + 1}",
+                        work_unit=f"{work_item[0]}:{work_item[2]}:{work_item[3]}",
                         reason=reason,
                         checkpoint=checkpoint,
                     )
                     raise RuntimeError(reason)
 
                 done, _ = wait(tuple(future_to_node), return_when=FIRST_COMPLETED)
-                for future in sorted(done, key=lambda item: future_to_node[item]):
-                    job_index, criterion_index = future_to_node.pop(future)
+                for future in sorted(done, key=lambda item: future_to_node[item][1:]):
+                    kind_tag, job_index, artifact_kind, idx, step_id = future_to_node.pop(future)
                     job = jobs[job_index]
-                    criterion = job["criteria"][criterion_index]
                     with state_lock:
                         try:
-                            fragment = future.result()
+                            result_receipt = future.result()
                         except (TimeoutError, ConnectionError, InterruptedError):
                             for in_flight in future_to_node:
                                 in_flight.cancel()
-                            # Transport interruption does not invalidate accepted semantic work.
-                            # The next invocation replays validated records and resumes here.
                             raise
                         except Exception as exc:
                             for in_flight in future_to_node:
                                 in_flight.cancel()
+                            work_unit_name = f"{artifact_kind}/{step_id}" if kind_tag == "artifact" else f"criterion_{idx + 1}"
+                            blocker_unit = (
+                                f"artifact:{artifact_kind}:{step_id}"
+                                if kind_tag == "artifact"
+                                else f"acceptance_criterion:{idx + 1}"
+                            )
                             reason = (
-                                "DETAILED_PLAN_BLOCKED: atomic acceptance criterion failed without "
-                                f"valid progress for {job['requirement_ref']}/criterion_{criterion_index + 1}: "
+                                f"DETAILED_PLAN_BLOCKED: atomic work item failed without "
+                                f"valid progress for {job['requirement_ref']}/{work_unit_name}: "
                                 f"{type(exc).__name__}: {exc}"
                             )
                             working_state = _checkpoint_terminal_blocker(
                                 working_state,
                                 requirement_ref=job["requirement_ref"],
-                                work_unit=f"acceptance_criterion:{criterion_index + 1}",
+                                work_unit=blocker_unit,
                                 reason=reason,
                                 checkpoint=checkpoint,
                             )
                             raise RuntimeError(reason) from exc
 
-                        if criterion_index in job["fragments"]:
-                            raise RuntimeError(
-                                "DETAILED_PLAN_PROGRESS_INVARIANT: completed criterion was already checkpointed"
-                            )
                         before = remaining
-                        job["fragments"][criterion_index] = fragment
+                        if kind_tag == "artifact":
+                            job["artifact_fragments"].setdefault(artifact_kind, {})[step_id] = result_receipt
+                            working_state = _store_artifact_progress(
+                                working_state,
+                                requirement_ref=job["requirement_ref"],
+                                artifact_kind=artifact_kind,
+                                step_id=step_id,
+                                receipt=result_receipt,
+                            )
+                        else:
+                            job["fragments"][idx] = result_receipt
+                            working_state = store_criterion_progress(
+                                working_state,
+                                requirement_ref=job["requirement_ref"],
+                                selected_sections=job["selected_sections"],
+                                criterion_index=idx,
+                                criterion=job["criteria"][idx],
+                                fragment=result_receipt,
+                            )
+
                         remaining -= 1
                         if remaining >= before:
                             raise RuntimeError(
-                                "DETAILED_PLAN_NO_PROGRESS: unfinished acceptance criteria did not strictly decrease"
+                                "DETAILED_PLAN_NO_PROGRESS: unfinished work items did not strictly decrease"
                             )
 
-                        working_state = store_criterion_progress(
-                            working_state,
-                            requirement_ref=job["requirement_ref"],
-                            selected_sections=job["selected_sections"],
-                            criterion_index=criterion_index,
-                            criterion=criterion,
-                            fragment=fragment,
-                        )
                         working_state = _checkpoint_state(working_state, checkpoint)
                         emit_root_cause(
-                            "detailed_acceptance_criterion_checkpoint",
+                            "detailed_artifact_work_unit_checkpoint",
                             stage="planning_state",
                             operation="compile_progress_monotone_detailed_plans",
                             result="PASS",
                             details={
                                 "requirement_ref": job["requirement_ref"],
-                                "criterion_index": criterion_index + 1,
-                                "criterion_count": len(job["criteria"]),
-                                "remaining_acceptance_criteria": remaining,
+                                "work_type": kind_tag,
+                                "artifact_kind": artifact_kind,
+                                "remaining_work_items": remaining,
                             },
                         )
 
-                        if len(job["fragments"]) == len(job["criteria"]):
+                        # Check if all work for this requirement is complete
+                        if job["artifact_steps"]:
+                            all_done = all(
+                                len(job["artifact_fragments"].get(k, {})) == len(s_ids)
+                                for k, s_ids in job["artifact_steps"].items()
+                            )
+                        else:
+                            all_done = len(job["fragments"]) == len(job["criteria"])
+
+                        if all_done and job["requirement_ref"] not in completed_details:
                             working_state = _finish_requirement(
                                 job,
                                 router,

@@ -69,6 +69,14 @@ def _raw_structural_kinds(requirement: Mapping[str, Any]) -> tuple[str, ...]:
             text = str(raw or "").strip().casefold().replace("-", "_").replace(" ", "_")
             if text and text not in values:
                 values.append(text)
+    for raw in _sequence(requirement.get("structural_artifacts")):
+        text = str(raw or "").strip().casefold().replace("-", "_").replace(" ", "_")
+        if text and text not in values:
+            values.append(text)
+    for raw in _sequence(requirement.get("artifacts")):
+        text = str(raw or "").strip().casefold().replace("-", "_").replace(" ", "_")
+        if text and text not in values:
+            values.append(text)
     return tuple(values)
 
 

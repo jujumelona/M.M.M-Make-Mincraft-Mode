@@ -1,0 +1,36 @@
+﻿id: fabric/item/register_basic
+artifact: java_fragment
+target:
+  file: src/main/java/{{package_path}}/registry/ModItems.java
+  anchor: mod_items_registry
+requires:
+  - mod_id
+  - registry_path
+  - java_constant
+produces:
+  - item_registry_id
+  - item_symbol
+ai_slots: []
+render:
+  language: java
+  body: |
+    public static final Item {{java_constant}} =
+        Registry.register(
+            Registries.ITEM,
+            Identifier.of(MOD_ID, "{{registry_path}}"),
+            new Item(new Item.Settings())
+        );
+validators:
+  - java_parse
+  - registry_identifier_unique
+fixture:
+  input:
+    mod_id: space
+    package_path: com/foo/space
+    java_constant: RAW_LUNITE
+    registry_path: raw_lunite
+  expected_contains:
+    - "Registry.register"
+    - "Registries.ITEM"
+    - "raw_lunite"
+    - "RAW_LUNITE"

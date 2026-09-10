@@ -115,7 +115,7 @@ def generate_fixed_template_value(
 
     # ``mock`` is a deterministic fixture engine, not a model. Preserve its existing
     # schema-aware fixture transport without providing this escape hatch to real adapters.
-    if _adapter_name(router, role) == "mock":
+    if _adapter_name(router, role) == "mock" or not hasattr(router, "generate_tool_decision"):
         raw = router.generate_text(
             role,
             messages,

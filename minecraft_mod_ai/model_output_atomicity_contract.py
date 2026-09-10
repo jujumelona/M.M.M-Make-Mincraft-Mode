@@ -21,6 +21,12 @@ _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
     {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
 )
 
+MAX_MODEL_FIELDS = 3
+MAX_MODEL_STRING_CHARS = 256
+MAX_MODEL_ARRAY_ITEMS = 4
+MAX_SCHEMA_DEPTH = 2
+MAX_COMPLETION_TOKENS = 128
+
 
 def _configuration_error(message: str) -> Exception:
     from .model_adapters import ModelConfigurationError
@@ -93,6 +99,46 @@ def _assert_closed_object_schemas(
                 path=f"{path}[{index}]",
                 scoped_object_constraint=scoped_object_constraint,
             )
+
+
+def assert_strict_atomicity_bounds(
+    value: Any,
+    *,
+    surface: str = "",
+    path: str = "$",
+    depth: int = 1,
+) -> None:
+    """Enforce physical and structural atomicity bounds for small model reliability."""
+    if depth > MAX_SCHEMA_DEPTH:
+        raise _configuration_error(
+            f"MODEL_ATOMICITY_DEPTH_EXCEEDED: Schema depth {depth} exceeds MAX_SCHEMA_DEPTH={MAX_SCHEMA_DEPTH} at {path} for {surface}"
+        )
+    if isinstance(value, Mapping):
+        props = value.get("properties")
+        if isinstance(props, Mapping):
+            if len(props) > MAX_MODEL_FIELDS:
+                raise _configuration_error(
+                    f"MODEL_ATOMICITY_FIELDS_EXCEEDED: Declared {len(props)} properties at {path}, "
+                    f"exceeding MAX_MODEL_FIELDS={MAX_MODEL_FIELDS} for {surface}"
+                )
+            for k, child in props.items():
+                assert_strict_atomicity_bounds(child, surface=surface, path=f"{path}.{k}", depth=depth + 1)
+        if value.get("type") == "array":
+            max_items = value.get("maxItems")
+            if max_items is not None and max_items > MAX_MODEL_ARRAY_ITEMS:
+                raise _configuration_error(
+                    f"MODEL_ATOMICITY_ARRAY_EXCEEDED: maxItems={max_items} exceeds "
+                    f"MAX_MODEL_ARRAY_ITEMS={MAX_MODEL_ARRAY_ITEMS} at {path} for {surface}"
+                )
+            if "items" in value and isinstance(value["items"], Mapping):
+                assert_strict_atomicity_bounds(value["items"], surface=surface, path=f"{path}[]", depth=depth + 1)
+        if value.get("type") == "string":
+            max_len = value.get("maxLength")
+            if max_len is not None and max_len > MAX_MODEL_STRING_CHARS:
+                raise _configuration_error(
+                    f"MODEL_ATOMICITY_STRING_EXCEEDED: maxLength={max_len} exceeds "
+                    f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
+                )
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
@@ -356,8 +402,14 @@ def assert_installed(*, model_router_module: Any | None = None) -> None:
 
 
 __all__ = [
+    "MAX_COMPLETION_TOKENS",
+    "MAX_MODEL_ARRAY_ITEMS",
+    "MAX_MODEL_FIELDS",
+    "MAX_MODEL_STRING_CHARS",
+    "MAX_SCHEMA_DEPTH",
     "assert_atomic_model_schema",
     "assert_installed",
+    "assert_strict_atomicity_bounds",
     "is_atomic_model_schema",
     "install",
 ]

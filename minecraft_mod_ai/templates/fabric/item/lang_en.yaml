@@ -1,0 +1,25 @@
+﻿id: fabric/item/lang_en
+artifact: json_fragment
+target:
+  file: src/main/resources/assets/{{mod_id}}/lang/en_us.json
+requires:
+  - mod_id
+  - registry_path
+  - display_name
+produces:
+  - translation_key
+ai_slots: []
+render:
+  language: json
+  body:
+    "item.{{mod_id}}.{{registry_path}}": "{{display_name}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: raw_lunite
+    display_name: Raw Lunite
+  expected_contains:
+    - "item.space.raw_lunite"
+    - "Raw Lunite"
