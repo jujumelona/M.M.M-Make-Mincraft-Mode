@@ -1,0 +1,5 @@
+id: asset/item_sprite
+task: Render prompt mold for Minecraft item sprite
+render:
+  language: text
+  body: "Pixel Art, PixArFK, isolated item sprite, transparent background, {{visual_description}}"

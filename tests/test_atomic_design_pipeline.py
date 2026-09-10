@@ -147,7 +147,7 @@ def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
 
 
 @pytest.mark.parametrize(
-    "capability", ["ENTITY_EXISTS", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]
+    "capability", ["MAGIC_SPELL", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]
 )
 def test_unsupported_capability_never_becomes_item(capability):
     with pytest.raises(SlotFillError, match="CAPABILITY_UNSUPPORTED"):

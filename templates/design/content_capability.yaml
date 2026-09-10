@@ -16,4 +16,4 @@ rules:
   the entity.
 - Do not convert a machine, worldgen feature, entity, GUI, or sound to an item merely
   because it is easier.
-- Supported base facts are ITEM_EXISTS, BLOCK_EXISTS, CRAFTING_RECIPE, SMELTING_RECIPE, REGISTRY_TAG. Other requested capabilities must remain explicit and unsupported.
+- Supported base facts are ITEM_EXISTS, BLOCK_EXISTS, CRAFTING_RECIPE, SMELTING_RECIPE, REGISTRY_TAG, ENTITY_EXISTS, GUI_EXISTS, NETWORK_PACKET, BLOCK_ENTITY_EXISTS, DATA_COMPONENT, WORLDGEN_FEATURE, DIMENSION, BIOME, STATUS_EFFECT, SOUND_EVENT, PARTICLE_TYPE, ENTITY_LOOT, ADVANCEMENT, EQUIPMENT_ARMOR, CUSTOM_ITEM_BEHAVIOR, CUSTOM_BLOCK_BEHAVIOR. Other requested capabilities must remain explicit and unsupported.

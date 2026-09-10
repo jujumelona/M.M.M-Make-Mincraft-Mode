@@ -6,6 +6,8 @@ from hashlib import sha256
 from .atomic_slot_executor import SlotFillError
 from .complete_spec import AssetRequest, ProductionModule
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
+from .implementation_template_renderer import render_template
+from .task_template_catalog import load_template
 from .task_template_runner import run_record_template
 
 
@@ -195,6 +197,22 @@ def compile_content_graph(
         if fact_type not in {
             FactType.ITEM_EXISTS,
             FactType.BLOCK_EXISTS,
+            FactType.ENTITY_EXISTS,
+            FactType.GUI_EXISTS,
+            FactType.NETWORK_PACKET,
+            FactType.BLOCK_ENTITY_EXISTS,
+            FactType.DATA_COMPONENT,
+            FactType.WORLDGEN_FEATURE,
+            FactType.DIMENSION,
+            FactType.BIOME,
+            FactType.STATUS_EFFECT,
+            FactType.SOUND_EVENT,
+            FactType.PARTICLE_TYPE,
+            FactType.ENTITY_LOOT,
+            FactType.ADVANCEMENT,
+            FactType.EQUIPMENT_ARMOR,
+            FactType.CUSTOM_ITEM_BEHAVIOR,
+            FactType.CUSTOM_BLOCK_BEHAVIOR,
             FactType.CRAFTING_RECIPE,
             FactType.SMELTING_RECIPE,
             FactType.REGISTRY_TAG,
@@ -217,6 +235,48 @@ def compile_content_graph(
         allowed_properties = {
             FactType.ITEM_EXISTS: visual_properties | {"display_name", "stack_limit"},
             FactType.BLOCK_EXISTS: visual_properties | {"display_name"},
+            FactType.ENTITY_EXISTS: visual_properties
+            | {"display_name", "category", "health", "speed", "tracking_range"},
+            FactType.GUI_EXISTS: visual_properties
+            | {"display_name", "screen_type", "slot_count"},
+            FactType.NETWORK_PACKET: {"display_name", "packet_name", "channel", "direction"},
+            FactType.BLOCK_ENTITY_EXISTS: {
+                "display_name",
+                "sync_type",
+                "container_size",
+            },
+            FactType.DATA_COMPONENT: {
+                "display_name",
+                "component_name",
+                "value_type",
+                "codec",
+            },
+            FactType.WORLDGEN_FEATURE: {
+                "display_name",
+                "feature_type",
+                "step",
+                "biomes",
+            },
+            FactType.DIMENSION: {
+                "display_name",
+                "dimension_type",
+                "ambient_light",
+                "coordinate_scale",
+            },
+            FactType.BIOME: {"display_name", "temperature", "downfall", "precipitation"},
+            FactType.STATUS_EFFECT: {"display_name", "category", "color", "beneficial"},
+            FactType.SOUND_EVENT: {"display_name", "sound_id", "subtitle", "category"},
+            FactType.PARTICLE_TYPE: {
+                "display_name",
+                "particle_name",
+                "override_limiter",
+            },
+            FactType.ENTITY_LOOT: {"display_name", "loot_table_id", "type"},
+            FactType.ADVANCEMENT: {"display_name", "parent", "frame_type"},
+            FactType.EQUIPMENT_ARMOR: visual_properties
+            | {"display_name", "slot", "defense", "toughness"},
+            FactType.CUSTOM_ITEM_BEHAVIOR: {"display_name", "action", "cooldown"},
+            FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
             FactType.CRAFTING_RECIPE: {
                 "recipe_kind",
                 "count",
@@ -258,13 +318,39 @@ def compile_content_graph(
                 display_name=props["display_name"],
             )
         )
-        kind = "item" if fact_type == FactType.ITEM_EXISTS else "block"
+        fact_kind_map = {
+            FactType.ITEM_EXISTS: "item",
+            FactType.BLOCK_EXISTS: "block",
+            FactType.ENTITY_EXISTS: "entity",
+            FactType.GUI_EXISTS: "gui",
+            FactType.NETWORK_PACKET: "networking",
+            FactType.BLOCK_ENTITY_EXISTS: "machine",
+            FactType.DATA_COMPONENT: "custom_java",
+            FactType.WORLDGEN_FEATURE: "structure",
+            FactType.DIMENSION: "dimension",
+            FactType.BIOME: "biome",
+            FactType.STATUS_EFFECT: "effect",
+            FactType.SOUND_EVENT: "custom_java",
+            FactType.PARTICLE_TYPE: "custom_java",
+            FactType.ENTITY_LOOT: "loot",
+            FactType.ADVANCEMENT: "advancement",
+            FactType.EQUIPMENT_ARMOR: "armor",
+            FactType.CUSTOM_ITEM_BEHAVIOR: "item",
+            FactType.CUSTOM_BLOCK_BEHAVIOR: "block",
+        }
+        kind = fact_kind_map.get(fact_type, "item")
         config = {
             "name": props["display_name"],
             "requirement_refs": node["requirement_refs"],
             "implementation_obligations": [node["role"]],
             "reason": node["role"],
         }
+        for prop_key, prop_val in props.items():
+            if prop_key not in visual_properties and prop_key not in {
+                "display_name",
+                "stack_limit",
+            }:
+                config[prop_key] = prop_val
         if "stack_limit" in props:
             raw = props["stack_limit"]
             if kind != "item" or not raw.isdecimal() or not 1 <= int(raw) <= 64:
@@ -284,54 +370,244 @@ def compile_content_graph(
         modules.append(ProductionModule(eid, kind, config))
         visual = {k: v for k, v in props.items() if k in visual_properties}
         if visual:
-            mold = (
-                "isolated item sprite, transparent background"
-                if kind == "item"
-                else "seamless block surface tile"
+            visual_desc = ", ".join(f"{k}: {v}" for k, v in visual.items())
+            if kind in {"item", "armor"}:
+                mold_template_id = "asset/item_sprite"
+                asset_kind = "item"
+                w, h = 16, 16
+            elif kind == "block":
+                mold_template_id = "asset/block_tile"
+                asset_kind = "block"
+                w, h = 16, 16
+            elif kind in {"entity", "boss", "npc"}:
+                mold_template_id = "asset/entity_texture"
+                asset_kind = "entity"
+                w, h = 64, 64
+            elif kind == "gui":
+                mold_template_id = "asset/gui_panel"
+                asset_kind = "gui"
+                w, h = 256, 256
+            else:
+                mold_template_id = "asset/item_sprite"
+                asset_kind = "item"
+                w, h = 16, 16
+
+            mold_tmpl = load_template(mold_template_id)
+            prompt_text = render_template(
+                mold_tmpl, {"visual_description": visual_desc}
             )
             assets.append(
                 AssetRequest(
-                    asset_id=f"texture_{kind}_{eid}",
-                    kind=kind,
-                    target_path=f"assets/{mod_id}/textures/{kind}/{eid}.png",
-                    width=16,
-                    height=16,
-                    prompt="Pixel Art, PixArFK, "
-                    + mold
-                    + ", "
-                    + ", ".join(f"{k}: {v}" for k, v in visual.items()),
+                    asset_id=f"texture_{asset_kind}_{eid}",
+                    kind=asset_kind,
+                    target_path=f"assets/{mod_id}/textures/{asset_kind}/{eid}.png",
+                    width=w,
+                    height=h,
+                    prompt=prompt_text,
                 )
             )
 
+    module_by_id = {m.module_id: m for m in modules}
+    module_deps = {m.module_id: list(m.depends_on) for m in modules}
+
     for edge in relations:
         source, target = edge["source_id"], edge["target_id"]
-        if capabilities[source] in {
+        rel_type = edge["relation_type"]
+        src_cap = capabilities.get(source)
+        tgt_cap = capabilities.get(target)
+        if src_cap in {
             FactType.CRAFTING_RECIPE,
             FactType.SMELTING_RECIPE,
             FactType.REGISTRY_TAG,
         }:
             continue
-        if (
-            edge["relation_type"] != "drops"
-            or capabilities[source] != FactType.BLOCK_EXISTS
-            or capabilities[target] != FactType.ITEM_EXISTS
-        ):
-            raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
-        if any(
-            f.fact_type == FactType.BLOCK_DROP and f.subject == source for f in facts
-        ):
-            raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
-        facts.append(
-            ImplementationFact(
-                fact_id=f"{source}.drop",
-                fact_type=FactType.BLOCK_DROP,
-                subject=source,
-                object=target,
-                provenance=FactProvenance.DESIGN,
-                parent_requirement=edge["parent_requirement"],
+
+        if rel_type == "drops":
+            valid_drop = (
+                src_cap == FactType.BLOCK_EXISTS and tgt_cap == FactType.ITEM_EXISTS
+            ) or (
+                src_cap == FactType.ENTITY_EXISTS
+                and tgt_cap in {FactType.ITEM_EXISTS, FactType.ENTITY_LOOT}
             )
-        )
-        next(m for m in modules if m.module_id == source).config["drop"] = target
+            if not valid_drop:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            if any(
+                f.fact_type == FactType.BLOCK_DROP and f.subject == source for f in facts
+            ):
+                raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.drop",
+                    fact_type=FactType.BLOCK_DROP,
+                    subject=source,
+                    object=target,
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_by_id[source].config["drop"] = target
+                module_deps[source].append(target)
+
+        elif rel_type in {"requires", "upgrades"}:
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.{rel_type}.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": rel_type},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config.setdefault(rel_type, []).append(target)
+
+        elif rel_type == "unlocks":
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.unlocks.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "unlocks"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if target in module_by_id:
+                module_deps[target].append(source)
+                module_by_id[target].config.setdefault("unlocked_by", []).append(source)
+
+        elif rel_type == "opens":
+            if tgt_cap != FactType.GUI_EXISTS:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.opens.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "opens"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config["opens_gui"] = target
+
+        elif rel_type == "controls":
+            if tgt_cap not in {FactType.BLOCK_ENTITY_EXISTS, FactType.ENTITY_EXISTS}:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.controls.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "controls"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config["controls"] = target
+
+        elif rel_type == "spawns":
+            if tgt_cap != FactType.ENTITY_EXISTS:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.spawns.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "spawns"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config["spawns"] = target
+
+        elif rel_type == "transports_to":
+            if tgt_cap not in {FactType.DIMENSION, FactType.BIOME}:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.transports_to.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "transports_to"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config["transports_to"] = target
+
+        elif rel_type == "displays":
+            if src_cap != FactType.GUI_EXISTS:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.displays.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "displays"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config.setdefault("displays", []).append(target)
+
+        elif rel_type == "synchronizes":
+            if tgt_cap != FactType.NETWORK_PACKET:
+                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+            facts.append(
+                ImplementationFact(
+                    fact_id=f"{source}.synchronizes.{target}",
+                    fact_type=FactType.CONTENT_RELATION,
+                    subject=source,
+                    object=target,
+                    value={"relation": "synchronizes"},
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=edge["parent_requirement"],
+                )
+            )
+            if source in module_by_id:
+                module_deps[source].append(target)
+                module_by_id[source].config["sync_packet"] = target
+
+        else:
+            raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+
+    updated_modules = []
+    for m in modules:
+        deps = tuple(dict.fromkeys(module_deps.get(m.module_id, m.depends_on)))
+        if deps != m.depends_on:
+            updated_modules.append(
+                ProductionModule(
+                    m.module_id,
+                    m.kind,
+                    dict(m.config),
+                    depends_on=deps,
+                    required_gates=m.required_gates,
+                )
+            )
+        else:
+            updated_modules.append(m)
+    modules = updated_modules
 
     for eid, fact_type in capabilities.items():
         if fact_type not in {

@@ -26,4 +26,4 @@ rules:
 - Use exact entity IDs supplied by the host. Never invent missing endpoints.
 - Do not invent drops, ingredients, progression, or networking.
 - Return not_applicable with a reason if no relationship is required.
-  - Recipe source relations are consumes and produces; shaped recipes bind one ingredient with key_X for pattern symbol X. Tag membership uses contains.
+  - Recipe source relations are consumes and produces; shaped recipes bind one ingredient with key_X for pattern symbol X. Tag membership uses contains. Content relations include drops, requires, unlocks, upgrades, opens, controls, spawns, transports_to, displays, synchronizes.

@@ -1,0 +1,5 @@
+id: asset/entity_texture
+task: Render prompt mold for Minecraft entity texture
+render:
+  language: text
+  body: "Pixel Art, PixArFK, mob texture map, clean unwrapped texture, {{visual_description}}"

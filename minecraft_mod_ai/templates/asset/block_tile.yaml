@@ -1,0 +1,5 @@
+id: asset/block_tile
+task: Render prompt mold for Minecraft block texture
+render:
+  language: text
+  body: "Pixel Art, PixArFK, seamless block surface tile, {{visual_description}}"
