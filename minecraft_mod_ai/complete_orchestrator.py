@@ -798,9 +798,50 @@ class CompleteProductionOrchestrator:
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
             elif stage == 'entity':
                 for module in members:
-                    config = module.config
-                    behavior_default = 'npc' if module.kind == 'npc' else 'hostile_melee'
-                    receipts.append(generate_geckolib_entity_assets(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, entity_id=module.module_id, texture_width=int(config.get('texture_width', 64)), texture_height=int(config.get('texture_height', 64)), max_health=float(config.get('max_health', 80.0)), attack_damage=float(config.get('attack_damage', 8.0)), movement_speed=float(config.get('movement_speed', 0.27)), follow_range=float(config.get('follow_range', 40.0)), archetype=str(config.get('archetype', 'biped')), behavior=str(config.get('behavior', behavior_default)), entity_width=float(config.get('entity_width', 0.8)), entity_height=float(config.get('entity_height', 2.0)), spawn_group=str(config['spawn_group']) if config.get('spawn_group') else None, custom_bones=config.get('custom_bones') if isinstance(config.get('custom_bones'), list) else None, policy=self.policy))
+                    config = dict(module.config)
+                    required_entity_config = (
+                        "max_health",
+                        "attack_damage",
+                        "movement_speed",
+                        "follow_range",
+                        "archetype",
+                        "behavior",
+                        "entity_width",
+                        "entity_height",
+                        "spawn_group",
+                        "main_color",
+                    )
+                    missing_entity_config = [
+                        key for key in required_entity_config if config.get(key) in (None, "")
+                    ]
+                    if missing_entity_config:
+                        raise CompleteProductionError(
+                            f"ENTITY_DESIGN_UNRESOLVED: {module.module_id} missing {missing_entity_config}"
+                        )
+                    receipts.append(
+                        generate_geckolib_entity_assets(
+                            project_root=project_root,
+                            mod_id=spec.mod_id,
+                            package_name=spec.package_name,
+                            entity_id=module.module_id,
+                            texture_width=int(config.get("texture_width", 64)),
+                            texture_height=int(config.get("texture_height", 64)),
+                            max_health=float(config["max_health"]),
+                            attack_damage=float(config["attack_damage"]),
+                            movement_speed=float(config["movement_speed"]),
+                            follow_range=float(config["follow_range"]),
+                            archetype=str(config["archetype"]),
+                            behavior=str(config["behavior"]),
+                            entity_width=float(config["entity_width"]),
+                            entity_height=float(config["entity_height"]),
+                            spawn_group=str(config["spawn_group"]),
+                            texture_color=str(config["main_color"]),
+                            custom_bones=config.get("custom_bones")
+                            if isinstance(config.get("custom_bones"), list)
+                            else None,
+                            policy=self.policy,
+                        )
+                    )
             elif stage == 'custom':
                 receipts.extend(generate_custom(module) for module in members)
             else:

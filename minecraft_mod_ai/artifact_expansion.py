@@ -46,6 +46,42 @@ _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
 # Kept public for callers/tests, but every entry is verified before use.
 FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
 
+# These fact types are intentionally implemented by an existing module generator until
+# their executable leaf catalog is complete.  Keeping this declaration explicit prevents
+# a supported higher-level capability from being mistaken for an ArtifactJob leaf while
+# still failing closed for every undeclared fact type.
+DECLARED_GENERATOR_HANDOFFS = frozenset(
+    {
+        FactType.ENTITY_EXISTS,
+        FactType.GUI_EXISTS,
+        FactType.NETWORK_PACKET,
+        FactType.BLOCK_ENTITY_EXISTS,
+        FactType.DATA_COMPONENT,
+        FactType.WORLDGEN_FEATURE,
+        FactType.DIMENSION,
+        FactType.BIOME,
+        FactType.STATUS_EFFECT,
+        FactType.SOUND_EVENT,
+        FactType.PARTICLE_TYPE,
+        FactType.ENTITY_LOOT,
+        FactType.ADVANCEMENT,
+        FactType.EQUIPMENT_ARMOR,
+        FactType.CUSTOM_ITEM_BEHAVIOR,
+        FactType.CUSTOM_BLOCK_BEHAVIOR,
+        FactType.CONTENT_RELATION,
+    }
+)
+
+
+def implementation_route(fact_type: FactType) -> str:
+    if fact_type in FACT_EXPANSIONS:
+        return "artifact"
+    if fact_type in DECLARED_GENERATOR_HANDOFFS:
+        return "generator"
+    raise ArtifactExpansionError(
+        f"ARTIFACT_FACT_UNSUPPORTED: no implementation route exists for {fact_type.value}"
+    )
+
 
 def _constant_name(value: str) -> str:
     cleaned = "".join(c if c.isalnum() else "_" for c in value).strip("_")
@@ -170,12 +206,13 @@ def expand_facts_to_jobs(
     )
 
     for fact in facts:
-        template_ids = FACT_EXPANSIONS.get(fact.fact_type)
-        if template_ids is None:
-            raise ArtifactExpansionError(
-                f"ARTIFACT_FACT_UNSUPPORTED: no validated leaf expansion exists for "
-                f"{fact.fact_type.value}; do not silently skip or improvise it"
-            )
+        route = implementation_route(fact.fact_type)
+        if route == "generator":
+            # The ImplementationFact remains in the proposal and is consumed by the
+            # module generator selected from its content capability.  It is deliberately
+            # not represented as a fake/empty ArtifactJob.
+            continue
+        template_ids = FACT_EXPANSIONS[fact.fact_type]
 
         resource_values = {}
         if fact.fact_type in {

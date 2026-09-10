@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from hashlib import sha256
+import re
 
 from .atomic_slot_executor import SlotFillError
 from .complete_spec import AssetRequest, ProductionModule
@@ -236,7 +237,18 @@ def compile_content_graph(
             FactType.ITEM_EXISTS: visual_properties | {"display_name", "stack_limit"},
             FactType.BLOCK_EXISTS: visual_properties | {"display_name"},
             FactType.ENTITY_EXISTS: visual_properties
-            | {"display_name", "category", "health", "speed", "tracking_range"},
+            | {
+                "display_name",
+                "category",
+                "health",
+                "attack_damage",
+                "speed",
+                "tracking_range",
+                "width",
+                "height",
+                "archetype",
+                "behavior",
+            },
             FactType.GUI_EXISTS: visual_properties
             | {"display_name", "screen_type", "slot_count"},
             FactType.NETWORK_PACKET: {"display_name", "packet_name", "channel", "direction"},
@@ -306,6 +318,67 @@ def compile_content_graph(
             continue
         if "display_name" not in props:
             raise SlotFillError(f"CONTENT_PROPERTY_UNRESOLVED: {eid}.display_name")
+        if fact_type == FactType.ENTITY_EXISTS:
+            required_entity_properties = {
+                "category",
+                "health",
+                "attack_damage",
+                "speed",
+                "tracking_range",
+                "width",
+                "height",
+                "archetype",
+                "behavior",
+                "main_color",
+            }
+            missing_entity_properties = sorted(required_entity_properties - set(props))
+            if missing_entity_properties:
+                raise SlotFillError(
+                    f"CONTENT_PROPERTY_UNRESOLVED: {eid} missing {missing_entity_properties}"
+                )
+            for numeric_key in (
+                "health",
+                "attack_damage",
+                "speed",
+                "tracking_range",
+                "width",
+                "height",
+            ):
+                try:
+                    numeric_value = float(props[numeric_key])
+                except (TypeError, ValueError) as exc:
+                    raise SlotFillError(
+                        f"CONTENT_PROPERTY_INVALID: {eid}.{numeric_key}"
+                    ) from exc
+                if numeric_value <= 0:
+                    raise SlotFillError(
+                        f"CONTENT_PROPERTY_INVALID: {eid}.{numeric_key}"
+                    )
+            if props["category"].strip().lower() not in {
+                "monster",
+                "creature",
+                "ambient",
+                "water_creature",
+                "misc",
+            }:
+                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.category")
+            if props["archetype"].strip().lower() not in {
+                "biped",
+                "quadruped",
+                "flying",
+                "serpentine",
+                "construct",
+            }:
+                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.archetype")
+            if props["behavior"].strip().lower() not in {
+                "hostile_melee",
+                "neutral_melee",
+                "passive",
+                "npc",
+            }:
+                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.behavior")
+            if not re.fullmatch(r"#[0-9A-Fa-f]{6}", props["main_color"].strip()):
+                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.main_color")
         properties_by_id[eid] = props
         facts.append(
             ImplementationFact(
@@ -338,7 +411,7 @@ def compile_content_graph(
             FactType.CUSTOM_ITEM_BEHAVIOR: "item",
             FactType.CUSTOM_BLOCK_BEHAVIOR: "block",
         }
-        kind = fact_kind_map.get(fact_type, "item")
+        kind = fact_kind_map[fact_type]
         config = {
             "name": props["display_name"],
             "requirement_refs": node["requirement_refs"],
@@ -351,6 +424,21 @@ def compile_content_graph(
                 "stack_limit",
             }:
                 config[prop_key] = prop_val
+        if fact_type == FactType.ENTITY_EXISTS:
+            config.update(
+                {
+                    "max_health": float(props["health"]),
+                    "attack_damage": float(props["attack_damage"]),
+                    "movement_speed": float(props["speed"]),
+                    "follow_range": float(props["tracking_range"]),
+                    "entity_width": float(props["width"]),
+                    "entity_height": float(props["height"]),
+                    "archetype": props["archetype"].strip().lower(),
+                    "behavior": props["behavior"].strip().lower(),
+                    "spawn_group": props["category"].strip().lower(),
+                    "main_color": props["main_color"].strip(),
+                }
+            )
         if "stack_limit" in props:
             raw = props["stack_limit"]
             if kind != "item" or not raw.isdecimal() or not 1 <= int(raw) <= 64:

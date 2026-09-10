@@ -53,6 +53,7 @@ def generate_geckolib_entity_assets(
     entity_height: float = 2.0,
     follow_range: float = 40.0,
     spawn_group: str | None = None,
+    texture_color: str | None = None,
     custom_bones: list[dict[str, Any]] | None = None,
     policy: ScalePolicy | None = None,
 ) -> dict[str, Any]:
@@ -90,11 +91,14 @@ def generate_geckolib_entity_assets(
         raise GeckoLibGenerationError("Unknown or incomplete entity archetype.")
     if behavior not in _BEHAVIORS:
         raise GeckoLibGenerationError("Unknown entity behavior profile.")
-    spawn_group = spawn_group or (
-        "monster" if behavior == "hostile_melee" else "creature"
-    )
+    if spawn_group is None:
+        raise GeckoLibGenerationError("spawn_group must come from an explicit entity design.")
     if spawn_group not in _SPAWN:
         raise GeckoLibGenerationError("Unknown spawn group.")
+    if texture_color is None or not re.fullmatch(r"#[0-9A-Fa-f]{6}", texture_color):
+        raise GeckoLibGenerationError(
+            "texture_color must be an explicit #RRGGBB entity design value."
+        )
 
     info = inspect_fabric_project(project_root)
     if info.mod_id != mod_id or info.package_name != package_name:
@@ -185,7 +189,7 @@ def generate_geckolib_entity_assets(
     if not texture.exists():
         texture.write_bytes(
             make_texture_png(
-                "#5ba6d8",
+                texture_color,
                 entity_id,
                 kind="entity",
                 size=max(texture_width, texture_height),
