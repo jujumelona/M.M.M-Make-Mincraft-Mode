@@ -1,0 +1,13 @@
+id: research/content_extraction
+input:
+  evidence_items:
+task:
+  extract_observed_content:
+rules:
+  - Record concrete content identities and roles separately from behavior.
+  - Do not create missing content to make a system complete.
+output:
+  content_records:
+  evidence_refs:
+proof:
+  predicate: every content record has direct source evidence

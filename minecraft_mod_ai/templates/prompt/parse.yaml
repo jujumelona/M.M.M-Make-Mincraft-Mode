@@ -1,0 +1,13 @@
+id: prompt/parse
+input:
+  raw_prompt:
+task:
+  split_explicit_clauses:
+rules:
+  - Segment only explicit prompt text.
+  - Preserve source spans for every clause.
+  - Do not assign meaning beyond the text.
+output:
+  clauses:
+proof:
+  predicate: every clause maps to an exact non-overlapping or explicitly shared source span

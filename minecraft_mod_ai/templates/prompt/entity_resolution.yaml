@@ -1,0 +1,14 @@
+id: prompt/entity_resolution
+input:
+  raw_prompt:
+  clauses:
+task:
+  identify_explicit_reference_entities:
+rules:
+  - Resolve only names explicitly present in the prompt or already verified evidence.
+  - Do not invent a reference entity from similarity.
+output:
+  reference_entities:
+  unresolved_entities:
+proof:
+  predicate: every resolved entity has an explicit source span or verified identity receipt

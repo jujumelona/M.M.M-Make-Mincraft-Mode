@@ -1,0 +1,15 @@
+id: research/evidence_check
+input:
+  claim:
+  evidence_refs:
+task:
+  verify_claim_support:
+rules:
+  - Check identity, relevance, provenance, and direct support separately.
+  - A missing or contradictory source fails the claim.
+output:
+  supported:
+  failed_checks:
+  unresolved_conflicts:
+proof:
+  predicate: supported is true only when every required evidence check passes

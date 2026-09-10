@@ -1,0 +1,14 @@
+id: prompt/constraints
+input:
+  raw_prompt:
+  clauses:
+task:
+  extract_explicit_constraints:
+rules:
+  - Record only user-stated limits, exclusions, target requirements, and invariants.
+  - Do not turn defaults or conventions into user constraints.
+output:
+  constraints:
+  source_refs:
+proof:
+  predicate: every constraint points to an exact supporting prompt clause

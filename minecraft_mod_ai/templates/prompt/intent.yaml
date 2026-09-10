@@ -1,0 +1,15 @@
+id: prompt/intent
+input:
+  raw_prompt:
+  clauses:
+task:
+  identify_requested_goal:
+rules:
+  - Use only explicit prompt clauses.
+  - Keep uncertain intent unresolved instead of guessing.
+output:
+  goal:
+  supporting_clause_refs:
+  unresolved_intent:
+proof:
+  predicate: the goal is supported by cited prompt clauses or unresolved_intent is non-empty

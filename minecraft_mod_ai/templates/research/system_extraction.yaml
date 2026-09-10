@@ -1,0 +1,13 @@
+id: research/system_extraction
+input:
+  evidence_items:
+task:
+  extract_observed_systems:
+rules:
+  - Extract one independently evidenced system statement per record.
+  - Do not infer systems not present in evidence.
+output:
+  systems:
+  evidence_refs:
+proof:
+  predicate: every system statement is directly supported by cited evidence

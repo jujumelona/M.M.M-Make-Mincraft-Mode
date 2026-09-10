@@ -1,0 +1,15 @@
+id: research/reference_identity
+input:
+  reference_entities:
+  available_evidence:
+task:
+  verify_reference_identity:
+rules:
+  - Distinguish exact identity from similarly named entities.
+  - Mark ambiguity unresolved when evidence is insufficient.
+output:
+  verified_identities:
+  unresolved_identities:
+  evidence_refs:
+proof:
+  predicate: every verified identity has sufficient identity evidence

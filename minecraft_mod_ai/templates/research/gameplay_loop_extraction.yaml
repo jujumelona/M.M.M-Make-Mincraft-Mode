@@ -1,0 +1,13 @@
+id: research/gameplay_loop_extraction
+input:
+  evidence_items:
+task:
+  extract_observed_gameplay_loops:
+rules:
+  - Preserve trigger, action, feedback, and repeat condition only when evidenced.
+  - Leave missing loop stages unknown.
+output:
+  gameplay_loops:
+  evidence_refs:
+proof:
+  predicate: every populated loop stage has direct evidence

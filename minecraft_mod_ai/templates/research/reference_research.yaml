@@ -1,0 +1,14 @@
+id: research/reference_research
+input:
+  verified_identity:
+  information_need:
+task:
+  collect_relevant_reference_evidence:
+rules:
+  - Research only the supplied information need for the verified identity.
+  - Preserve source provenance and distinguish observed facts from inference.
+output:
+  evidence_items:
+  unanswered_questions:
+proof:
+  predicate: every evidence item has a source locator and directly addresses the information need

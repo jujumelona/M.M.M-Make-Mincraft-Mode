@@ -1,0 +1,15 @@
+id: prompt/output_requirements
+input:
+  raw_prompt:
+  clauses:
+task:
+  extract_requested_deliverables:
+rules:
+  - Record only explicitly requested outputs and completion conditions.
+  - Leave format or scope unspecified when the prompt does not state them.
+output:
+  deliverables:
+  completion_conditions:
+  unresolved_output_requirements:
+proof:
+  predicate: every emitted requirement is source-backed and unstated requirements remain absent

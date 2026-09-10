@@ -1,0 +1,13 @@
+id: research/audio_extraction
+input:
+  audio_evidence:
+task:
+  extract_observed_audio_requirements:
+rules:
+  - Separate sound identity, trigger, timing, looping, and spatial behavior when evidenced.
+  - Do not invent missing sounds.
+output:
+  audio_records:
+  evidence_refs:
+proof:
+  predicate: every audio record is supported by cited evidence

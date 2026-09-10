@@ -1,0 +1,13 @@
+id: prompt/capture
+input:
+  user_prompt:
+task:
+  preserve_prompt_exactly:
+rules:
+  - Copy the supplied prompt without semantic rewriting.
+  - Record source boundaries; do not infer missing text.
+output:
+  raw_prompt:
+  source_receipt:
+proof:
+  predicate: raw_prompt is byte-for-byte equivalent to the supplied prompt
