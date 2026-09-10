@@ -18,7 +18,11 @@ Every request starts from the same production baseline and adds only the capabil
 - add configuration, entities, rendering, GeckoLib animation, audio, commands, multiplayer systems, or mod-owned worldgen only when requested;
 - verify source with static checks, Eclipse JDT LS, Gradle, GameTest, dedicated-server loading, JAR inspection, runtime checks, SBOM, and provenance before release.
 
-The full method matrix is in [docs/MOD_DEVELOPMENT_METHODS.md](docs/MOD_DEVELOPMENT_METHODS.md).
+The canonical machine-readable method catalog is implemented in [`minecraft_mod_ai/mod_development_methods.py`](minecraft_mod_ai/mod_development_methods.py); `mod_development_method_catalog()` returns the complete catalog used by the runtime.
+
+## Historical evidence
+
+Past plans, executions, verification outcomes, failures, decisions, rejected alternatives, and unresolved work are indexed by [`minecraft_mod_ai/history_lifecycle_ledger.py`](minecraft_mod_ai/history_lifecycle_ledger.py). The history ledger stores references and lifecycle relations only. Proposal bodies, planning snapshots, transcripts, trajectories, verifier receipts, and root-cause payloads remain in their existing authoritative stores, so historical indexing does not create competing mutable copies of those artifacts. Verification uses the existing L0-L5 trajectory-verification vocabulary rather than model-authored success claims.
 
 ## Google Colab
 
