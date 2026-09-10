@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from copy import deepcopy
@@ -39,6 +39,40 @@ def validate_research_template_sequence() -> None:
             raise ValueError(f"RESEARCH_TEMPLATE: {identifier} must declare a proof predicate")
 
 
+def _evaluate_research_step(
+    identifier: str,
+    context: Mapping[str, Any],
+    output: dict[str, Any],
+) -> tuple[dict[str, Any], bool, str, str]:
+    if identifier == "research/reference_identity":
+        unres = list(output.get("unresolved_identities") or context.get("unresolved_identities") or [])
+        output["unresolved_identities"] = unres
+        if unres:
+            return output, False, f"Unresolved identities: {unres}", "BLOCKED"
+        return output, True, "", "PASS"
+
+    if identifier == "research/evidence_check":
+        failed = list(output.get("failed_checks") or context.get("failed_checks") or [])
+        conflicts = list(output.get("unresolved_conflicts") or context.get("unresolved_conflicts") or [])
+        explicit_supp = output.get("supported") if "supported" in output else context.get("supported")
+        if failed or conflicts or explicit_supp is False:
+            output["supported"] = False
+            output["failed_checks"] = failed or ["Evidence check failure"]
+            output["unresolved_conflicts"] = conflicts
+            return output, False, f"Evidence check failed: failed={output['failed_checks']}, conflicts={conflicts}", "BLOCKED"
+        output["supported"] = True
+        output["failed_checks"] = []
+        output["unresolved_conflicts"] = []
+        return output, True, "", "PASS"
+
+    # Generic check for blockers in research outputs
+    for key in ("unanswered_questions", "failed_checks", "unresolved_conflicts", "blocked_reason"):
+        val = output.get(key) or context.get(key)
+        if val:
+            return output, False, f"Blocked by {key}: {val}", "BLOCKED"
+    return output, True, "", "PASS"
+
+
 def execute_research_template(
     identifier: str,
     *,
@@ -56,16 +90,22 @@ def execute_research_template(
     predicate = str(proof.get("predicate") or "").strip()
 
     output_keys = list(template.get("output", {}).keys())
-    output = {}
+    output: dict[str, Any] = {}
     for key in output_keys:
         val = context.get(key)
         output[key] = deepcopy(val) if val is not None else []
 
+    output, passed, reason, status = _evaluate_research_step(identifier, context, output)
+
+    proof_payload: dict[str, Any] = {"passed": passed, "predicate": predicate}
+    if not passed and reason:
+        proof_payload["reason"] = reason
+
     receipt = {
         "template_id": identifier,
-        "status": "PASS",
+        "status": status,
         "output": output,
-        "proof": {"passed": True, "predicate": predicate},
+        "proof": proof_payload,
     }
 
     if checkpoint is not None:

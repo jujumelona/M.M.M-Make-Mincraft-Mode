@@ -1,9 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import pytest
 
 from minecraft_mod_ai.research_template_pipeline import (
     RESEARCH_SEQUENCE,
+    execute_research_template,
     run_research_pipeline,
     validate_research_template_sequence,
 )
@@ -41,3 +42,23 @@ def test_run_research_pipeline_generates_all_receipts():
     # Replay with saved progress
     replayed = run_research_pipeline(state, evidence_items=evidence, progress=saved_progress)
     assert replayed["receipts"] == result["receipts"]
+
+
+def test_research_proof_blocking():
+    # 1. Unresolved identities block research/reference_identity
+    r1 = execute_research_template(
+        "research/reference_identity",
+        context={"unresolved_identities": ["UnknownAmbiguousMob"]},
+    )
+    assert r1["status"] == "BLOCKED"
+    assert r1["proof"]["passed"] is False
+    assert "Unresolved identities" in r1["proof"]["reason"]
+
+    # 2. Failed checks block research/evidence_check and mark supported=False
+    r2 = execute_research_template(
+        "research/evidence_check",
+        context={"failed_checks": ["Claim provenance cannot be traced to primary source"]},
+    )
+    assert r2["status"] == "BLOCKED"
+    assert r2["proof"]["passed"] is False
+    assert r2["output"]["supported"] is False

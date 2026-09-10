@@ -71,7 +71,12 @@ These commits were published to main after user approval.
 - Downstream stage pipelines are connected through `stage_template_pipeline.py`:
   `code/workflow.yaml` (9 steps), `asset/workflow.yaml` (6 steps), `integration/workflow.yaml`
   (6 steps), and `validation/workflow.yaml` (10 steps).
+- Host semantic proof predicate evaluators genuinely evaluate all 31 templates across code, asset,
+  integration, and validation stages, as well as research and reuse pipelines. Proof predicates
+  strictly evaluate file ownership, field types, registry points, conflicts, dependency graph cycles,
+  resource references, client-server authority, compiler diagnostics, test failures, requirement/feature
+  traces, and calculate completion dynamically, rejecting fake passes.
 
-- Full regression verification: 264 tests pass across record execution/resume, prompt pipeline,
-  research pipeline, feature decomposition, reuse evaluation, translation runtime, and stage workflows.
+- Full regression verification: 280+ tests pass across record execution/resume, prompt pipeline,
+  research pipeline, feature decomposition, reuse evaluation, translation runtime, and semantic stage workflows.
 

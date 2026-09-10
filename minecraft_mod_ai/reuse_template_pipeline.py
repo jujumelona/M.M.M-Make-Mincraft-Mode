@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from copy import deepcopy
@@ -45,6 +45,52 @@ def validate_reuse_template_sequence() -> None:
             raise ValueError(f"REUSE_TEMPLATE: {identifier} must declare a proof predicate")
 
 
+def _evaluate_reuse_step(
+    identifier: str,
+    context: Mapping[str, Any],
+    output: dict[str, Any],
+) -> tuple[dict[str, Any], bool, str, str]:
+    if identifier == "reuse/license_check":
+        unres = list(output.get("unresolved_terms") or context.get("unresolved_terms") or [])
+        perm = output.get("permission_state") or context.get("permission_state")
+        output["unresolved_terms"] = unres
+        if unres or perm in ("forbidden", "blocked", "unknown"):
+            return output, False, f"License terms unresolved or not permitted: {unres or perm}", "BLOCKED"
+        return output, True, "", "PASS"
+
+    if identifier == "reuse/compatibility_check":
+        failed = list(output.get("failed_checks") or context.get("failed_checks") or [])
+        unres = list(output.get("unresolved_checks") or context.get("unresolved_checks") or [])
+        explicit_compat = output.get("compatible") if "compatible" in output else context.get("compatible")
+        if failed or unres or explicit_compat is False:
+            output["compatible"] = False
+            output["failed_checks"] = failed or ["Compatibility check failure"]
+            output["unresolved_checks"] = unres
+            return output, False, f"Compatibility failed: failed={output['failed_checks']}, unresolved={unres}", "BLOCKED"
+        output["compatible"] = True
+        output["failed_checks"] = []
+        output["unresolved_checks"] = []
+        return output, True, "", "PASS"
+
+    if identifier == "reuse/direct_reuse":
+        blocked = list(output.get("blocking_reasons") or context.get("blocking_reasons") or [])
+        explicit_direct = output.get("reusable_directly") if "reusable_directly" in output else context.get("reusable_directly")
+        if blocked or explicit_direct is False:
+            output["reusable_directly"] = False
+            output["blocking_reasons"] = blocked or ["Direct reuse blocked"]
+            return output, False, f"Direct reuse blocked: {output['blocking_reasons']}", "BLOCKED"
+        output["reusable_directly"] = True
+        output["blocking_reasons"] = []
+        return output, True, "", "PASS"
+
+    # Generic check for blockers in reuse outputs
+    for key in ("blocking_reasons", "blocked_reasons", "blocked_points", "failed_checks", "unresolved_adaptations", "unresolved_dependencies"):
+        val = output.get(key) or context.get(key)
+        if val:
+            return output, False, f"Blocked by {key}: {val}", "BLOCKED"
+    return output, True, "", "PASS"
+
+
 def execute_reuse_template(
     identifier: str,
     *,
@@ -62,16 +108,22 @@ def execute_reuse_template(
     predicate = str(proof.get("predicate") or "").strip()
 
     output_keys = list(template.get("output", {}).keys())
-    output = {}
+    output: dict[str, Any] = {}
     for key in output_keys:
         val = context.get(key)
         output[key] = deepcopy(val) if val is not None else []
 
+    output, passed, reason, status = _evaluate_reuse_step(identifier, context, output)
+
+    proof_payload: dict[str, Any] = {"passed": passed, "predicate": predicate}
+    if not passed and reason:
+        proof_payload["reason"] = reason
+
     receipt = {
         "template_id": identifier,
-        "status": "PASS",
+        "status": status,
         "output": output,
-        "proof": {"passed": True, "predicate": predicate},
+        "proof": proof_payload,
     }
 
     if checkpoint is not None:
