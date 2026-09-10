@@ -161,7 +161,6 @@ def execute_artifact_graph(
     by_id = {job.job_id: job for job in ordered_jobs}
     dependency_ids: dict[str, set[str]] = {}
     dependents: dict[str, list[str]] = {job.job_id: [] for job in ordered_jobs}
-    indegree: dict[str, int] = {}
     for job in ordered_jobs:
         required_producers = {
             producers[name]
@@ -169,9 +168,9 @@ def execute_artifact_graph(
             if name in producers
         }
         dependency_ids[job.job_id] = required_producers
-        indegree[job.job_id] = len(required_producers)
         for producer_id in required_producers:
             dependents[producer_id].append(job.job_id)
+    indegree = {job_id: len(required) for job_id, required in dependency_ids.items()}
     for producer_id in dependents:
         dependents[producer_id].sort(key=order.__getitem__)
 
