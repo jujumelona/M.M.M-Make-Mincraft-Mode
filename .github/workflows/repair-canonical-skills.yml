@@ -19,31 +19,112 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Restore canonical registry
+      - name: Install package
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Restore registry and migrate Skill policies
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('minecraft_mod_ai/skill_catalog.py')
-          text = path.read_text(encoding='utf-8')
+          import yaml
+
+          catalog = Path('minecraft_mod_ai/skill_catalog.py')
+          text = catalog.read_text(encoding='utf-8')
           old = """CANONICAL_SKILLS = (\n    'compile-massive-work-graph',\n    'converge-game-quality',\n    'execute-complete-production',\n    'gather-adaptive-minecraft-evidence',\n    'resume-production-run',\n    'route-generic-game-research',\n    'select-compatible-ai-technique',\n)\nPOLICY_NATIVE_SKILLS = frozenset(CANONICAL_SKILLS)\n"""
           new = """CANONICAL_SKILLS = ('intake-mod-brief', 'research-minecraft-evidence', 'plan-game-design', 'freeze-approved-spec', 'inspect-existing-project', 'generate-fabric-core', 'generate-datagen', 'generate-worldgen', 'generate-geckolib-entity', 'generate-quest-progression', 'generate-gui-networking', 'generate-textures', 'model-with-blockbench', 'compile-and-repair', 'runtime-playtest', 'visual-review', 'release-security', 'execute-complete-production', 'patch-existing-project', 'publish-release', 'compile-massive-work-graph', 'gather-adaptive-minecraft-evidence', 'ground-production-with-live-evidence', 'resume-production-run', 'route-generic-game-research', 'select-compatible-ai-technique', 'converge-game-quality')\nPOLICY_NATIVE_SKILLS = frozenset({'compile-massive-work-graph', 'gather-adaptive-minecraft-evidence', 'resume-production-run', 'route-generic-game-research', 'select-compatible-ai-technique', 'execute-complete-production', 'converge-game-quality'})\n"""
           if old not in text:
               raise SystemExit('canonical Skill block did not match expected current source')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          catalog.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          names = (
+              'intake-mod-brief', 'research-minecraft-evidence', 'plan-game-design',
+              'freeze-approved-spec', 'inspect-existing-project', 'generate-fabric-core',
+              'generate-datagen', 'generate-worldgen', 'generate-geckolib-entity',
+              'generate-quest-progression', 'generate-gui-networking', 'generate-textures',
+              'model-with-blockbench', 'compile-and-repair', 'runtime-playtest',
+              'visual-review', 'release-security', 'execute-complete-production',
+              'patch-existing-project', 'publish-release', 'compile-massive-work-graph',
+              'gather-adaptive-minecraft-evidence', 'ground-production-with-live-evidence',
+              'resume-production-run', 'route-generic-game-research',
+              'select-compatible-ai-technique', 'converge-game-quality',
+          )
+          for name in names:
+              path = Path('skills') / name / 'SKILL.md'
+              raw = path.read_text(encoding='utf-8')
+              if not raw.startswith('---\n'):
+                  raise SystemExit(f'{name}: missing frontmatter')
+              marker = raw.find('\n---\n', 4)
+              if marker < 0:
+                  raise SystemExit(f'{name}: malformed frontmatter')
+              front = yaml.safe_load(raw[4:marker])
+              if not isinstance(front, dict) or front.get('name') != name:
+                  raise SystemExit(f'{name}: invalid frontmatter name')
+              description = front.get('description')
+              if not isinstance(description, str) or not description.strip():
+                  raise SystemExit(f'{name}: invalid description')
+              body = raw[marker + 5:].strip()
+              if body.startswith('```yaml') and body.endswith('```'):
+                  body = body[len('```yaml'): -3].strip()
+              policy = yaml.safe_load(body)
+              if not isinstance(policy, dict):
+                  raise SystemExit(f'{name}: policy is not a mapping')
+
+              retry = policy.get('retry_policy')
+              if not isinstance(retry, dict):
+                  raise SystemExit(f'{name}: retry_policy missing')
+              strategy = str(retry.get('strategy') or '')
+              retry['require_fresh_evidence'] = bool(
+                  retry.get('require_fresh_evidence',
+                            'new ' in strategy.casefold() or 'fresh ' in strategy.casefold()
+                            or 'diagnostic' in strategy.casefold())
+              )
+              retry['stop_on_repeated_error_signature'] = bool(
+                  retry.get('stop_on_repeated_error_signature', True)
+              )
+
+              approval = policy.get('approval_required')
+              if not isinstance(approval, dict):
+                  raise SystemExit(f'{name}: approval_required missing')
+              policy['approval_required'] = {
+                  'writes': bool(approval.get('writes', False)),
+                  'runtime': bool(approval.get('runtime', False)),
+                  'release': bool(approval.get('release', name == 'publish-release')),
+              }
+
+              rendered_front = yaml.safe_dump(
+                  {'name': name, 'description': description.strip()},
+                  allow_unicode=True,
+                  sort_keys=False,
+              ).strip()
+              rendered_policy = yaml.safe_dump(
+                  policy,
+                  allow_unicode=True,
+                  sort_keys=False,
+                  width=120,
+              ).strip()
+              path.write_text(
+                  f'---\n{rendered_front}\n---\n\n```yaml\n{rendered_policy}\n```\n',
+                  encoding='utf-8',
+              )
           PY
-      - name: Install package
-        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Rebuild packaged skills
         run: python tools/package_skills.py
       - name: Validate skills
         run: |
           python -m ruff check minecraft_mod_ai/skill_catalog.py minecraft_mod_ai/packaged_skill_runtime.py tools/package_skills.py --select F,E7,E9
+          python - <<'PY'
+          from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS, compile_skill_catalog
+          contracts = compile_skill_catalog('skills')
+          assert len(CANONICAL_SKILLS) == 27
+          assert set(contracts) == set(CANONICAL_SKILLS)
+          print('canonical skill contracts:', len(contracts))
+          PY
           python -m pytest -q tests -k 'skill_catalog or packaged_skill'
-      - name: Commit repair and remove one-shot workflow
+      - name: Commit repair and remove repair workflows
         run: |
           git rm .github/workflows/repair-canonical-skills.yml
+          git rm -f .github/workflows/sync-generated-skill-catalog.yml || true
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add skills minecraft_mod_ai/skill_catalog.py minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
+          git add skills minecraft_mod_ai/skill_catalog.py minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills .github/workflows
           git commit -m 'Restore full canonical Skill catalog'
           git push origin HEAD:main
