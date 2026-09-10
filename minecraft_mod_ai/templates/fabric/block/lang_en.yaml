@@ -1,13 +1,20 @@
 id: fabric/block/lang_en
 artifact: json_fragment
 target:
+  operation: JSON_OBJECT_MERGE
   file: src/main/resources/assets/{{mod_id}}/lang/en_us.json
 requires:
   - mod_id
   - registry_path
   - display_name
+dependencies:
+  - "{{subject}}.block_registry_id"
 produces:
-  - block_translation_key
+  - name: block_translation_key
+    binding: "{{subject}}.block_translation_key"
+    kind: TRANSLATION_KEY
+    target_type: "Block"
+    value: "block.{{mod_id}}.{{registry_path}}"
 ai_slots: []
 render:
   language: json
@@ -23,3 +30,7 @@ fixture:
   expected_contains:
     - "block.space.lunite_ore"
     - "Lunite Ore"
+dependency_types:
+  '{{subject}}.block_registry_id':
+    kind: REGISTRY_ID
+    target_type: Block

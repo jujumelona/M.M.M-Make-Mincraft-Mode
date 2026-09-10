@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .artifact_job import ArtifactJob
+from .artifact_job_checkpoint import execute_checkpointed_job
 from .artifact_ports import PortRegistry
 from .task_template_runner import execute_artifact_template
 
@@ -38,6 +39,8 @@ def execute_artifact_graph(
 ) -> dict[str, Any]:
     """Run jobs only when every declared scoped dependency is available."""
     pending = list(jobs)
+    if len({job.job_id for job in pending}) != len(pending):
+        raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
     registry = port_registry or PortRegistry()
     producers = _producer_index(pending)
 
@@ -51,9 +54,7 @@ def execute_artifact_graph(
         if missing:
             missing_external[job.job_id] = missing
     if missing_external:
-        raise ArtifactGraphError(
-            f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}"
-        )
+        raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
     receipts: list[dict[str, Any]] = []
     completed: list[str] = []
@@ -69,12 +70,13 @@ def execute_artifact_graph(
             raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
         for job in runnable:
-            receipt = execute_artifact_template(
+            receipt = execute_checkpointed_job(
                 job,
                 context=context,
                 router=router,
-                port_registry=registry,
+                registry=registry,
                 base_dir=base_dir,
+                execute=execute_artifact_template,
             )
             if receipt.get("status") != "PASS":
                 raise ArtifactGraphError(

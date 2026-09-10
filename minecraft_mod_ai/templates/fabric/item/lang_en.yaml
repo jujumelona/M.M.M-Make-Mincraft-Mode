@@ -1,13 +1,20 @@
 ﻿id: fabric/item/lang_en
 artifact: json_fragment
 target:
+  operation: JSON_OBJECT_MERGE
   file: src/main/resources/assets/{{mod_id}}/lang/en_us.json
 requires:
   - mod_id
   - registry_path
   - display_name
+dependencies:
+  - "{{subject}}.registry_id"
 produces:
-  - translation_key
+  - name: translation_key
+    binding: "{{subject}}.translation_key"
+    kind: TRANSLATION_KEY
+    target_type: "Item"
+    value: "item.{{mod_id}}.{{registry_path}}"
 ai_slots: []
 render:
   language: json
@@ -23,3 +30,7 @@ fixture:
   expected_contains:
     - "item.space.raw_lunite"
     - "Raw Lunite"
+dependency_types:
+  '{{subject}}.registry_id':
+    kind: REGISTRY_ID
+    target_type: Item

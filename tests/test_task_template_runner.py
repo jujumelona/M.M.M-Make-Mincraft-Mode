@@ -53,3 +53,11 @@ def test_catalog_manifests_resolve_every_declared_task():
         task = load_template(path.relative_to(ROOT).with_suffix('').as_posix())
         for identifier in task.get('steps', []):
             assert load_template(identifier)['id'] == identifier
+
+
+def test_allowed_evidence_is_not_automatically_attached(monkeypatch):
+    responses=iter([{"status":"record","record":{"trigger":"click","owner":"server"},"reason":""},
+                    {"status":"done","record":None,"reason":""}])
+    drive(monkeypatch,responses)
+    result=runner.run_record_template(None,'feature/behavior_contract/entry_conditions',context={},allowed_refs={'unrelated_a','unrelated_b'})
+    assert result['evidence_refs']==[]

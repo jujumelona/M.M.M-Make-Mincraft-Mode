@@ -141,7 +141,7 @@ def canonical_game_design(design: Mapping[str, Any]) -> dict[str, Any]:
 def validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
     """Fail closed before retrieval when the host projection is incomplete."""
     result = canonical_game_design(design)
-    for field in ("core_loop", "progression", "acceptance_tests"):
+    for field in ("acceptance_tests",):
         value = result.get(field)
         if not isinstance(value, list) or not any(_text(item) for item in value):
             raise SpecValidationError(f"design readiness failed: {field} is empty")

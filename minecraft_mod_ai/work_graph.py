@@ -101,6 +101,9 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         ordered,
         policy=policy,
         deterministic_module_kinds=deterministic_module_kinds,
+        artifact_owners=frozenset(
+            job["owner_module"] for job in proposal.game_design.get("_artifact_jobs", ())
+        ),
     ):
         node_id = f'generate-{stage}-{len(generated_nodes):08d}'
         member_ids = {module.module_id for module in members}
@@ -637,7 +640,7 @@ def _module_stage(
     # reviewed by the authoritative target adapter belong on the deterministic
     # content lane. Unsupported target/kind pairs must use target-grounded source
     # editing instead of reaching the fail-closed mutation guard.
-    extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
+    extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
     if module.kind in extended_kinds:
         if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
             return 'content'
@@ -664,12 +667,13 @@ def _module_shards(
     *,
     policy: ScalePolicy,
     deterministic_module_kinds: frozenset[str] | None = None,
+    artifact_owners: frozenset[str] = frozenset(),
 ) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
     """Emit bounded dependency-ready waves while exposing safe stage parallelism."""
     staged = [
         (
             module,
-            _module_stage(
+            "content" if module.module_id in artifact_owners else _module_stage(
                 module,
                 deterministic_module_kinds=deterministic_module_kinds,
             ),

@@ -1,6 +1,7 @@
 id: fabric/block/key
 artifact: java_fragment
 target:
+  operation: JAVA_PATCH
   file: src/main/java/{{package_path}}/registry/ModBlockIds.java
   anchor: "/* MMM:block_keys */"
 requires:
@@ -8,8 +9,13 @@ requires:
   - registry_path
   - java_constant
   - package_path
+dependencies: []
 produces:
-  - block_key_symbol
+  - name: block_key_symbol
+    binding: "{{subject}}.block_key_symbol"
+    kind: JAVA_SYMBOL
+    target_type: "ResourceKey<Block>"
+    value: "ModBlockIds.{{java_constant}}_KEY"
 ai_slots: []
 render:
   language: java

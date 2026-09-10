@@ -1,0 +1,19 @@
+id: design/content_capability
+task: Select the single base Minecraft capability needed to implement this content
+  entity.
+record_schema:
+  type: object
+  properties:
+    fact_type:
+      type: string
+      minLength: 1
+      maxLength: 64
+  required:
+  - fact_type
+  additionalProperties: false
+rules:
+- Return an exact FactType name. Use UNSUPPORTED when no known capability represents
+  the entity.
+- Do not convert a machine, worldgen feature, entity, GUI, or sound to an item merely
+  because it is easier.
+- Supported base facts are ITEM_EXISTS, BLOCK_EXISTS, CRAFTING_RECIPE, SMELTING_RECIPE, REGISTRY_TAG. Other requested capabilities must remain explicit and unsupported.

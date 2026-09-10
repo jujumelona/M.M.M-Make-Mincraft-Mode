@@ -213,38 +213,35 @@ def test_autotune_keeps_baseline_when_gain_is_below_threshold() -> None:
     assert decision.selected.name == "baseline"
 
 
-def test_server_args_use_quality_neutral_performance_defaults(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
-    monkeypatch.delenv("MMM_LLAMA_BATCH", raising=False)
-    monkeypatch.delenv("MMM_LLAMA_UBATCH", raising=False)
-    monkeypatch.delenv("MMM_KV_CACHE_QUANT", raising=False)
+def test_native_server_sizing_requires_explicit_overrides(monkeypatch) -> None:
+    from inspect import unwrap
+
+    for key in ("MMM_LLAMA_SERVER_CTX", "MMM_LLAMA_BATCH", "MMM_LLAMA_UBATCH",
+                "MMM_KV_CACHE_QUANT", "MMM_LLAMA_PARALLEL"):
+        monkeypatch.delenv(key, raising=False)
+    native_args = unwrap(_base_args)
     config = SimpleNamespace(max_context=32768)
-    args = _base_args("llama-server", "/tmp/model.gguf", config, 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
-    assert args[args.index("--batch-size") + 1] == "2048"
-    assert args[args.index("--ubatch-size") + 1] == "512"
-    assert args[args.index("--gpu-layers") + 1] == "auto"
-    assert args[args.index("--parallel") + 1] == "1"
+    args = native_args("llama-server", "/tmp/model.gguf", config, 8910)
+    for flag in ("--ctx-size", "--batch-size", "--ubatch-size", "--cache-type-k", "--cache-type-v"):
+        assert flag not in args
+    assert args[args.index("--parallel") + 1] == "-1"
+    assert args[args.index("--gpu-layers") + 1] == "all"
     assert args[args.index("--flash-attn") + 1] == "on"
-    assert args[args.index("--cache-type-k") + 1] == "q4_0"
-    assert args[args.index("--cache-type-v") + 1] == "q4_0"
-    assert args[args.index("--load-mode") + 1] == "auto"
-    assert "--cache-prompt" in args
-    assert args[args.index("--cache-ram") + 1] == "1024"
+    assert args[args.index("--load-mode") + 1] == "none"
+    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "8192")
+    monkeypatch.setenv("MMM_LLAMA_UBATCH", "256")
+    monkeypatch.setenv("MMM_LLAMA_PARALLEL", "2")
+    args = native_args("llama-server", "/tmp/model.gguf", config, 8910)
+    assert args[args.index("--ctx-size") + 1] == "8192"
+    assert args[args.index("--ubatch-size") + 1] == "256"
+    assert args[args.index("--parallel") + 1] == "2"
 
 
 def test_speculative_server_flags_are_native() -> None:
-    assert _variant_args(ServerVariant("mtp-2", "draft-mtp", 2)) == [
-        "--spec-type",
-        "draft-mtp",
-        "--spec-draft-n-max",
-        "2",
-        "--spec-draft-n-min",
-        "0",
-        "--spec-draft-ngl",
-        "auto",
-    ]
-    assert _variant_args(ServerVariant("ngram-simple", "ngram-simple")) == [
-        "--spec-type",
-        "ngram-simple",
+    from inspect import unwrap
+
+    native_args = unwrap(_variant_args)
+    assert native_args(ServerVariant("baseline", "none")) == ["--spec-type", "none"]
+    assert native_args(ServerVariant("mtp-2", "draft-mtp", 2)) == [
+        "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--spec-draft-ngl", "all",
     ]

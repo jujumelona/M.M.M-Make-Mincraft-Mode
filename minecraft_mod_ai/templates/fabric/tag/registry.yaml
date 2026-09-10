@@ -1,0 +1,42 @@
+id: fabric/tag/registry
+artifact: json_resource
+target:
+  operation: CREATE_FILE
+  file: src/main/resources/data/{{mod_id}}/tags/{{registry_kind}}/{{registry_path}}.json
+requires:
+- registry_kind
+- members
+- mod_id
+- registry_path
+dependencies: []
+produces:
+- name: resource_ref
+  binding: '{{subject}}.resource_ref'
+  kind: GENERIC
+  target_type: Tag
+  value: '{{mod_id}}:{{registry_path}}'
+ai_slots: []
+render:
+  language: json
+  body:
+    replace: false
+    values: '{{members}}'
+validators:
+- json_parse
+- resource_references
+ownership: manual
+conflict_policy: reject
+fixture:
+  input:
+    mod_id: demo
+    registry_path: sample
+    registry_kind: item
+    members:
+    - demo:gem
+    minecraft_version: 1.21.2
+  expected_contains:
+  - demo:gem
+target_contract:
+  minimum_minecraft: 1.21.2
+  maximum_minecraft: '26.2'
+  source: https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-2

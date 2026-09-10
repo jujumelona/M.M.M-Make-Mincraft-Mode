@@ -9,10 +9,10 @@ Supports four materialization modes:
 4. binary_asset: Writes raw binary data (e.g. textures).
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
 import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,8 @@ def _resolve_path(path: Path | str, base_dir: Path | None = None) -> Path:
     p = Path(path)
     if base_dir is not None and not p.is_absolute():
         p = base_dir / p
+    if base_dir is not None and not p.resolve().is_relative_to(Path(base_dir).resolve()):
+        raise MaterializeError(f"TARGET_ESCAPE: {p}")
     return p
 
 
@@ -222,7 +224,46 @@ def materialize_job_output(
     if not target_file:
         raise MaterializeError(f"JOB_NO_TARGET: Job {job.job_id} has no target_path")
 
+    operation = job.operation
+    if operation and operation not in {"CREATE_FILE", "REPLACE_FILE", "JAVA_PATCH", "JSON_OBJECT_MERGE", "JSON_ARRAY_MERGE", "BINARY_WRITE"}:
+        raise MaterializeError(f"JOB_OPERATION_UNSUPPORTED: {operation}")
+    p = _resolve_path(target_file, base_dir)
+    if base_dir is not None:
+        root = Path(base_dir).resolve()
+        for origin, other in (("src/main/resources", "src/main/generated"), ("src/main/generated", "src/main/resources")):
+            source = root / origin
+            if p.resolve().is_relative_to(source):
+                counterpart = root / other / p.resolve().relative_to(source)
+                if counterpart.is_file():
+                    raise MaterializeError(f"RESOURCE_OWNERSHIP_CONFLICT: {p} and {counterpart}")
+    if operation and operation != "JAVA_PATCH" and job.anchor:
+        raise MaterializeError("OPERATION_ANCHOR_CONFLICT")
+    if operation == "BINARY_WRITE" and not isinstance(rendered_content, bytes):
+        raise MaterializeError("BINARY_BYTES_REQUIRED")
+    if operation == "REPLACE_FILE":
+        if not p.is_file() or not job.expected_sha256:
+            raise MaterializeError("REPLACE_REQUIRES_BEFORE_HASH")
+        return materialize_whole_file(target_file, rendered_content, base_dir=base_dir, expected_sha256=job.expected_sha256)
+    if operation == "JSON_ARRAY_MERGE":
+        incoming = json.loads(rendered_content) if isinstance(rendered_content, str) else rendered_content
+        current = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+        if not isinstance(incoming, list) or not isinstance(current, list):
+            raise MaterializeError("JSON_ARRAY_REQUIRED")
+        merged = list(current)
+        for value in incoming:
+            if value not in merged:
+                merged.append(value)
+        return materialize_whole_file(p, json.dumps(merged, ensure_ascii=False)+"\n", base_dir=base_dir)
+    if operation in {"CREATE_FILE", "BINARY_WRITE"} and p.is_file():
+        incoming = rendered_content if isinstance(rendered_content, bytes) else (
+            json.dumps(rendered_content, indent=2, ensure_ascii=False)+"\n"
+            if isinstance(rendered_content, (dict,list)) else str(rendered_content)
+        ).encode("utf-8")
+        if p.read_bytes() != incoming:
+            raise MaterializeError(f"EXCLUSIVE_FILE_CONFLICT: {p}")
     # If anchor is specified, perform java_patch
+    if operation == "JAVA_PATCH" and not job.anchor:
+        raise MaterializeError("JAVA_ANCHOR_REQUIRED")
     if job.anchor:
         # Settings properties are per-item and should replace the anchor
         is_property_anchor = "properties:" in job.anchor
@@ -236,7 +277,7 @@ def materialize_job_output(
         )
 
     # If it's a JSON fragment (e.g. lang file), perform json_merge
-    if target_file.endswith(".json") and (isinstance(rendered_content, Mapping) or "lang" in job.template_id):
+    if operation == "JSON_OBJECT_MERGE" or (not operation and target_file.endswith(".json") and (isinstance(rendered_content, Mapping) or "lang" in job.template_id)):
         if isinstance(rendered_content, str):
             fragment = json.loads(rendered_content)
         else:

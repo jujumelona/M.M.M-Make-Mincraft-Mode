@@ -1,12 +1,19 @@
 ﻿id: fabric/item/model_basic
 artifact: json_resource
 target:
+  operation: CREATE_FILE
   file: src/main/resources/assets/{{mod_id}}/models/item/{{registry_path}}.json
 requires:
   - mod_id
   - registry_path
+dependencies:
+  - "{{subject}}.registry_id"
 produces:
-  - model_ref
+  - name: model_ref
+    binding: "{{subject}}.model_ref"
+    kind: MODEL_REF
+    target_type: "Item"
+    value: "{{mod_id}}:item/{{registry_path}}"
 ai_slots: []
 render:
   language: json
@@ -23,3 +30,7 @@ fixture:
   expected_contains:
     - "minecraft:item/generated"
     - "space:item/raw_lunite"
+dependency_types:
+  '{{subject}}.registry_id':
+    kind: REGISTRY_ID
+    target_type: Item

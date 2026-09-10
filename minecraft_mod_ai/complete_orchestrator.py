@@ -639,7 +639,7 @@ class CompleteProductionOrchestrator:
         generation_nodes = tuple(node for node in work_plan.nodes if node.stage.startswith('generate:'))
         node_by_id = {node.node_id: node for node in generation_nodes}
         generation_stages = tuple(sorted({node.stage for node in generation_nodes}))
-        extended_kinds = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot'}
+        extended_kinds = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot'}
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
@@ -708,12 +708,23 @@ class CompleteProductionOrchestrator:
                                 artifact_jobs_to_run.append(job_obj)
                                 seen_job_ids.add(job_obj.job_id)
 
-                # Also include prerequisite artifact jobs (such as drop items)
-                for rj in raw_jobs:
-                    job_obj = ArtifactJob.from_dict(rj) if isinstance(rj, dict) else rj
-                    if job_obj.job_id not in seen_job_ids:
-                        artifact_jobs_to_run.append(job_obj)
-                        seen_job_ids.add(job_obj.job_id)
+                # Include only the exact transitive prerequisites of these owners.
+                all_jobs = [ArtifactJob.from_dict(j) if isinstance(j, dict) else j for j in raw_jobs]
+                producers = {}
+                for candidate in all_jobs:
+                    for port in candidate.produces:
+                        if port in producers and producers[port].job_id != candidate.job_id:
+                            raise CompleteProductionError(f"ARTIFACT_DUPLICATE_PRODUCER: {port}")
+                        producers[port] = candidate
+                cursor = 0
+                while cursor < len(artifact_jobs_to_run):
+                    current_job = artifact_jobs_to_run[cursor]
+                    cursor += 1
+                    for dependency in current_job.requires:
+                        prerequisite = producers.get(dependency)
+                        if prerequisite is not None and prerequisite.job_id not in seen_job_ids:
+                            artifact_jobs_to_run.append(prerequisite)
+                            seen_job_ids.add(prerequisite.job_id)
 
                 if artifact_jobs_to_run:
                     ensure_artifact_scaffolding(
@@ -737,6 +748,10 @@ class CompleteProductionOrchestrator:
                     from .generator import make_texture_png
 
                     for module in artifact_handled_members:
+                        if module.kind not in {"item", "block"}:
+                            continue
+                        if any(a.asset_id == f"texture_{module.kind}_{module.module_id}" for a in approved.assets):
+                            continue
                         subfolder = "block" if module.kind == "block" else "item"
                         tex_path = (
                             project_root
@@ -744,10 +759,10 @@ class CompleteProductionOrchestrator:
                         )
                         if not tex_path.is_file():
                             tex_path.parent.mkdir(parents=True, exist_ok=True)
-                            color = str(
-                                (module.config.get("color") if isinstance(module.config, dict) else None)
-                                or "#74c7ec"
-                            )
+                            color = module.config.get("color") if isinstance(module.config, dict) else None
+                            if not color:
+                                raise CompleteProductionError(f"ARTIFACT_TEXTURE_UNRESOLVED: {module.module_id}")
+                            color = str(color)
                             tex_path.write_bytes(
                                 make_texture_png(color, module.module_id, kind=subfolder, size=16)
                             )

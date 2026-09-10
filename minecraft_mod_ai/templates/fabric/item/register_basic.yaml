@@ -1,6 +1,7 @@
 id: fabric/item/register_basic
 artifact: java_fragment
 target:
+  operation: JAVA_PATCH
   file: src/main/java/{{package_path}}/registry/ModItems.java
   anchor: "/* MMM:item_registry */"
 requires:
@@ -8,9 +9,19 @@ requires:
   - registry_path
   - java_constant
   - package_path
+dependencies:
+  - "{{subject}}.key_symbol"
 produces:
-  - item_registry_id
-  - item_symbol
+  - name: item_registry_id
+    binding: "{{subject}}.registry_id"
+    kind: REGISTRY_ID
+    target_type: "Item"
+    value: "{{mod_id}}:{{registry_path}}"
+  - name: item_symbol
+    binding: "{{subject}}.java_symbol"
+    kind: JAVA_SYMBOL
+    target_type: "Item"
+    value: "ModItems.{{java_constant}}"
 ai_slots: []
 render:
   language: java
@@ -36,3 +47,7 @@ fixture:
     - "ModItemIds.RAW_LUNITE_KEY"
     - "raw_lunite"
     - "RAW_LUNITE"
+dependency_types:
+  '{{subject}}.key_symbol':
+    kind: JAVA_SYMBOL
+    target_type: ResourceKey<Item>

@@ -26,7 +26,7 @@ def test_planner_lowers_implementation_facts_and_jobs():
         ProductionModule(
             "raw_lunite",
             "item",
-            {"name": "Raw Lunite", "stack_limit": 16},
+            {"name": "Raw Lunite", "stack_limit": 16, "color": "#808080"},
         ),
     )
     facts, jobs = _lower_implementation_facts_and_jobs(modules, base.spec)
@@ -58,7 +58,7 @@ def test_orchestrator_executes_artifact_jobs_and_materializes_to_disk(tmp_path: 
         ProductionModule(
             "raw_lunite",
             "item",
-            {"name": "Raw Lunite", "stack_limit": 16},
+            {"name": "Raw Lunite", "stack_limit": 16, "color": "#808080"},
         ),
     )
 
@@ -125,12 +125,12 @@ def test_orchestrator_executes_artifact_jobs_for_blocks_and_materializes_to_disk
         ProductionModule(
             "raw_lunite",
             "item",
-            {"name": "Raw Lunite"},
+            {"name": "Raw Lunite", "color": "#808080"},
         ),
         ProductionModule(
             "lunite_ore",
             "block",
-            {"name": "Lunite Ore", "drop": "raw_lunite"},
+            {"name": "Lunite Ore", "drop": "raw_lunite", "color": "#808080"},
         ),
     )
 

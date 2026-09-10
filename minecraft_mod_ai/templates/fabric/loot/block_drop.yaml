@@ -1,13 +1,21 @@
 id: fabric/loot/block_drop
 artifact: json_resource
 target:
+  operation: CREATE_FILE
   file: src/main/resources/data/{{mod_id}}/loot_tables/blocks/{{registry_path}}.json
 requires:
   - mod_id
   - registry_path
   - drop_item
+dependencies:
+  - "{{subject}}.block_registry_id"
+  - "{{drop_item}}.registry_id"
 produces:
-  - block_loot_table_ref
+  - name: block_loot_table_ref
+    binding: "{{subject}}.block_loot_table_ref"
+    kind: GENERIC
+    target_type: "LootTable"
+    value: "{{mod_id}}:blocks/{{registry_path}}"
 ai_slots: []
 render:
   language: json
@@ -31,3 +39,10 @@ fixture:
     - "minecraft:block"
     - "space:raw_lunite"
     - "minecraft:survives_explosion"
+dependency_types:
+  '{{subject}}.block_registry_id':
+    kind: REGISTRY_ID
+    target_type: Block
+  '{{drop_item}}.registry_id':
+    kind: REGISTRY_ID
+    target_type: Item

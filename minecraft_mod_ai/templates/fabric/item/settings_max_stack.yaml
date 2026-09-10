@@ -1,12 +1,15 @@
 id: fabric/item/settings_max_stack
 artifact: java_fragment
 target:
+  operation: JAVA_PATCH
   file: src/main/java/{{package_path}}/registry/ModItems.java
   anchor: "/* MMM:properties:{{registry_path}} */"
 requires:
   - stack_limit
   - package_path
   - registry_path
+dependencies:
+  - "{{subject}}.java_symbol"
 produces: []
 ai_slots: []
 render:
@@ -21,3 +24,7 @@ fixture:
     registry_path: raw_lunite
   expected_contains:
     - ".stacksTo(16)"
+dependency_types:
+  '{{subject}}.java_symbol':
+    kind: JAVA_SYMBOL
+    target_type: Item

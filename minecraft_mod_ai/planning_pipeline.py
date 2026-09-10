@@ -72,6 +72,7 @@ class PlanningPipeline:
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
         self.planning_state: dict[str, Any] | None = None
+        self.design_progress: dict[str, Any] = {}
 
     def prepare(
         self,
@@ -202,6 +203,7 @@ class PlanningPipeline:
                         "evidence": planning_state.get("evidence", []),
                     },
                     request_catalog=request_catalog,
+                    progress=self.design_progress,
                 ),
             )
             design = dict(atomic_design)
@@ -224,6 +226,9 @@ class PlanningPipeline:
                 "_atomic_facts": atomic_design.get("_implementation_facts", []),
                 "_atomic_modules": atomic_design.get("modules", []),
                 "_atomic_assets": atomic_design.get("assets", []),
+                "_content_entities": atomic_design.get("_content_entities", []),
+                "_content_relations": atomic_design.get("_content_relations", []),
+                "_research_facts": atomic_design.get("_research_facts", []),
             }
             try:
                 pre_retrieval_plan = _host_operation(
@@ -257,10 +262,28 @@ class PlanningPipeline:
             "deterministic_bootstrap",
             lambda: host_design.deterministic_bootstrap(prompt, design),
         )
+        if design.get("_content_entities"):
+            # All content is owned by the graph; bootstrap must not invent another item/block.
+            build_slice["contents"] = []
+            build_slice["deferred_capabilities"] = []
         proposal = _host_operation(
             "lower_model_data_to_proposal",
             lambda: _proposal_from_model_data(prompt, build_slice),
         )
+        if design.get("_content_entities"):
+            proposal = replace(proposal, spec=replace(proposal.spec, boss=None),
+                               deferred_requests=(), approval_hash="").with_hash()
+            from .complete_spec import AssetRequest
+            assets = []
+            for asset in design.get("_atomic_assets", ()):
+                if not isinstance(asset, AssetRequest):
+                    raise PlanningStageError(PlanningStage.DESIGN, "atomic asset must be typed")
+                parts = asset.target_path.split("/")
+                if len(parts) < 3 or parts[0] != "assets":
+                    raise PlanningStageError(PlanningStage.DESIGN, "atomic asset has invalid namespace path")
+                parts[1] = proposal.spec.mod_id
+                assets.append(replace(asset, target_path="/".join(parts)))
+            design = {**design, "assets":assets, "_atomic_assets":assets}
         if proposal.requested_prompt != prompt:
             proposal = replace(
                 proposal,

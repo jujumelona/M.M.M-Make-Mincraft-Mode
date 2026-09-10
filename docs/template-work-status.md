@@ -1,5 +1,75 @@
 # Small task template migration
 
+## Executable content graph and resource leaves (2026-09-10)
+
+The normal planning path now calls `atomic_design_pipeline.compile_atomic_design`
+through `PlanningPipeline`. `content_design_graph.py` asks for one entity, relation,
+capability, property, research fact or design decision per response. It preserves
+requirement IDs and exact research source bindings, checks duplicate and dangling
+edges, and lowers supported graph nodes into authoritative ImplementationFacts.
+The old prompt-stem item/block invention and keyword-selected design filler are
+removed. Canonicalization retains the graph and clears bootstrap content guesses.
+Each node's capability/property calls receive its incident relations and relevant
+authored decisions/research. Visual properties feed distinct existing item-sprite
+and block-texture asset requests under the actual selected namespace.
+
+`artifact_expansion.py` reads targets, operations, scoped ports and dependencies
+from executable Fabric YAML. New shaped/shapeless, smelting/blasting and registry-tag
+leaves render typed host JSON, with explicit recipe counts and cooking values.
+`resource_fact_inputs.py` rejects missing, extra or invalid fields;
+`artifact_validators/resource_links.py` checks ingredient/result/tag references
+against typed registry ports or an explicit host registry inventory. Local graph
+references bind to the selected mod namespace. These resource molds declare the
+1.21.2 through 26.2 data format range; this declaration is not Java/runtime proof.
+The existing block-drop leaf remains deterministic and now requires an explicit
+existing item dependency rather than inventing a drop item.
+
+`artifact_materializer.py` distinguishes CREATE_FILE, REPLACE_FILE, JAVA_PATCH,
+JSON_OBJECT_MERGE, JSON_ARRAY_MERGE and BINARY_WRITE. It confines targets to the
+project, rejects mismatched hashes and ambiguous anchors, merges JSON keys without
+replacing conflicts, and rejects simultaneous manual/generated resource ownership.
+`task_template_runner.py` checks typed ports and conflicting publications before
+writing. `complete_orchestrator.py` runs only a module's jobs and their transitive
+prerequisites. `work_graph.py` routes artifact-owned recipe/tag modules correctly.
+
+`artifact_job_checkpoint.py` persists template/input/dependency hashes, before/after
+file hashes, validator receipts and published ports in `.mmm/artifact_jobs.json`.
+Exact replay verifies the latest shared-file hash, restores ports and skips writes.
+Changed inputs require explicit adaptation; changed files fail closed. This is
+verified job replay, not a general source-code REUSE/ADAPT classifier. Existing
+project inventory, repository reuse and source-edit infrastructure remain in place.
+The project lock is process-local; cross-process concurrent writers and interruption
+between file write and checkpoint save are not transactional guarantees.
+
+Verification: 306 passed and 2 skipped across 48 selected regression files. After
+adding three explicit-operation safety cases, the materializer file passed all 13
+tests (309 distinct passing cases across these runs). New core modules pass Ruff;
+`git diff --check` passes. This is a selected regression suite, not the entire repo.
+
+Regression coverage includes multi-entity planning, research ownership, no-router
+failure, graph-to-recipe execution, typed JSON fixtures, missing refs, version gates,
+resource ownership conflicts, typed dependency mismatch and shared-Java-file replay.
+Legacy server-option and recorded-plan fixtures now assert current native-option
+and structural-root contracts; missing historical artifact coverage remains visible.
+No real local-model completion, Gradle build or Minecraft GameTest was run here.
+The available JDK is 17 and this checkout supplies no Gradle wrapper for a generated
+fixture. Python/source validation must not be reported as a playable mod result.
+
+Remaining executable graph domains: Entity/renderer, GUI and networking with explicit
+client/server authority, BlockEntity/machine, worldgen, sound, and entity loot.
+These do not receive an invented Item fallback. Low-level entity tags can use a
+host-provided registry inventory; graph lowering currently supports item/block tags.
+Rename-only and texture-only source adaptation still need a dedicated fact-to-reuse
+path; existing general reuse is not yet an exact decision for every ArtifactJob.
+The next bottleneck is that per-fact inventory/ADAPT binding, followed by durable
+normal-planning design-record checkpoints across process restarts. Current design
+record progress can replay within the supplied progress mapping. Artifact job
+checkpoints themselves are durable.
+
+Remaining large AI work includes aggregate accepted-record/graph input context and
+legacy review/repair workflows outside this connected slice. Output records stay
+small, but this change does not establish a bound on every model input in the repo.
+
 Implemented and connected:
 
 - Feature worksheet record layouts load from `minecraft_mod_ai/templates/feature/`.

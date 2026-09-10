@@ -1,6 +1,7 @@
 id: fabric/block/register_basic
 artifact: java_fragment
 target:
+  operation: JAVA_PATCH
   file: src/main/java/{{package_path}}/registry/ModBlocks.java
   anchor: "/* MMM:block_registry */"
 requires:
@@ -8,9 +9,19 @@ requires:
   - registry_path
   - java_constant
   - package_path
+dependencies:
+  - "{{subject}}.block_key_symbol"
 produces:
-  - block_registry_id
-  - block_symbol
+  - name: block_registry_id
+    binding: "{{subject}}.block_registry_id"
+    kind: REGISTRY_ID
+    target_type: "Block"
+    value: "{{mod_id}}:{{registry_path}}"
+  - name: block_symbol
+    binding: "{{subject}}.block_symbol"
+    kind: JAVA_SYMBOL
+    target_type: "Block"
+    value: "ModBlocks.{{java_constant}}"
 ai_slots: []
 render:
   language: java
@@ -35,3 +46,7 @@ fixture:
     - "ModBlockIds.LUNITE_ORE_KEY"
     - "lunite_ore"
     - "LUNITE_ORE"
+dependency_types:
+  '{{subject}}.block_key_symbol':
+    kind: JAVA_SYMBOL
+    target_type: ResourceKey<Block>

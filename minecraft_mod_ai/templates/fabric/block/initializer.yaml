@@ -1,11 +1,14 @@
 id: fabric/block/initializer
 artifact: java_fragment
 target:
+  operation: JAVA_PATCH
   file: src/main/java/{{package_path}}/{{main_class}}.java
   anchor: "/* MMM:init */"
 requires:
   - package_path
   - main_class
+dependencies:
+  - "{{subject}}.block_symbol"
 produces: []
 ai_slots: []
 render:
@@ -19,3 +22,7 @@ fixture:
     main_class: SpaceMod
   expected_contains:
     - "ModBlocks.initialize();"
+dependency_types:
+  '{{subject}}.block_symbol':
+    kind: JAVA_SYMBOL
+    target_type: Block

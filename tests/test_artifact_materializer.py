@@ -157,3 +157,47 @@ def test_ensure_artifact_scaffolding_includes_blocks(tmp_path: Path):
     assert "ModBlocks.initialize();" in main_content
     assert "ModItems.initialize();" in main_content
 
+
+
+def test_explicit_replace_requires_matching_existing_hash(tmp_path):
+    from hashlib import sha256
+
+    target = tmp_path / "owned.txt"
+    target.write_bytes(b"original")
+    job = ArtifactJob("replace", "test", "owner", "owned.txt", operation="REPLACE_FILE")
+    with pytest.raises(MaterializeError, match="REPLACE_REQUIRES_BEFORE_HASH"):
+        materialize_job_output(job, "changed", base_dir=tmp_path)
+    job.expected_sha256 = "stale"
+    with pytest.raises(MaterializeError, match="SHA_MISMATCH"):
+        materialize_job_output(job, "changed", base_dir=tmp_path)
+    assert target.read_bytes() == b"original"
+    job.expected_sha256 = sha256(b"original").hexdigest()
+    receipt = materialize_job_output(job, "changed", base_dir=tmp_path)
+    assert receipt.before_sha256 == job.expected_sha256
+    assert target.read_bytes() == b"changed"
+
+
+def test_explicit_array_merge_preserves_siblings_and_rejects_objects(tmp_path):
+    target = tmp_path / "values.json"
+    target.write_text('[{"id":"old"}]', encoding="utf-8")
+    job = ArtifactJob("merge", "test", "owner", "values.json", operation="JSON_ARRAY_MERGE")
+    materialize_job_output(job, [{"id":"old"}, {"id":"new"}], base_dir=tmp_path)
+    assert json.loads(target.read_text()) == [{"id":"old"}, {"id":"new"}]
+    before = target.read_bytes()
+    with pytest.raises(MaterializeError, match="JSON_ARRAY_REQUIRED"):
+        materialize_job_output(job, {}, base_dir=tmp_path)
+    assert target.read_bytes() == before
+
+
+def test_explicit_binary_ownership_and_target_confinement(tmp_path):
+    job = ArtifactJob("image", "test", "owner", "texture.bin", operation="BINARY_WRITE")
+    with pytest.raises(MaterializeError, match="BINARY_BYTES_REQUIRED"):
+        materialize_job_output(job, "text", base_dir=tmp_path)
+    materialize_job_output(job, b"image bytes", base_dir=tmp_path)
+    materialize_job_output(job, b"image bytes", base_dir=tmp_path)
+    with pytest.raises(MaterializeError, match="EXCLUSIVE_FILE_CONFLICT"):
+        materialize_job_output(job, b"different", base_dir=tmp_path)
+    assert (tmp_path / "texture.bin").read_bytes() == b"image bytes"
+    job.target_path = "../escaped.bin"
+    with pytest.raises(MaterializeError, match="TARGET_ESCAPE"):
+        materialize_job_output(job, b"escape", base_dir=tmp_path)

@@ -1,7 +1,7 @@
 "One declared concern per model call, plus deterministic executable leaf templates."
 
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -104,8 +104,6 @@ def run_record_template(
                 for r in ev:
                     if isinstance(r, str) and r in allowed_refs and r not in grounded_refs:
                         grounded_refs.append(r)
-            if not grounded_refs and allowed_refs:
-                grounded_refs = sorted(allowed_refs)[:4]
             value["evidence_refs"] = grounded_refs
         if any(ref not in allowed_refs for ref in value["evidence_refs"]):
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
@@ -164,6 +162,8 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
         raise ValueError(
             "TEMPLATE_PORT_REGISTRY_REQUIRED: job declares dependencies but no port registry was supplied"
         )
+    required_types = {p["name"]:p for p in _job_value(job, "required_ports", ())}
+    aliases = [str(d).rsplit(".",1)[-1] for d in dependencies if isinstance(d,str)]
     for dependency in dependencies:
         if isinstance(dependency, Mapping) or hasattr(dependency, "port_kind"):
             name = getattr(dependency, "name", None) or dependency.get("name")
@@ -178,7 +178,13 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
                 raise ValueError(
                     f"TEMPLATE_JOB_DEPENDENCY_MISSING: required scoped port {dep_name!r} is unavailable"
                 )
+        expected = required_types.get(dep_name)
+        if expected is not None:
+            port_registry.resolve(dep_name, expected["kind"], expected["target_type"])
         alias = dep_name.rsplit(".", 1)[-1]
+        values.setdefault("dependency_ports", {})[dep_name] = port.value
+        if aliases.count(alias) > 1:
+            continue
         existing = values.get(alias)
         if existing is not None and str(existing) != port.value:
             raise ValueError(
@@ -220,10 +226,12 @@ def _logical_port(
     from .implementation_template_renderer import render_template
 
     if isinstance(logical_name, Mapping):
-        kind_str = str(logical_name.get("kind") or "GENERIC")
-        kind = PortKind(kind_str) if kind_str in PortKind.__members__.values() else PortKind.GENERIC
-        target_type = str(logical_name.get("target_type") or "Object")
-        raw_val = logical_name.get("value", "")
+        for key in ("name", "kind", "target_type", "value"):
+            if not isinstance(logical_name.get(key), str) or not logical_name[key].strip():
+                raise ValueError(f"TEMPLATE_PORT_DECLARATION: {template_id!r} missing {key}")
+        kind = PortKind(logical_name["kind"])
+        target_type = logical_name["target_type"]
+        raw_val = logical_name["value"]
         if isinstance(raw_val, str) and "{{" in raw_val:
             rendered_val = render_template({"render": raw_val}, values)
         else:
@@ -275,6 +283,8 @@ def execute_artifact_template(
     det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
     values: dict[str, Any] = {**context_map, **det_inputs}
 
+    from .artifact_target_contract import validate_artifact_target
+    validate_artifact_target(template, values.get("minecraft_version", ""))
     _bind_job_dependencies(job, values, port_registry)
     for required in tuple(template.get("requires", ()) or ()):
         if required not in values:
@@ -311,6 +321,7 @@ def execute_artifact_template(
         "registry_identifier_unique",
         "registry_identifier",
         "json_parse",
+        "resource_references",
     }
     declared_validators = tuple(template.get("validators", ()) or ())
     unknown = [name for name in declared_validators if name not in supported_validators]
@@ -329,6 +340,9 @@ def execute_artifact_template(
                     f"{values.get('mod_id', '')}:{values.get('registry_path', '')}"
                 )
             )
+        elif validator_name == "resource_references":
+            from .artifact_validators.resource_links import validate_resource_links
+            validation_receipts.append(validate_resource_links(rendered_output, values, port_registry))
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
 
@@ -342,11 +356,19 @@ def execute_artifact_template(
             f"TEMPLATE_PORT_ARITY: job {str(_job_value(job, 'job_id', ''))!r} declares "
             f"{len(scoped_outputs)} scoped outputs for {len(logical_outputs)} template outputs"
         )
-    published_names = scoped_outputs or logical_outputs
+    published_names = scoped_outputs or tuple(
+        port["name"] if isinstance(port, Mapping) else port for port in logical_outputs
+    )
 
     ports_published: dict[str, Any] = {}
     for logical_name, published_name in zip(logical_outputs, published_names, strict=True):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
+        if published_name in ports_published:
+            raise ValueError(f"TEMPLATE_PORT_DUPLICATE: {published_name}")
+        if port_registry is not None:
+            existing_port = port_registry.get(published_name)
+            if existing_port is not None and existing_port != port_obj:
+                raise ValueError(f"TEMPLATE_PORT_CONFLICT: {published_name}")
         ports_published[published_name] = port_obj
 
     effective_base_dir = (
@@ -354,10 +376,16 @@ def execute_artifact_template(
     )
     materialization_data = None
     if effective_base_dir:
-        from .artifact_materializer import materialize_job_output
+        from dataclasses import replace
 
+        from .artifact_job import ArtifactJob
+        from .artifact_materializer import materialize_job_output
+        materialize_job = replace(job, target_path=target_file, anchor=anchor,
+            operation=target_spec.get("operation", _job_value(job,"operation",""))) if isinstance(job, ArtifactJob) else job
+        if isinstance(job, ArtifactJob) and job.operation and (job.target_path != target_file or job.anchor != anchor):
+            raise ValueError("TEMPLATE_JOB_TARGET_DRIFT: re-expand the job against the current template")
         mat_receipt = materialize_job_output(
-            job, rendered_output, base_dir=effective_base_dir
+            materialize_job, rendered_output, base_dir=effective_base_dir
         )
         materialization_data = {
             "status": mat_receipt.status,

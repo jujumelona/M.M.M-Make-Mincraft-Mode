@@ -1,0 +1,16 @@
+id: design/research_fact
+task: Extract one supported fact from the supplied evidence shard for this requirement.
+record_schema:
+  type: object
+  properties:
+    fact:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+  - fact
+  additionalProperties: false
+rules:
+- Do not infer source identifiers; the host binds the record to the supplied source.
+- Return one factual claim per record; not_applicable when this shard does not support
+  the requirement.

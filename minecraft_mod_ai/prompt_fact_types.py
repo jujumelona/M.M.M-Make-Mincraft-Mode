@@ -27,6 +27,7 @@ class FactType(str, Enum):
     VISUAL_FORM = "VISUAL_FORM"
     VISUAL_TEXTURE_REFERENCE = "VISUAL_TEXTURE_REFERENCE"
     CRAFTING_RECIPE = "CRAFTING_RECIPE"
+    REGISTRY_TAG = "REGISTRY_TAG"
     SMELTING_RECIPE = "SMELTING_RECIPE"
     EXTERNAL_REFERENCE = "EXTERNAL_REFERENCE"
 
@@ -55,7 +56,7 @@ class PromptFact:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "PromptFact":
+    def from_dict(cls, data: dict[str, Any]) -> PromptFact:
         return cls(
             fact_id=str(data["fact_id"]),
             fact_type=FactType(data["fact_type"]),

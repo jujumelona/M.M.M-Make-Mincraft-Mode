@@ -13,8 +13,11 @@ class ArtifactJob:
     owner_module: str
     target_path: str = ""
     anchor: str = ""
+    operation: str = ""
+    expected_sha256: str | None = None
     requires: tuple[str, ...] = ()
     produces: tuple[str, ...] = ()
+    required_ports: tuple[dict[str, str], ...] = ()
     ai_slots: tuple[dict[str, Any], ...] = ()
     deterministic_inputs: dict[str, Any] = field(default_factory=dict)
     status: str = "PENDING"
@@ -28,8 +31,11 @@ class ArtifactJob:
             "owner_module": self.owner_module,
             "target_path": self.target_path,
             "anchor": self.anchor,
+            "operation": self.operation,
+            "expected_sha256": self.expected_sha256,
             "requires": list(self.requires),
             "produces": list(self.produces),
+            "required_ports": list(self.required_ports),
             "ai_slots": list(self.ai_slots),
             "deterministic_inputs": dict(self.deterministic_inputs),
             "status": self.status,
@@ -38,15 +44,18 @@ class ArtifactJob:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ArtifactJob":
+    def from_dict(cls, data: dict[str, Any]) -> ArtifactJob:
         return cls(
             job_id=str(data["job_id"]),
             template_id=str(data["template_id"]),
             owner_module=str(data["owner_module"]),
             target_path=str(data.get("target_path", "")),
             anchor=str(data.get("anchor", "")),
+            operation=str(data.get("operation", "")),
+            expected_sha256=data.get("expected_sha256"),
             requires=tuple(str(k) for k in data.get("requires", ())),
             produces=tuple(str(k) for k in data.get("produces", ())),
+            required_ports=tuple(dict(k) for k in data.get("required_ports", ())),
             ai_slots=tuple(dict(s) for s in data.get("ai_slots", ())),
             deterministic_inputs=dict(data.get("deterministic_inputs", {})),
             status=str(data.get("status", "PENDING")),

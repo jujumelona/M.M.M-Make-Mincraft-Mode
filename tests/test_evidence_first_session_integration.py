@@ -212,6 +212,10 @@ def test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap() -
                     "network.action_sync",
                     "ui.container",
                 ],
+                "artifact_obligations": [
+                    {"kind": "block_entity"}, {"kind": "saved_data"},
+                    {"kind": "network_payload"}, {"kind": "screen"}, {"kind": "texture"},
+                ],
                 "acceptance": ["The complete machine vertical slice works."],
             }
         ],

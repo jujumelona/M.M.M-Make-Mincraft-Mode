@@ -1,0 +1,21 @@
+id: design/decision
+task: Resolve one design decision required by this requirement.
+record_schema:
+  type: object
+  properties:
+    slot_id:
+      type: string
+      minLength: 1
+      maxLength: 32
+    value:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+  - slot_id
+  - value
+  additionalProperties: false
+rules:
+- Use an exact slot_id from the allowed_slots supplied by the host.
+- Return one decision per record. Do not fill unrelated slots.
+- Return not_applicable if the requirement needs no additional design decisions.

@@ -137,3 +137,34 @@ def test_invalid_registry_subject_is_rejected_before_render():
             mod_id="space",
             package_name="com.foo.space",
         )
+
+
+def test_catalog_drives_targets_dependencies_and_scoped_ports(monkeypatch):
+    import minecraft_mod_ai.artifact_expansion as expansion
+    original = expansion.load_template
+
+    def load(identifier):
+        template = original(identifier)
+        if identifier == "fabric/item/model_basic":
+            template["target"]["file"] = "src/main/resources/assets/{{mod_id}}/models/item/custom_{{subject}}.json"
+            template["dependencies"] = ["{{subject}}.java_symbol"]
+            template["produces"][0]["binding"] = "{{subject}}.custom_model"
+        return template
+
+    monkeypatch.setattr(expansion, "load_template", load)
+    jobs = expand_facts_to_jobs(
+        [PromptFact(fact_id="one", fact_type=FactType.ITEM_EXISTS, subject="widget")],
+        mod_id="sample", package_name="org.sample",
+    )
+    model = next(job for job in jobs if job.template_id == "fabric/item/model_basic")
+    assert model.target_path.endswith("models/item/custom_widget.json")
+    assert model.requires == ("widget.java_symbol",)
+    assert model.produces == ("widget.custom_model",)
+
+
+def test_block_drop_cannot_invent_a_drop_target():
+    with pytest.raises(ArtifactExpansionError, match="ARTIFACT_DROP_TARGET_REQUIRED"):
+        expand_facts_to_jobs(
+            [PromptFact(fact_id="drop", fact_type=FactType.BLOCK_DROP, subject="ore")],
+            mod_id="sample", package_name="org.sample",
+        )

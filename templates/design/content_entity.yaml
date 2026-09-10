@@ -1,26 +1,30 @@
 id: design/content_entity
-task: Identify a discrete Minecraft content entity (item, block, entity, or gui) required for this mod.
+task: Identify one distinct content entity required by this requirement. Semantic
+  kinds describe content roles, not implementation modules.
 record_schema:
   type: object
   properties:
     entity_id:
       type: string
+      minLength: 1
       maxLength: 32
+      pattern: ^[a-z][a-z0-9_]+$
     kind:
       type: string
-      enum:
-        - item
-        - block
-        - entity
-        - gui
-      maxLength: 16
+      minLength: 1
+      maxLength: 32
     role:
       type: string
+      minLength: 1
       maxLength: 128
   required:
-    - entity_id
-    - kind
-    - role
+  - entity_id
+  - kind
+  - role
   additionalProperties: false
 rules:
-  - Provide a snake_case identifier, valid kind, and concise role.
+- Return one entity per record. Do not derive a single generic entity from the whole
+  prompt.
+- Reuse the exact ID of an existing entity only when its meaning and role are identical.
+- Continue until the requirement has no further content entities. Return blocked if
+  meaning is unresolved.

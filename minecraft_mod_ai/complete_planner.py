@@ -20,8 +20,8 @@ from .evidence_execution_contract import task_batches
 from .evidence_first_planning import compile_evidence_first_plan
 from .model_router import ModelRouter
 from .planner_template_schema import build_batch_skeleton
-from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .planner_trace_artifacts import repository_revision
+from .planning_pipeline import PlanningPipeline, PlanningStage, PlanningStageError
 from .research_derived_requirements import (
     attach_derived_requirement_ledger,
     derive_research_requirements,
@@ -182,11 +182,7 @@ class CompleteGameDesignPlanner:
             acceptance_tests=acceptance_tests,
             evidence_plan=evidence_plan,
         )
-        existing_facts = (
-            internal_design.get("_atomic_facts")
-            or internal_design.get("_implementation_facts")
-            or ()
-        )
+        existing_facts = internal_design.get("_atomic_facts", internal_design.get("_implementation_facts"))
         facts_data, jobs_data = _lower_implementation_facts_and_jobs(
             modules, artifacts.base_proposal.spec, existing_facts=existing_facts
         )
@@ -424,15 +420,27 @@ def _lower_implementation_facts_and_jobs(
 
     implementation_facts: list[ImplementationFact] = []
     seen_facts: set[tuple[str, str]] = set()
+    authored_facts = {}
 
     if existing_facts:
         for ef in existing_facts:
             fact_obj = ef if isinstance(ef, ImplementationFact) else ImplementationFact.from_dict(dict(ef))
             raw_type = fact_obj.fact_type.value if isinstance(fact_obj.fact_type, FactType) else str(fact_obj.fact_type)
             key = (raw_type, str(fact_obj.subject))
+            if key in authored_facts:
+                prior = authored_facts[key]
+                if (prior.value, prior.object, prior.display_name) != (fact_obj.value, fact_obj.object, fact_obj.display_name):
+                    raise ValueError(f"IMPLEMENTATION_FACT_CONFLICT: {key}")
+            authored_facts[key] = fact_obj
             if key not in seen_facts:
                 implementation_facts.append(fact_obj)
                 seen_facts.add(key)
+
+    if existing_facts is not None:
+        jobs = expand_facts_to_jobs(implementation_facts, mod_id=spec.mod_id,
+            package_name=spec.package_name, main_class=getattr(spec, "main_class", "") or "",
+            minecraft_version=getattr(getattr(spec,"platform",None),"minecraft_version", ""))
+        return [fact.to_dict() for fact in implementation_facts], [job.to_dict() for job in jobs]
 
     item_module_ids = {m.module_id for m in modules if m.kind == "item"}
     for module in modules:
@@ -457,12 +465,13 @@ def _lower_implementation_facts_and_jobs(
                     )
                 )
                 seen_facts.add(key_exists)
-            stack_limit = (
-                config.get("stack_limit")
-                or config.get("max_stack")
-                or config.get("max_count")
-            )
+            stack_values = [config[key] for key in ("stack_limit", "max_stack", "max_count") if key in config]
+            if stack_values and any(value != stack_values[0] for value in stack_values):
+                raise ValueError(f"STACK_LIMIT_CONFLICT: {module.module_id}")
+            stack_limit = stack_values[0] if stack_values else None
             if stack_limit is not None:
+                if type(stack_limit) is not int:
+                    raise ValueError(f"Invalid stack limit for {module.module_id}: explicit integer required")
                 try:
                     stack_val = int(stack_limit)
                 except (ValueError, TypeError) as exc:
@@ -514,8 +523,10 @@ def _lower_implementation_facts_and_jobs(
                 or config.get("drops")
                 or config.get("drop_item")
                 or config.get("loot_table_drop")
-                or module.module_id
+                or ""
             )
+            if not drop_item:
+                continue
             key_drop = (FactType.BLOCK_DROP.value, module.module_id)
             if key_drop not in seen_facts:
                 implementation_facts.append(
@@ -531,17 +542,7 @@ def _lower_implementation_facts_and_jobs(
                 )
                 seen_facts.add(key_drop)
             if drop_item not in item_module_ids and (FactType.ITEM_EXISTS.value, drop_item) not in seen_facts:
-                implementation_facts.append(
-                    ImplementationFact(
-                        fact_id=f"{drop_item}.item_exists",
-                        fact_type=FactType.ITEM_EXISTS,
-                        subject=drop_item,
-                        display_name=display_name,
-                        provenance=FactProvenance.DESIGN,
-                        parent_requirement=module.module_id,
-                    )
-                )
-                seen_facts.add((FactType.ITEM_EXISTS.value, drop_item))
+                raise ValueError(f"BLOCK_DROP_TARGET_UNRESOLVED: {drop_item}; declare or reuse the item explicitly")
 
     artifact_jobs: list[dict[str, Any]] = []
     if implementation_facts:
@@ -550,6 +551,7 @@ def _lower_implementation_facts_and_jobs(
             mod_id=spec.mod_id,
             package_name=spec.package_name,
             main_class=getattr(spec, "main_class", "") or "",
+            minecraft_version=getattr(getattr(spec,"platform",None),"minecraft_version", ""),
         )
         artifact_jobs = [job.to_dict() for job in jobs]
 

@@ -11,28 +11,28 @@ import pytest
 
 from minecraft_mod_ai import complete_planner
 from minecraft_mod_ai.acceptance_contracts import is_public_acceptance
+from minecraft_mod_ai.evidence_execution_contract import (
+    _execution_task,
+    _validate_derived_owners,
+    execution_handoff,
+    execution_plan,
+)
+from minecraft_mod_ai.evidence_first_handoff import (
+    _asset_requests_for_task,
+    _production_modules_for_task,
+    build_evidence_first_handoff,
+)
 from minecraft_mod_ai.evidence_first_planning import (
     _compile_tasks,
     compile_evidence_first_plan,
 )
-from minecraft_mod_ai.evidence_execution_contract import (
-    _execution_task,
-    _validate_derived_owners,
-    execution_plan,
-    execution_handoff,
-)
-from minecraft_mod_ai.evidence_first_handoff import (
-    _production_modules_for_task,
-    _asset_requests_for_task,
-    build_evidence_first_handoff,
-)
 from minecraft_mod_ai.plan_collect_all_linker import (
-    collect_plan_link_issues,
     PlanCollectAllLinkError,
+    collect_plan_link_issues,
 )
 from minecraft_mod_ai.research_derived_requirements import (
-    derive_research_requirements,
     attach_derived_requirement_ledger,
+    derive_research_requirements,
 )
 from minecraft_mod_ai.research_requirement_plan_slice import host_facet_baseline
 from tests.planning_authority_fixtures import request_catalog
@@ -85,33 +85,45 @@ def _reachability(tasks):
     return result
 
 
-def test_recorded_gate_failure_is_removed_without_losing_any_dependency():
+def test_recorded_legacy_roots_cannot_bypass_structural_translation():
+    from minecraft_mod_ai.evidence_first_planning import EvidencePlanError
+
     fixture = _recording()
-    compiler = fixture["compiler"]
-    tasks = list(_compile_tasks(**compiler, emit_trace=False))
     assert len(fixture["recorded_tasks"]) == 161
-    assert len(tasks) == 142  # Seven fake gates and twelve inherited template steps removed.
+    with pytest.raises(EvidencePlanError, match="translation:artifact_dependency_graph"):
+        _compile_tasks(**fixture["compiler"], emit_trace=False)
+
+
+def test_current_structural_compiler_preserves_recorded_requirement_dependencies():
+    from minecraft_mod_ai.minecraft_template_steps import ROOT_PROVIDE
+
+    compiler = _recording()["compiler"]
+    # This legacy recording predates the required host translation root and has
+    # semantic labels, not artifact obligations. It cannot prove resource coverage.
+    compiler["root_provides"].append(ROOT_PROVIDE)
+    tasks = list(_compile_tasks(**compiler, emit_trace=False))
     assert not any(
         "requirement_ready:" in value for task in tasks for value in task["provides"]
     )
-    current, original = _reachability(tasks), _reachability(fixture["recorded_tasks"])
-    assert len(current) == len(tasks)
-    assert set(current) <= set(original)
-    for task, predecessors in current.items():
-        assert predecessors == original[task] & current.keys()
+    providers = {value: task for task in tasks for value in task["provides"]}
+    reachability = _reachability(tasks)
+    for gap in compiler["gaps"]:
+        completion = providers["requirement_done:" + gap["requirement_ref"]]
+        predecessors = reachability[(tuple(completion["requirement_refs"]), tuple(completion["provides"]))]
+        for dependency in gap["depends_on_requirements"]:
+            provider = providers["requirement_done:" + dependency]
+            assert (tuple(provider["requirement_refs"]), tuple(provider["provides"])) in predecessors
     lowered, handoff = _lower_and_link(tasks, compiler["ownership"])
     assert collect_plan_link_issues({"tasks": lowered}, handoff) == ()
-    for gap in compiler["gaps"]:
-        requirement = dict(gap, requirement_id=gap["requirement_ref"])
-        baseline = host_facet_baseline(
-            requirement,
-            [
-                task
-                for task in tasks
-                if gap["requirement_ref"] in task["requirement_refs"]
-            ],
-        )
-        assert all(item["disposition"] != "missing" for item in baseline.values())
+    # Retain the coverage gap instead of turning the legacy labels into artifacts.
+    assert any(
+        item["disposition"] == "missing"
+        for gap in compiler["gaps"]
+        for item in host_facet_baseline(
+            dict(gap, requirement_id=gap["requirement_ref"]),
+            [task for task in tasks if gap["requirement_ref"] in task["requirement_refs"]],
+        ).values()
+    )
 
 
 def test_old_gates_and_runtime_with_test_only_binding_still_fail_closed():

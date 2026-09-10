@@ -1,182 +1,349 @@
-from __future__ import annotations
-
-from typing import Any
+import json
+from copy import deepcopy
 
 import pytest
 
-from minecraft_mod_ai.atomic_design_pipeline import (
-    DESIGN_SLOTS,
-    compile_atomic_design,
-)
-from minecraft_mod_ai.atomic_slot_executor import SlotDefinition
-from minecraft_mod_ai.implementation_fact import FactType
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+from minecraft_mod_ai.atomic_design_pipeline import DESIGN_SLOTS, compile_atomic_design
+from minecraft_mod_ai.atomic_slot_executor import SlotDefinition, SlotFillError
+from minecraft_mod_ai.prompt_fact_types import FactType
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def test_design_templates_exist_and_satisfy_strict_atomicity():
-    assert len(DESIGN_SLOTS) == 32
-    for slot_id in DESIGN_SLOTS:
-        tmpl = load_template(slot_id)
-        assert tmpl["id"] == slot_id
-        schema = tmpl.get("record_schema") or tmpl.get("output_schema")
-        assert schema is not None
-        # Must pass strict atomicity bounds: 1 field, depth 1, maxLength <= 256
-        assert_atomic_model_schema(schema, surface=f"design template {slot_id}")
-        slot_def = SlotDefinition(slot_id=slot_id, schema=schema)
-        slot_def.validate_schema()
+class GraphRouter:
+    def __init__(self, *, edges=None, capability="ITEM_EXISTS", nodes=None):
+        self.calls = []
+        self.edges = edges or []
+        self.capability = capability
+        self.nodes = (
+            nodes
+            if nodes is not None
+            else [
+                {
+                    "entity_id": "raw_material",
+                    "kind": "resource",
+                    "role": "Collect raw material",
+                },
+                {
+                    "entity_id": "processed_material",
+                    "kind": "processed_material",
+                    "role": "Use processed material",
+                },
+            ]
+        )
+
+    def generate_tool_decision(
+        self, role, messages, *, tool_name, parameters, **kwargs
+    ):
+        self.calls.append(tool_name)
+        context = json.loads(messages[-1]["content"])
+        accepted = context["accepted_records"]
+        if tool_name == "submit_design_content_entity":
+            rows = self.nodes
+        elif tool_name == "submit_design_content_relation":
+            rows = self.edges
+        elif tool_name == "submit_design_content_capability":
+            rows = [{"fact_type": self.capability}]
+        elif tool_name == "submit_design_content_property":
+            eid = context["entity"]["entity_id"]
+            rows = [
+                {"property": "display_name", "value": eid.replace("_", " ").title()},
+                {"property": "shape", "value": "faceted chunk"},
+            ]
+        elif tool_name == "submit_design_decision":
+            rows = []
+        else:
+            raise AssertionError(tool_name)
+        if len(accepted) < len(rows):
+            return {
+                "status": "record",
+                "record": deepcopy(rows[len(accepted)]),
+                "reason": "",
+            }
+        return {
+            "status": "done" if rows else "not_applicable",
+            "record": None,
+            "reason": "No additional decision or relation required" if not rows else "",
+        }
 
 
-def test_compile_atomic_design_korean_space_mod():
-    design = compile_atomic_design("우주모드 만들어")
-    assert design["title"]
-    assert len(design["core_loop"]) == 1
-    assert len(design["progression"]) == 3
-    assert "First Goal:" in design["progression"][0]
-    assert "Condition:" in design["progression"][1]
-    assert "Reward:" in design["progression"][2]
-
-    # Verify slots dictionary: only active resolved slots exist
-    slots = design["_design_slots"]
-    assert "core_loop" in slots
-    assert "first_goal" in slots
-    assert "progression_condition" in slots
-    assert "reward" in slots
-    assert "visual_identity" in slots
-    assert "theme" in slots
-    # Unactivated slots are omitted, not fake-filled
-    assert "audio_identity" not in slots
-    assert "npc_role" not in slots
-    assert "machine_role" not in slots
-    for k, v in slots.items():
-        assert isinstance(v, str)
-        assert 0 < len(v) <= 256
-
-    # Verify atomic implementation facts
-    facts = design["_implementation_facts"]
-    assert len(facts) >= 1
-    fact_types = [f.fact_type for f in facts]
-    assert FactType.ITEM_EXISTS in fact_types or FactType.BLOCK_EXISTS in fact_types or FactType.ENTITY_EXISTS in fact_types
-
-    # Verify dynamic modules and asset requests
-    modules = design["modules"]
-    assets = design["assets"]
-    assert len(modules) >= 1
-    assert len(assets) >= 1
-    for m in modules:
-        m.validate()
-    for a in assets:
-        a.validate()
-        assert a.width in (16, 64, 256) and a.height in (16, 64, 256)
-        assert "Pixel Art" in a.prompt
+def test_design_templates_obey_atomicity():
+    for identifier in (
+        *DESIGN_SLOTS,
+        "design/content_entity",
+        "design/content_relation",
+        "design/content_capability",
+        "design/content_property",
+        "design/decision",
+    ):
+        template = load_template(identifier)
+        SlotDefinition(identifier, template["record_schema"]).validate_schema()
 
 
-def test_compile_atomic_design_empty_prompt_fails_closed():
+def test_graph_emits_multiple_entities_instead_of_prompt_stem_module():
+    design = compile_atomic_design("Create two materials", GraphRouter())
+    assert [m.module_id for m in design["modules"]] == [
+        "raw_material",
+        "processed_material",
+    ]
+    assert all(
+        f.fact_type == FactType.ITEM_EXISTS for f in design["_implementation_facts"]
+    )
+    assert design["_content_relations"] == []
+    assert design["core_loop"] == []
+    assert design["progression"] == []
+    assert design["_design_slots"] == {}
+    for module in design["modules"]:
+        module.validate()
+    for asset in design["assets"]:
+        asset.validate()
+        assert "faceted chunk" in asset.prompt
+
+
+def test_graph_provenance_is_bound_to_exact_requirement():
+    catalog = {
+        "requirements": [
+            {"requirement_id": "req_material", "statement": "Create two materials"}
+        ]
+    }
+    design = compile_atomic_design(
+        "Create two materials", GraphRouter(), request_catalog=catalog
+    )
+    assert all(
+        f.parent_requirement == "req_material" for f in design["_implementation_facts"]
+    )
+    assert all(f.evidence_refs == () for f in design["_implementation_facts"])
+
+
+def test_graph_rejects_dangling_relation():
+    with pytest.raises(SlotFillError, match="DANGLING"):
+        compile_atomic_design(
+            "materials",
+            GraphRouter(
+                edges=[
+                    {
+                        "relation_type": "drops",
+                        "source_id": "missing",
+                        "target_id": "raw_material",
+                    }
+                ]
+            ),
+        )
+
+
+def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
+    with pytest.raises(SlotFillError, match="RELATION_UNSUPPORTED"):
+        compile_atomic_design(
+            "materials",
+            GraphRouter(
+                edges=[
+                    {
+                        "relation_type": "transports_to",
+                        "source_id": "raw_material",
+                        "target_id": "processed_material",
+                    }
+                ]
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "capability", ["ENTITY_EXISTS", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]
+)
+def test_unsupported_capability_never_becomes_item(capability):
+    with pytest.raises(SlotFillError, match="CAPABILITY_UNSUPPORTED"):
+        compile_atomic_design("requested feature", GraphRouter(capability=capability))
+
+
+def test_no_router_or_empty_prompt_fails_closed():
+    with pytest.raises(SlotFillError, match="UNRESOLVED"):
+        compile_atomic_design("create material")
     with pytest.raises(ValueError, match="ATOMIC_DESIGN"):
         compile_atomic_design("")
 
 
-class _MockSlotRouter:
-    def __init__(self, mapping: dict[str, Any]):
-        self.mapping = mapping
-        self.calls: list[str] = []
-
-    def generate_tool_decision(self, _role, _messages, *, tool_name, parameters, description=""):
-        self.calls.append(tool_name)
-        props = parameters.get("properties", {})
-        for slot_id, p_schema in props.items():
-            val = self.mapping.get(slot_id)
-            if val is not None:
-                return {slot_id: val}
-            if isinstance(p_schema, dict) and p_schema.get("type") == "array":
-                return {slot_id: ["item"]}
-            return {slot_id: f"Valid mock {slot_id}"}
-        return {}
+def test_graph_resumes_validated_records_without_recalling_model():
+    progress = {}
+    first = GraphRouter()
+    design = compile_atomic_design("materials", first, progress=progress)
+    assert progress and first.calls
+    second = GraphRouter()
+    resumed = compile_atomic_design("materials", second, progress=progress)
+    assert resumed == design
+    assert second.calls == []
 
 
-def test_compile_atomic_design_with_router():
-    router = _MockSlotRouter({
-        "core_loop": "Build deep space telescopes and discover exoplanets.",
-        "first_goal": "Assemble a telescope lens from polished obsidian.",
-        "progression_condition": "Calibrate the lens against the North Star.",
-        "reward": "Starmap item showing asteroid cluster coordinates.",
-    })
-
-    design = compile_atomic_design("space stargazing mod", router=router)
-    assert design["core_loop"] == ["Build deep space telescopes and discover exoplanets."]
-    assert "First Goal: Assemble a telescope lens from polished obsidian." in design["progression"][0]
-    assert "Condition: Calibrate the lens against the North Star." in design["progression"][1]
-    assert "Reward: Starmap item showing asteroid cluster coordinates." in design["progression"][2]
+def test_one_content_record_per_model_call():
+    router = GraphRouter()
+    compile_atomic_design("materials", router)
+    assert router.calls.count("submit_design_content_entity") == 3
+    assert "resolve_domains" not in router.calls
 
 
-def test_compile_atomic_design_with_research_context():
-    research = {
-        "summary": "Moon geology and lunar basalt materials",
-        "known": ["Lunar basalt is dense", "Moon vacuum requires sealed helmets"],
-        "references": ["Galacticraft", "Ad Astra"],
-    }
-    design = compile_atomic_design("moon base mod", research=research)
-    assert design["title"]
-    assert 5 <= len(design["_design_slots"]) <= 16
-    assert "npc_role" not in design["_design_slots"]
-    assert len(design["modules"]) >= 1
-    assert len(design["assets"]) >= 1
+def test_graph_passes_real_readiness_without_invented_progression():
+    from minecraft_mod_ai.agentic_research_game_design import (
+        canonical_game_design,
+        validate_ready_design,
+    )
+
+    design = compile_atomic_design("materials", GraphRouter())
+    ready = validate_ready_design("materials", canonical_game_design(design))
+    assert ready["core_loop"] == []
+    assert ready["progression"] == []
 
 
-def test_dynamic_slot_execution_count_is_bounded():
-    router = _MockSlotRouter({
-        "domains": ["item"],
-    })
-    design = compile_atomic_design("simple ruby item mod", router=router)
-    assert 8 <= len(router.calls) < 20
-    assert len(design["_design_slots"]) == len(router.calls) - 1
-    assert "npc_role" not in design["_design_slots"]
+def test_research_facts_are_bound_to_their_actual_source():
+    class ResearchRouter(GraphRouter):
+        def generate_tool_decision(
+            self, role, messages, *, tool_name, parameters, **kwargs
+        ):
+            if tool_name == "submit_design_research_fact":
+                context = json.loads(messages[-1]["content"])
+                assert context["source_ref"] == "source_b"
+                if not context["accepted_records"]:
+                    return {
+                        "status": "record",
+                        "record": {"fact": "Material is brittle"},
+                        "reason": "",
+                    }
+                return {"status": "done", "record": None, "reason": ""}
+            return super().generate_tool_decision(
+                role, messages, tool_name=tool_name, parameters=parameters, **kwargs
+            )
+
+    design = compile_atomic_design(
+        "materials",
+        ResearchRouter(),
+        request_catalog={
+            "requirements": [
+                {
+                    "requirement_id": "req_material",
+                    "statement": "materials",
+                    "evidence_refs": ["source_b"],
+                }
+            ]
+        },
+        research={
+            "evidence": [
+                {"evidence_id": "source_a", "text": "unrelated"},
+                {
+                    "evidence_id": "source_b",
+                    "text": "Material is brittle",
+                    "source_locator": "p2",
+                },
+            ]
+        },
+    )
+    assert design["_research_facts"] == [
+        {
+            "fact": "Material is brittle",
+            "source_ref": "source_b",
+            "source_locator": "p2",
+            "parent_requirement": "req_material",
+        }
+    ]
 
 
-def test_targeted_rename_activates_minimal_slots():
-    design = compile_atomic_design("아이템 이름만 바꿔줘")
-    assert "theme" in design["_design_slots"]
-    assert "core_loop" not in design["_design_slots"]
-    assert "progression_condition" not in design["_design_slots"]
-    assert "npc_role" not in design["_design_slots"]
+def test_recipe_content_graph_reaches_artifact_files(tmp_path):
+    from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
+    from minecraft_mod_ai.artifact_graph_executor import execute_artifact_graph
+    from minecraft_mod_ai.artifact_materializer import ensure_artifact_scaffolding
+
+    class RecipeRouter(GraphRouter):
+        def generate_tool_decision(
+            self, role, messages, *, tool_name, parameters, **kwargs
+        ):
+            context = json.loads(messages[-1]["content"])
+            if context.get("entity", {}).get("entity_id") == "conversion":
+                rows = (
+                    [{"fact_type": "CRAFTING_RECIPE"}]
+                    if tool_name == "submit_design_content_capability"
+                    else [
+                        {"property": "recipe_kind", "value": "shapeless"},
+                        {"property": "count", "value": "1"},
+                    ]
+                )
+                index = len(context["accepted_records"])
+                return (
+                    {"status": "record", "record": rows[index], "reason": ""}
+                    if index < len(rows)
+                    else {"status": "done", "record": None, "reason": ""}
+                )
+            return super().generate_tool_decision(
+                role, messages, tool_name=tool_name, parameters=parameters, **kwargs
+            )
+
+    router = RecipeRouter(
+        edges=[
+            {
+                "relation_type": "consumes",
+                "source_id": "conversion",
+                "target_id": "raw_material",
+            },
+            {
+                "relation_type": "produces",
+                "source_id": "conversion",
+                "target_id": "processed_material",
+            },
+        ]
+    )
+    router.nodes.append(
+        {"entity_id": "conversion", "kind": "process", "role": "Convert materials"}
+    )
+    design = compile_atomic_design("materials", router)
+    ensure_artifact_scaffolding(
+        tmp_path, mod_id="bound_target", package_name="org.demo"
+    )
+    jobs = expand_facts_to_jobs(
+        design["_implementation_facts"],
+        mod_id="bound_target",
+        package_name="org.demo",
+        minecraft_version="1.21.2",
+    )
+    execute_artifact_graph(jobs, base_dir=tmp_path)
+    data = json.loads(
+        (
+            tmp_path / "src/main/resources/data/bound_target/recipe/conversion.json"
+        ).read_text()
+    )
+    assert data["result"]["id"] == "bound_target:processed_material"
 
 
-def test_targeted_texture_activates_minimal_slots():
-    design = compile_atomic_design("아이템 텍스처만 바꿔줘")
-    assert "visual_identity" in design["_design_slots"]
-    assert "texture_requirement" in design["_design_slots"]
-    assert "core_loop" not in design["_design_slots"]
+def test_normal_planning_projection_keeps_graph_content_and_asset_namespace(
+    monkeypatch,
+):
+    from contextlib import nullcontext
 
+    import minecraft_mod_ai.agentic_research_game_design as host
+    import minecraft_mod_ai.planning_authority as authority
+    import minecraft_mod_ai.reuse_planner as reuse
+    from minecraft_mod_ai.planning_pipeline import PlanningPipeline
 
-def test_resolve_content_domains_fails_closed_when_router_fails():
-    from minecraft_mod_ai.atomic_slot_executor import SlotFillError
-    from minecraft_mod_ai.atomic_design_pipeline import resolve_content_domains
-
-    class FailingRouter:
-        def generate_tool_decision(self, *args, **kwargs):
-            raise RuntimeError("Model generation failed")
-
-    with pytest.raises(SlotFillError):
-        resolve_content_domains(FailingRouter(), prompt="우주모드")
-
-
-def test_custom_stack_limit_emitted_and_default_omitted():
-    # Default stack limit (64) is omitted from facts
-    design_default = compile_atomic_design("simple ruby item")
-    stack_facts_default = [f for f in design_default["_implementation_facts"] if f.fact_type == FactType.ITEM_STACK_LIMIT]
-    assert len(stack_facts_default) == 0
-
-    # Custom stack limit (16) is emitted
-    design_custom = compile_atomic_design("루나이트 원석은 16개까지 겹쳐져")
-    stack_facts_custom = [f for f in design_custom["_implementation_facts"] if f.fact_type == FactType.ITEM_STACK_LIMIT]
-    assert len(stack_facts_custom) == 1
-    assert stack_facts_custom[0].value == 16
-
-
-def test_entity_and_gui_domains_do_not_force_item():
-    router_entity = _MockSlotRouter({"domains": ["entity"]})
-    design_entity = compile_atomic_design("alien boss", router=router_entity)
-    module_kinds = [m.kind for m in design_entity["modules"]]
-    assert "entity" in module_kinds
-    assert "item" not in module_kinds
-
+    monkeypatch.setattr(
+        authority,
+        "build_authoritative_request_catalog",
+        lambda *a, **k: {
+            "requirements": [
+                {"requirement_id": "req_material", "statement": "materials"}
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        authority, "authoritative_request_scope", lambda *a, **k: nullcontext()
+    )
+    monkeypatch.setattr(reuse, "compile_pre_retrieval_plan", lambda *a, **k: {})
+    monkeypatch.setattr(
+        host, "research_brief_from_design", lambda *a, **k: {}, raising=False
+    )
+    pipeline = PlanningPipeline(GraphRouter())
+    design, proposal = pipeline._semantic_design(
+        "materials for a complex long title with many words",
+        planning_state={},
+        media_paths=(),
+    )
+    assert proposal.spec.contents == ()
+    assert proposal.spec.boss is None
+    assert len(design["_content_entities"]) == 2
+    assert all(
+        a.target_path.startswith(f"assets/{proposal.spec.mod_id}/")
+        for a in design["_atomic_assets"]
+    )

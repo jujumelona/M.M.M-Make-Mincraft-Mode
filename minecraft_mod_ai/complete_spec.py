@@ -30,6 +30,7 @@ MODULE_KINDS = frozenset(
         "fluid",
         "machine",
         "recipe",
+        "tag",
         "effect",
         "enchantment",
         "entity",

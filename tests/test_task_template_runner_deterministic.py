@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import pytest
 
 from minecraft_mod_ai.artifact_job import ArtifactJob
@@ -98,3 +99,26 @@ def test_declared_leaf_fixtures_render():
         receipt = execute_artifact_template(job)
         for expected in fixture["expected_contains"]:
             assert expected in receipt["rendered_output"]
+
+
+def test_migrated_leaf_has_no_central_port_semantics_dependency(monkeypatch):
+    import minecraft_mod_ai.task_template_runner as runner
+    monkeypatch.setattr(runner, "_STANDARD_PORT_DEFINITIONS", {})
+    registry = PortRegistry()
+    execute_artifact_template(_register_job(), port_registry=registry)
+    assert registry.resolve("raw_lunite.registry_id", PortKind.REGISTRY_ID, "Item").value == "space:raw_lunite"
+
+
+@pytest.mark.parametrize("change", [{"kind": "TYPO"}, {"target_type": ""}, {"value": ""}])
+def test_malformed_port_declaration_fails_before_publish(monkeypatch, change):
+    import minecraft_mod_ai.task_template_catalog as catalog
+    original = catalog.load_template
+    def load(identifier):
+        template = original(identifier)
+        template["produces"][0].update(change)
+        return template
+    monkeypatch.setattr(catalog, "load_template", load)
+    registry = PortRegistry()
+    with pytest.raises(ValueError):
+        execute_artifact_template(_register_job(), port_registry=registry)
+    assert registry.all_ports() == {}

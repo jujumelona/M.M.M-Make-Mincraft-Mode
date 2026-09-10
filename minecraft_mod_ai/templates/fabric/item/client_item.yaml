@@ -1,12 +1,19 @@
 id: fabric/item/client_item
 artifact: json_resource
 target:
+  operation: CREATE_FILE
   file: src/main/resources/assets/{{mod_id}}/items/{{registry_path}}.json
 requires:
   - mod_id
   - registry_path
+dependencies:
+  - "{{subject}}.registry_id"
 produces:
-  - client_item_ref
+  - name: client_item_ref
+    binding: "{{subject}}.client_item_ref"
+    kind: CLIENT_ITEM_REF
+    target_type: "Item"
+    value: "{{mod_id}}:items/{{registry_path}}"
 ai_slots: []
 render:
   language: json
@@ -23,3 +30,7 @@ fixture:
   expected_contains:
     - "minecraft:model"
     - "space:item/raw_lunite"
+dependency_types:
+  '{{subject}}.registry_id':
+    kind: REGISTRY_ID
+    target_type: Item

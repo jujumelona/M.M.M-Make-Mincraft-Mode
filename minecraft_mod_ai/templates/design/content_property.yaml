@@ -1,0 +1,26 @@
+id: design/content_property
+task: Resolve one explicit property of the current content entity.
+record_schema:
+  type: object
+  properties:
+    property:
+      type: string
+      minLength: 1
+      maxLength: 32
+    value:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+  - property
+  - value
+  additionalProperties: false
+rules:
+- Use display_name for the authored English display name; stack_limit for an explicitly
+  required item stack limit.
+- 'Visual properties: shape, material, main_color, accent, surface, silhouette, transparency,
+  tileability.'
+- Only state properties required by the requirement. Do not invent numeric defaults.
+- Return not_applicable if no property is required.
+  - Recipe properties are recipe_kind, count, pattern_1..pattern_3, cooking_type, experience, cookingtime; each is a separate record.
+  - Tag properties include registry_kind. Never serialize a complete resource into a value.

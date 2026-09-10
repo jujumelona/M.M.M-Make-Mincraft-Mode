@@ -1,21 +1,29 @@
 id: design/content_relation
-task: Define a relationship between two mod content entities (e.g., block drop, craft ingredient, entity spawn).
+task: Identify one explicit relationship required by this requirement.
 record_schema:
   type: object
   properties:
     relation_type:
       type: string
+      minLength: 1
       maxLength: 32
     source_id:
       type: string
+      minLength: 1
       maxLength: 32
+      pattern: ^[a-z][a-z0-9_]+$
     target_id:
       type: string
+      minLength: 1
       maxLength: 32
+      pattern: ^[a-z][a-z0-9_]+$
   required:
-    - relation_type
-    - source_id
-    - target_id
+  - relation_type
+  - source_id
+  - target_id
   additionalProperties: false
 rules:
-  - Specify the relation type, source entity ID, and target entity ID.
+- Use exact entity IDs supplied by the host. Never invent missing endpoints.
+- Do not invent drops, ingredients, progression, or networking.
+- Return not_applicable with a reason if no relationship is required.
+  - Recipe source relations are consumes and produces; shaped recipes bind one ingredient with key_X for pattern symbol X. Tag membership uses contains.

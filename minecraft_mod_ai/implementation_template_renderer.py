@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 
@@ -29,6 +30,9 @@ def _substitute_string(template_str: str, values: Mapping[str, Any]) -> str:
 
 def _substitute_json_data(data: Any, values: Mapping[str, Any]) -> Any:
     if isinstance(data, str):
+        match = _PLACEHOLDER_PATTERN.fullmatch(data)
+        if match and match.group(1) in values:
+            return deepcopy(values[match.group(1)])
         return _substitute_string(data, values)
     if isinstance(data, Mapping):
         return {
