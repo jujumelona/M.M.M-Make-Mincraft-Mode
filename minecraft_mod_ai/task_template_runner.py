@@ -6,7 +6,7 @@ from hashlib import sha256
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
-from .task_template_catalog import load_template
+from .task_template_catalog import load_record_template
 
 
 class TemplateBlocked(ValueError):
@@ -38,7 +38,7 @@ def record_response_schema(template):
 
 
 def run_record_template(router, identifier, *, context, allowed_refs, progress=None, checkpoint=None):
-    template = load_template(identifier)
+    template = load_record_template(identifier)
     schema = record_response_schema(template)
     validator = Draft202012Validator(schema)
     records, refs, seen = [], [], set()

@@ -1,0 +1,3 @@
+id: criterion/behavior_contract
+execution: sequence
+steps: [feature/behavior_contract/actors, feature/behavior_contract/entry_conditions, feature/behavior_contract/preconditions, feature/behavior_contract/inputs, feature/behavior_contract/outputs, feature/behavior_contract/success_postconditions, feature/behavior_contract/rejection_postconditions, feature/behavior_contract/ordering_and_timing, feature/behavior_contract/boundaries]

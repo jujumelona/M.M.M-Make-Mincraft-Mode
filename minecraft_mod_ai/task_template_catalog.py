@@ -8,6 +8,13 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).with_name("templates")
 
+CRITERION_SECTIONS = (
+    "behavior_contract", "state_model", "algorithm", "integration",
+    "authority_and_network", "persistence", "resources_and_ui",
+    "failure_and_limits", "reuse_assessment", "verification",
+)
+_CRITERION_ALIASES = {f"feature/{section}": f"criterion/{section}" for section in CRITERION_SECTIONS}
+
 
 @lru_cache(maxsize=None)
 def _load(identifier):
@@ -23,17 +30,26 @@ def _load(identifier):
 
 
 def load_template(identifier):
-    return deepcopy(_load(identifier))
+    """Load a manifest/template, including isolated criterion compatibility aliases."""
+    return deepcopy(_load(_CRITERION_ALIASES.get(identifier, identifier)))
+
+
+def load_record_template(identifier):
+    """Load exactly the requested record template with no namespace aliasing."""
+    value = deepcopy(_load(identifier))
+    if "record_schema" not in value:
+        raise ValueError(f"TEMPLATE_RECORD_SCHEMA: missing record schema for {identifier}")
+    return value
 
 
 def detail_records():
     records = {}
-    for path in sorted((ROOT / "feature").glob("*.yaml")):
-        manifest = load_template(f"feature/{path.stem}")
+    for section in CRITERION_SECTIONS:
+        manifest = load_template(f"criterion/{section}")
         if manifest.get("execution") != "sequence":
-            continue
-        records[path.stem] = {}
+            raise ValueError(f"TEMPLATE_CRITERION: {section} must be a sequence")
+        records[section] = {}
         for identifier in manifest["steps"]:
-            schema = load_template(identifier)["record_schema"]
-            records[path.stem][identifier.rsplit("/", 1)[1]] = " ".join(schema["required"])
+            schema = load_record_template(identifier)["record_schema"]
+            records[section][identifier.rsplit("/", 1)[1]] = " ".join(schema["required"])
     return records

@@ -1,11 +1,8 @@
 id: feature/persistence
-execution: sequence
-steps:
-- feature/persistence/stored_state
-- feature/persistence/serialization
-- feature/persistence/missing_defaults
-- feature/persistence/save_triggers
-- feature/persistence/load_behavior
-- feature/persistence/migration
-- feature/persistence/malformed_data
-- feature/persistence/transfers
+task: Identify one persistence responsibility or state that must survive reload. Return one record per responsibility.
+rules: [Use only supplied state context, Separate persistent values or responsibilities, Use not_applicable with a concrete reason when persistence is unnecessary]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, persistent_value: {type: string, minLength: 1}, lifetime: {type: string, minLength: 1}}
+  required: [feature_id, persistent_value, lifetime]
+  additionalProperties: false
