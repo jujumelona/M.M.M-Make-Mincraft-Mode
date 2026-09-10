@@ -2,8 +2,7 @@ id: design/player_fantasy
 slot_id: player_fantasy
 task: "Define the core role and fantasy experienced by the player."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent roles, themes, or mechanics."
 record_schema:
   type: object
   properties:
