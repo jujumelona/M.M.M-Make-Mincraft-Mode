@@ -11,10 +11,11 @@ def refresh_worksheet_checkpoint(state):
     legacy = any(
         isinstance(decision, Mapping)
         and decision.get("decision_type") == "detailed_implementation_plan"
-        and isinstance(decision.get("engineering_worksheet"), Mapping)
-        and any(isinstance(row, Mapping) and isinstance(row.get("specification"), str)
-                for row in decision["engineering_worksheet"].values())
+        and decision.get("worksheet_contract") != "authored_concern_records"
         for decision in decisions
+    ) or any(
+        isinstance(row, Mapping) and row.get("schema_version") != "mmm/detail-criterion-records"
+        for row in state.get("detail_progress", [])
     )
     if not legacy:
         return state
@@ -25,6 +26,7 @@ def refresh_worksheet_checkpoint(state):
     result["decisions"] = [row for row in result["decisions"] if not (
         isinstance(row, Mapping) and row.get("decision_type") == "detailed_implementation_plan"
     )]
+    result["detail_progress"] = []
     result["coverage"] = []
     result["plan_ready"] = False
     result["state_sha256"] = _hash_without(result, "state_sha256")
@@ -32,7 +34,7 @@ def refresh_worksheet_checkpoint(state):
         "legacy_worksheet_invalidated", stage="planning_state", result="PASS",
         operation="refresh_worksheet_checkpoint",
         details={"removed_details": len(decisions) - len(result["decisions"]),
-                 "reason": "Prose worksheets require regeneration under fixed record templates.",
+                 "reason": "Uncertified worksheets and prose-derived progress require authored concern records.",
                  "research_preserved": True},
     )
     return result

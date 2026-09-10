@@ -512,6 +512,7 @@ def _assemble_requirement_plan(
         "requirement_ref": requirement_ref,
         "required_detail_sections": list(selected_sections),
         "engineering_worksheet": validated_worksheet,
+        "worksheet_contract": "authored_concern_records",
         "implementation_capabilities": _host_derived_capabilities(validated_worksheet),
         "implementation_obligations": _host_derived_obligations(validated_worksheet),
         "artifact_obligations": [],

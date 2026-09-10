@@ -1,134 +1,82 @@
-from __future__ import annotations
+from copy import deepcopy
 
-from minecraft_mod_ai.planning_criterion_fragments import (
-    generate_criterion_fragment,
-    generate_criterion_fragments_batch,
-)
+import pytest
+
+from minecraft_mod_ai import planning_criterion_fragments as fragments
 from minecraft_mod_ai.planning_detail_template import CORE_WORKSHEET_SECTIONS
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+from minecraft_mod_ai.planning_detail_checkpoint import refresh_worksheet_checkpoint
+from minecraft_mod_ai.planning_state_contract import _hash_without
 
 
-_REQUIREMENT = {"statement": "Implement the requested behavior."}
-_SECTION = "behavior_contract"
-_SECTIONS = CORE_WORKSHEET_SECTIONS
+def authored(section):
+    spec = {concern: [{field: f'{section}.{concern}.{field}' for field in columns.split()}]
+            for concern, columns in DETAIL_RECORDS[section].items()}
+    spec['inapplicable_concerns'] = []
+    return {'section': section, 'specification': spec, 'constraint_evidence_refs': []}
 
 
-def _fragment(implementation: str = "Apply the requested behavior.") -> dict:
-    return {
-        "section_updates": [
-            {
-                "section": _SECTION,
-                "implementation": implementation,
-                "constraint": "",
-                "evidence_refs": [],
-            }
-        ]
-    }
+def test_each_call_receives_one_concern_and_results_are_not_rewritten(monkeypatch):
+    calls = []
+    def run(router, identifier, *, context, allowed_refs):
+        section, concern = identifier.split('/')[1:]
+        calls.append(identifier)
+        return {'records': authored(section)['specification'][concern], 'reason': '', 'evidence_refs': []}
+    monkeypatch.setattr(fragments, 'run_record_template', run)
+    result = fragments.generate_criterion_fragment(None, requirement={'statement': 'Activate'},
+        criterion='Activation changes state', selected_sections=CORE_WORKSHEET_SECTIONS,
+        evidence=[], allowed_refs=set())
+    assert len(calls) == sum(len(DETAIL_RECORDS[s]) for s in CORE_WORKSHEET_SECTIONS)
+    worksheet = fragments.assemble_worksheet_from_fragments({}, selected_sections=CORE_WORKSHEET_SECTIONS,
+        criteria=('Activation changes state',), fragments={0: result}, allowed_refs=set())
+    for section in CORE_WORKSHEET_SECTIONS:
+        assert worksheet[section]['specification'] == authored(section)['specification']
 
 
-class _Router:
-    def __init__(self, responses: list[dict]) -> None:
-        self._responses = iter(responses)
-        self.tool_calls: list[dict] = []
-
-    def generate_text(self, *_args, **_kwargs):
-        raise AssertionError("criterion planning must not use raw structured text generation")
-
-    def generate_tool_decision(
-        self,
-        role,
-        messages,
-        *,
-        tool_name,
-        parameters,
-        description="",
-    ):
-        self.tool_calls.append(
-            {
-                "role": role,
-                "messages": tuple(messages),
-                "tool_name": tool_name,
-                "parameters": parameters,
-                "description": description,
-            }
-        )
-        return next(self._responses)
+def test_prose_cannot_be_promoted_to_state_or_test_records():
+    value = {'section_updates': [{'section': 'state_model', 'implementation': 'Works correctly', 'constraint': '', 'evidence_refs': []}]}
+    with pytest.raises(ValueError, match='prose'):
+        fragments.validate_criterion_fragment(value, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
 
 
-def test_single_criterion_uses_one_forced_template_call():
-    router = _Router([_fragment()])
-
-    result = generate_criterion_fragment(
-        router,
-        requirement=_REQUIREMENT,
-        criterion="The requested behavior is observable.",
-        selected_sections=_SECTIONS,
-        evidence=[],
-        allowed_refs=set(),
-    )
-
-    assert result == _fragment()
-    assert len(router.tool_calls) == 1
-    call = router.tool_calls[0]
-    assert call["role"] == "planner"
-    assert call["tool_name"] == "submit_criterion_fragment"
-    assert call["description"]
-    assert call["parameters"]["additionalProperties"] is False
-    prompt = "\n".join(str(message.get("content", "")) for message in call["messages"])
-    assert "fixed template" in prompt.lower()
-    assert "serialization syntax" in prompt.lower()
-    assert "Return JSON only" not in prompt
+def test_unknown_evidence_is_rejected_instead_of_removed():
+    row = authored('state_model')
+    row['constraint_evidence_refs'] = ['invented']
+    with pytest.raises(ValueError, match='evidence'):
+        fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
 
 
-def test_no_progress_repair_is_another_forced_template_fill():
-    router = _Router([_fragment(""), _fragment("Apply the corrected behavior.")])
-
-    result = generate_criterion_fragment(
-        router,
-        requirement=_REQUIREMENT,
-        criterion="The requested behavior is observable.",
-        selected_sections=_SECTIONS,
-        evidence=[],
-        allowed_refs=set(),
-    )
-
-    assert result == _fragment("Apply the corrected behavior.")
-    assert [call["tool_name"] for call in router.tool_calls] == [
-        "submit_criterion_fragment",
-        "submit_criterion_fragment",
-    ]
-    repair_prompt = "\n".join(
-        str(message.get("content", "")) for message in router.tool_calls[1]["messages"]
-    )
-    assert "Correction required" in repair_prompt
+def test_missing_concern_is_not_automatically_marked_inapplicable():
+    row = authored('state_model')
+    row['specification']['transitions'] = []
+    with pytest.raises(ValueError, match='inapplicable'):
+        fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
 
 
-def test_batch_criteria_use_one_forced_batch_template_call():
-    batch = {
-        "criterion_fragments": [
-            {"criterion_index": 0, **_fragment("Implement criterion zero.")},
-            {"criterion_index": 1, **_fragment("Implement criterion one.")},
-        ]
-    }
-    router = _Router([batch])
+def test_batch_is_host_aggregation_of_independent_criteria(monkeypatch):
+    calls = []
+    def generate(router, **kwargs):
+        calls.append(kwargs['criterion'])
+        return {'section_updates': [authored('state_model')]}
+    monkeypatch.setattr(fragments, 'generate_criterion_fragment', generate)
+    result = fragments.generate_criterion_fragments_batch(None, requirement={}, criteria={0: 'A', 1: 'B'},
+        selected_sections=CORE_WORKSHEET_SECTIONS, evidence=[], allowed_refs=set())
+    assert calls == ['A', 'B']
+    assert set(result) == {0, 1}
 
-    result = generate_criterion_fragments_batch(
-        router,
-        requirement=_REQUIREMENT,
-        criteria={0: "Criterion zero.", 1: "Criterion one."},
-        selected_sections=_SECTIONS,
-        evidence=[],
-        allowed_refs=set(),
-    )
 
-    assert result == {
-        0: _fragment("Implement criterion zero."),
-        1: _fragment("Implement criterion one."),
-    }
-    assert len(router.tool_calls) == 1
-    call = router.tool_calls[0]
-    assert call["tool_name"] == "submit_criterion_fragments"
-    assert call["parameters"]["additionalProperties"] is False
-    prompt = "\n".join(str(message.get("content", "")) for message in call["messages"])
-    assert "fixed template" in prompt.lower()
-    assert "serialization syntax" in prompt.lower()
-    assert "one JSON response" not in prompt
+def test_legacy_checkpoint_invalidates_derived_work_only():
+    state = {'decisions': [{'decision_type': 'detailed_implementation_plan', 'engineering_worksheet': {}}],
+             'detail_progress': [], 'coverage': ['old'], 'plan_ready': True,
+             'evidence': [{'source': 'retained'}]}
+    state['state_sha256'] = _hash_without(state, 'state_sha256')
+    result = refresh_worksheet_checkpoint(state)
+    assert result['evidence'] == state['evidence']
+    assert result['decisions'] == [] and result['coverage'] == []
+    assert result['plan_ready'] is False
+    assert result['state_sha256'] == _hash_without(result, 'state_sha256')
+    assert state['plan_ready'] is True
+    tampered = deepcopy(state)
+    tampered['evidence'] = []
+    with pytest.raises(ValueError, match='hash mismatch'):
+        refresh_worksheet_checkpoint(tampered)

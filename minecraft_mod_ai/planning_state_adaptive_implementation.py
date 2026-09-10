@@ -73,6 +73,8 @@ def _detail_matches_selection(
     detail: Mapping[str, Any],
     selected_sections: tuple[str, ...],
 ) -> bool:
+    if detail.get("worksheet_contract") != "authored_concern_records":
+        return False
     raw = detail.get("required_detail_sections")
     if not isinstance(raw, list) or tuple(raw) != selected_sections:
         return False
@@ -319,7 +321,7 @@ def _finish_requirement(
                 )
             updates = [row for row in supplement["section_updates"]
                        if row["section"] == section and
-                       (_text(row.get("implementation")) or _text(row.get("constraint")))]
+                       isinstance(row.get("specification"), Mapping)]
             if not updates:
                 raise MissingWorksheetSections([section])
             fragment = deepcopy(job["fragments"][0])

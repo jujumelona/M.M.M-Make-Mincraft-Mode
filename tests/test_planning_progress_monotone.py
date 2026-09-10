@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 
 import pytest
 
@@ -45,7 +46,7 @@ def _base_state(*, blockers=None, decisions=None, detail_progress=None) -> dict[
 def _row(section: str) -> dict[str, object]:
     return criterion_fragments.assemble_worksheet_from_fragments(
         {"statement": "Collect resources."},
-        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        selected_sections=WORKSHEET_SECTIONS,
         criteria=("Collected items enter inventory.",),
         fragments={0: _real_fragment()},
         allowed_refs=set(),
@@ -53,7 +54,7 @@ def _row(section: str) -> dict[str, object]:
 
 
 def _worksheet() -> dict[str, dict[str, object]]:
-    return {section: _row(section) for section in adaptive.WORKSHEET_SECTIONS}
+    return {section: _row(section) for section in WORKSHEET_SECTIONS}
 
 
 def _plan(requirement_ref: str, selected_sections, worksheet) -> dict[str, object]:
@@ -61,6 +62,7 @@ def _plan(requirement_ref: str, selected_sections, worksheet) -> dict[str, objec
         "requirement_ref": requirement_ref,
         "required_detail_sections": list(selected_sections),
         "engineering_worksheet": deepcopy(worksheet),
+        "worksheet_contract": "authored_concern_records",
     }
 
 
@@ -71,22 +73,16 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
     }
 
 
-def _real_fragment(*, evidence_ref: str | None = None) -> dict[str, object]:
-    return {
-        "section_updates": [
-            {
-                "section": section,
-                "implementation": (
-                    f"implement {section.replace('_', ' ')} for this acceptance criterion"
-                ),
-                "constraint": (
-                    f"enforce the {section.replace('_', ' ')} boundary for this acceptance criterion"
-                ),
-                "evidence_refs": [evidence_ref] if evidence_ref else [],
-            }
-            for section in adaptive.WORKSHEET_SECTIONS
-        ]
-    }
+def _real_fragment(*, evidence_ref=None):
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+    rows = []
+    for section in WORKSHEET_SECTIONS:
+        specification = {concern: [{field: f"{section}.{concern}.{field}" for field in columns.split()}]
+                         for concern, columns in DETAIL_RECORDS[section].items()}
+        specification["inapplicable_concerns"] = []
+        rows.append({"section": section, "specification": specification,
+                     "constraint_evidence_refs": [evidence_ref] if evidence_ref else []})
+    return {"section_updates": rows}
 
 
 def _patch_compile_boundaries(monkeypatch, requirements):
@@ -126,7 +122,7 @@ def test_normal_path_runs_once_per_unfinished_acceptance_criterion_without_secti
         selected_sections,
         **_kwargs,
     ):
-        assert tuple(selected_sections) == tuple(adaptive.WORKSHEET_SECTIONS)
+        assert tuple(selected_sections) == tuple(WORKSHEET_SECTIONS)
         calls.append((requirement_ref, criterion_index, criterion))
         return _fragment(requirement_ref, criterion_index)
 
@@ -137,7 +133,7 @@ def test_normal_path_runs_once_per_unfinished_acceptance_criterion_without_secti
         "prompt",
         _base_state(),
         required_sections_by_requirement={
-            row["requirement_id"]: adaptive.WORKSHEET_SECTIONS for row in requirements
+            row["requirement_id"]: WORKSHEET_SECTIONS for row in requirements
         },
     )
 
@@ -171,7 +167,7 @@ def test_checkpointed_criterion_progress_reuses_completed_work_and_runs_only_mis
         _Router(),
         "prompt",
         _base_state(),
-        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
     )
 
     assert sorted(calls) == [1, 2]
@@ -196,7 +192,7 @@ def test_each_successful_criterion_is_checkpointed_before_requirement_assembly(m
         _Router(),
         "prompt",
         _base_state(),
-        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
         checkpoint=lambda state: checkpoints.append(deepcopy(state)),
     )
 
@@ -214,7 +210,7 @@ def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
     requirements = _requirements(1)
     _patch_compile_boundaries(monkeypatch, requirements)
     worksheet = _worksheet()
-    existing = _plan("req_1", adaptive.WORKSHEET_SECTIONS, worksheet)
+    existing = _plan("req_1", WORKSHEET_SECTIONS, worksheet)
     existing.update(
         {
             "decision_type": "detailed_implementation_plan",
@@ -232,7 +228,7 @@ def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
         _Router(),
         "prompt",
         _base_state(decisions=[existing]),
-        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
     )
 
     assert result["plan_ready"] is True
@@ -258,7 +254,7 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
             _Router(),
             "prompt",
             _base_state(),
-            required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+            required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
             checkpoint=lambda state: checkpoints.append(deepcopy(state)),
         )
 
@@ -279,23 +275,19 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
             _Router(),
             "prompt",
             terminal,
-            required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+            required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
         )
     assert calls == calls_before_resume
 
 
-def test_full_section_criterion_schema_is_atomic_and_closed() -> None:
-    schema = criterion_fragments.criterion_fragment_schema(adaptive.WORKSHEET_SECTIONS)
-
-    assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"section_updates"}
-    assert schema["required"] == ["section_updates"]
-    updates = schema["properties"]["section_updates"]
-    assert updates["maxItems"] == len(adaptive.WORKSHEET_SECTIONS)
-    assert updates["items"]["additionalProperties"] is False
-    assert set(updates["items"]["properties"]["section"]["enum"]) == set(
-        adaptive.WORKSHEET_SECTIONS
-    )
+def test_each_concern_schema_is_closed():
+    from minecraft_mod_ai.task_template_catalog import load_template
+    from minecraft_mod_ai.task_template_runner import record_response_schema
+    for section in WORKSHEET_SECTIONS:
+        for identifier in load_template(f"feature/{section}")["steps"]:
+            schema = record_response_schema(load_template(identifier))
+            assert schema["additionalProperties"] is False
+            assert "section_updates" not in schema["properties"]
 
 
 def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> None:
@@ -305,7 +297,7 @@ def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> No
     stored = criterion_fragments.store_criterion_progress(
         _base_state(),
         requirement_ref="req_1",
-        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        selected_sections=WORKSHEET_SECTIONS,
         criterion_index=0,
         criterion=criteria[0],
         fragment=fragment,
@@ -314,7 +306,7 @@ def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> No
     restored = criterion_fragments.load_requirement_progress(
         stored,
         requirement_ref="req_1",
-        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        selected_sections=WORKSHEET_SECTIONS,
         criteria=criteria,
         allowed_refs={"ev_001"},
     )
@@ -322,7 +314,7 @@ def test_real_criterion_progress_round_trip_preserves_completed_fragment() -> No
     assert set(restored) == {0}
     assert restored[0] == criterion_fragments.validate_criterion_fragment(
         fragment,
-        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        selected_sections=WORKSHEET_SECTIONS,
         allowed_refs={"ev_001"},
     )
 
@@ -337,17 +329,17 @@ def test_real_criterion_fragments_assemble_canonical_all_section_worksheet() -> 
 
     worksheet = criterion_fragments.assemble_worksheet_from_fragments(
         requirement,
-        selected_sections=adaptive.WORKSHEET_SECTIONS,
+        selected_sections=WORKSHEET_SECTIONS,
         criteria=criteria,
         fragments=fragments,
         allowed_refs={"ev_001"},
     )
 
-    assert tuple(worksheet) == tuple(adaptive.WORKSHEET_SECTIONS)
-    for section in adaptive.WORKSHEET_SECTIONS:
+    assert tuple(worksheet) == tuple(WORKSHEET_SECTIONS)
+    for section in WORKSHEET_SECTIONS:
         assert worksheet[section]["constraint_evidence_refs"] == ["ev_001"]
         assert isinstance(worksheet[section]["specification"], dict)
-        assert worksheet[section]["specification"]["inapplicable_concerns"]
+        assert worksheet[section]["specification"]["inapplicable_concerns"] == []
 
 
 def test_blocked_research_stays_terminal_on_reentry(monkeypatch):
@@ -407,11 +399,11 @@ def test_missing_requirement_sections_are_generated_and_checkpointed(monkeypatch
         return {"section_updates": [row for row in _real_fragment()["section_updates"]
                                     if row["section"] == section]}
 
-    monkeypatch.setattr(adaptive, "generate_criterion_fragment", complete)
+    monkeypatch.setattr(adaptive, "generate_targeted_section_fragment", complete)
     checkpoints = []
     result = adaptive.compile_progress_monotone_detailed_plans(
         _Router(), "prompt", _base_state(),
-        required_sections_by_requirement={"req_1": adaptive.WORKSHEET_SECTIONS},
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
         checkpoint=lambda state: checkpoints.append(deepcopy(state)),
     )
     assert calls == ["reuse_assessment", "verification"]
@@ -424,10 +416,10 @@ def test_missing_requirement_sections_are_generated_and_checkpointed(monkeypatch
 
 def test_resume_rejects_legacy_plan_with_vacuous_required_section():
     worksheet = _worksheet()
-    detail = _plan("req_1", adaptive.WORKSHEET_SECTIONS, worksheet)
-    assert adaptive._detail_matches_selection(detail, adaptive.WORKSHEET_SECTIONS)
+    detail = _plan("req_1", WORKSHEET_SECTIONS, worksheet)
+    assert adaptive._detail_matches_selection(detail, WORKSHEET_SECTIONS)
     spec = detail["engineering_worksheet"]["verification"]["specification"]
     for concern in list(spec):
         if concern != "inapplicable_concerns":
             spec[concern] = []
-    assert not adaptive._detail_matches_selection(detail, adaptive.WORKSHEET_SECTIONS)
+    assert not adaptive._detail_matches_selection(detail, WORKSHEET_SECTIONS)
