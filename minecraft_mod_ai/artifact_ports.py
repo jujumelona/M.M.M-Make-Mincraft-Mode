@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from threading import RLock
 from typing import Any
 
 
@@ -74,21 +75,23 @@ def validate_port_compatibility(
 
 
 class PortRegistry:
-    """Session-local immutable-by-name port table."""
+    """Session-local immutable-by-name port table safe for parallel job execution."""
 
     def __init__(self) -> None:
         self._ports: dict[str, TypedPort] = {}
+        self._lock = RLock()
 
     def publish(self, port: TypedPort) -> None:
         if not port.name or not port.value:
             raise PortConnectionError("PORT_EMPTY: published ports need non-empty name and value")
-        existing = self._ports.get(port.name)
-        if existing is not None and existing != port:
-            raise PortConnectionError(
-                f"PORT_DUPLICATE: Port {port.name} already has {existing.to_dict()}, "
-                f"conflicting with {port.to_dict()}"
-            )
-        self._ports[port.name] = port
+        with self._lock:
+            existing = self._ports.get(port.name)
+            if existing is not None and existing != port:
+                raise PortConnectionError(
+                    f"PORT_DUPLICATE: Port {port.name} already has {existing.to_dict()}, "
+                    f"conflicting with {port.to_dict()}"
+                )
+            self._ports[port.name] = port
 
     def register(
         self,
@@ -108,7 +111,8 @@ class PortRegistry:
         expected_kind: PortKind | str,
         expected_target_type: str,
     ) -> TypedPort:
-        port = self._ports.get(name)
+        with self._lock:
+            port = self._ports.get(name)
         if port is None:
             raise PortConnectionError(
                 f"PORT_MISSING: Required port {name!r} has not been published"
@@ -117,10 +121,13 @@ class PortRegistry:
         return port
 
     def get(self, name: str) -> TypedPort | None:
-        return self._ports.get(name)
+        with self._lock:
+            return self._ports.get(name)
 
     def has(self, name: str) -> bool:
-        return name in self._ports
+        with self._lock:
+            return name in self._ports
 
     def all_ports(self) -> dict[str, TypedPort]:
-        return dict(self._ports)
+        with self._lock:
+            return dict(self._ports)
