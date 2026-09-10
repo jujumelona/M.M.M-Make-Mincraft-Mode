@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import generation_concurrency_safety as safety
+from minecraft_mod_ai import project_index as project_index_module
 from minecraft_mod_ai.project_index import ProjectIndex
 
 
@@ -87,6 +88,7 @@ def test_cpu_generation_width_fails_closed_on_invalid_value(monkeypatch):
 
 def test_project_index_initial_file_work_overlaps_and_preserves_order(tmp_path, monkeypatch):
     monkeypatch.setenv("MMM_PROJECT_INDEX_WORKERS", "2")
+    safety._install_project_index_parallel_scan(project_index_module)
     first = tmp_path / "a.java"
     second = tmp_path / "b.json"
     first.write_text("class A {}", encoding="utf-8")
