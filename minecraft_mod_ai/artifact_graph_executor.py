@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +82,9 @@ def _validate_completed_job(
         if raw_path:
             path = Path(str(raw_path))
             if not path.is_absolute() and base_dir is not None:
-                path = Path(base_dir) / path
+                candidate = Path(base_dir) / path
+                if candidate.exists() or not path.exists():
+                    path = candidate
             if not path.exists():
                 raise ArtifactGraphError(
                     f"ARTIFACT_OUTPUT_MISSING: {job.job_id!r} materialized {path} but it does not exist"
@@ -111,15 +113,23 @@ def execute_artifact_graph(
     port_registry: PortRegistry | None = None,
     base_dir: Any = None,
 ) -> dict[str, Any]:
-    """Run dependency-ready waves concurrently and validate jobs as they finish."""
-    pending = list(jobs)
-    if len({job.job_id for job in pending}) != len(pending):
+    """Run a bounded event-driven DAG and release dependents as soon as producers pass."""
+    ordered_jobs = list(jobs)
+    if len({job.job_id for job in ordered_jobs}) != len(ordered_jobs):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
-    registry = port_registry or PortRegistry()
-    producers = _producer_index(pending)
+    if not ordered_jobs:
+        registry = port_registry or PortRegistry()
+        return {
+            "status": "PASS",
+            "completed_jobs": [],
+            "receipts": [],
+            "ports": {name: port.to_dict() for name, port in registry.all_ports().items()},
+        }
 
+    registry = port_registry or PortRegistry()
+    producers = _producer_index(ordered_jobs)
     missing_external: dict[str, list[str]] = {}
-    for job in pending:
+    for job in ordered_jobs:
         missing = [
             name
             for name in job.requires
@@ -130,80 +140,79 @@ def execute_artifact_graph(
     if missing_external:
         raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
-    receipts: list[dict[str, Any]] = []
-    completed: list[str] = []
-    while pending:
-        runnable = [
-            job for job in pending if all(registry.has(name) for name in job.requires)
-        ]
-        if not runnable:
-            blocked = {
-                job.job_id: [name for name in job.requires if not registry.has(name)]
-                for job in pending
-            }
-            raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
+    pending: dict[str, ArtifactJob] = {job.job_id: job for job in ordered_jobs}
+    running: dict[Future[dict[str, Any]], ArtifactJob] = {}
+    results: dict[str, dict[str, Any]] = {}
+    worker_count = _parallelism(len(ordered_jobs))
 
-        # Each completion is validated immediately. Slow siblings keep generating while
-        # the main thread validates finished outputs, removing the old wave-wide
-        # generation -> validation barrier. Receipts are still committed in graph order.
-        wave_results: dict[str, dict[str, Any]] = {}
-        if len(runnable) == 1:
-            job = runnable[0]
-            receipt = _execute_one(
+    def ready(job: ArtifactJob) -> bool:
+        return all(registry.has(name) for name in job.requires)
+
+    def submit_ready(pool: ThreadPoolExecutor) -> int:
+        submitted = 0
+        slots = worker_count - len(running)
+        if slots <= 0:
+            return 0
+        for job in ordered_jobs:
+            if slots <= 0:
+                break
+            if job.job_id not in pending or not ready(job):
+                continue
+            pending.pop(job.job_id)
+            future = pool.submit(
+                _execute_one,
                 job,
                 context=context,
                 router=router,
                 registry=registry,
                 base_dir=base_dir,
             )
-            _validate_completed_job(
-                job,
-                receipt,
-                context=context,
-                base_dir=base_dir,
-            )
-            wave_results[job.job_id] = receipt
-        else:
-            with ThreadPoolExecutor(
-                max_workers=_parallelism(len(runnable)),
-                thread_name_prefix="mmm-artifact",
-            ) as pool:
-                futures = {
-                    pool.submit(
-                        _execute_one,
-                        job,
-                        context=context,
-                        router=router,
-                        registry=registry,
-                        base_dir=base_dir,
-                    ): job
-                    for job in runnable
+            running[future] = job
+            submitted += 1
+            slots -= 1
+        return submitted
+
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="mmm-artifact",
+    ) as pool:
+        submit_ready(pool)
+        while pending or running:
+            if not running:
+                blocked = {
+                    job.job_id: [name for name in job.requires if not registry.has(name)]
+                    for job in pending.values()
                 }
-                try:
-                    for future in as_completed(futures):
-                        job = futures[future]
-                        receipt = future.result()
-                        _validate_completed_job(
-                            job,
-                            receipt,
-                            context=context,
-                            base_dir=base_dir,
-                        )
-                        wave_results[job.job_id] = receipt
-                except BaseException:
-                    for future in futures:
-                        future.cancel()
-                    raise
+                raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
-        for job in runnable:
-            receipt = wave_results[job.job_id]
-            receipts.append(receipt)
-            completed.append(job.job_id)
-            pending.remove(job)
+            done, _ = wait(tuple(running), return_when=FIRST_COMPLETED)
+            try:
+                for future in done:
+                    job = running.pop(future)
+                    receipt = future.result()
+                    _validate_completed_job(
+                        job,
+                        receipt,
+                        context=context,
+                        base_dir=base_dir,
+                    )
+                    results[job.job_id] = receipt
+                    # The checkpoint executor publishes produced ports before returning.
+                    # Refill capacity immediately so direct dependents do not wait for
+                    # unrelated slow siblings from the previous readiness set.
+                    submit_ready(pool)
+            except BaseException:
+                for future in running:
+                    future.cancel()
+                raise
 
+            submit_ready(pool)
+
+    completed_jobs = [job.job_id for job in ordered_jobs]
+    receipts = [results[job.job_id] for job in ordered_jobs]
     return {
         "status": "PASS",
-        "completed_jobs": completed,
+        "completed_jobs": completed_jobs,
         "receipts": receipts,
         "ports": {name: port.to_dict() for name, port in registry.all_ports().items()},
     }
