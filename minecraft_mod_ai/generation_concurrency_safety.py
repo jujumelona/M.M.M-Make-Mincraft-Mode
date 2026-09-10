@@ -152,6 +152,42 @@ def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
     work_graph_module._exclusive_anchor_keys = exclusive_anchor_keys
 
 
+def _install_fine_grained_module_shards(work_graph_module: Any) -> None:
+    """Split built-in generation batches so the outer DAG can pipeline each module.
+
+    The original sharder still owns dependency ordering and explicit batching policy.
+    By default content/system/entity batches are split after that ordering decision.
+    Operators can opt back into the original batching for a stage by setting its
+    pipeline shard environment variable to any positive integer.
+    """
+    current = work_graph_module._module_shards
+    if getattr(current, "_mmm_fine_grained_generation", False):
+        return
+
+    stage_override = {
+        "content": "MMM_CONTENT_PIPELINE_SHARD_SIZE",
+        "system": "MMM_SYSTEM_PIPELINE_SHARD_SIZE",
+        "entity": "MMM_ENTITY_PIPELINE_SHARD_SIZE",
+    }
+
+    @wraps(current)
+    def module_shards(*args: Any, **kwargs: Any):
+        for stage, members in current(*args, **kwargs):
+            env_name = stage_override.get(stage)
+            if env_name is None or os.environ.get(env_name, "").strip():
+                yield stage, members
+                continue
+            if len(members) <= 1:
+                yield stage, members
+                continue
+            for member in members:
+                yield stage, (member,)
+
+    module_shards._mmm_fine_grained_generation = True  # type: ignore[attr-defined]
+    module_shards.__wrapped__ = current  # type: ignore[attr-defined]
+    work_graph_module._module_shards = module_shards
+
+
 def _install_cpu_capacity_policy(scheduler_safety: Any) -> None:
     """Allow the host to expose all reviewed CPU/I/O capacity instead of a fixed cap."""
     current = scheduler_safety._cpu_capacity
@@ -200,6 +236,7 @@ def install() -> None:
         _install_custom_generator_lock(custom_module_generator)
         _install_project_index_snapshot_lock(project_index)
         _install_exact_anchor_fallback(work_graph)
+        _install_fine_grained_module_shards(work_graph)
         _replace_stage_locks_with_anchor_fencing(work_graph)
         _INSTALLED = True
 
