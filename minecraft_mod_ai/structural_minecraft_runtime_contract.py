@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Runtime replacement that compiles Minecraft work only from explicit structural artifacts."""
+"""Compile Minecraft work only from the fixed structural translation pipeline."""
 
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -13,11 +13,9 @@ from .minecraft_template_catalog import (
     TEMPLATE_CATALOG_SCHEMA,
 )
 from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep
-from .structural_artifact_mapping import (
-    branch_features_for_artifacts,
-    detect_structural_artifacts,
-)
+from .structural_artifact_mapping import branch_features_for_artifacts
 from .task_template_catalog import load_template
+from .translation_runtime import translate_requirement
 
 _PLANNING: Any | None = None
 _INSTALLED = False
@@ -40,9 +38,9 @@ def _append(steps, capability, previous, *, name, outcome, anchor_kinds=("symbol
 
 def structural_steps_for_requirement(requirement: Mapping[str, Any]) -> tuple[TemplateStep, ...]:
     capability = _capability(requirement)
-    plan = detect_structural_artifacts(requirement)
-    if plan.unresolved_inputs:
-        raise ValueError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(plan.unresolved_inputs))
+    translation = translate_requirement(requirement)
+    if translation.unresolved_inputs:
+        raise ValueError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(translation.unresolved_inputs))
     steps: list[TemplateStep] = []
     previous = ROOT_PROVIDE
     for name, outcome in (
@@ -54,14 +52,15 @@ def structural_steps_for_requirement(requirement: Mapping[str, Any]) -> tuple[Te
         ("failure", "Implement only the declared rejection and preserved-state behavior"),
     ):
         previous = _append(steps, capability, previous, name=name, outcome=f"{outcome} for {capability}")
-    for artifact in plan.artifact_kinds:
+
+    for artifact in translation.artifact_kinds:
         manifest = load_template(f"minecraft/{artifact}")
         if manifest.get("execution") != "sequence":
             raise ValueError(f"STRUCTURAL_ARTIFACT_TEMPLATE: minecraft/{artifact} must be a sequence")
-        artifact_branches = tuple(sorted(branch_features_for_artifacts((artifact,))))
         identifiers = manifest.get("steps")
         if not isinstance(identifiers, list) or not identifiers:
             raise ValueError(f"STRUCTURAL_ARTIFACT_TEMPLATE: minecraft/{artifact} has no responsibilities")
+        artifact_branches = tuple(sorted(branch_features_for_artifacts((artifact,))))
         for identifier in identifiers:
             task = load_template(str(identifier))
             rules = task.get("rules")
@@ -78,6 +77,7 @@ def structural_steps_for_requirement(requirement: Mapping[str, Any]) -> tuple[Te
                 anchor_kinds=tuple(task.get("anchor_kinds") or ("symbol", "test")),
                 branch_features=artifact_branches,
             )
+
     previous = _append(steps, capability, previous, name="integration", outcome=f"Connect only the declared producer and consumer interfaces for {capability}")
     steps.append(TemplateStep(name="runtime_scenario", outcome=f"Verify the declared observable acceptance scenarios for {capability}", consumes=(previous,), provides=(capability,), anchor_kinds=("test",), branch_features=()))
     return tuple(steps)
@@ -110,9 +110,9 @@ def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=No
         requirement_ref = str(gap["requirement_ref"])
         capability = _capability(gap)
         semantic_type = str(gap.get("semantic_type") or "gameplay_mechanic")
-        structural_plan = detect_structural_artifacts(gap)
-        if structural_plan.unresolved_inputs:
-            raise planning.EvidencePlanError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(structural_plan.unresolved_inputs))
+        translation = translate_requirement(gap)
+        if translation.unresolved_inputs:
+            raise planning.EvidencePlanError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(translation.unresolved_inputs))
         required_provide = str(gap["missing_provides"][0])
         decision = reuse_by_req.get(requirement_ref, {})
         steps = structural_steps_for_requirement(gap)
@@ -154,7 +154,7 @@ def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=No
                 "impact_probes": ["changed_symbols", "changed_resource_ids_and_references", "dependency_and_source_set_edges", "affected_tests_and_acceptance_bindings"],
                 "template_id": "structural_artifact_pipeline",
                 "template_catalog_schema": TEMPLATE_CATALOG_SCHEMA,
-                "template_features": sorted(structural_plan.branch_features),
+                "template_features": sorted(translation.branch_features),
                 "state": "pending",
                 "task_sha256": "",
             }
@@ -171,10 +171,10 @@ def _name_only_route_disabled(*args, **kwargs):
 
 
 def _requirement_branch_features(requirement):
-    plan = detect_structural_artifacts(requirement)
-    if plan.unresolved_inputs:
-        raise ValueError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(plan.unresolved_inputs))
-    return plan.branch_features
+    translation = translate_requirement(requirement)
+    if translation.unresolved_inputs:
+        raise ValueError("STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(translation.unresolved_inputs))
+    return translation.branch_features
 
 
 def install(planning_module):
