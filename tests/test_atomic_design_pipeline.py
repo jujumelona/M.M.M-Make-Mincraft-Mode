@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from minecraft_mod_ai.atomic_design_pipeline import (
@@ -34,24 +36,27 @@ def test_compile_atomic_design_korean_space_mod():
     assert "Condition:" in design["progression"][1]
     assert "Reward:" in design["progression"][2]
 
-    # Verify slots dictionary
+    # Verify slots dictionary: only active resolved slots exist
     slots = design["_design_slots"]
     assert "core_loop" in slots
     assert "first_goal" in slots
     assert "progression_condition" in slots
     assert "reward" in slots
     assert "visual_identity" in slots
-    assert "audio_identity" in slots
-    assert "content_scale" in slots
+    assert "theme" in slots
+    # Unactivated slots are omitted, not fake-filled
+    assert "audio_identity" not in slots
+    assert "npc_role" not in slots
+    assert "machine_role" not in slots
     for k, v in slots.items():
         assert isinstance(v, str)
         assert 0 < len(v) <= 256
 
     # Verify atomic implementation facts
     facts = design["_implementation_facts"]
-    assert len(facts) >= 2
+    assert len(facts) >= 1
     fact_types = [f.fact_type for f in facts]
-    assert FactType.ITEM_EXISTS in fact_types or FactType.BLOCK_EXISTS in fact_types
+    assert FactType.ITEM_EXISTS in fact_types or FactType.BLOCK_EXISTS in fact_types or FactType.ENTITY_EXISTS in fact_types
 
     # Verify dynamic modules and asset requests
     modules = design["modules"]
@@ -62,7 +67,7 @@ def test_compile_atomic_design_korean_space_mod():
         m.validate()
     for a in assets:
         a.validate()
-        assert a.width == 16 and a.height == 16
+        assert a.width in (16, 64, 256) and a.height in (16, 64, 256)
         assert "Pixel Art" in a.prompt
 
 
@@ -72,7 +77,7 @@ def test_compile_atomic_design_empty_prompt_fails_closed():
 
 
 class _MockSlotRouter:
-    def __init__(self, mapping: dict[str, str]):
+    def __init__(self, mapping: dict[str, Any]):
         self.mapping = mapping
         self.calls: list[str] = []
 
@@ -112,7 +117,8 @@ def test_compile_atomic_design_with_research_context():
     }
     design = compile_atomic_design("moon base mod", research=research)
     assert design["title"]
-    assert len(design["_design_slots"]) == 32
+    assert 5 <= len(design["_design_slots"]) <= 16
+    assert "npc_role" not in design["_design_slots"]
     assert len(design["modules"]) >= 1
     assert len(design["assets"]) >= 1
 
@@ -123,5 +129,54 @@ def test_dynamic_slot_execution_count_is_bounded():
     })
     design = compile_atomic_design("simple ruby item mod", router=router)
     assert 8 <= len(router.calls) < 20
-    assert len(design["_design_slots"]) == 32
+    assert len(design["_design_slots"]) == len(router.calls) - 1
+    assert "npc_role" not in design["_design_slots"]
+
+
+def test_targeted_rename_activates_minimal_slots():
+    design = compile_atomic_design("아이템 이름만 바꿔줘")
+    assert "theme" in design["_design_slots"]
+    assert "core_loop" not in design["_design_slots"]
+    assert "progression_condition" not in design["_design_slots"]
+    assert "npc_role" not in design["_design_slots"]
+
+
+def test_targeted_texture_activates_minimal_slots():
+    design = compile_atomic_design("아이템 텍스처만 바꿔줘")
+    assert "visual_identity" in design["_design_slots"]
+    assert "texture_requirement" in design["_design_slots"]
+    assert "core_loop" not in design["_design_slots"]
+
+
+def test_resolve_content_domains_fails_closed_when_router_fails():
+    from minecraft_mod_ai.atomic_slot_executor import SlotFillError
+    from minecraft_mod_ai.atomic_design_pipeline import resolve_content_domains
+
+    class FailingRouter:
+        def generate_tool_decision(self, *args, **kwargs):
+            raise RuntimeError("Model generation failed")
+
+    with pytest.raises(SlotFillError):
+        resolve_content_domains(FailingRouter(), prompt="우주모드")
+
+
+def test_custom_stack_limit_emitted_and_default_omitted():
+    # Default stack limit (64) is omitted from facts
+    design_default = compile_atomic_design("simple ruby item")
+    stack_facts_default = [f for f in design_default["_implementation_facts"] if f.fact_type == FactType.ITEM_STACK_LIMIT]
+    assert len(stack_facts_default) == 0
+
+    # Custom stack limit (16) is emitted
+    design_custom = compile_atomic_design("루나이트 원석은 16개까지 겹쳐져")
+    stack_facts_custom = [f for f in design_custom["_implementation_facts"] if f.fact_type == FactType.ITEM_STACK_LIMIT]
+    assert len(stack_facts_custom) == 1
+    assert stack_facts_custom[0].value == 16
+
+
+def test_entity_and_gui_domains_do_not_force_item():
+    router_entity = _MockSlotRouter({"domains": ["entity"]})
+    design_entity = compile_atomic_design("alien boss", router=router_entity)
+    module_kinds = [m.kind for m in design_entity["modules"]]
+    assert "entity" in module_kinds
+    assert "item" not in module_kinds
 

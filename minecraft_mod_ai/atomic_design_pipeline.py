@@ -269,34 +269,98 @@ def resolve_content_domains(
 ) -> list[str]:
     """Resolve which Minecraft content domains are required using the model or prompt fallback."""
     if router is not None:
+        template = load_template("design/content_domains")
+        schema = template.get("record_schema") or template.get("output_schema")
+        slot_def = SlotDefinition(
+            slot_id="domains",
+            schema=dict(schema),
+            description=str(template.get("task", "Select content domains")),
+        )
+        slot_def.validate_schema()
+        slot_context = {
+            "prompt": prompt,
+            "task": slot_def.description,
+            "research": research_context,
+        }
         try:
-            template = load_template("design/content_domains")
-            schema = template.get("record_schema") or template.get("output_schema")
-            slot_def = SlotDefinition(
-                slot_id="domains",
-                schema=dict(schema),
-                description=str(template.get("task", "Select content domains")),
-            )
-            slot_def.validate_schema()
-            slot_context = {
-                "prompt": prompt,
-                "task": slot_def.description,
-                "research": research_context,
-            }
             result = fill_one_slot(router, slot_def, slot_context, role="planner")
-            if isinstance(result, Mapping) and "domains" in result:
-                domains = result["domains"]
-                if isinstance(domains, list) and domains:
-                    valid = [str(d).lower() for d in domains if str(d).lower() in DOMAIN_SLOTS]
-                    if valid:
-                        return valid[:3]
-            elif isinstance(result, list):
-                valid = [str(d).lower() for d in result if str(d).lower() in DOMAIN_SLOTS]
-                if valid:
-                    return valid[:3]
-        except Exception:
-            pass
+        except SlotFillError:
+            raise
+        except Exception as exc:
+            raise SlotFillError(
+                f"CONTENT_DOMAINS_FAILED: Failed to resolve content domains for {prompt!r}: {exc}"
+            ) from exc
+
+        valid: list[str] = []
+        if isinstance(result, Mapping) and "domains" in result:
+            raw = result["domains"]
+            if isinstance(raw, list):
+                valid = [str(d).lower() for d in raw if str(d).lower() in DOMAIN_SLOTS]
+        elif isinstance(result, list):
+            valid = [str(d).lower() for d in result if str(d).lower() in DOMAIN_SLOTS]
+
+        if not valid:
+            raise SlotFillError(
+                f"CONTENT_DOMAINS_INVALID: model returned invalid or empty domains for {prompt!r}: {result!r}"
+            )
+        return valid[:3]
+
     return _fallback_content_domains(prompt)
+
+
+def select_active_design_slots(
+    prompt: str,
+    domains: Sequence[str],
+    *,
+    request_catalog: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Dynamically determine which atomic design slots to activate based on requirement rules."""
+    p = prompt.lower().strip()
+
+    # Targeted scoped modifications (e.g. rename only, texture only)
+    is_rename_only = bool(re.search(r"(이름만|이름\s*바꿔|rename|only\s+name|change\s+name)", p))
+    is_texture_only = bool(re.search(r"(텍스처만|texture\s*only|change\s+texture|재질만)", p))
+
+    if is_rename_only:
+        return ["design/theme"]
+    if is_texture_only:
+        return ["design/visual_identity", "design/texture_requirement"]
+
+    # General feature or mod creation
+    active: list[str] = [
+        "design/theme",
+        "design/visual_identity",
+        "design/core_action",
+        "design/core_loop",
+        "design/first_goal",
+        "design/texture_requirement",
+    ]
+
+    # Player fantasy: activate for mods, themes, or roleplay requests
+    if any(w in p for w in ("모드", "mod", "fantasy", "rpg", "magic", "space", "우주", "adventure", "dimension")) or len(p) > 15:
+        active.append("design/player_fantasy")
+
+    # Domain-specific child slots
+    for domain in domains:
+        for s in DOMAIN_SLOTS.get(domain, ()):
+            if s not in active:
+                active.append(s)
+
+    # Progression condition and reward: activate when progression/tiers/goals are involved
+    needs_progression = (
+        any(w in p for w in ("progression", "condition", "reward", "tier", "upgrade", "진행", "보상", "조건", "모드", "mod", "loop", "advancement", "goal", "목표"))
+        or "machine" in domains
+        or "worldgen" in domains
+        or "combat" in domains
+        or len(domains) >= 2
+        or len(p) > 20
+    )
+    if needs_progression:
+        for s in PROGRESSION_SLOTS:
+            if s not in active:
+                active.append(s)
+
+    return active
 
 
 def _extract_identifiers(text: str, default_stem: str) -> list[str]:
@@ -327,26 +391,21 @@ def compile_atomic_design(
     research_context = _format_research_context(research)
     resolved_slots: dict[str, str] = {}
 
-    # 1. Foundation slots
-    active_slots: list[str] = list(FOUNDATION_SLOTS)
-
-    # 2. Dynamic content domains (model-classified or fallback)
+    # 1. Resolve content domains (model-classified or fallback)
     domains = resolve_content_domains(
         router,
         prompt=prompt_text,
         research_context=research_context,
     )
-    for domain in domains:
-        for s in DOMAIN_SLOTS.get(domain, ()):
-            if s not in active_slots:
-                active_slots.append(s)
 
-    # 3. Progression condition
-    for s in PROGRESSION_SLOTS:
-        if s not in active_slots:
-            active_slots.append(s)
+    # 2. Select active slots dynamically based on requirements
+    active_slots = select_active_design_slots(
+        prompt_text,
+        domains,
+        request_catalog=request_catalog,
+    )
 
-    # Resolve active slots dynamically
+    # 3. Resolve active slots dynamically
     for slot_tmpl in active_slots:
         slot_id, value = resolve_design_slot(
             router,
@@ -355,12 +414,6 @@ def compile_atomic_design(
             research_context=research_context,
         )
         resolved_slots[slot_id] = value
-
-    # Populate all remaining slots with deterministic bounded fallbacks so downstream never sees missing keys
-    for slot_tmpl in ALL_DESIGN_SLOTS:
-        s_id = slot_tmpl.rsplit("/", 1)[-1]
-        if s_id not in resolved_slots:
-            resolved_slots[s_id] = _deterministic_prompt_fallback(s_id, prompt_text, research_context)
 
     stem = _sanitize_stem(prompt_text)
     mod_id = f"{stem}_mod"
@@ -393,7 +446,9 @@ def compile_atomic_design(
 
     has_item = "item" in domains
     has_block = "block" in domains
-    if not (has_item or has_block):
+    has_entity = "entity" in domains
+    has_gui = "gui" in domains
+    if not (has_item or has_block or has_entity or has_gui):
         has_item = True
 
     # Dynamic Items
@@ -416,16 +471,21 @@ def compile_atomic_design(
                 display_name=f"{item_id.replace('_', ' ').title()}",
             )
         )
-        facts.append(
-            ImplementationFact(
-                fact_id=f"fact_{item_id}_stack",
-                fact_type=FactType.ITEM_STACK_LIMIT,
-                subject=item_id,
-                value=64,
-                provenance=FactProvenance.DESIGN,
-                display_name=f"{item_id} Stack Limit",
-            )
-        )
+        # Emit ITEM_STACK_LIMIT only if an explicit non-64 stack limit was specified
+        stack_match = re.search(r"(\d+)\s*(?:개까지\s*겹쳐|stack(?:ing)?\s*limit|max\s*stack)", prompt_text)
+        if stack_match:
+            stack_val = int(stack_match.group(1))
+            if stack_val != 64 and 1 <= stack_val <= 64:
+                facts.append(
+                    ImplementationFact(
+                        fact_id=f"fact_{item_id}_stack",
+                        fact_type=FactType.ITEM_STACK_LIMIT,
+                        subject=item_id,
+                        value=stack_val,
+                        provenance=FactProvenance.DESIGN,
+                        display_name=f"{item_id} Stack Limit",
+                    )
+                )
         modules.append(
             ProductionModule(
                 module_id=item_id,
@@ -512,6 +572,84 @@ def compile_atomic_design(
             )
         )
 
+    # Dynamic Entities
+    if has_entity:
+        entity_id = f"{stem}_entity"
+        req_refs = list(all_req_ids) if all_req_ids else [f"req_{entity_id}"]
+        entity_obligations = [f"Register entity {entity_id}", core_loop_val]
+        if ledger:
+            for r in ledger:
+                st = _text(r.get("statement") or r.get("semantic_statement"))
+                if st and st not in entity_obligations:
+                    entity_obligations.append(st)
+        facts.append(
+            ImplementationFact(
+                fact_id=f"fact_{entity_id}_exists",
+                fact_type=FactType.ENTITY_EXISTS,
+                subject=entity_id,
+                value={"display_name_en": f"{entity_id.replace('_', ' ').title()}"},
+                provenance=FactProvenance.DESIGN,
+                display_name=f"{entity_id.replace('_', ' ').title()}",
+            )
+        )
+        modules.append(
+            ProductionModule(
+                module_id=entity_id,
+                kind="entity",
+                config={
+                    "entity_id": entity_id,
+                    "name": f"{entity_id.replace('_', ' ').title()}",
+                    "plugin_id": entity_id,
+                    "requirement_refs": req_refs,
+                    "implementation_obligations": entity_obligations,
+                    "reason": core_loop_val,
+                },
+                depends_on=(),
+                required_gates=(),
+            )
+        )
+        assets.append(
+            AssetRequest(
+                asset_id=f"texture_entity_{entity_id}",
+                kind="entity",
+                target_path=f"assets/{mod_id}/textures/entity/{entity_id}.png",
+                width=64,
+                height=64,
+                prompt=f"Pixel Art, PixArFK, {visual_identity_val}, {entity_id.replace('_', ' ')} mob texture",
+            )
+        )
+
+    # Dynamic GUI
+    if has_gui:
+        gui_id = f"{stem}_screen"
+        req_refs = list(all_req_ids) if all_req_ids else [f"req_{gui_id}"]
+        modules.append(
+            ProductionModule(
+                module_id=gui_id,
+                kind="gui",
+                config={
+                    "screen_id": gui_id,
+                    "name": f"{gui_id.replace('_', ' ').title()}",
+                    "plugin_id": gui_id,
+                    "requirement_refs": req_refs,
+                    "implementation_obligations": [f"Register screen {gui_id}"],
+                    "reason": resolved_slots.get("ui_requirement", "UI interface"),
+                },
+                depends_on=(),
+                required_gates=(),
+            )
+        )
+        assets.append(
+            AssetRequest(
+                asset_id=f"texture_gui_{gui_id}",
+                kind="gui",
+                target_path=f"assets/{mod_id}/textures/gui/{gui_id}.png",
+                width=256,
+                height=256,
+                prompt=f"Pixel Art, {visual_identity_val}, Minecraft GUI container interface for {stem}",
+            )
+        )
+
     # Acceptance tests derived strictly from design slots
     acceptance_tests = [
         f"Core loop verified: {core_loop_val}",
@@ -550,5 +688,7 @@ __all__ = [
     "CORE_DESIGN_SLOTS",
     "DESIGN_SLOTS",
     "compile_atomic_design",
+    "resolve_content_domains",
     "resolve_design_slot",
+    "select_active_design_slots",
 ]

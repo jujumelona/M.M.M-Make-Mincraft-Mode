@@ -473,20 +473,21 @@ def _lower_implementation_facts_and_jobs(
                     raise ValueError(
                         f"Stack limit {stack_val} for {module.module_id} out of bounds [1, 64]"
                     )
-                key_stack = (FactType.ITEM_STACK_LIMIT.value, module.module_id)
-                if key_stack not in seen_facts:
-                    implementation_facts.append(
-                        ImplementationFact(
-                            fact_id=f"{module.module_id}.stack_limit",
-                            fact_type=FactType.ITEM_STACK_LIMIT,
-                            subject=module.module_id,
-                            value=stack_val,
-                            display_name=display_name,
-                            provenance=FactProvenance.DESIGN,
-                            parent_requirement=module.module_id,
+                if stack_val != 64:
+                    key_stack = (FactType.ITEM_STACK_LIMIT.value, module.module_id)
+                    if key_stack not in seen_facts:
+                        implementation_facts.append(
+                            ImplementationFact(
+                                fact_id=f"{module.module_id}.stack_limit",
+                                fact_type=FactType.ITEM_STACK_LIMIT,
+                                subject=module.module_id,
+                                value=stack_val,
+                                display_name=display_name,
+                                provenance=FactProvenance.DESIGN,
+                                parent_requirement=module.module_id,
+                            )
                         )
-                    )
-                    seen_facts.add(key_stack)
+                        seen_facts.add(key_stack)
         elif module.kind == "block":
             config = module.config if isinstance(module.config, dict) else {}
             display_name = str(

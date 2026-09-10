@@ -106,7 +106,6 @@ def generate_fixed_template_value(
     enable_tools: bool = True,
     tool_name: str = _DEFAULT_TOOL_NAME,
     description: str = "",
-    assert_atomicity: bool = True,
 ) -> Any:
     """Return host-validated structured data without model-authored JSON syntax."""
 

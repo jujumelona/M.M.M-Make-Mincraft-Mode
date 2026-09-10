@@ -1,0 +1,26 @@
+id: design/content_entity
+task: Identify a discrete Minecraft content entity (item, block, entity, or gui) required for this mod.
+record_schema:
+  type: object
+  properties:
+    entity_id:
+      type: string
+      maxLength: 32
+    kind:
+      type: string
+      enum:
+        - item
+        - block
+        - entity
+        - gui
+      maxLength: 16
+    role:
+      type: string
+      maxLength: 128
+  required:
+    - entity_id
+    - kind
+    - role
+  additionalProperties: false
+rules:
+  - Provide a snake_case identifier, valid kind, and concise role.

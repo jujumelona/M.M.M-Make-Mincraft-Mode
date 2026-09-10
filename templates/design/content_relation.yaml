@@ -1,0 +1,21 @@
+id: design/content_relation
+task: Define a relationship between two mod content entities (e.g., block drop, craft ingredient, entity spawn).
+record_schema:
+  type: object
+  properties:
+    relation_type:
+      type: string
+      maxLength: 32
+    source_id:
+      type: string
+      maxLength: 32
+    target_id:
+      type: string
+      maxLength: 32
+  required:
+    - relation_type
+    - source_id
+    - target_id
+  additionalProperties: false
+rules:
+  - Specify the relation type, source entity ID, and target entity ID.

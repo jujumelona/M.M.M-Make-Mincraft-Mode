@@ -92,7 +92,21 @@ def run_record_template(
         if evidence_from_value is not None:
             value["evidence_refs"] = list(evidence_from_value)
         else:
-            value["evidence_refs"] = sorted(allowed_refs)[:4]
+            grounded_refs: list[str] = []
+            for key in ("source_evidence_id", "evidence_ref", "shard_id"):
+                ref = context.get(key)
+                if isinstance(ref, str) and ref in allowed_refs and ref not in grounded_refs:
+                    grounded_refs.append(ref)
+            ev = context.get("evidence")
+            if isinstance(ev, str) and ev in allowed_refs and ev not in grounded_refs:
+                grounded_refs.append(ev)
+            elif isinstance(ev, (list, tuple, set)):
+                for r in ev:
+                    if isinstance(r, str) and r in allowed_refs and r not in grounded_refs:
+                        grounded_refs.append(r)
+            if not grounded_refs and allowed_refs:
+                grounded_refs = sorted(allowed_refs)[:4]
+            value["evidence_refs"] = grounded_refs
         if any(ref not in allowed_refs for ref in value["evidence_refs"]):
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
         status = value["status"]
@@ -174,6 +188,28 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
         values[alias] = port.value
 
 
+_STANDARD_PORT_DEFINITIONS: dict[str, tuple[str, str, str]] = {
+    "item_key_symbol": ("JAVA_SYMBOL", "ResourceKey<Item>", "ModItemIds.{constant}_KEY"),
+    "item_registry_id": ("REGISTRY_ID", "Item", "{mod_id}:{registry_path}"),
+    "item_symbol": ("JAVA_SYMBOL", "Item", "ModItems.{constant}"),
+    "model_ref": ("MODEL_REF", "Item", "{mod_id}:item/{registry_path}"),
+    "translation_key": ("TRANSLATION_KEY", "Item", "item.{mod_id}.{registry_path}"),
+    "texture_ref": ("TEXTURE_REF", "Item", "{mod_id}:item/{registry_path}"),
+    "client_item_ref": ("CLIENT_ITEM_REF", "Item", "{mod_id}:items/{registry_path}"),
+    "block_key_symbol": ("JAVA_SYMBOL", "ResourceKey<Block>", "ModBlockIds.{constant}_KEY"),
+    "block_registry_id": ("REGISTRY_ID", "Block", "{mod_id}:{registry_path}"),
+    "block_symbol": ("JAVA_SYMBOL", "Block", "ModBlocks.{constant}"),
+    "blockstate_ref": ("MODEL_REF", "Block", "{mod_id}:block/{registry_path}"),
+    "block_model_ref": ("MODEL_REF", "Block", "{mod_id}:block/{registry_path}"),
+    "block_translation_key": ("TRANSLATION_KEY", "Block", "block.{mod_id}.{registry_path}"),
+    "block_loot_table_ref": ("GENERIC", "LootTable", "{mod_id}:blocks/{registry_path}"),
+    "entity_key_symbol": ("JAVA_SYMBOL", "ResourceKey<EntityType<?>>", "ModEntityIds.{constant}_KEY"),
+    "entity_registry_id": ("REGISTRY_ID", "EntityType<?>", "{mod_id}:{registry_path}"),
+    "entity_symbol": ("JAVA_SYMBOL", "EntityType<?>", "ModEntities.{constant}"),
+    "entity_translation_key": ("TRANSLATION_KEY", "EntityType<?>", "entity.{mod_id}.{registry_path}"),
+}
+
+
 def _logical_port(
     logical_name: str | Mapping[str, Any],
     published_name: str,
@@ -194,77 +230,15 @@ def _logical_port(
             rendered_val = str(raw_val)
         return TypedPort(published_name, kind, target_type, rendered_val)
 
-    mod_id = str(values.get("mod_id") or "")
-    registry_path = str(values.get("registry_path") or "")
-    constant = str(values.get("java_constant") or "")
-    if logical_name == "item_key_symbol":
-        return TypedPort(
-            published_name, PortKind.JAVA_SYMBOL, "ResourceKey<Item>", f"ModItemIds.{constant}_KEY"
+    if logical_name in _STANDARD_PORT_DEFINITIONS:
+        kind_name, target_type, pattern = _STANDARD_PORT_DEFINITIONS[logical_name]
+        kind = getattr(PortKind, kind_name)
+        rendered_val = pattern.format(
+            mod_id=str(values.get("mod_id") or ""),
+            registry_path=str(values.get("registry_path") or ""),
+            constant=str(values.get("java_constant") or ""),
         )
-    if logical_name == "item_registry_id":
-        return TypedPort(
-            published_name, PortKind.REGISTRY_ID, "Item", f"{mod_id}:{registry_path}"
-        )
-    if logical_name == "item_symbol":
-        return TypedPort(
-            published_name, PortKind.JAVA_SYMBOL, "Item", f"ModItems.{constant}"
-        )
-    if logical_name == "model_ref":
-        return TypedPort(
-            published_name,
-            PortKind.MODEL_REF,
-            "Item",
-            f"{mod_id}:item/{registry_path}",
-        )
-    if logical_name == "translation_key":
-        return TypedPort(
-            published_name,
-            PortKind.TRANSLATION_KEY,
-            "Item",
-            f"item.{mod_id}.{registry_path}",
-        )
-    if logical_name == "texture_ref":
-        return TypedPort(
-            published_name,
-            PortKind.TEXTURE_REF,
-            "Item",
-            f"{mod_id}:item/{registry_path}",
-        )
-    if logical_name == "client_item_ref":
-        return TypedPort(
-            published_name,
-            PortKind.CLIENT_ITEM_REF,
-            "Item",
-            f"{mod_id}:items/{registry_path}",
-        )
-    if logical_name == "block_key_symbol":
-        return TypedPort(
-            published_name, PortKind.JAVA_SYMBOL, "ResourceKey<Block>", f"ModBlockIds.{constant}_KEY"
-        )
-    if logical_name == "block_registry_id":
-        return TypedPort(
-            published_name, PortKind.REGISTRY_ID, "Block", f"{mod_id}:{registry_path}"
-        )
-    if logical_name == "block_symbol":
-        return TypedPort(
-            published_name, PortKind.JAVA_SYMBOL, "Block", f"ModBlocks.{constant}"
-        )
-    if logical_name == "blockstate_ref":
-        return TypedPort(
-            published_name, PortKind.MODEL_REF, "Block", f"{mod_id}:block/{registry_path}"
-        )
-    if logical_name == "block_model_ref":
-        return TypedPort(
-            published_name, PortKind.MODEL_REF, "Block", f"{mod_id}:block/{registry_path}"
-        )
-    if logical_name == "block_translation_key":
-        return TypedPort(
-            published_name, PortKind.TRANSLATION_KEY, "Block", f"block.{mod_id}.{registry_path}"
-        )
-    if logical_name == "block_loot_table_ref":
-        return TypedPort(
-            published_name, PortKind.GENERIC, "LootTable", f"{mod_id}:blocks/{registry_path}"
-        )
+        return TypedPort(published_name, kind, target_type, rendered_val)
     raise ValueError(
         f"TEMPLATE_PORT_UNDECLARED_SEMANTICS: template {template_id!r} publishes "
         f"unknown logical port {logical_name!r}"
