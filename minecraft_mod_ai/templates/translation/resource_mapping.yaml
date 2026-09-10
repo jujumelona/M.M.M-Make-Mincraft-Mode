@@ -1,0 +1,21 @@
+id: translation/resource_mapping
+input:
+  atomic_feature:
+  resource_requirements:
+  asset_requirements:
+
+task:
+  map_resource_artifacts:
+
+rules:
+  - Emit only explicitly required data or client resource artifacts.
+  - Keep recipe, loot, tag, advancement, model, texture, animation, sound, language, and datagen concerns separate.
+  - Do not fabricate resource identifiers or paths when they are unresolved.
+
+output:
+  resource_artifacts:
+  asset_artifacts:
+  unresolved_inputs:
+
+proof:
+  predicate: every resource artifact is explicitly required and has a known owner or is reported unresolved
