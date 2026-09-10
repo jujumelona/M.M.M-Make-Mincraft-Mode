@@ -1,0 +1,131 @@
+name: one-shot atomic handoff hardening
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-finish-atomic-handoff.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply focused remaining architecture fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected snippet in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # 1) Explicitly declare facts owned by existing non-artifact generators.
+          path = Path('minecraft_mod_ai/artifact_expansion.py')
+          text = path.read_text(encoding='utf-8')
+          marker = 'FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)\n\n\n'
+          addition = '''FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)\n\n# These fact types are intentionally implemented by an existing module generator until\n# their executable leaf catalog is complete.  Keeping this declaration explicit prevents\n# a supported higher-level capability from being mistaken for an ArtifactJob leaf while\n# still failing closed for every undeclared fact type.\nDECLARED_GENERATOR_HANDOFFS = frozenset(\n    {\n        FactType.ENTITY_EXISTS,\n        FactType.GUI_EXISTS,\n        FactType.NETWORK_PACKET,\n        FactType.BLOCK_ENTITY_EXISTS,\n        FactType.DATA_COMPONENT,\n        FactType.WORLDGEN_FEATURE,\n        FactType.DIMENSION,\n        FactType.BIOME,\n        FactType.STATUS_EFFECT,\n        FactType.SOUND_EVENT,\n        FactType.PARTICLE_TYPE,\n        FactType.ENTITY_LOOT,\n        FactType.ADVANCEMENT,\n        FactType.EQUIPMENT_ARMOR,\n        FactType.CUSTOM_ITEM_BEHAVIOR,\n        FactType.CUSTOM_BLOCK_BEHAVIOR,\n        FactType.CONTENT_RELATION,\n    }\n)\n\n\ndef implementation_route(fact_type: FactType) -> str:\n    if fact_type in FACT_EXPANSIONS:\n        return "artifact"\n    if fact_type in DECLARED_GENERATOR_HANDOFFS:\n        return "generator"\n    raise ArtifactExpansionError(\n        f"ARTIFACT_FACT_UNSUPPORTED: no implementation route exists for {fact_type.value}"\n    )\n\n\n'''
+          if 'DECLARED_GENERATOR_HANDOFFS' not in text:
+              if marker not in text:
+                  raise SystemExit('artifact expansion insertion marker missing')
+              text = text.replace(marker, addition, 1)
+          old = '''        template_ids = FACT_EXPANSIONS.get(fact.fact_type)\n        if template_ids is None:\n            raise ArtifactExpansionError(\n                f"ARTIFACT_FACT_UNSUPPORTED: no validated leaf expansion exists for "\n                f"{fact.fact_type.value}; do not silently skip or improvise it"\n            )\n'''
+          new = '''        route = implementation_route(fact.fact_type)\n        if route == "generator":\n            # The ImplementationFact remains in the proposal and is consumed by the\n            # module generator selected from its content capability.  It is deliberately\n            # not represented as a fake/empty ArtifactJob.\n            continue\n        template_ids = FACT_EXPANSIONS[fact.fact_type]\n'''
+          if old not in text:
+              raise SystemExit('artifact unsupported branch missing')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # 2) Require complete entity semantics and map them to the existing entity generator.
+          path = Path('minecraft_mod_ai/content_design_graph.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''            FactType.ENTITY_EXISTS: visual_properties\n            | {"display_name", "category", "health", "speed", "tracking_range"},\n'''
+          new = '''            FactType.ENTITY_EXISTS: visual_properties\n            | {\n                "display_name",\n                "category",\n                "health",\n                "attack_damage",\n                "speed",\n                "tracking_range",\n                "width",\n                "height",\n                "archetype",\n                "behavior",\n            },\n'''
+          if old not in text:
+              raise SystemExit('entity allowed property block missing')
+          text = text.replace(old, new, 1)
+
+          old = '''        if "display_name" not in props:\n            raise SlotFillError(f"CONTENT_PROPERTY_UNRESOLVED: {eid}.display_name")\n        properties_by_id[eid] = props\n'''
+          new = '''        if "display_name" not in props:\n            raise SlotFillError(f"CONTENT_PROPERTY_UNRESOLVED: {eid}.display_name")\n        if fact_type == FactType.ENTITY_EXISTS:\n            required_entity_properties = {\n                "category",\n                "health",\n                "attack_damage",\n                "speed",\n                "tracking_range",\n                "width",\n                "height",\n                "archetype",\n                "behavior",\n                "main_color",\n            }\n            missing_entity_properties = sorted(required_entity_properties - set(props))\n            if missing_entity_properties:\n                raise SlotFillError(\n                    f"CONTENT_PROPERTY_UNRESOLVED: {eid} missing {missing_entity_properties}"\n                )\n            for numeric_key in (\n                "health",\n                "attack_damage",\n                "speed",\n                "tracking_range",\n                "width",\n                "height",\n            ):\n                try:\n                    numeric_value = float(props[numeric_key])\n                except (TypeError, ValueError) as exc:\n                    raise SlotFillError(\n                        f"CONTENT_PROPERTY_INVALID: {eid}.{numeric_key}"\n                    ) from exc\n                if numeric_value <= 0:\n                    raise SlotFillError(\n                        f"CONTENT_PROPERTY_INVALID: {eid}.{numeric_key}"\n                    )\n            if props["category"].strip().lower() not in {\n                "monster",\n                "creature",\n                "ambient",\n                "water_creature",\n                "misc",\n            }:\n                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.category")\n            if props["archetype"].strip().lower() not in {\n                "biped",\n                "quadruped",\n                "flying",\n                "serpentine",\n                "construct",\n            }:\n                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.archetype")\n            if props["behavior"].strip().lower() not in {\n                "hostile_melee",\n                "neutral_melee",\n                "passive",\n                "npc",\n            }:\n                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.behavior")\n            if not re.fullmatch(r"#[0-9A-Fa-f]{6}", props["main_color"].strip()):\n                raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.main_color")\n        properties_by_id[eid] = props\n'''
+          if old not in text:
+              raise SystemExit('display name validation marker missing')
+          text = text.replace(old, new, 1)
+
+          # Ensure re is available for deterministic color validation.
+          if 'import re\n' not in text.split('\n', 12)[:12]:
+              text = text.replace('from hashlib import sha256\n', 'from hashlib import sha256\nimport re\n', 1)
+
+          old = '        kind = fact_kind_map.get(fact_type, "item")\n'
+          new = '        kind = fact_kind_map[fact_type]\n'
+          if old not in text:
+              raise SystemExit('fact kind fallback missing')
+          text = text.replace(old, new, 1)
+
+          old = '''        for prop_key, prop_val in props.items():\n            if prop_key not in visual_properties and prop_key not in {\n                "display_name",\n                "stack_limit",\n            }:\n                config[prop_key] = prop_val\n        if "stack_limit" in props:\n'''
+          new = '''        for prop_key, prop_val in props.items():\n            if prop_key not in visual_properties and prop_key not in {\n                "display_name",\n                "stack_limit",\n            }:\n                config[prop_key] = prop_val\n        if fact_type == FactType.ENTITY_EXISTS:\n            config.update(\n                {\n                    "max_health": float(props["health"]),\n                    "attack_damage": float(props["attack_damage"]),\n                    "movement_speed": float(props["speed"]),\n                    "follow_range": float(props["tracking_range"]),\n                    "entity_width": float(props["width"]),\n                    "entity_height": float(props["height"]),\n                    "archetype": props["archetype"].strip().lower(),\n                    "behavior": props["behavior"].strip().lower(),\n                    "spawn_group": props["category"].strip().lower(),\n                    "main_color": props["main_color"].strip(),\n                }\n            )\n        if "stack_limit" in props:\n'''
+          if old not in text:
+              raise SystemExit('config property copy marker missing')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # 3) Entity generation must consume design-owned values; no semantic magic defaults.
+          path = Path('minecraft_mod_ai/complete_orchestrator.py')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(r"            elif stage == 'entity':\n(?:.*\n)*?            elif stage == 'custom':", re.M)
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit('entity generation stage block missing')
+          replacement = '''            elif stage == 'entity':\n                for module in members:\n                    config = dict(module.config)\n                    required_entity_config = (\n                        "max_health",\n                        "attack_damage",\n                        "movement_speed",\n                        "follow_range",\n                        "archetype",\n                        "behavior",\n                        "entity_width",\n                        "entity_height",\n                        "spawn_group",\n                        "main_color",\n                    )\n                    missing_entity_config = [\n                        key for key in required_entity_config if config.get(key) in (None, "")\n                    ]\n                    if missing_entity_config:\n                        raise CompleteProductionError(\n                            f"ENTITY_DESIGN_UNRESOLVED: {module.module_id} missing {missing_entity_config}"\n                        )\n                    receipts.append(\n                        generate_geckolib_entity_assets(\n                            project_root=project_root,\n                            mod_id=spec.mod_id,\n                            package_name=spec.package_name,\n                            entity_id=module.module_id,\n                            texture_width=int(config.get("texture_width", 64)),\n                            texture_height=int(config.get("texture_height", 64)),\n                            max_health=float(config["max_health"]),\n                            attack_damage=float(config["attack_damage"]),\n                            movement_speed=float(config["movement_speed"]),\n                            follow_range=float(config["follow_range"]),\n                            archetype=str(config["archetype"]),\n                            behavior=str(config["behavior"]),\n                            entity_width=float(config["entity_width"]),\n                            entity_height=float(config["entity_height"]),\n                            spawn_group=str(config["spawn_group"]),\n                            texture_color=str(config["main_color"]),\n                            custom_bones=config.get("custom_bones")\n                            if isinstance(config.get("custom_bones"), list)\n                            else None,\n                            policy=self.policy,\n                        )\n                    )\n            elif stage == 'custom':'''
+          text = text[:match.start()] + replacement + text[match.end():]
+          path.write_text(text, encoding='utf-8')
+
+          # 4) GeckoLib fallback texture is permitted only from an explicit design color.
+          path = Path('minecraft_mod_ai/geckolib_generator.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    spawn_group: str | None = None,\n    custom_bones: list[dict[str, Any]] | None = None,\n'''
+          new = '''    spawn_group: str | None = None,\n    texture_color: str | None = None,\n    custom_bones: list[dict[str, Any]] | None = None,\n'''
+          if old not in text:
+              raise SystemExit('geckolib signature marker missing')
+          text = text.replace(old, new, 1)
+          old = '''    spawn_group = spawn_group or (\n        "monster" if behavior == "hostile_melee" else "creature"\n    )\n    if spawn_group not in _SPAWN:\n        raise GeckoLibGenerationError("Unknown spawn group.")\n'''
+          new = '''    if spawn_group is None:\n        raise GeckoLibGenerationError("spawn_group must come from an explicit entity design.")\n    if spawn_group not in _SPAWN:\n        raise GeckoLibGenerationError("Unknown spawn group.")\n    if texture_color is None or not re.fullmatch(r"#[0-9A-Fa-f]{6}", texture_color):\n        raise GeckoLibGenerationError(\n            "texture_color must be an explicit #RRGGBB entity design value."\n        )\n'''
+          if old not in text:
+              raise SystemExit('geckolib spawn fallback marker missing')
+          text = text.replace(old, new, 1)
+          old = '''    if not texture.exists():\n        texture.write_bytes(\n            make_texture_png(\n                "#5ba6d8",\n                entity_id,\n                kind="entity",\n                size=max(texture_width, texture_height),\n            )\n        )\n'''
+          new = '''    if not texture.exists():\n        texture.write_bytes(\n            make_texture_png(\n                texture_color,\n                entity_id,\n                kind="entity",\n                size=max(texture_width, texture_height),\n            )\n        )\n'''
+          if old not in text:
+              raise SystemExit('geckolib magic texture marker missing')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          # 5) Add narrow regression tests for explicit implementation routing and no entity magic.
+          Path('tests/test_atomic_capability_handoff.py').write_text('''from pathlib import Path\n\nfrom minecraft_mod_ai.artifact_expansion import (\n    DECLARED_GENERATOR_HANDOFFS,\n    implementation_route,\n)\nfrom minecraft_mod_ai.prompt_fact_types import FactType\n\n\ndef test_artifact_and_generator_routes_are_explicit():\n    assert implementation_route(FactType.ITEM_EXISTS) == "artifact"\n    assert implementation_route(FactType.CRAFTING_RECIPE) == "artifact"\n    assert implementation_route(FactType.ENTITY_EXISTS) == "generator"\n    assert FactType.CONTENT_RELATION in DECLARED_GENERATOR_HANDOFFS\n\n\ndef test_geckolib_has_no_magic_blue_entity_texture():\n    source = Path("minecraft_mod_ai/geckolib_generator.py").read_text(encoding="utf-8")\n    assert "#5ba6d8" not in source\n    assert "texture_color must be an explicit #RRGGBB entity design value" in source\n\n\ndef test_entity_orchestrator_requires_atomic_semantics():\n    source = Path("minecraft_mod_ai/complete_orchestrator.py").read_text(encoding="utf-8")\n    assert "ENTITY_DESIGN_UNRESOLVED" in source\n    assert 'max_health=float(config["max_health"])' in source\n    assert 'movement_speed=float(config["movement_speed"])' in source\n''', encoding='utf-8')
+          PY
+
+          python -m compileall -q minecraft_mod_ai tests/test_atomic_capability_handoff.py
+          python -m pytest -q tests/test_atomic_capability_handoff.py
+          git diff --check
+      - name: Commit fixes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai tests/test_atomic_capability_handoff.py
+          git commit -m 'fix: route atomic capabilities without semantic fallbacks'
+          git push origin HEAD:main
