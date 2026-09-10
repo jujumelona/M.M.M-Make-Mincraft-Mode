@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Thread-safety boundaries for stateful generation helpers shared by the DAG runner."""
 
+import os
 import threading
 from collections.abc import Callable
 from functools import wraps
@@ -117,16 +118,10 @@ def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
     """Model shared files that built-in generators are known to read/merge/rewrite."""
     kind = str(getattr(module, "kind", ""))
     if stage == "content" and kind != "integration":
-        # ExtendedContentGenerator merges its catalog/language files and rewrites the
-        # shared GeneratedExtendedContent registrar plus the main initializer binding.
         return ("mmm://builtin/content/shared-registration",)
     if stage == "system":
-        # Every system pack emits the common persistent/config classes and edits the
-        # shared main initializer. Different pack-specific files alone are not enough.
         return ("mmm://builtin/system/shared-runtime",)
     if stage == "entity":
-        # GeckoLib generation rewrites shared entity registrars, dependency metadata,
-        # fabric.mod.json and main/client entrypoint bindings.
         return ("mmm://builtin/entity/shared-runtime",)
     return ()
 
@@ -157,6 +152,30 @@ def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
     work_graph_module._exclusive_anchor_keys = exclusive_anchor_keys
 
 
+def _install_cpu_capacity_policy(scheduler_safety: Any) -> None:
+    """Allow the host to expose all reviewed CPU/I/O capacity instead of a fixed cap."""
+    current = scheduler_safety._cpu_capacity
+    if getattr(current, "_mmm_host_configurable", False):
+        return
+
+    @wraps(current)
+    def cpu_capacity() -> int:
+        raw = os.environ.get("MMM_CPU_IO_WORKERS", "").strip()
+        if not raw:
+            return current()
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("MMM_CPU_IO_WORKERS must be a positive integer") from exc
+        if value < 1:
+            raise ValueError("MMM_CPU_IO_WORKERS must be a positive integer")
+        return value
+
+    cpu_capacity._mmm_host_configurable = True  # type: ignore[attr-defined]
+    cpu_capacity.__wrapped__ = current  # type: ignore[attr-defined]
+    scheduler_safety._cpu_capacity = cpu_capacity
+
+
 def _replace_stage_locks_with_anchor_fencing(work_graph_module: Any) -> None:
     """Replace global stage critical sections with WorkGraph collision edges."""
     from . import scheduler_parallel_safety_contract as scheduler_safety
@@ -166,6 +185,7 @@ def _replace_stage_locks_with_anchor_fencing(work_graph_module: Any) -> None:
         return
     scheduler_safety._STAGE_WRITE_LOCKS.clear()
     scheduler_safety._SERIAL_CPU_STAGES = ()
+    _install_cpu_capacity_policy(scheduler_safety)
 
 
 def install() -> None:
