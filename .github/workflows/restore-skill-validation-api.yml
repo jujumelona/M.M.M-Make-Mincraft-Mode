@@ -18,13 +18,46 @@ jobs:
           python-version: '3.11'
       - name: Restore validation facade
         run: |
-          python - <<'PY'
+          cat > /tmp/restore_validation.py <<'PY'
           from pathlib import Path
-          path = Path('minecraft_mod_ai/skill_catalog.py')
-          text = path.read_text(encoding='utf-8')
-          marker = """def load_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:\n    return compile_skill_catalog(root)\n\n\n"""
-          replacement = marker + """def validate_skill_catalog(root: str | Path | None=None) -> dict[str, Any]:\n    findings: list[str] = []\n    contracts: dict[str, dict[str, Any]] = {}\n    try:\n        compiled = compile_skill_catalog(root)\n    except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:\n        return {\n            'schema_version': 'mmm/skill-catalog-validation-v2',\n            'skills': list(CANONICAL_SKILLS),\n            'contracts': {},\n            'findings': [f'invalid-catalog:{exc}'],\n            'passed': False,\n        }\n    for name, contract in compiled.items():\n        contracts[name] = contract.to_dict()\n    return {\n        'schema_version': 'mmm/skill-catalog-validation-v2',\n        'skills': list(CANONICAL_SKILLS),\n        'contracts': contracts,\n        'findings': findings,\n        'passed': True,\n    }\n\n\n"""
-          if marker not in text:\n              raise SystemExit('load_skill_catalog anchor missing')\n          if 'def validate_skill_catalog(' in text:\n              raise SystemExit('validate_skill_catalog already exists')\n          path.write_text(text.replace(marker, replacement, 1), encoding='utf-8')\n          PY
+
+          path = Path("minecraft_mod_ai/skill_catalog.py")
+          text = path.read_text(encoding="utf-8")
+          marker = "def load_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:\n    return compile_skill_catalog(root)\n\n\n"
+          addition = '''def validate_skill_catalog(root: str | Path | None=None) -> dict[str, Any]:
+              findings: list[str] = []
+              contracts: dict[str, dict[str, Any]] = {}
+              try:
+                  compiled = compile_skill_catalog(root)
+              except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:
+                  return {
+                      "schema_version": "mmm/skill-catalog-validation-v2",
+                      "skills": list(CANONICAL_SKILLS),
+                      "contracts": {},
+                      "findings": [f"invalid-catalog:{exc}"],
+                      "passed": False,
+                  }
+              for name, contract in compiled.items():
+                  contracts[name] = contract.to_dict()
+              return {
+                  "schema_version": "mmm/skill-catalog-validation-v2",
+                  "skills": list(CANONICAL_SKILLS),
+                  "contracts": contracts,
+                  "findings": findings,
+                  "passed": True,
+              }
+
+
+          '''
+          import textwrap
+          addition = textwrap.dedent(addition)
+          if "def validate_skill_catalog(" in text:
+              raise SystemExit("validate_skill_catalog already exists")
+          if marker not in text:
+              raise SystemExit("load_skill_catalog anchor missing")
+          path.write_text(text.replace(marker, marker + addition, 1), encoding="utf-8")
+          PY
+          python /tmp/restore_validation.py
       - name: Verify API
         run: |
           python -m pip install --prefer-binary -e '.[dev]'
