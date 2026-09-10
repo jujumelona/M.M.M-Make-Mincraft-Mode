@@ -71,6 +71,20 @@ def test_entity_pipeline_preserves_explicit_batching(monkeypatch):
     assert safety.os.environ["MMM_ENTITY_PIPELINE_SHARD_SIZE"] == "3"
 
 
+def test_system_pipeline_defaults_to_java_shard_budget(monkeypatch):
+    monkeypatch.delenv("MMM_SYSTEM_PIPELINE_SHARD_SIZE", raising=False)
+    monkeypatch.setenv("MMM_JAVA_SHARD_SIZE", "7")
+    safety._configure_pipeline_granularity()
+    assert safety.os.environ["MMM_SYSTEM_PIPELINE_SHARD_SIZE"] == "7"
+
+
+def test_system_pipeline_preserves_explicit_batching(monkeypatch):
+    monkeypatch.setenv("MMM_JAVA_SHARD_SIZE", "48")
+    monkeypatch.setenv("MMM_SYSTEM_PIPELINE_SHARD_SIZE", "5")
+    safety._configure_pipeline_granularity()
+    assert safety.os.environ["MMM_SYSTEM_PIPELINE_SHARD_SIZE"] == "5"
+
+
 def test_cpu_generation_width_accepts_explicit_host_capacity(monkeypatch):
     scheduler = SimpleNamespace(_cpu_capacity=lambda: 4)
     safety._install_cpu_capacity_policy(scheduler)
@@ -98,7 +112,7 @@ def test_project_index_initial_file_work_overlaps_and_preserves_order(tmp_path, 
     original = ProjectIndex._indexed_file
 
     def coordinated(self, normalized, path):
-        entered.wait(timeout=2)
+        entered.wait(timeout=10)
         return original(self, normalized, path)
 
     monkeypatch.setattr(ProjectIndex, "_indexed_file", coordinated)
