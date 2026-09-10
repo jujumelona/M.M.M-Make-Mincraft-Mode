@@ -21,3 +21,8 @@ tools/.complete_patch/
 runtime_mutation_audit.json
 runtime_mutation_summary.json
 .mmm/
+
+# Keep Markdown documents local; publish README files only.
+*.[mM][dD]
+*.[mM][aA][rR][kK][dD][oO][wW][nN]
+![rR][eE][aA][dD][mM][eE].[mM][dD]
