@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 """JSON resource validation for models, recipes, tags, loot tables, and lang files."""
 
@@ -21,7 +21,9 @@ def validate_json_resource(content: str, *, resource_kind: str = "") -> dict[str
         raise JsonResourceValidationError(f"JSON_SYNTAX: Invalid JSON: {exc}") from exc
 
     if not isinstance(data, (dict, list)):
-        raise JsonResourceValidationError("JSON_ROOT: Minecraft resources must be JSON objects or arrays")
+        raise JsonResourceValidationError(
+            "JSON_ROOT: Minecraft resources must be JSON objects or arrays"
+        )
 
     return {
         "status": "PASS",
