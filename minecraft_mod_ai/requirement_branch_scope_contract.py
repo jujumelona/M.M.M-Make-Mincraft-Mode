@@ -1,24 +1,20 @@
 from __future__ import annotations
 
-"""Expose per-requirement branch provenance from the Minecraft template feature model.
-
-Branch selection is no longer inferred from substrings and this module no longer wraps
-task compilation.  The template compiler owns task architecture; this contract only adds
-requirement-local provenance to the branch receipt for diagnostics and downstream views.
-"""
+"""Expose requirement-local branch provenance from explicit Minecraft structure."""
 
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import evidence_first_planning as _planning
-from .minecraft_template_catalog import requirement_branch_features
+from .structural_artifact_mapping import detect_structural_artifacts
+from .structural_minecraft_runtime_contract import install as install_structural_runtime
 
 _INSTALLED = False
 
 
 def _contains_term(text: str, term: str) -> bool:
-    """Compatibility helper for callers/tests; not used for branch architecture."""
+    """Compatibility helper for callers/tests; never used for architecture routing."""
 
     parts = [part for part in re.split(r"[_\s.-]+", term.casefold()) if part]
     if not parts:
@@ -48,6 +44,15 @@ def _component_supports_requirement(
     return bool(required & provided)
 
 
+def _structural_features(requirement: Mapping[str, Any]) -> frozenset[str]:
+    plan = detect_structural_artifacts(requirement)
+    if plan.unresolved_inputs:
+        raise ValueError(
+            "STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(plan.unresolved_inputs)
+        )
+    return plan.branch_features
+
+
 def _scoped_branch_predicates(
     requirements: Sequence[Mapping[str, Any]],
     components: Sequence[Mapping[str, Any]],
@@ -67,7 +72,7 @@ def _scoped_branch_predicates(
             requirement_id = str(requirement.get("requirement_id") or "").strip()
             if not requirement_id:
                 continue
-            active = branch in requirement_branch_features(requirement)
+            active = branch in _structural_features(requirement)
             component_refs: list[str] = []
             if branch == "needs_datagen" and not active:
                 component_refs = [
@@ -85,7 +90,11 @@ def _scoped_branch_predicates(
             per_requirement[requirement_id] = (
                 "ACTIVE" if active else "NOT_APPLICABLE"
             )
-            refs = [f"requirement:{requirement_id}:template-feature"] if active else []
+            refs = (
+                [f"requirement:{requirement_id}:structural-artifact"]
+                if active
+                else []
+            )
             refs.extend(f"component:{item}" for item in component_refs)
             if branch == "needs_loader_leaf" and multi_loader:
                 refs.append("target-topology:multiple-loader-modules")
@@ -97,13 +106,13 @@ def _scoped_branch_predicates(
             "predicate": branch,
             "status": "ACTIVE" if active_refs else "NOT_APPLICABLE",
             "evidence_refs": active_refs
-            or ["host-template-catalog:no-matching-feature"],
+            or ["structural-artifact-routing:no-matching-requirement"],
             "requirement_status": per_requirement,
             "requirement_evidence_refs": evidence_by_requirement,
             "reason": (
-                "activated by exact host template features for the listed requirements"
+                "activated by explicit structural artifact requirements"
                 if active_refs
-                else "no selected template or target topology activates this branch"
+                else "no structural artifact or target topology activates this branch"
             ),
         }
     return result
@@ -138,12 +147,13 @@ def _branches_for_requirement(
 
 
 def install_requirement_branch_scope_contract() -> None:
-    """Install provenance-only branch scoping; task DAG compilation stays untouched."""
+    """Install structural branch routing and replace name-only task routing."""
 
     global _INSTALLED
     if _INSTALLED:
         return
     _planning._branch_predicates = _scoped_branch_predicates
+    install_structural_runtime(_planning)
     _INSTALLED = True
 
 
