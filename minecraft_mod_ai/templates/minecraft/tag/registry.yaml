@@ -9,7 +9,8 @@ consumes:
 provides:
 - registry
 anchor_kinds:
-- resource
+- registry_id
+- symbol
 - test
 rules:
 - Use the supplied artifact identity and acceptance contract.

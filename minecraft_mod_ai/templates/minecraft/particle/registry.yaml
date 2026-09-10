@@ -9,6 +9,7 @@ consumes:
 provides:
 - registry
 anchor_kinds:
+- registry_id
 - symbol
 - test
 rules:
