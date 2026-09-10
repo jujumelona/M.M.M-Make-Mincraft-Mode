@@ -1,0 +1,8 @@
+id: feature/constraints
+task: Identify one external or implementation constraint that must be preserved. Return one record per constraint.
+rules: [Use only supplied feature and evidence, Keep authored behavior rules separate from external constraints, Do not invent platform facts]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, constraint: {type: string, minLength: 1}}
+  required: [feature_id, constraint]
+  additionalProperties: false

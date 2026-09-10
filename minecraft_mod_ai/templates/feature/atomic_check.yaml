@@ -1,0 +1,15 @@
+id: feature/atomic_check
+task: Evaluate exactly one host-declared atomicity check against the supplied relevant feature records. Report that check only. Do not decide whether the feature is atomic.
+rules:
+  - The check must equal target_check.
+  - passed is true only when the supplied records explicitly satisfy the check.
+  - Do not infer absent trigger inputs outputs state dependencies effects mappings artifacts or tests.
+  - The host computes final atomicity from every required check; never emit an overall atomic decision.
+record_schema:
+  type: object
+  properties:
+    check: {enum: [single_primary_behavior, explicit_trigger, explicit_inputs, explicit_outputs, state_known, dependencies_known, external_effects_known, minecraft_mapping_possible, required_artifacts_known, test_case_writable]}
+    passed: {type: boolean}
+    reason: {type: string, minLength: 1}
+  required: [check, passed, reason]
+  additionalProperties: false

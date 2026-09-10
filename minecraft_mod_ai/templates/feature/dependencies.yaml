@@ -1,0 +1,8 @@
+id: feature/dependencies
+task: Identify one dependency required by the feature. Return one record per dependency.
+rules: [Use only supplied behavior context, State why the dependency is required, Do not invent target API dependencies]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, dependency: {type: string, minLength: 1}, reason: {type: string, minLength: 1}}
+  required: [feature_id, dependency, reason]
+  additionalProperties: false

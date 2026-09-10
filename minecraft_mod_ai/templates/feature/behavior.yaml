@@ -1,0 +1,8 @@
+id: feature/behavior
+task: Describe one externally observable primary behavior for this feature.
+rules: [Use only the supplied feature context, Separate independent behaviors into separate records, Do not describe Minecraft implementation]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, behavior: {type: string, minLength: 1}}
+  required: [feature_id, behavior]
+  additionalProperties: false

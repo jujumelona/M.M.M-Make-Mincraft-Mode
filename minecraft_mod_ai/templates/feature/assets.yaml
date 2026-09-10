@@ -1,0 +1,8 @@
+id: feature/assets
+task: Identify one authored asset required by the feature. Return one record per asset.
+rules: [Use only supplied UI and resource context, Separate authored assets from generated resources, Do not invent asset paths]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, asset_kind: {type: string, minLength: 1}, asset_requirement: {type: string, minLength: 1}}
+  required: [feature_id, asset_kind, asset_requirement]
+  additionalProperties: false

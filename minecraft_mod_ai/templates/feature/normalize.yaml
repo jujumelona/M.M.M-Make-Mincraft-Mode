@@ -1,0 +1,13 @@
+id: feature/normalize
+task: Normalize one discovered feature into a stable implementation-neutral statement without adding behavior.
+rules:
+  - Use only the supplied feature and allowed evidence.
+  - Preserve scope exactly; do not add or remove behavior.
+  - Emit exactly one normalized record, then done.
+record_schema:
+  type: object
+  properties:
+    feature_id: {type: string, minLength: 1}
+    normalized_description: {type: string, minLength: 1}
+  required: [feature_id, normalized_description]
+  additionalProperties: false

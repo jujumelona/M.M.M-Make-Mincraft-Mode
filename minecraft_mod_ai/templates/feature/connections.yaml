@@ -1,0 +1,8 @@
+id: feature/connections
+task: Identify one connection from this feature to another feature or system. Return one record per connection.
+rules: [Use only supplied dependency context, Emit one connection per record, Do not invent neighboring features]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, target: {type: string, minLength: 1}, connection: {type: string, minLength: 1}}
+  required: [feature_id, target, connection]
+  additionalProperties: false

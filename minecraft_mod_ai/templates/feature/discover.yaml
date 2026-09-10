@@ -1,0 +1,14 @@
+id: feature/discover
+task: Discover one candidate feature explicitly supported by the supplied prompt or research context. Do not infer unrelated game-specific features.
+rules: &rules
+  - Use only the supplied context and allowed evidence.
+  - Do not invent missing facts; return blocked when the judgement cannot be made.
+  - Emit one independent record at a time; use done only after all supported records are emitted.
+record_schema:
+  type: object
+  properties:
+    feature_id: {type: string, minLength: 1}
+    feature_description: {type: string, minLength: 1}
+    evidence_basis: {type: string, minLength: 1}
+  required: [feature_id, feature_description, evidence_basis]
+  additionalProperties: false

@@ -1,0 +1,8 @@
+id: feature/trigger
+task: Identify the explicit event or condition that starts the primary behavior.
+rules: [Use only supplied behavior context, Do not invent a trigger, Emit independent triggers separately]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, trigger: {type: string, minLength: 1}}
+  required: [feature_id, trigger]
+  additionalProperties: false

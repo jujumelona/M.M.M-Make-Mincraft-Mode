@@ -1,0 +1,8 @@
+id: feature/resources
+task: Identify one non-code runtime resource required by the feature. Return one record per resource.
+rules: [Use only supplied behavior context, Do not invent concrete resource paths, Separate resource kinds]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, resource_kind: {type: string, minLength: 1}, resource_requirement: {type: string, minLength: 1}}
+  required: [feature_id, resource_kind, resource_requirement]
+  additionalProperties: false

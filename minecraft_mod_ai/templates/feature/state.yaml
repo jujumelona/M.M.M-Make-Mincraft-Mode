@@ -1,0 +1,8 @@
+id: feature/state
+task: Identify one persistent or transient state value owned or read by the feature. Return one record per state value.
+rules: [Use only supplied behavior context, Distinguish owned from read-only state in the contract, Use not_applicable with a concrete reason for stateless behavior]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, state_name: {type: string, minLength: 1}, state_contract: {type: string, minLength: 1}}
+  required: [feature_id, state_name, state_contract]
+  additionalProperties: false

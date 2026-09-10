@@ -1,0 +1,8 @@
+id: feature/input
+task: Identify one input consumed by the primary behavior. Return one record per independent input.
+rules: [Use only supplied behavior and trigger context, Name the input and its contract, Use not_applicable only when the behavior truly consumes no input]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, input_name: {type: string, minLength: 1}, input_contract: {type: string, minLength: 1}}
+  required: [feature_id, input_name, input_contract]
+  additionalProperties: false

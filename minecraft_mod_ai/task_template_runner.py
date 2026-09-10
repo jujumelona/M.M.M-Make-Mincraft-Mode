@@ -13,6 +13,16 @@ class TemplateBlocked(ValueError):
     pass
 
 
+def _contains_blank_string(value):
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return any(_contains_blank_string(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_blank_string(item) for item in value)
+    return False
+
+
 def record_response_schema(template):
     return {
         "type": "object",
@@ -57,7 +67,7 @@ def run_record_template(router, identifier, *, context, allowed_refs, progress=N
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
         status, record, reason = value["status"], value["record"], value["reason"].strip()
         if status == "record":
-            if record is None or any(not text.strip() for text in record.values()):
+            if record is None or _contains_blank_string(record):
                 raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
             key = json.dumps(record, sort_keys=True, ensure_ascii=False)
             if key in seen:

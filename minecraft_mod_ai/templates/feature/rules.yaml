@@ -1,0 +1,8 @@
+id: feature/rules
+task: Identify one invariant or behavioral rule constraining the feature. Return one record per rule.
+rules: [Use only supplied behavior context, Emit one rule per record, Do not add design preferences not required by the feature]
+record_schema:
+  type: object
+  properties: {feature_id: {type: string, minLength: 1}, rule: {type: string, minLength: 1}}
+  required: [feature_id, rule]
+  additionalProperties: false

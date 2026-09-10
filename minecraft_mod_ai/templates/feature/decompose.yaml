@@ -1,0 +1,13 @@
+id: feature/decompose
+task: Identify one independently testable child responsibility when the feature is not atomic. Return one child feature per record. Children must partition responsibility rather than merely rename the parent.
+rules: [Use only the completed feature and failed checks, Split only responsibilities needed to resolve failed atomic checks, Never emit the parent feature unchanged]
+record_schema:
+  type: object
+  properties:
+    parent_feature_id: {type: string, minLength: 1}
+    feature_id: {type: string, minLength: 1}
+    purpose: {type: string, minLength: 1}
+    behavior: {type: string, minLength: 1}
+    reason_for_split: {type: string, minLength: 1}
+  required: [parent_feature_id, feature_id, purpose, behavior, reason_for_split]
+  additionalProperties: false
