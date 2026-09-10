@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .importer import inspect_existing_project_archive
@@ -27,14 +28,21 @@ class ScalableMinecraftModPipeline(MinecraftModPipeline):
         *,
         existing_input: str | Path | None = None,
     ):
-        """Create one target-bound proposal without runtime monkeypatches."""
+        """Create one target-bound proposal without serializing independent input work."""
 
-        proposal = self.planner.plan(prompt)
-        report = (
-            inspect_existing_project_archive(existing_input)
-            if existing_input is not None
-            else None
-        )
+        report = None
+        if existing_input is None:
+            proposal = self.planner.plan(prompt)
+        else:
+            # Planner inference and archive inspection consume independent inputs.
+            # Run them concurrently, then join only at platform resolution where
+            # both results are actually required.
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="mmm-plan") as pool:
+                proposal_future = pool.submit(self.planner.plan, prompt)
+                report_future = pool.submit(inspect_existing_project_archive, existing_input)
+                proposal = proposal_future.result()
+                report = report_future.result()
+
         requested_version = getattr(self.planner, "_mmm_requested_minecraft_version", None)
         requested_loader = getattr(self.planner, "_mmm_requested_loader", None)
         effective_prompt = str(prompt)
