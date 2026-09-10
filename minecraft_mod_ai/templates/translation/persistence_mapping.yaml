@@ -1,0 +1,22 @@
+id: translation/persistence_mapping
+input:
+  atomic_feature:
+  state:
+  persistence_requirement:
+
+task:
+  map_persistent_state_owner:
+
+rules:
+  - Emit persistence work only for state explicitly required to survive its declared lifetime boundary.
+  - Preserve owner, scope, defaults, load behavior, and dirty/change trigger.
+  - Do not invent saved state for transient behavior.
+
+output:
+  persistence_artifacts:
+  state_owner:
+  lifecycle_requirements:
+  unresolved_inputs:
+
+proof:
+  predicate: every persistence artifact traces to one explicit persistent state requirement
