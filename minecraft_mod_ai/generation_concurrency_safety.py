@@ -213,14 +213,18 @@ def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
 
 
 def _configure_pipeline_granularity() -> None:
-    """Expose entity generation/review as independent DAG nodes by default.
+    """Choose generation units that match each generator's actual state boundary.
 
-    The work graph already provides an explicit environment override. Setting only the
-    absent default here removes the built-in two-entity serial loop without overriding
-    an operator's intentional batching choice.
+    Content and entity work remain singleton by default so independent artifacts and
+    reviews stay exposed to the DAG. Built-in system validation and record generation
+    are pack-aggregate operations, so system nodes use the Java shard budget instead
+    of forcing one cumulative directory scan per individual module.
     """
     os.environ.setdefault("MMM_CONTENT_PIPELINE_SHARD_SIZE", "1")
-    os.environ.setdefault("MMM_SYSTEM_PIPELINE_SHARD_SIZE", "1")
+    os.environ.setdefault(
+        "MMM_SYSTEM_PIPELINE_SHARD_SIZE",
+        os.environ.get("MMM_JAVA_SHARD_SIZE", "48").strip() or "48",
+    )
     os.environ.setdefault("MMM_ENTITY_PIPELINE_SHARD_SIZE", "1")
 
 
