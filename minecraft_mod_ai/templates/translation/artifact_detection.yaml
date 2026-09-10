@@ -1,0 +1,20 @@
+id: translation/artifact_detection
+input:
+  artifact_obligations:
+  implementation_surfaces:
+  minecraft_structure:
+
+task:
+  normalize_declared_artifact_kinds:
+
+rules:
+  - Do not inspect feature names, capability names, prompt wording, or domain labels.
+  - Select only canonical Minecraft artifacts backed by explicit structural obligations.
+  - Keep unsupported artifact kinds unresolved; never guess a replacement.
+
+output:
+  artifact_kinds:
+  unresolved_inputs:
+
+proof:
+  predicate: every emitted artifact kind is canonical and every unsupported input is reported
