@@ -5,12 +5,13 @@ from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
+from uuid import uuid4
 
 from .artifact_ports import TypedPort
 from .task_template_catalog import load_template
 
 _LOCK = RLock()
-_PROJECT_LOCKS = {}
+_JOB_LOCKS = {}
 _TARGET_LOCKS = {}
 
 
@@ -21,6 +22,7 @@ def digest(value):
 
 
 def _load(path):
+    """Load the legacy monolithic checkpoint for backward-compatible reuse only."""
     if not path.exists():
         return {"jobs": {}, "paths": {}}
     envelope = json.loads(path.read_text(encoding="utf-8"))
@@ -30,13 +32,65 @@ def _load(path):
     return state
 
 
-def _locks_for(root, relative):
+def _record_path(root, namespace, key):
+    filename = sha256(str(key).encode("utf-8")).hexdigest() + ".json"
+    return root / ".mmm/artifact_jobs" / namespace / filename
+
+
+def _read_record(root, namespace, key):
+    path = _record_path(root, namespace, key)
+    if not path.exists():
+        return None
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    payload = {"key": envelope.get("key"), "value": envelope.get("value")}
+    if payload["key"] != key or envelope.get("sha256") != digest(payload):
+        raise ValueError("ARTIFACT_CHECKPOINT_CORRUPT")
+    return payload["value"]
+
+
+def _write_record(root, namespace, key, value):
+    path = _record_path(root, namespace, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"key": key, "value": value}
+    envelope = {**payload, "sha256": digest(payload)}
+    temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temp.write_text(
+            json.dumps(envelope, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        temp.replace(path)
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def _legacy_state(root):
+    return _load(root / ".mmm/artifact_jobs.json")
+
+
+def _read_job_record(root, job_id):
+    record = _read_record(root, "jobs", job_id)
+    if record is not None:
+        return record
+    return _legacy_state(root)["jobs"].get(job_id)
+
+
+def _read_path_hash(root, relative):
+    record = _read_record(root, "paths", relative)
+    if record is not None:
+        return record
+    return _legacy_state(root)["paths"].get(relative)
+
+
+def _locks_for(root, job_id, relative):
     project_key = str(root)
+    job_key = (project_key, str(job_id))
     target_key = (project_key, relative)
     with _LOCK:
-        project_lock = _PROJECT_LOCKS.setdefault(project_key, RLock())
+        job_lock = _JOB_LOCKS.setdefault(job_key, RLock())
         target_lock = _TARGET_LOCKS.setdefault(target_key, RLock())
-    return project_lock, target_lock
+    return job_lock, target_lock
 
 
 def _current_sha256(target):
@@ -54,18 +108,6 @@ def _restore_checkpoint(job, receipt, registry):
     return restored
 
 
-def _write_state(path, state):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(
-        json.dumps(
-            {"state": state, "sha256": digest(state)}, sort_keys=True, default=str
-        ),
-        encoding="utf-8",
-    )
-    temp.replace(path)
-
-
 def execute_checkpointed_job(job, *, context, router, registry, base_dir, execute):
     if base_dir is None:
         return execute(job, context=context, router=router, port_registry=registry)
@@ -73,7 +115,6 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
     target = (root / job.target_path).resolve()
     if not target.is_relative_to(root):
         raise ValueError("ARTIFACT_TARGET_ESCAPE")
-    path = root / ".mmm/artifact_jobs.json"
     relative = target.relative_to(root).as_posix()
     definition = job.to_dict()
     for name in ("status", "validation_receipts", "rendered_output"):
@@ -87,27 +128,26 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "context": context or {},
         }
     )
-    project_lock, target_lock = _locks_for(root, relative)
+    job_lock, target_lock = _locks_for(root, job.job_id, relative)
 
-    # A target lock prevents duplicate/same-path jobs from mutating one file at
-    # the same time. Different targets intentionally do not share this lock, so
-    # expensive model/render/template execution can proceed concurrently.
-    with target_lock:
-        with project_lock:
-            state = _load(path)
-            current = _current_sha256(target)
-            prior = state["jobs"].get(job.job_id)
-            if prior is not None:
-                if prior["input_hash"] != binding:
-                    raise ValueError(
-                        f"ARTIFACT_ADAPT_REQUIRED: changed inputs for {job.job_id}"
-                    )
-                if current is None or state["paths"].get(relative) != current:
-                    raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-                return _restore_checkpoint(job, prior["receipt"], registry)
-            if relative in state["paths"] and current != state["paths"][relative]:
+    # Job identity and target identity are the only checkpoint collision domains.
+    # Different jobs writing different targets do not share a project-wide lock, so
+    # expensive model/render/template execution and checkpoint commits can overlap.
+    with job_lock, target_lock:
+        current = _current_sha256(target)
+        prior = _read_job_record(root, job.job_id)
+        recorded = _read_path_hash(root, relative)
+        if prior is not None:
+            if prior["input_hash"] != binding:
+                raise ValueError(
+                    f"ARTIFACT_ADAPT_REQUIRED: changed inputs for {job.job_id}"
+                )
+            if current is None or recorded != current:
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-            before = current
+            return _restore_checkpoint(job, prior["receipt"], registry)
+        if recorded is not None and current != recorded:
+            raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
+        before = current
 
         try:
             receipt = execute(
@@ -125,34 +165,25 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         if after is None:
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_MISSING: {relative}")
 
-        # Merge into the latest checkpoint state under the short project lock.
-        # Reloading here is required so concurrently completed jobs on different
-        # targets cannot overwrite each other's checkpoint records.
-        with project_lock:
-            state = _load(path)
-            prior = state["jobs"].get(job.job_id)
-            if prior is not None:
-                if prior["input_hash"] != binding:
-                    raise ValueError(
-                        f"ARTIFACT_ADAPT_REQUIRED: changed inputs for {job.job_id}"
-                    )
-                recorded = state["paths"].get(relative)
-                if recorded != after:
-                    raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-                return _restore_checkpoint(job, prior["receipt"], registry)
-            recorded = state["paths"].get(relative)
-            if recorded is not None and recorded != before:
-                raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-            state["paths"][relative] = after
-            state["jobs"][job.job_id] = {
-                "template_id": job.template_id,
-                "input_hash": binding,
-                "dependency_hashes": dependencies,
-                "target_path": relative,
-                "before_hash": before,
-                "after_hash": after,
-                "status": "SUCCESS",
-                "receipt": receipt,
-            }
-            _write_state(path, state)
+        # Re-read the per-target record after execution. This detects any mutation
+        # that escaped the in-process target lock without serializing unrelated jobs.
+        recorded = _read_path_hash(root, relative)
+        if recorded is not None and recorded != before:
+            raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
+
+        checkpoint = {
+            "template_id": job.template_id,
+            "input_hash": binding,
+            "dependency_hashes": dependencies,
+            "target_path": relative,
+            "before_hash": before,
+            "after_hash": after,
+            "status": "SUCCESS",
+            "receipt": receipt,
+        }
+        # Commit the target hash first. If the process dies before the job record is
+        # written, the next run safely re-executes the job against the verified target
+        # instead of accepting an incomplete checkpoint as reusable.
+        _write_record(root, "paths", relative, after)
+        _write_record(root, "jobs", job.job_id, checkpoint)
         return receipt
