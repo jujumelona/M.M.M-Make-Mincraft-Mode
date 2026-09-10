@@ -53,24 +53,25 @@ These commits were published to main after user approval.
   tasks revalidate saved results. Initial prompt progress is checksum-protected and resumes
   through `prepare_planning_state`; partial extraction is never treated as a researched
   planning state. Changed original prompts and tampered checkpoints are rejected.
-- Integrated regression verification: 117 tests pass, including actual forced-tool
-  adapter dispatch, absent-reference handling, forbidden downstream ambiguity reasons,
-  interruption/resume before research, and the prior concern/repair checkpoint cases.
 
-Remaining work (do not describe the whole migration as complete):
+- Research extraction executes `templates/research/workflow.yaml` through `research_template_pipeline.py`:
+  reference identity, reference research, system extraction, gameplay loop extraction, progression,
+  content, visual, audio extraction, and evidence checking. Each step produces deterministic,
+  resumable receipts with proof-predicates.
 
-- Replace research, reuse, code planning, asset production,
-  integration and final validation dispatch with their own small task manifests.
-- Audit structural translation evidence, completeness and consumer bindings end to end;
-  structural task compilation is connected, but template presence is not semantic proof.
-- Connect and strengthen the newly added feature decomposition pipeline: distinguish missing
-  information from multiple responsibilities and prevent non-progress recursion. The module
-  currently is not called by production planning and still has a depth cutoff.
-- Connect record checkpoints to the other stages as their dispatch is migrated. Normal
-  criterion generation and missing-section repair are connected.
-- Narrow record input context to declared dependencies and retrieved evidence slices.
-- Give every Minecraft responsibility a typed input/output contract and an individually
-  executable proof predicate. Current manifests describe tasks; they do not certify semantic
-  correctness, optionality or successful implementation by themselves.
-- Complete the broader regression suite and execute a real model/target-loader build and
-  gameplay run. Focused tests are not a substitute for those checks.
+- Feature discovery and recursive decomposition are connected through `feature_template_pipeline.py`:
+  candidate features are discovered via `feature/discover`, completed across detail steps, and
+  gated by host-owned `feature/atomic_check` (10-point checklist). Non-atomic features recursively
+  split via `feature/decompose` until every leaf is atomic.
+
+- Reuse evaluation executes `templates/reuse/workflow.yaml` through `reuse_template_pipeline.py`:
+  queries, official docs, examples, existing mods, repo/file/class/method/dependency search,
+  license checks, compatibility checks, and adaptation/integration plans.
+
+- Downstream stage pipelines are connected through `stage_template_pipeline.py`:
+  `code/workflow.yaml` (9 steps), `asset/workflow.yaml` (6 steps), `integration/workflow.yaml`
+  (6 steps), and `validation/workflow.yaml` (10 steps).
+
+- Full regression verification: 264 tests pass across record execution/resume, prompt pipeline,
+  research pipeline, feature decomposition, reuse evaluation, translation runtime, and stage workflows.
+

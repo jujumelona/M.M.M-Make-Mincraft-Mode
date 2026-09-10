@@ -1,0 +1,13 @@
+﻿id: validation/workflow
+execution: sequence
+steps:
+- validation/compile
+- validation/static_check
+- validation/unit_test
+- validation/integration_test
+- validation/runtime_test
+- validation/gameplay_test
+- validation/requirement_trace
+- validation/feature_trace
+- validation/resource_trace
+- validation/completeness

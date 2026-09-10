@@ -1,0 +1,12 @@
+﻿id: code/workflow
+execution: sequence
+steps:
+- code/file_plan
+- code/class_plan
+- code/method_plan
+- code/field_plan
+- code/registration_plan
+- code/call_graph_plan
+- code/dependency_plan
+- code/import_plan
+- code/generation_unit
