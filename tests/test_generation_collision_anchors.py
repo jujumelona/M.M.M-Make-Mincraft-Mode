@@ -56,6 +56,18 @@ def test_builtin_generators_keep_only_required_shared_collision_domains():
     )
 
 
+def test_entity_pipeline_defaults_to_singleton_nodes(monkeypatch):
+    monkeypatch.delenv("MMM_ENTITY_PIPELINE_SHARD_SIZE", raising=False)
+    safety._configure_pipeline_granularity()
+    assert safety.os.environ["MMM_ENTITY_PIPELINE_SHARD_SIZE"] == "1"
+
+
+def test_entity_pipeline_preserves_explicit_batching(monkeypatch):
+    monkeypatch.setenv("MMM_ENTITY_PIPELINE_SHARD_SIZE", "3")
+    safety._configure_pipeline_granularity()
+    assert safety.os.environ["MMM_ENTITY_PIPELINE_SHARD_SIZE"] == "3"
+
+
 def test_cpu_generation_width_accepts_explicit_host_capacity(monkeypatch):
     scheduler = SimpleNamespace(_cpu_capacity=lambda: 4)
     safety._install_cpu_capacity_policy(scheduler)
