@@ -1,9 +1,8 @@
 id: design/ui_requirement
 slot_id: ui_requirement
-task: "Define custom screens, container menus, or HUD overlays required."
+task: "Define custom screens, container menus, or HUD overlays explicitly required by the requested behavior."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent screens, menus, HUD elements, or interactions."
 record_schema:
   type: object
   properties:
