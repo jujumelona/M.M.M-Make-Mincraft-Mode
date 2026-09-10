@@ -1,26 +1,21 @@
 id: design/content_property
-task: Resolve one explicit property of the current content entity.
+task: Resolve exactly one explicit property of the current content entity.
 record_schema:
   type: object
   properties:
     property:
       type: string
-      minLength: 1
-      maxLength: 32
+      pattern: ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind)$
     value:
       type: string
       minLength: 1
       maxLength: 256
   required:
-  - property
-  - value
+    - property
+    - value
   additionalProperties: false
 rules:
-- Use display_name for the authored English display name; stack_limit for an explicitly
-  required item stack limit.
-- 'Visual properties: shape, material, main_color, accent, surface, silhouette, transparency,
-  tileability.'
-- Only state properties required by the requirement. Do not invent numeric defaults.
-- Return not_applicable if no property is required.
-  - Recipe properties are recipe_kind, count, pattern_1..pattern_3, cooking_type, experience, cookingtime; each is a separate record.
-  - Tag properties include registry_kind. Never serialize a complete resource into a value.
+  - Emit only properties explicitly required by the current requirement; the host must skip this template when none are required.
+  - Do not invent numeric defaults or serialize a complete Minecraft resource into value.
+  - Use display_name for the authored English display name and stack_limit only for an explicitly required item stack limit.
+  - Recipe pattern rows use pattern_1 through pattern_3; emit each property as a separate record.
