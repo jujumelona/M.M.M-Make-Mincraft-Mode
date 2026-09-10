@@ -16,6 +16,7 @@ class _ProjectLockState:
     )
     writer_owner: int | None = None
     writer_depth: int = 0
+    waiting_writers: int = 0
     scoped_total: int = 0
     scoped_depth: dict[int, int] = field(default_factory=dict)
     path_locks: dict[str, threading.RLock] = field(default_factory=dict)
@@ -53,7 +54,8 @@ def project_write_lock(project_root: str | Path) -> Iterator[None]:
     This is the compatibility boundary for read/merge/write operations whose exact
     target set is not known before reading shared project state. It excludes every
     path-scoped source transaction for the same project and remains re-entrant for
-    existing higher-level generators.
+    existing higher-level generators. Waiting coarse writers receive preference over
+    new scoped transactions so a stream of small patches cannot starve shared merges.
     """
 
     state = _state_for(project_root)
@@ -67,10 +69,14 @@ def project_write_lock(project_root: str | Path) -> Iterator[None]:
                     "Cannot upgrade a path-scoped project write lock to the coarse "
                     "project lock; acquire the coarse lock first."
                 )
-            while state.writer_owner is not None or state.scoped_total:
-                state.condition.wait()
-            state.writer_owner = owner
-            state.writer_depth = 1
+            state.waiting_writers += 1
+            try:
+                while state.writer_owner is not None or state.scoped_total:
+                    state.condition.wait()
+                state.writer_owner = owner
+                state.writer_depth = 1
+            finally:
+                state.waiting_writers -= 1
     try:
         yield
     finally:
@@ -105,8 +111,11 @@ def project_path_write_locks(
 
     with state.condition:
         owns_coarse = state.writer_owner == owner
+        nested_scoped = state.scoped_depth.get(owner, 0) > 0
         if not owns_coarse:
-            while state.writer_owner is not None:
+            while state.writer_owner is not None or (
+                state.waiting_writers and not nested_scoped
+            ):
                 state.condition.wait()
             state.scoped_total += 1
             state.scoped_depth[owner] = state.scoped_depth.get(owner, 0) + 1
@@ -131,7 +140,7 @@ def project_path_write_locks(
                 state.scoped_total -= 1
                 if state.scoped_total < 0:
                     raise RuntimeError("project path write lock count was corrupted")
-                if state.scoped_total == 0:
+                if state.scoped_total == 0 or state.waiting_writers:
                     state.condition.notify_all()
 
 
