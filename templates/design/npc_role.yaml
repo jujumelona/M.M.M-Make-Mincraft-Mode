@@ -1,9 +1,8 @@
 id: design/npc_role
 slot_id: npc_role
-task: "Define non-player character interactions, dialogues, or companion behaviors."
+task: "Define required non-player character interactions, dialogue, or companion behavior."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent NPCs, dialogue, relationships, or companion mechanics."
 record_schema:
   type: object
   properties:
