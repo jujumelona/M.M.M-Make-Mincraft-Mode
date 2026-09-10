@@ -2,8 +2,7 @@ id: design/machine_role
 slot_id: machine_role
 task: "Define automated machines, processing units, or energy systems."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent machines or energy systems."
 record_schema:
   type: object
   properties:
