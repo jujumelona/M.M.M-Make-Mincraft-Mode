@@ -1,0 +1,19 @@
+id: translation/minecraft_capability_mapping
+input:
+  atomic_feature:
+  structural_requirements:
+
+task:
+  collect_required_minecraft_surfaces:
+
+rules:
+  - Read only explicit trigger, state, persistence, networking, UI, resource, asset, and external-interaction requirements.
+  - Do not use feature names, game names, capability labels, or semantic categories as routing keys.
+  - Leave a surface absent when no structural requirement supports it.
+
+output:
+  implementation_surfaces:
+  evidence_links:
+
+proof:
+  predicate: every emitted surface has one explicit structural evidence link
