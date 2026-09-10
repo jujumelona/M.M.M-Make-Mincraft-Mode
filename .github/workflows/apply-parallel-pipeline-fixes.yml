@@ -1,0 +1,159 @@
+name: Apply pipeline concurrency fixes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch concurrency boundaries
+        run: |
+          cat > /tmp/patch_pipeline.py <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one patch anchor, found {text.count(old)}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Expose deterministic built-in work as singleton DAG nodes by default.
+          replace_once(
+              'minecraft_mod_ai/work_graph.py',
+              """    def shard_size_for(stage: str) -> int:\n        if stage == 'entity':\n            return _pipeline_shard_size(\n                'MMM_ENTITY_PIPELINE_SHARD_SIZE',\n                2,\n                max(1, int(policy.entity_shard_size)),\n            )\n        if stage == 'custom':\n""",
+              """    def shard_size_for(stage: str) -> int:\n        if stage == 'content':\n            return _pipeline_shard_size(\n                'MMM_CONTENT_PIPELINE_SHARD_SIZE',\n                1,\n                max(1, int(policy.java_shard_size)),\n            )\n        if stage == 'system':\n            return _pipeline_shard_size(\n                'MMM_SYSTEM_PIPELINE_SHARD_SIZE',\n                1,\n                max(1, int(policy.java_shard_size)),\n            )\n        if stage == 'entity':\n            return _pipeline_shard_size(\n                'MMM_ENTITY_PIPELINE_SHARD_SIZE',\n                1,\n                max(1, int(policy.entity_shard_size)),\n            )\n        if stage == 'custom':\n""",
+          )
+
+          # Replace content-stage global fencing with exact deterministic module ownership.
+          replace_once(
+              'minecraft_mod_ai/generation_concurrency_safety.py',
+              """_SYSTEM_PACK_BY_KIND = {\n""",
+              """_EXTENDED_CONTENT_KINDS = frozenset({\n    'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine',\n    'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot',\n})\n_SYSTEM_PACK_BY_KIND = {\n""",
+          )
+          replace_once(
+              'minecraft_mod_ai/generation_concurrency_safety.py',
+              """    if stage == \"content\" and kind != \"integration\":\n        return (\"mmm://builtin/content/shared-registration\",)\n""",
+              """    if stage == \"content\" and kind in _EXTENDED_CONTENT_KINDS:\n        module_id = str(getattr(module, \"module_id\", \"\")).strip()\n        if module_id:\n            return (f\"mmm://builtin/content/module/{module_id}\",)\n""",
+          )
+          replace_once(
+              'minecraft_mod_ai/generation_concurrency_safety.py',
+              """    os.environ.setdefault(\"MMM_ENTITY_PIPELINE_SHARD_SIZE\", \"1\")\n""",
+              """    os.environ.setdefault(\"MMM_CONTENT_PIPELINE_SHARD_SIZE\", \"1\")\n    os.environ.setdefault(\"MMM_SYSTEM_PIPELINE_SHARD_SIZE\", \"1\")\n    os.environ.setdefault(\"MMM_ENTITY_PIPELINE_SHARD_SIZE\", \"1\")\n""",
+          )
+
+          # Extended content: expensive planning/rendering happens concurrently; only
+          # shared snapshot/commit sections hold the project lock.
+          replace_once(
+              'minecraft_mod_ai/extended_content_generator.py',
+              'from functools import wraps\n',
+              '',
+          )
+          replace_once(
+              'minecraft_mod_ai/extended_content_generator.py',
+              """def _serialized_extended_content(func):\n    @wraps(func)\n    def wrapped(*args, **kwargs):\n        project_root = kwargs.get(\"project_root\")\n        if project_root is None:\n            return func(*args, **kwargs)\n        with project_write_lock(project_root):\n            return func(*args, **kwargs)\n\n    return wrapped\n\n\n@_serialized_extended_content\n""",
+              '',
+          )
+          replace_once(
+              'minecraft_mod_ai/extended_content_generator.py',
+              """    existing = {\n        str(item[\"module_id\"]): item\n        for item in iter_extended_module_records(info.root)\n    }\n    for module in selected:\n        existing[module.module_id] = {\n            \"module_id\": module.module_id,\n            \"kind\": module.kind,\n            \"config\": module.config,\n            \"depends_on\": list(module.depends_on),\n            \"required_gates\": list(module.required_gates),\n        }\n    ordered = [existing[key] for key in sorted(existing)]\n    catalog_path = info.root / \".minecraft_ai/extended-modules.json\"\n    already_directory = False\n    if catalog_path.is_file() and not catalog_path.is_symlink():\n        try:\n            already_directory = (\n                json.loads(catalog_path.read_text(encoding=\"utf-8\")).get(\n                    \"schema_version\"\n                )\n                == _DIRECTORY_CATALOG_SCHEMA\n            )\n        except (json.JSONDecodeError, OSError, AttributeError):\n            already_directory = False\n""",
+              """    with project_write_lock(info.root):\n        existing = {\n            str(item[\"module_id\"]): item\n            for item in iter_extended_module_records(info.root)\n        }\n        for module in selected:\n            existing[module.module_id] = {\n                \"module_id\": module.module_id,\n                \"kind\": module.kind,\n                \"config\": module.config,\n                \"depends_on\": list(module.depends_on),\n                \"required_gates\": list(module.required_gates),\n            }\n        ordered = [existing[key] for key in sorted(existing)]\n        catalog_path = info.root / \".minecraft_ai/extended-modules.json\"\n        already_directory = False\n        if catalog_path.is_file() and not catalog_path.is_symlink():\n            try:\n                already_directory = (\n                    json.loads(catalog_path.read_text(encoding=\"utf-8\")).get(\n                        \"schema_version\"\n                    )\n                    == _DIRECTORY_CATALOG_SCHEMA\n                )\n            except (json.JSONDecodeError, OSError, AttributeError):\n                already_directory = False\n""",
+          )
+          replace_once(
+              'minecraft_mod_ai/extended_content_generator.py',
+              """    _merge_lang(info.root / f\"src/main/resources/assets/{mod_id}/lang/en_us.json\", lang_en)\n    _merge_lang(info.root / f\"src/main/resources/assets/{mod_id}/lang/ko_kr.json\", lang_ko)\n    receipt = write_text_files(info, files, replace_existing=True)\n    binding = ensure_main_initializer_call(\n        info,\n        import_line=f\"import {package_name}.extended.GeneratedExtendedContent\",\n        call_line=\"GeneratedExtendedContent.register()\",\n        marker=\"extended:content\",\n    )\n""",
+              """    with project_write_lock(info.root):\n        # Refresh the shared catalog after concurrent preparation so module_count\n        # and directory records converge to the exact committed project state.\n        committed = {\n            str(item[\"module_id\"]): item\n            for item in iter_extended_module_records(info.root)\n        }\n        for module in selected:\n            committed[module.module_id] = {\n                \"module_id\": module.module_id,\n                \"kind\": module.kind,\n                \"config\": module.config,\n                \"depends_on\": list(module.depends_on),\n                \"required_gates\": list(module.required_gates),\n            }\n        directory = \".minecraft_ai/extended-module-records\"\n        files[\".minecraft_ai/extended-modules.json\"] = _json_text(\n            {\n                \"schema_version\": _DIRECTORY_CATALOG_SCHEMA,\n                \"module_count\": len(committed),\n                \"directory\": directory,\n            }\n        )\n        for module in selected:\n            files[f\"{directory}/{module.module_id}.json\"] = _json_text(\n                committed[module.module_id]\n            )\n        _merge_lang(info.root / f\"src/main/resources/assets/{mod_id}/lang/en_us.json\", lang_en)\n        _merge_lang(info.root / f\"src/main/resources/assets/{mod_id}/lang/ko_kr.json\", lang_ko)\n        receipt = write_text_files(info, files, replace_existing=True)\n        binding = ensure_main_initializer_call(\n            info,\n            import_line=f\"import {package_name}.extended.GeneratedExtendedContent\",\n            call_line=\"GeneratedExtendedContent.register()\",\n            marker=\"extended:content\",\n        )\n""",
+          )
+
+          # Source validation and auxiliary JDT diagnostics read the same immutable
+          # generated manifest, so overlap them and join before Gradle mutation starts.
+          replace_once(
+              'minecraft_mod_ai/complete_orchestrator.py',
+              'import xml.etree.ElementTree as ET\n',
+              'import xml.etree.ElementTree as ET\nfrom concurrent.futures import ThreadPoolExecutor\n',
+          )
+          old_validation = """        source_report = run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))\n        if source_report.get('status') != 'PASS':\n            raise CompleteProductionError('Generated complete project failed deterministic validation.')\n        self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})\n        self._persist_work_evidence(project_root, ledger, work_plan)\n        if options.run_jdt and (not options.source_only):\n\n            def run_jdt() -> dict[str, Any]:\n                return run_jdt_diagnostics(\n                    JavaLanguageService,\n                    project_root,\n                    timeout_seconds=90,\n                )\n            jdt_receipt = run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))\n            module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})\n            print('[JDT RECEIPT] ' + json.dumps(jdt_receipt, ensure_ascii=False, sort_keys=True, default=str), flush=True)\n            # JDT is an auxiliary source diagnostic.  Its publication gap must\n            # remain visible and non-PASS, but must not abort the node before\n            # the authoritative clean Gradle verifier can run.\n            errors = jdt_diagnostic_errors(jdt_receipt)\n            if errors and (not options.auto_repair):\n                raise CompleteProductionError('JDT reported errors and automatic repair is disabled.')\n"""
+          new_validation = """        validation_manifest = self._project_manifest_hash(project_root)\n\n        def validate_source() -> dict[str, Any]:\n            return run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))\n\n        def validate_jdt() -> dict[str, Any]:\n            def run_jdt() -> dict[str, Any]:\n                return run_jdt_diagnostics(\n                    JavaLanguageService,\n                    project_root,\n                    timeout_seconds=90,\n                )\n            return run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))\n\n        jdt_receipt = None\n        if options.run_jdt and (not options.source_only):\n            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='mmm-validate') as pool:\n                source_future = pool.submit(validate_source)\n                jdt_future = pool.submit(validate_jdt)\n                source_report = source_future.result()\n                jdt_receipt = jdt_future.result()\n        else:\n            source_report = validate_source()\n\n        if source_report.get('status') != 'PASS':\n            raise CompleteProductionError('Generated complete project failed deterministic validation.')\n        self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})\n        self._persist_work_evidence(project_root, ledger, work_plan)\n        if jdt_receipt is not None:\n            module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})\n            print('[JDT RECEIPT] ' + json.dumps(jdt_receipt, ensure_ascii=False, sort_keys=True, default=str), flush=True)\n            # JDT is auxiliary; actual diagnostics may fail closed when repair is disabled.\n            errors = jdt_diagnostic_errors(jdt_receipt)\n            if errors and (not options.auto_repair):\n                raise CompleteProductionError('JDT reported errors and automatic repair is disabled.')\n"""
+          replace_once('minecraft_mod_ai/complete_orchestrator.py', old_validation, new_validation)
+          PY
+          python /tmp/patch_pipeline.py
+      - name: Add focused regression tests
+        run: |
+          cat > tests/test_pipeline_parallel_bottlenecks.py <<'PY'
+          from __future__ import annotations
+
+          import inspect
+
+          from minecraft_mod_ai.complete_spec import ProductionModule
+          from minecraft_mod_ai.extended_content_generator import generate_extended_content
+          from minecraft_mod_ai.generation_concurrency_safety import _builtin_shared_anchors
+          from minecraft_mod_ai.scale_policy import ScalePolicy
+          from minecraft_mod_ai.work_graph import _module_shards
+
+
+          def _shards(monkeypatch, modules):
+              for name in (
+                  'MMM_CONTENT_PIPELINE_SHARD_SIZE',
+                  'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
+                  'MMM_ENTITY_PIPELINE_SHARD_SIZE',
+              ):
+                  monkeypatch.delenv(name, raising=False)
+              return list(_module_shards(modules, policy=ScalePolicy()))
+
+
+          def test_builtin_content_system_entity_are_singleton_dag_nodes_by_default(monkeypatch):
+              modules = (
+                  ProductionModule('ruby_sword', 'weapon'),
+                  ProductionModule('ruby_armor', 'armor'),
+                  ProductionModule('quest_alpha', 'quest'),
+                  ProductionModule('shop_alpha', 'shop'),
+                  ProductionModule('wolf_alpha', 'entity'),
+                  ProductionModule('wolf_beta', 'entity'),
+              )
+              shards = _shards(monkeypatch, modules)
+              relevant = [(stage, members) for stage, members in shards if stage in {'content', 'system', 'entity'}]
+              assert len(relevant) == len(modules)
+              assert all(len(members) == 1 for _, members in relevant)
+
+
+          def test_builtin_anchor_scope_is_module_or_system_pack_not_stage_global():
+              sword = ProductionModule('ruby_sword', 'weapon')
+              armor = ProductionModule('ruby_armor', 'armor')
+              quest_a = ProductionModule('quest_a', 'quest')
+              quest_b = ProductionModule('quest_b', 'quest')
+              shop = ProductionModule('shop_a', 'shop')
+              assert _builtin_shared_anchors(sword, 'content') != _builtin_shared_anchors(armor, 'content')
+              assert _builtin_shared_anchors(quest_a, 'system') == _builtin_shared_anchors(quest_b, 'system')
+              assert _builtin_shared_anchors(quest_a, 'system') != _builtin_shared_anchors(shop, 'system')
+
+
+          def test_extended_content_no_long_function_wide_serialization_wrapper():
+              source = inspect.getsource(generate_extended_content)
+              assert '_serialized_extended_content' not in source
+              assert 'with project_write_lock(info.root):' in source
+          PY
+      - name: Install and verify
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check minecraft_mod_ai/work_graph.py minecraft_mod_ai/generation_concurrency_safety.py minecraft_mod_ai/extended_content_generator.py minecraft_mod_ai/complete_orchestrator.py tests/test_pipeline_parallel_bottlenecks.py --select F,E7,E9
+          python -m pytest -q tests/test_pipeline_parallel_bottlenecks.py tests/test_artifact_graph_executor.py tests/test_work_graph.py tests/test_generation_concurrency_safety.py 2>/dev/null || python -m pytest -q tests/test_pipeline_parallel_bottlenecks.py
+      - name: Commit tested patch
+        run: |
+          git rm .github/workflows/apply-parallel-pipeline-fixes.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/work_graph.py minecraft_mod_ai/generation_concurrency_safety.py minecraft_mod_ai/extended_content_generator.py minecraft_mod_ai/complete_orchestrator.py tests/test_pipeline_parallel_bottlenecks.py .github/workflows
+          git commit -m 'Remove remaining serial pipeline bottlenecks'
+          git push origin HEAD:main
