@@ -1,9 +1,8 @@
 id: design/progression_node
 slot_id: progression_node
-task: "Define the primary milestone node in the progression tree."
+task: "Define one primary milestone node in the progression tree."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent milestones, rewards, prerequisites, or mechanics."
 record_schema:
   type: object
   properties:
