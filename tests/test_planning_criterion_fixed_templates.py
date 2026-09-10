@@ -18,7 +18,7 @@ def authored(section):
 
 def test_each_call_receives_one_concern_and_results_are_not_rewritten(monkeypatch):
     calls = []
-    def run(router, identifier, *, context, allowed_refs):
+    def run(router, identifier, *, context, allowed_refs, progress, checkpoint):
         section, concern = identifier.split('/')[1:]
         calls.append(identifier)
         return {'records': authored(section)['specification'][concern], 'reason': '', 'evidence_refs': []}
@@ -51,18 +51,6 @@ def test_missing_concern_is_not_automatically_marked_inapplicable():
     row['specification']['transitions'] = []
     with pytest.raises(ValueError, match='inapplicable'):
         fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
-
-
-def test_batch_is_host_aggregation_of_independent_criteria(monkeypatch):
-    calls = []
-    def generate(router, **kwargs):
-        calls.append(kwargs['criterion'])
-        return {'section_updates': [authored('state_model')]}
-    monkeypatch.setattr(fragments, 'generate_criterion_fragment', generate)
-    result = fragments.generate_criterion_fragments_batch(None, requirement={}, criteria={0: 'A', 1: 'B'},
-        selected_sections=CORE_WORKSHEET_SECTIONS, evidence=[], allowed_refs=set())
-    assert calls == ['A', 'B']
-    assert set(result) == {0, 1}
 
 
 def test_legacy_checkpoint_invalidates_derived_work_only():

@@ -423,3 +423,66 @@ def test_resume_rejects_legacy_plan_with_vacuous_required_section():
         if concern != "inapplicable_concerns":
             spec[concern] = []
     assert not adaptive._detail_matches_selection(detail, WORKSHEET_SECTIONS)
+
+
+def test_transport_interruption_preserves_individual_records_and_resumes(monkeypatch):
+    import json
+    from minecraft_mod_ai import task_template_runner as runner
+    requirements = _requirements()
+    _patch_compile_boundaries(monkeypatch, requirements)
+    monkeypatch.setattr(adaptive, 'router_native_model_parallelism', lambda _: 1)
+    checkpoints, calls = [], []
+    interrupted = False
+
+    def generate(*args, response_schema, tool_name, **kwargs):
+        nonlocal interrupted
+        context = json.loads(args[2][1]['content'])
+        calls.append((tool_name, len(context['accepted_records'])))
+        if len(calls) == 4 and not interrupted:
+            interrupted = True
+            raise TimeoutError('interrupted within a concern')
+        record = None if context['accepted_records'] else {
+            key: f'authored {key}'
+            for key in response_schema['properties']['record']['anyOf'][0]['required']
+        }
+        return {'status': 'done' if record is None else 'record', 'record': record,
+                'reason': '', 'evidence_refs': []}
+
+    monkeypatch.setattr(runner, 'generate_fixed_template_value', generate)
+    kwargs = dict(required_sections_by_requirement={'req_1': WORKSHEET_SECTIONS},
+                  checkpoint=lambda state: checkpoints.append(deepcopy(state)))
+    with pytest.raises(TimeoutError):
+        adaptive.compile_progress_monotone_detailed_plans(_Router(), 'request', _base_state(), **kwargs)
+    saved = checkpoints[-1]
+    assert not saved['blockers']
+    assert sorted(len(v) for v in saved['template_progress'].values()) == [1, 2]
+    initial_calls = len(calls)
+    result = adaptive.compile_progress_monotone_detailed_plans(_Router(), 'request', saved, **kwargs)
+    assert result['plan_ready']
+    assert calls[initial_calls] == calls[3]  # Resume the interrupted completion request.
+    assert calls.count(calls[0]) == 1  # The completed concern was not regenerated.
+    assert all(values[-1]['status'] == 'done' for values in result['template_progress'].values())
+
+
+def test_concurrent_record_checkpoints_do_not_overwrite_sibling_progress(monkeypatch):
+    from threading import Barrier
+    requirements = _requirements(2)
+    _patch_compile_boundaries(monkeypatch, requirements)
+    barrier = Barrier(2)
+    checkpoints = []
+
+    def compile_criterion(_router, *, requirement_ref, record_checkpoint, **kwargs):
+        record_checkpoint(requirement_ref, [{'accepted': requirement_ref}])
+        barrier.wait(timeout=5)
+        return _fragment(requirement_ref, 0)
+
+    monkeypatch.setattr(adaptive, '_compile_criterion', compile_criterion)
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(), 'request', _base_state(),
+        required_sections_by_requirement={r['requirement_id']: WORKSHEET_SECTIONS for r in requirements},
+        checkpoint=lambda state: checkpoints.append(deepcopy(state)),
+    )
+    assert set(result['template_progress']) == {'req_1', 'req_2'}
+    assert result['plan_ready']
+    sizes = [len(s.get('template_progress', {})) for s in checkpoints]
+    assert sizes == sorted(sizes)

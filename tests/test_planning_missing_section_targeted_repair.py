@@ -4,6 +4,14 @@ from typing import Any
 
 import minecraft_mod_ai.planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+
+def authored(section, description):
+    spec = {concern: [{field: description for field in columns.split()}]
+            for concern, columns in DETAIL_RECORDS[section].items()}
+    spec["inapplicable_concerns"] = []
+    return {"section": section, "specification": spec, "constraint_evidence_refs": []}
 
 
 def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monkeypatch) -> None:
@@ -40,12 +48,7 @@ def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monk
         assert section in implementations
         return {
             "section_updates": [
-                {
-                    "section": section,
-                    "implementation": implementations[section],
-                    "constraint": f"Do not commit an invalid {section} result.",
-                    "evidence_refs": [],
-                }
+                authored(section, implementations[section])
             ]
         }
 
@@ -91,12 +94,7 @@ def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monk
         "fragments": {
             0: {
                 "section_updates": [
-                    {
-                        "section": section,
-                        "implementation": f"Existing concrete contract for {section}.",
-                        "constraint": f"Existing concrete boundary for {section}.",
-                        "evidence_refs": [],
-                    }
+                    authored(section, f"Existing concrete contract for {section}.")
                     for section in WORKSHEET_SECTIONS
                     if section not in {"integration", "persistence", "reuse_assessment"}
                 ]

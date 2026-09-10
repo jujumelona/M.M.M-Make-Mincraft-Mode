@@ -24,14 +24,15 @@ def requirement_acceptance_criteria(requirement):
     return canonical_public_acceptance(requirement.get("acceptance")) or (project_requirement_public_acceptance(requirement),)
 
 
-def generate_section_records(router, *, requirement, criterion, section, evidence, allowed_refs):
+def generate_section_records(router, *, requirement, criterion, section, evidence, allowed_refs, progress=None, checkpoint=None):
     specification, refs, reasons = {}, [], []
     for identifier in load_template(f"feature/{section}")["steps"]:
         concern = identifier.rsplit("/", 1)[1]
         result = run_record_template(router, identifier, context={
+            "requirement_id": requirement.get("requirement_id", ""),
             "requirement": requirement.get("statement", ""),
             "criterion": criterion, "evidence": evidence,
-        }, allowed_refs=allowed_refs)
+        }, allowed_refs=allowed_refs, progress=progress, checkpoint=checkpoint)
         specification[concern] = result["records"]
         if not result["records"]:
             reasons.append({"concern": concern, "reason": result["reason"]})
@@ -60,18 +61,12 @@ def validate_criterion_fragment(value, *, selected_sections, allowed_refs):
     return {_FRAGMENT_KEY: rows}
 
 
-def generate_criterion_fragment(router, *, requirement, criterion, selected_sections, evidence, allowed_refs):
+def generate_criterion_fragment(router, *, requirement, criterion, selected_sections, evidence, allowed_refs, progress=None, checkpoint=None):
     selected = normalize_required_sections(selected_sections)
     return {_FRAGMENT_KEY: [generate_section_records(router, requirement=requirement,
-        criterion=criterion, section=section, evidence=evidence, allowed_refs=allowed_refs)
+        criterion=criterion, section=section, evidence=evidence, allowed_refs=allowed_refs,
+        progress=progress, checkpoint=checkpoint)
         for section in selected]}
-
-
-def generate_criterion_fragments_batch(router, *, requirement, criteria, selected_sections, evidence, allowed_refs):
-    # Host aggregation only. Each model call still authors one concern record.
-    return {index: generate_criterion_fragment(router, requirement=requirement,
-        criterion=criterion, selected_sections=selected_sections, evidence=evidence,
-        allowed_refs=allowed_refs) for index, criterion in criteria.items()}
 
 
 def load_requirement_progress(

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 The host keeps each approved public acceptance criterion as an independently
 validated and checkpointed semantic work unit, but unfinished criteria belonging to the
-same requirement share one model transport. This removes repeated prefill/decode overhead
-on single-slot local runtimes while preserving deterministic resume and fail-closed state.
+same requirement execute independently. Each accepted concern record is checkpointed
+before the next model call, including partially completed criteria.
 """
 
 from collections import deque
@@ -23,7 +23,6 @@ from .planning_criterion_fragments import (
     MissingWorksheetSections,
     clear_requirement_progress,
     generate_criterion_fragment,
-    generate_criterion_fragments_batch,
     load_requirement_progress,
     requirement_acceptance_criteria,
     store_criterion_progress,
@@ -214,55 +213,10 @@ def _compile_criterion(
     selected_sections: tuple[str, ...],
     evidence: list[Mapping[str, Any]],
     allowed_refs: set[str],
-    criteria: tuple[str, ...] | None = None,
-    batch_pending_indices: tuple[int, ...] | None = None,
-    batch_cache: dict[int, dict[str, Any]] | None = None,
-    batch_lock: Any | None = None,
+    progress: Mapping[str, Any] | None = None,
+    record_checkpoint: Callable | None = None,
 ) -> dict[str, Any]:
-    """Return one criterion while single-flighting requirement-scoped generation.
-
-    The scheduler and per-criterion checkpoints remain unchanged. On production calls,
-    the first unfinished criterion generates all unfinished criteria for its requirement
-    in one model request; sibling futures reuse that in-memory result under the same lock.
-    Tests and external callers that omit batch state retain the original atomic path.
-    """
-    if (
-        criteria is not None
-        and batch_pending_indices is not None
-        and batch_cache is not None
-        and batch_lock is not None
-    ):
-        cached = batch_cache.get(criterion_index)
-        if cached is not None:
-            return deepcopy(cached)
-        with batch_lock:
-            cached = batch_cache.get(criterion_index)
-            if cached is not None:
-                return deepcopy(cached)
-            missing = {
-                index: criteria[index]
-                for index in batch_pending_indices
-                if index not in batch_cache
-            }
-            if missing:
-                with planner_operation(f"detailed_requirement_batch:{requirement_ref}"):
-                    batch_cache.update(
-                        generate_criterion_fragments_batch(
-                            router,
-                            requirement=requirement,
-                            criteria=missing,
-                            selected_sections=selected_sections,
-                            evidence=evidence,
-                            allowed_refs=allowed_refs,
-                        )
-                    )
-            cached = batch_cache.get(criterion_index)
-            if cached is None:
-                raise RuntimeError(
-                    "DETAILED_PLAN_BATCH: requirement batch did not produce the requested criterion"
-                )
-            return deepcopy(cached)
-
+    """Generate only this criterion, saving each validated record immediately."""
     with planner_operation(
         f"detailed_criterion:{requirement_ref}:{criterion_index + 1}"
     ):
@@ -273,6 +227,7 @@ def _compile_criterion(
             selected_sections=selected_sections,
             evidence=evidence,
             allowed_refs=allowed_refs,
+            progress=progress, checkpoint=record_checkpoint,
         )
 
 
@@ -381,7 +336,7 @@ def compile_progress_monotone_detailed_plans(
     """Compile one bounded contract per unfinished public acceptance criterion.
 
     The ranking function is the number of unfinished canonical acceptance criteria. Every
-    successful model call removes exactly one element and checkpoints it. Failed work is
+    completed criterion removes exactly one element; every accepted record is checkpointed. Failed work is
     terminal rather than re-enqueued. Completed criteria and requirements are restored from
     checkpoints without model calls. The only concurrency is among independent unfinished
     criteria, bounded by the router's native model parallelism.
@@ -467,11 +422,6 @@ def compile_progress_monotone_detailed_plans(
                 "allowed": allowed,
                 "criteria": criteria,
                 "fragments": fragments,
-                "batch_pending_indices": tuple(
-                    index for index in range(len(criteria)) if index not in fragments
-                ),
-                "batch_cache": {},
-                "batch_lock": RLock(),
             }
         )
 
@@ -488,6 +438,18 @@ def compile_progress_monotone_detailed_plans(
                 completed_details=completed_details,
                 checkpoint=checkpoint,
             )
+
+    state_lock = RLock()
+    record_progress = deepcopy(working_state.get("template_progress", {}))
+    if not isinstance(record_progress, dict):
+        raise ValueError("TEMPLATE_PROGRESS: expected checkpoint mapping")
+
+    def save_record(binding, responses):
+        nonlocal working_state
+        with state_lock:
+            candidate = deepcopy(working_state)
+            candidate.setdefault("template_progress", {})[binding] = deepcopy(responses)
+            working_state = _checkpoint_state(candidate, checkpoint)
 
     pending = deque(
         (job_index, criterion_index)
@@ -521,10 +483,8 @@ def compile_progress_monotone_detailed_plans(
                         selected_sections=job["selected_sections"],
                         evidence=job["evidence"],
                         allowed_refs=job["allowed"],
-                        criteria=job["criteria"],
-                        batch_pending_indices=job["batch_pending_indices"],
-                        batch_cache=job["batch_cache"],
-                        batch_lock=job["batch_lock"],
+                        progress=record_progress,
+                        record_checkpoint=save_record,
                     )
                     future_to_node[future] = (job_index, criterion_index)
 
@@ -549,68 +509,75 @@ def compile_progress_monotone_detailed_plans(
                     job_index, criterion_index = future_to_node.pop(future)
                     job = jobs[job_index]
                     criterion = job["criteria"][criterion_index]
-                    try:
-                        fragment = future.result()
-                    except Exception as exc:
-                        for in_flight in future_to_node:
-                            in_flight.cancel()
-                        reason = (
-                            "DETAILED_PLAN_BLOCKED: atomic acceptance criterion failed without "
-                            f"valid progress for {job['requirement_ref']}/criterion_{criterion_index + 1}: "
-                            f"{type(exc).__name__}: {exc}"
-                        )
-                        working_state = _checkpoint_terminal_blocker(
+                    with state_lock:
+                        try:
+                            fragment = future.result()
+                        except (TimeoutError, ConnectionError, InterruptedError):
+                            for in_flight in future_to_node:
+                                in_flight.cancel()
+                            # Transport interruption does not invalidate accepted semantic work.
+                            # The next invocation replays validated records and resumes here.
+                            raise
+                        except Exception as exc:
+                            for in_flight in future_to_node:
+                                in_flight.cancel()
+                            reason = (
+                                "DETAILED_PLAN_BLOCKED: atomic acceptance criterion failed without "
+                                f"valid progress for {job['requirement_ref']}/criterion_{criterion_index + 1}: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                            working_state = _checkpoint_terminal_blocker(
+                                working_state,
+                                requirement_ref=job["requirement_ref"],
+                                work_unit=f"acceptance_criterion:{criterion_index + 1}",
+                                reason=reason,
+                                checkpoint=checkpoint,
+                            )
+                            raise RuntimeError(reason) from exc
+
+                        if criterion_index in job["fragments"]:
+                            raise RuntimeError(
+                                "DETAILED_PLAN_PROGRESS_INVARIANT: completed criterion was already checkpointed"
+                            )
+                        before = remaining
+                        job["fragments"][criterion_index] = fragment
+                        remaining -= 1
+                        if remaining >= before:
+                            raise RuntimeError(
+                                "DETAILED_PLAN_NO_PROGRESS: unfinished acceptance criteria did not strictly decrease"
+                            )
+
+                        working_state = store_criterion_progress(
                             working_state,
                             requirement_ref=job["requirement_ref"],
-                            work_unit=f"acceptance_criterion:{criterion_index + 1}",
-                            reason=reason,
-                            checkpoint=checkpoint,
+                            selected_sections=job["selected_sections"],
+                            criterion_index=criterion_index,
+                            criterion=criterion,
+                            fragment=fragment,
                         )
-                        raise RuntimeError(reason) from exc
+                        working_state = _checkpoint_state(working_state, checkpoint)
+                        emit_root_cause(
+                            "detailed_acceptance_criterion_checkpoint",
+                            stage="planning_state",
+                            operation="compile_progress_monotone_detailed_plans",
+                            result="PASS",
+                            details={
+                                "requirement_ref": job["requirement_ref"],
+                                "criterion_index": criterion_index + 1,
+                                "criterion_count": len(job["criteria"]),
+                                "remaining_acceptance_criteria": remaining,
+                            },
+                        )
 
-                    if criterion_index in job["fragments"]:
-                        raise RuntimeError(
-                            "DETAILED_PLAN_PROGRESS_INVARIANT: completed criterion was already checkpointed"
-                        )
-                    before = remaining
-                    job["fragments"][criterion_index] = fragment
-                    remaining -= 1
-                    if remaining >= before:
-                        raise RuntimeError(
-                            "DETAILED_PLAN_NO_PROGRESS: unfinished acceptance criteria did not strictly decrease"
-                        )
-
-                    working_state = store_criterion_progress(
-                        working_state,
-                        requirement_ref=job["requirement_ref"],
-                        selected_sections=job["selected_sections"],
-                        criterion_index=criterion_index,
-                        criterion=criterion,
-                        fragment=fragment,
-                    )
-                    working_state = _checkpoint_state(working_state, checkpoint)
-                    emit_root_cause(
-                        "detailed_acceptance_criterion_checkpoint",
-                        stage="planning_state",
-                        operation="compile_progress_monotone_detailed_plans",
-                        result="PASS",
-                        details={
-                            "requirement_ref": job["requirement_ref"],
-                            "criterion_index": criterion_index + 1,
-                            "criterion_count": len(job["criteria"]),
-                            "remaining_acceptance_criteria": remaining,
-                        },
-                    )
-
-                    if len(job["fragments"]) == len(job["criteria"]):
-                        working_state = _finish_requirement(
-                            job,
-                            router,
-                            working_state=working_state,
-                            requirement_order=requirement_order,
-                            completed_details=completed_details,
-                            checkpoint=checkpoint,
-                        )
+                        if len(job["fragments"]) == len(job["criteria"]):
+                            working_state = _finish_requirement(
+                                job,
+                                router,
+                                working_state=working_state,
+                                requirement_order=requirement_order,
+                                completed_details=completed_details,
+                                checkpoint=checkpoint,
+                            )
 
     if len(completed_details) != len(requirement_order):
         raise RuntimeError(

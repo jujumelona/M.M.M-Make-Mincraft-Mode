@@ -1,5 +1,7 @@
 """One declared concern, one record per model call, deterministic completion."""
 import json
+from copy import deepcopy
+from hashlib import sha256
 
 from jsonschema import Draft202012Validator
 
@@ -25,14 +27,22 @@ def record_response_schema(template):
     }
 
 
-def run_record_template(router, identifier, *, context, allowed_refs, max_records=128):
+def run_record_template(router, identifier, *, context, allowed_refs, progress=None, checkpoint=None):
     template = load_template(identifier)
     schema = record_response_schema(template)
     validator = Draft202012Validator(schema)
     records, refs, seen = [], [], set()
-    # The final iteration permits a completion response after the last allowed record.
-    for _ in range(max_records + 1):
-        value = generate_fixed_template_value(
+    binding = sha256(json.dumps(
+        [template, context, sorted(allowed_refs)], sort_keys=True,
+        ensure_ascii=False, allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    saved = (progress or {}).get(binding, [])
+    if not isinstance(saved, list):
+        raise ValueError("TEMPLATE_PROGRESS: expected response array")
+    accepted = []
+    while True:
+        replaying = len(accepted) < len(saved)
+        value = deepcopy(saved[len(accepted)]) if replaying else generate_fixed_template_value(
             router, "planner",
             [{"role": "system", "content": template["task"] + "\n" + "\n".join(template["rules"])},
              {"role": "user", "content": json.dumps({
@@ -52,19 +62,23 @@ def run_record_template(router, identifier, *, context, allowed_refs, max_record
             key = json.dumps(record, sort_keys=True, ensure_ascii=False)
             if key in seen:
                 raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
-            if len(records) == max_records:
-                break
             seen.add(key)
             records.append(record)
             refs.extend(ref for ref in value["evidence_refs"] if ref not in refs)
-            continue
-        if record is not None:
+        elif record is not None:
             raise ValueError(f"TEMPLATE_STATUS: {status} cannot carry a record")
-        if status == "blocked":
+        elif status == "blocked":
             raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {reason or 'missing blocking reason'}")
-        if status == "done" and records:
-            return {"records": records, "reason": "", "evidence_refs": refs}
-        if status == "not_applicable" and not records and reason:
-            return {"records": [], "reason": reason, "evidence_refs": value["evidence_refs"]}
-        raise ValueError(f"TEMPLATE_STATUS: invalid {status} transition in {identifier}")
-    raise TemplateBlocked(f"TEMPLATE_LIMIT: unfinished concern {identifier}; no completion accepted")
+        elif status == "done" and records:
+            refs.extend(ref for ref in value["evidence_refs"] if ref not in refs)
+        elif status == "not_applicable" and not records and reason:
+            refs = value["evidence_refs"]
+        else:
+            raise ValueError(f"TEMPLATE_STATUS: invalid {status} transition in {identifier}")
+        accepted.append(deepcopy(value))
+        if status != "record" and len(accepted) < len(saved):
+            raise ValueError("TEMPLATE_PROGRESS: responses after completion")
+        if not replaying and checkpoint is not None:
+            checkpoint(binding, deepcopy(accepted))
+        if status != "record":
+            return {"records": records, "reason": reason if status == "not_applicable" else "", "evidence_refs": refs}
