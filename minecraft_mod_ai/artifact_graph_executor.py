@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Deterministic dependency executor for already-expanded ArtifactJobs."""
 
+import heapq
 import os
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -125,7 +126,12 @@ def execute_artifact_graph(
     port_registry: PortRegistry | None = None,
     base_dir: Any = None,
 ) -> dict[str, Any]:
-    """Run generation and validation as a bounded event-driven dependency pipeline."""
+    """Run generation and validation as a bounded event-driven dependency pipeline.
+
+    Readiness is maintained with producer indegrees and a deterministic heap. No job
+    list is rescanned after each completion, so scheduler work grows with graph edges
+    instead of degenerating toward quadratic work on large artifact sets.
+    """
     ordered_jobs = list(jobs)
     if len({job.job_id for job in ordered_jobs}) != len(ordered_jobs):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
@@ -151,7 +157,31 @@ def execute_artifact_graph(
     if missing_external:
         raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
-    pending: dict[str, ArtifactJob] = {job.job_id: job for job in ordered_jobs}
+    order = {job.job_id: index for index, job in enumerate(ordered_jobs)}
+    by_id = {job.job_id: job for job in ordered_jobs}
+    dependency_ids: dict[str, set[str]] = {}
+    dependents: dict[str, list[str]] = {job.job_id: [] for job in ordered_jobs}
+    indegree: dict[str, int] = {}
+    for job in ordered_jobs:
+        required_producers = {
+            producers[name]
+            for name in job.requires
+            if name in producers
+        }
+        dependency_ids[job.job_id] = required_producers
+        indegree[job.job_id] = len(required_producers)
+        for producer_id in required_producers:
+            dependents[producer_id].append(job.job_id)
+    for producer_id in dependents:
+        dependents[producer_id].sort(key=order.__getitem__)
+
+    ready_heap: list[tuple[int, str]] = [
+        (order[job.job_id], job.job_id)
+        for job in ordered_jobs
+        if indegree[job.job_id] == 0
+    ]
+    heapq.heapify(ready_heap)
+    pending_ids = set(by_id)
     generation_futures: dict[Future[dict[str, Any]], ArtifactJob] = {}
     validation_futures: dict[Future[None], tuple[ArtifactJob, dict[str, Any]]] = {}
     results: dict[str, dict[str, Any]] = {}
@@ -159,27 +189,15 @@ def execute_artifact_graph(
     generation_workers = _parallelism(len(ordered_jobs))
     validation_workers = _validation_parallelism(len(ordered_jobs), generation_workers)
 
-    def ready(job: ArtifactJob) -> bool:
-        for port_name in job.requires:
-            producer_id = producers.get(port_name)
-            if producer_id is not None:
-                if producer_id not in validated_jobs:
-                    return False
-            elif not registry.has(port_name):
-                return False
-        return True
-
     def submit_ready(pool: ThreadPoolExecutor) -> int:
         submitted = 0
         slots = generation_workers - len(generation_futures)
-        if slots <= 0:
-            return 0
-        for job in ordered_jobs:
-            if slots <= 0:
-                break
-            if job.job_id not in pending or not ready(job):
+        while slots > 0 and ready_heap:
+            _index, job_id = heapq.heappop(ready_heap)
+            if job_id not in pending_ids:
                 continue
-            pending.pop(job.job_id)
+            pending_ids.remove(job_id)
+            job = by_id[job_id]
             generation_futures[
                 pool.submit(
                     _execute_one,
@@ -203,21 +221,22 @@ def execute_artifact_graph(
     ) as validation_pool:
         submit_ready(generation_pool)
         try:
-            while pending or generation_futures or validation_futures:
+            while pending_ids or generation_futures or validation_futures:
                 if not generation_futures and not validation_futures:
                     blocked = {
-                        job.job_id: [
+                        job_id: [
                             name
-                            for name in job.requires
+                            for name in by_id[job_id].requires
                             if producers.get(name) not in validated_jobs
                             and not (producers.get(name) is None and registry.has(name))
                         ]
-                        for job in pending.values()
+                        for job_id in sorted(pending_ids, key=order.__getitem__)
                     }
                     raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
                 active = tuple(generation_futures) + tuple(validation_futures)
                 done, _ = wait(active, return_when=FIRST_COMPLETED)
+                newly_validated: list[str] = []
                 for future in done:
                     if future in generation_futures:
                         job = generation_futures.pop(future)
@@ -235,6 +254,23 @@ def execute_artifact_graph(
                         future.result()
                         validated_jobs.add(job.job_id)
                         results[job.job_id] = receipt
+                        newly_validated.append(job.job_id)
+
+                # Apply all completions as one deterministic readiness update. The
+                # heap restores original job order even when futures finish in a
+                # different order on every run.
+                for producer_id in sorted(newly_validated, key=order.__getitem__):
+                    for dependent_id in dependents[producer_id]:
+                        indegree[dependent_id] -= 1
+                        if indegree[dependent_id] < 0:
+                            raise ArtifactGraphError(
+                                f"ARTIFACT_GRAPH_INDEGREE_CORRUPT: {dependent_id}"
+                            )
+                        if indegree[dependent_id] == 0:
+                            heapq.heappush(
+                                ready_heap,
+                                (order[dependent_id], dependent_id),
+                            )
 
                 # Refill generation immediately after every generation or validation
                 # completion. A dependent becomes eligible only after its producer's
