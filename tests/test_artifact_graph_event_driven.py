@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 from minecraft_mod_ai.artifact_job import ArtifactJob
-from minecraft_mod_ai.artifact_ports import ArtifactPort, PortRegistry
+from minecraft_mod_ai.artifact_ports import PortKind, PortRegistry, TypedPort
 import minecraft_mod_ai.artifact_graph_executor as executor
 
 
@@ -19,11 +19,11 @@ def _job(job_id: str, *, requires=(), produces=()) -> ArtifactJob:
 
 def _publish(registry: PortRegistry, name: str, job_id: str) -> None:
     registry.publish(
-        ArtifactPort(
+        TypedPort(
             name=name,
-            producer_job_id=job_id,
-            artifact_type="test",
-            payload={"job_id": job_id},
+            port_kind=PortKind.GENERIC,
+            target_type="Any",
+            value=job_id,
         )
     )
 
