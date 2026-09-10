@@ -32,17 +32,29 @@ def _producer_index(jobs: list[ArtifactJob]) -> dict[str, str]:
     return producers
 
 
+def _configured_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ArtifactGraphError(f"{name} must be a positive integer") from exc
+    if value < 1:
+        raise ArtifactGraphError(f"{name} must be a positive integer")
+    return value
+
+
 def _parallelism(job_count: int) -> int:
     """Bound fan-out so a large graph cannot overwhelm local model/I/O resources."""
-    configured = os.getenv("MMM_ARTIFACT_MAX_WORKERS", "").strip()
-    if configured:
-        try:
-            limit = max(1, int(configured))
-        except ValueError as exc:
-            raise ArtifactGraphError("MMM_ARTIFACT_MAX_WORKERS must be a positive integer") from exc
-    else:
-        limit = min(8, max(2, os.cpu_count() or 2))
-    return min(job_count, limit)
+    default = min(8, max(2, os.cpu_count() or 2))
+    return min(job_count, _configured_positive_int("MMM_ARTIFACT_MAX_WORKERS", default))
+
+
+def _validation_parallelism(job_count: int, generation_workers: int) -> int:
+    """Keep validation concurrent without allowing it to dominate the machine."""
+    default = min(4, max(1, generation_workers))
+    return min(job_count, _configured_positive_int("MMM_ARTIFACT_VALIDATION_WORKERS", default))
 
 
 def _execute_one(
@@ -70,7 +82,7 @@ def _validate_completed_job(
     context: dict[str, Any] | None,
     base_dir: Any,
 ) -> None:
-    """Validate a completed artifact immediately while sibling generation continues."""
+    """Validate one materialized artifact without mutating scheduler state."""
     if receipt.get("status") != "PASS":
         raise ArtifactGraphError(
             f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
@@ -113,12 +125,12 @@ def execute_artifact_graph(
     port_registry: PortRegistry | None = None,
     base_dir: Any = None,
 ) -> dict[str, Any]:
-    """Run a bounded event-driven DAG and release dependents as soon as producers pass."""
+    """Run generation and validation as a bounded event-driven dependency pipeline."""
     ordered_jobs = list(jobs)
     if len({job.job_id for job in ordered_jobs}) != len(ordered_jobs):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
+    registry = port_registry or PortRegistry()
     if not ordered_jobs:
-        registry = port_registry or PortRegistry()
         return {
             "status": "PASS",
             "completed_jobs": [],
@@ -126,7 +138,6 @@ def execute_artifact_graph(
             "ports": {name: port.to_dict() for name, port in registry.all_ports().items()},
         }
 
-    registry = port_registry or PortRegistry()
     producers = _producer_index(ordered_jobs)
     missing_external: dict[str, list[str]] = {}
     for job in ordered_jobs:
@@ -141,16 +152,26 @@ def execute_artifact_graph(
         raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
     pending: dict[str, ArtifactJob] = {job.job_id: job for job in ordered_jobs}
-    running: dict[Future[dict[str, Any]], ArtifactJob] = {}
+    generation_futures: dict[Future[dict[str, Any]], ArtifactJob] = {}
+    validation_futures: dict[Future[None], tuple[ArtifactJob, dict[str, Any]]] = {}
     results: dict[str, dict[str, Any]] = {}
-    worker_count = _parallelism(len(ordered_jobs))
+    validated_jobs: set[str] = set()
+    generation_workers = _parallelism(len(ordered_jobs))
+    validation_workers = _validation_parallelism(len(ordered_jobs), generation_workers)
 
     def ready(job: ArtifactJob) -> bool:
-        return all(registry.has(name) for name in job.requires)
+        for port_name in job.requires:
+            producer_id = producers.get(port_name)
+            if producer_id is not None:
+                if producer_id not in validated_jobs:
+                    return False
+            elif not registry.has(port_name):
+                return False
+        return True
 
     def submit_ready(pool: ThreadPoolExecutor) -> int:
         submitted = 0
-        slots = worker_count - len(running)
+        slots = generation_workers - len(generation_futures)
         if slots <= 0:
             return 0
         for job in ordered_jobs:
@@ -159,54 +180,72 @@ def execute_artifact_graph(
             if job.job_id not in pending or not ready(job):
                 continue
             pending.pop(job.job_id)
-            future = pool.submit(
-                _execute_one,
-                job,
-                context=context,
-                router=router,
-                registry=registry,
-                base_dir=base_dir,
-            )
-            running[future] = job
+            generation_futures[
+                pool.submit(
+                    _execute_one,
+                    job,
+                    context=context,
+                    router=router,
+                    registry=registry,
+                    base_dir=base_dir,
+                )
+            ] = job
             submitted += 1
             slots -= 1
         return submitted
 
     with ThreadPoolExecutor(
-        max_workers=worker_count,
-        thread_name_prefix="mmm-artifact",
-    ) as pool:
-        submit_ready(pool)
-        while pending or running:
-            if not running:
-                blocked = {
-                    job.job_id: [name for name in job.requires if not registry.has(name)]
-                    for job in pending.values()
-                }
-                raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
+        max_workers=generation_workers,
+        thread_name_prefix="mmm-artifact-generate",
+    ) as generation_pool, ThreadPoolExecutor(
+        max_workers=validation_workers,
+        thread_name_prefix="mmm-artifact-validate",
+    ) as validation_pool:
+        submit_ready(generation_pool)
+        try:
+            while pending or generation_futures or validation_futures:
+                if not generation_futures and not validation_futures:
+                    blocked = {
+                        job.job_id: [
+                            name
+                            for name in job.requires
+                            if producers.get(name) not in validated_jobs
+                            and not (producers.get(name) is None and registry.has(name))
+                        ]
+                        for job in pending.values()
+                    }
+                    raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
-            done, _ = wait(tuple(running), return_when=FIRST_COMPLETED)
-            try:
+                active = tuple(generation_futures) + tuple(validation_futures)
+                done, _ = wait(active, return_when=FIRST_COMPLETED)
                 for future in done:
-                    job = running.pop(future)
-                    receipt = future.result()
-                    _validate_completed_job(
-                        job,
-                        receipt,
-                        context=context,
-                        base_dir=base_dir,
-                    )
-                    results[job.job_id] = receipt
-                    # The checkpoint executor publishes produced ports before returning.
-                    # Refill capacity immediately so direct dependents do not wait for
-                    # unrelated slow siblings from the previous readiness set.
-                    submit_ready(pool)
-            except BaseException:
-                for future in running:
-                    future.cancel()
-                raise
+                    if future in generation_futures:
+                        job = generation_futures.pop(future)
+                        receipt = future.result()
+                        validation_future = validation_pool.submit(
+                            _validate_completed_job,
+                            job,
+                            receipt,
+                            context=context,
+                            base_dir=base_dir,
+                        )
+                        validation_futures[validation_future] = (job, receipt)
+                    else:
+                        job, receipt = validation_futures.pop(future)
+                        future.result()
+                        validated_jobs.add(job.job_id)
+                        results[job.job_id] = receipt
 
-            submit_ready(pool)
+                # Refill generation immediately after every generation or validation
+                # completion. A dependent becomes eligible only after its producer's
+                # validation succeeds, while unrelated work continues in parallel.
+                submit_ready(generation_pool)
+        except BaseException:
+            for future in generation_futures:
+                future.cancel()
+            for future in validation_futures:
+                future.cancel()
+            raise
 
     completed_jobs = [job.job_id for job in ordered_jobs]
     receipts = [results[job.job_id] for job in ordered_jobs]
