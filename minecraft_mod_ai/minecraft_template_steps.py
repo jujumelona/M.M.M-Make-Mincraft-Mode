@@ -1,97 +1,107 @@
 from __future__ import annotations
 
-"""Compile artifact responsibilities into tasks without game-specific builders."""
+"""Compile canonical Minecraft artifact responsibilities into narrow execution steps."""
+
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from .minecraft_template_catalog import (
-    FEATURE_CLIENT, FEATURE_DATAGEN, FEATURE_NETWORK, FEATURE_PERSISTENCE,
-    FEATURE_WORLDGEN, MinecraftTemplateProfile,
-)
+from .minecraft_template_catalog import validate_artifact_kinds
 from .task_template_catalog import load_template
 
-ROOT_PROVIDE = "target:frozen"
+ROOT_PROVIDE = "translation:artifact_dependency_graph"
 
 
 @dataclass(frozen=True)
 class TemplateStep:
     name: str
+    template_id: str
     outcome: str
     consumes: tuple[str, ...]
     provides: tuple[str, ...]
     anchor_kinds: tuple[str, ...]
-    branch_features: tuple[str, ...] = ()
 
 
-# Translation of already-declared artifact obligations, never prompt keyword matching.
-_ARTIFACT_KIND = {
-    "item_model": "model", "block_model": "model", "entity_model": "model",
-    "blockstate": "block", "loot_table": "loot", "lang": "language",
-    "recipe": "recipe", "tag": "tag", "dimension_data": "dimension",
-    "worldgen_data": "worldgen", "gametest": None, "benchmark": None,
-}
-_FEATURE_ARTIFACT = {
-    FEATURE_PERSISTENCE: "saved_data", FEATURE_NETWORK: "network_payload",
-    FEATURE_WORLDGEN: "worldgen",
-}
+def responsibility_ids_for_artifact(artifact_kind: str) -> tuple[str, ...]:
+    """Return one artifact's statically declared responsibility templates."""
+    (artifact_kind,) = validate_artifact_kinds((artifact_kind,))
+    manifest = load_template(f"minecraft/{artifact_kind}")
+    if manifest.get("execution") != "sequence":
+        raise ValueError(f"TEMPLATE_ARTIFACT: minecraft/{artifact_kind} must execute as a sequence")
+    raw_steps = manifest.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise ValueError(f"TEMPLATE_ARTIFACT: minecraft/{artifact_kind} has no responsibility steps")
+    prefix = f"minecraft/{artifact_kind}/"
+    identifiers: list[str] = []
+    for identifier in raw_steps:
+        if not isinstance(identifier, str) or not identifier.startswith(prefix):
+            raise ValueError(
+                f"TEMPLATE_ARTIFACT: {artifact_kind} contains non-local responsibility {identifier!r}"
+            )
+        identifiers.append(identifier)
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError(f"TEMPLATE_ARTIFACT: {artifact_kind} repeats a responsibility")
+    return tuple(identifiers)
 
 
-def steps_for_profile(profile: MinecraftTemplateProfile) -> tuple[TemplateStep, ...]:
-    capability = profile.capability
-    steps = []
+def steps_for_artifact(artifact_kind: str) -> tuple[TemplateStep, ...]:
+    """Compile one artifact with exactly one emitted step per responsibility template."""
     previous = ROOT_PROVIDE
-
-    def append(name, task, anchors=("symbol", "test"), branches=()):
-        nonlocal previous
-        output = f"{name}:{capability}"
-        steps.append(TemplateStep(name, task + f" for {capability}", (previous,), (output,), tuple(anchors), tuple(branches)))
-        previous = output
-
-    # Authored gameplay meaning remains in the requirement, not in a game-named builder.
-    for name, task in (
-        ("trigger", "Bind the authored trigger to its verified entry point"),
-        ("input", "Validate the declared input contract"),
-        ("state", "Declare the authored state with its explicit owner and defaults"),
-        ("transition", "Implement exactly the authored state transition"),
-        ("output", "Expose the declared observable output"),
-        ("failure", "Implement the declared rejection behavior and preserved state"),
-    ):
-        append(name, task)
-
-    artifacts = []
-    for kind in profile.artifact_kinds:
-        if kind not in _ARTIFACT_KIND:
-            raise ValueError(f"TEMPLATE_ARTIFACT: unmapped artifact obligation {kind!r}")
-        artifact = _ARTIFACT_KIND[kind]
-        if artifact:
-            artifacts.append((kind if artifact == "model" else artifact, artifact))
-    # A model resource alone does not implement its runtime owner.
-    for kind, owner in (("entity_model", "entity"), ("item_model", "item"), ("blockstate", "block")):
-        if kind in profile.artifact_kinds and (owner, owner) not in artifacts:
-            artifacts.insert(0, (owner, owner))
-    for feature, artifact in _FEATURE_ARTIFACT.items():
-        if feature in profile.features and (artifact, artifact) not in artifacts:
-            artifacts.append((artifact, artifact))
-    for instance, artifact in dict.fromkeys(artifacts):
-        branches = []
-        if artifact in {"model", "texture", "animation", "language", "recipe", "loot", "tag", "datagen"}:
-            branches.append(FEATURE_DATAGEN)
-        if artifact == "network_payload":
-            branches.append(FEATURE_NETWORK)
-        if artifact in {"worldgen", "dimension", "biome", "structure"}:
-            branches.append(FEATURE_WORLDGEN)
-        if artifact == "saved_data":
-            branches.append(FEATURE_PERSISTENCE)
-        for identifier in load_template(f"minecraft/{artifact}")["steps"]:
-            task = load_template(identifier)
-            append(identifier.replace(f"minecraft/{artifact}/", f"minecraft/{instance}/").replace("/", "_"), task["task"] + " " + " ".join(task["rules"]), task["anchor_kinds"], branches)
-    if FEATURE_CLIENT in profile.features:
-        for name, task in (("client_projection", "Read only the declared authoritative state projection"),
-                           ("client_input", "Bind the declared client input without granting gameplay authority"),
-                           ("client_render", "Render the declared client presentation on its verified surface")):
-            append(name, task, branches=(FEATURE_CLIENT,))
-    append("integration", "Connect only the declared producer and consumer interfaces")
-    steps.append(TemplateStep("runtime_scenario", f"Verify the authored observable acceptance scenarios for {capability}", (previous,), (capability,), ("test",)))
-    return tuple(steps)
+    compiled: list[TemplateStep] = []
+    for identifier in responsibility_ids_for_artifact(artifact_kind):
+        record = load_template(identifier)
+        task = record.get("task")
+        rules = record.get("rules", ())
+        anchors = record.get("anchor_kinds", ())
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} is missing task")
+        if not isinstance(rules, list):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} rules must be a list")
+        if not isinstance(anchors, list):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} anchor_kinds must be a list")
+        responsibility = identifier.rsplit("/", 1)[-1]
+        provide = f"{identifier}:complete"
+        compiled.append(
+            TemplateStep(
+                name=f"{artifact_kind}_{responsibility}",
+                template_id=identifier,
+                outcome=" ".join(
+                    [task.strip(), *[str(rule).strip() for rule in rules if str(rule).strip()]]
+                ),
+                consumes=(previous,),
+                provides=(provide,),
+                anchor_kinds=tuple(str(anchor).strip() for anchor in anchors if str(anchor).strip()),
+            )
+        )
+        previous = provide
+    return tuple(compiled)
 
 
-__all__ = ["ROOT_PROVIDE", "TemplateStep", "steps_for_profile"]
+def steps_for_artifacts(artifact_kinds: Iterable[str]) -> tuple[TemplateStep, ...]:
+    """Compile validated artifacts in canonical order without semantic routing."""
+    compiled: list[TemplateStep] = []
+    previous = ROOT_PROVIDE
+    for artifact_kind in validate_artifact_kinds(artifact_kinds):
+        artifact_steps = list(steps_for_artifact(artifact_kind))
+        if artifact_steps and previous != ROOT_PROVIDE:
+            first = artifact_steps[0]
+            artifact_steps[0] = TemplateStep(
+                name=first.name,
+                template_id=first.template_id,
+                outcome=first.outcome,
+                consumes=(previous,),
+                provides=first.provides,
+                anchor_kinds=first.anchor_kinds,
+            )
+        if artifact_steps:
+            previous = artifact_steps[-1].provides[0]
+            compiled.extend(artifact_steps)
+    return tuple(compiled)
+
+
+__all__ = [
+    "ROOT_PROVIDE",
+    "TemplateStep",
+    "responsibility_ids_for_artifact",
+    "steps_for_artifact",
+    "steps_for_artifacts",
+]
