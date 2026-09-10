@@ -1,0 +1,16 @@
+id: reuse/compatibility_check
+input:
+  candidate:
+  target_cell:
+  dependency_receipt:
+task:
+  verify_target_compatibility:
+rules:
+  - Check Minecraft target, loader, mappings, API coordinates, and dependencies independently.
+  - Unknown compatibility remains unresolved.
+output:
+  compatible:
+  failed_checks:
+  unresolved_checks:
+proof:
+  predicate: compatible is true only when every required compatibility check passes

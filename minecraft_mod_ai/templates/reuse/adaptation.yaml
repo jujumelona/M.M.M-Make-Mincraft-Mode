@@ -1,0 +1,15 @@
+id: reuse/adaptation
+input:
+  reusable_candidate:
+  adaptation_requirements:
+  target_cell:
+task:
+  plan_candidate_adaptation:
+rules:
+  - Adapt one responsibility at a time.
+  - Do not widen behavior beyond the atomic feature contract.
+output:
+  adaptations:
+  unresolved_adaptations:
+proof:
+  predicate: every adaptation maps one source responsibility to one target responsibility

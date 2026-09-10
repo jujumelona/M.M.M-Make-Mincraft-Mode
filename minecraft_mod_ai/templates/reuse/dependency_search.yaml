@@ -1,0 +1,14 @@
+id: reuse/dependency_search
+input:
+  candidate:
+  target_cell:
+task:
+  identify_candidate_dependencies:
+rules:
+  - Record direct and transitive requirements only when evidenced.
+  - Keep unresolved dependency coordinates explicit.
+output:
+  dependencies:
+  unresolved_dependencies:
+proof:
+  predicate: every resolved dependency has an evidence locator and target relevance

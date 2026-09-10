@@ -1,0 +1,14 @@
+id: reuse/official_examples
+input:
+  queries:
+  target_cell:
+task:
+  collect_official_example_candidates:
+rules:
+  - Keep example code separate from normative documentation.
+  - Record exact source revision when available.
+output:
+  candidates:
+  unresolved_queries:
+proof:
+  predicate: every example has a source locator and target applicability record

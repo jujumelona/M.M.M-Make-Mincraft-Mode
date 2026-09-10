@@ -1,0 +1,14 @@
+id: reuse/existing_mods
+input:
+  queries:
+  target_cell:
+task:
+  collect_existing_mod_candidates:
+rules:
+  - Treat third-party implementations as evidence candidates, not authoritative APIs.
+  - Preserve repository, revision, license evidence, and target coordinates when known.
+output:
+  candidates:
+  missing_metadata:
+proof:
+  predicate: no candidate is marked reusable without provenance metadata

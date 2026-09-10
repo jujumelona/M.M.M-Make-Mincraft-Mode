@@ -1,0 +1,14 @@
+id: reuse/query_build
+input:
+  atomic_feature:
+  information_need:
+task:
+  build_reuse_search_query:
+rules:
+  - Query only the supplied technical need and target constraints.
+  - Do not add game-feature archetype names that are absent from the need.
+output:
+  queries:
+  query_constraints:
+proof:
+  predicate: every query term traces to the supplied information need or target constraint

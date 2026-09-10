@@ -1,0 +1,16 @@
+id: reuse/pattern_reuse
+input:
+  candidate:
+  observed_pattern:
+  target_need:
+task:
+  decide_pattern_reuse:
+rules:
+  - Reuse only an evidenced implementation pattern, not unverifiable code behavior.
+  - Keep target adaptation requirements explicit.
+output:
+  reusable_pattern:
+  transferable_parts:
+  adaptation_requirements:
+proof:
+  predicate: every transferable part is evidenced and independently adaptable

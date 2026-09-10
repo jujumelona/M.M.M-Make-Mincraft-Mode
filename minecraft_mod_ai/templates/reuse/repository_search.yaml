@@ -1,0 +1,13 @@
+id: reuse/repository_search
+input:
+  query:
+  repositories:
+task:
+  find_candidate_repository_locations:
+rules:
+  - Search only supplied repositories and query terms.
+  - Return locators, not inferred implementation claims.
+output:
+  repository_hits:
+proof:
+  predicate: every hit identifies its repository and concrete locator
