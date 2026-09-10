@@ -90,7 +90,6 @@ jobs:
             plugins/mmm-minecraft-mod-ai/skills
 
   runtime-clean:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Runtime composition
@@ -110,7 +109,6 @@ jobs:
           tests/test_runtime_wrapper_signature_integrity.py
 
   mcp-evidence:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Minecraft MCP evidence
@@ -128,7 +126,6 @@ jobs:
           tests/test_research_coordinator.py
 
   planner-contract:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Planner and fixed-template contract
@@ -155,7 +152,6 @@ jobs:
           tests/test_planning_handoff_contract.py
 
   coder-contract:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Coder task-local contract
@@ -174,7 +170,6 @@ jobs:
           tests/test_small_model_boundary_regressions.py
 
   ui-contract:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Conversational UI contract
@@ -188,10 +183,9 @@ jobs:
       - run: python -m pytest -q tests/test_conversational_ui.py
 
   parallel-repair:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    name: Parallel repair safety
+    name: Parallel execution safety
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -204,9 +198,12 @@ jobs:
           tests/test_agentic_search_efficiency_contract.py
           tests/test_repair_candidate_purity_contract.py
           tests/test_llama_parallel_runtime_contract.py
+          tests/test_artifact_checkpoint_concurrency.py
+          tests/test_source_patch_path_concurrency.py
+          tests/test_artifact_graph_executor.py
+          tests/test_generation_collision_anchors.py
 
   remaining-tests:
-    needs: audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Remaining tests ${{ matrix.shard }}/3
@@ -262,6 +259,10 @@ jobs:
               "test_agentic_search_efficiency_contract.py",
               "test_repair_candidate_purity_contract.py",
               "test_llama_parallel_runtime_contract.py",
+              "test_artifact_checkpoint_concurrency.py",
+              "test_source_patch_path_concurrency.py",
+              "test_artifact_graph_executor.py",
+              "test_generation_collision_anchors.py",
           }
           shard_number = int(os.environ["SHARD"])
           eligible = [
