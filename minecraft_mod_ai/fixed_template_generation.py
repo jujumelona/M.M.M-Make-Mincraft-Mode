@@ -112,8 +112,7 @@ def generate_fixed_template_value(
 
     if not isinstance(response_schema, Mapping):
         raise TypeError("fixed-template generation requires a response_schema mapping")
-    if assert_atomicity:
-        assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
+    assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
     # ``mock`` is a deterministic fixture engine, not a model. Preserve its existing
     # schema-aware fixture transport without providing this escape hatch to real adapters.
@@ -127,12 +126,24 @@ def generate_fixed_template_value(
             tool_stage=tool_stage,
             enable_tools=enable_tools,
         )
+        extra_evidence_refs = None
+        try:
+            val = json.loads(raw)
+            if isinstance(val, Mapping) and "evidence_refs" in val and "evidence_refs" not in response_schema.get("properties", {}):
+                extra_evidence_refs = val["evidence_refs"]
+                val = {k: v for k, v in val.items() if k != "evidence_refs"}
+                raw = json.dumps(val, ensure_ascii=False)
+        except Exception:
+            pass
         validated = validate_structured_output(
             raw,
             response_format=_JSON_FIXTURE_FORMAT,
             response_schema=response_schema,
         )
-        return json.loads(validated)
+        out = json.loads(validated)
+        if extra_evidence_refs is not None and isinstance(out, dict):
+            out["evidence_refs"] = extra_evidence_refs
+        return out
 
     semantic_output = ""
     if _semantic_prelude_required(
@@ -171,13 +182,21 @@ def generate_fixed_template_value(
     else:
         value = arguments
 
+    extra_evidence_refs = None
+    if isinstance(value, Mapping) and "evidence_refs" in value and "evidence_refs" not in response_schema.get("properties", {}):
+        extra_evidence_refs = value["evidence_refs"]
+        value = {k: v for k, v in value.items() if k != "evidence_refs"}
+
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     validated = validate_structured_output(
         encoded,
         response_format=_JSON_FIXTURE_FORMAT,
         response_schema=response_schema,
     )
-    return json.loads(validated)
+    out = json.loads(validated)
+    if extra_evidence_refs is not None and isinstance(out, dict):
+        out["evidence_refs"] = extra_evidence_refs
+    return out
 
 
 def generate_fixed_template_text(

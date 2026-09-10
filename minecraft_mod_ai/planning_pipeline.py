@@ -201,16 +201,10 @@ class PlanningPipeline:
                         "references": planning_state.get("references", []),
                         "evidence": planning_state.get("evidence", []),
                     },
+                    request_catalog=request_catalog,
                 ),
             )
-            design = _host_operation(
-                "generate_sectioned_game_design",
-                lambda: host_design.generate_sectioned_game_design(
-                    self.router,
-                    prompt,
-                    research={"planning_state_sha256": planning_state.get("state_sha256")},
-                ),
-            )
+            design = dict(atomic_design)
             design = _host_operation(
                 "validate_ready_design",
                 lambda: host_design.validate_ready_design(

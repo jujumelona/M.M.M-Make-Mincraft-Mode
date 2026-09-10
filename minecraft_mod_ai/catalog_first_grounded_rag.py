@@ -142,7 +142,7 @@ def _query_bundle(
             if linked:
                 receipts["github"] = {
                     **dict(linked_receipt),
-                    "policy": "exact_catalog_link_first",
+                    "policy": "exact_catalog_link_only",
                 }
             elif github_disabled():
                 receipts["github"] = {
@@ -150,26 +150,11 @@ def _query_bundle(
                     "policy": "catalog_source_discovery_disabled",
                 }
             else:
-                try:
-                    found, fallback_receipt = backend._search_github(
-                        query,
-                        disabled=github_disabled,
-                        disable=disable_github,
-                    )
-                    records.extend(found)
-                    receipts["github"] = {
-                        **dict(fallback_receipt),
-                        "linked_source_status": _text(linked_receipt.get("status")),
-                        "policy": "catalog_candidate_source_discovery_fallback",
-                    }
-                except Exception as exc:
-                    receipt = backend._error("github", exc)
-                    receipts["github"] = {
-                        **dict(receipt),
-                        "linked_source_status": _text(linked_receipt.get("status")),
-                        "policy": "catalog_candidate_source_discovery_fallback",
-                    }
-                    errors.append(receipt)
+                receipts["github"] = {
+                    **dict(linked_receipt),
+                    "status": "skipped_catalog_without_linked_source",
+                    "policy": "no_broad_fallback_when_catalog_has_candidates",
+                }
         elif catalog_allowed:
             try:
                 found, receipt = backend._search_github(

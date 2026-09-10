@@ -52,8 +52,54 @@ ALL_DESIGN_SLOTS: tuple[str, ...] = (
     "design/visual_identity",
     "design/world_interaction",
 )
+# Foundation slots always resolved for every mod
+FOUNDATION_SLOTS: tuple[str, ...] = (
+    "design/theme",
+    "design/player_fantasy",
+    "design/visual_identity",
+    "design/core_action",
+    "design/core_loop",
+    "design/first_goal",
+    "design/texture_requirement",
+)
+
+# Domain-specific child slots triggered dynamically by content domains
+DOMAIN_SLOTS: dict[str, tuple[str, ...]] = {
+    "item": (
+        "design/resource_source",
+        "design/resource_sink",
+        "design/crafting_role",
+        "design/reward",
+    ),
+    "block": (
+        "design/world_interaction",
+    ),
+    "machine": (
+        "design/machine_role",
+    ),
+    "combat": (
+        "design/combat_role",
+        "design/risk",
+    ),
+    "entity": (
+        "design/enemy_role",
+        "design/npc_role",
+    ),
+    "worldgen": (
+        "design/exploration_target",
+    ),
+    "gui": (
+        "design/ui_requirement",
+    ),
+}
+
+PROGRESSION_SLOTS: tuple[str, ...] = (
+    "design/progression_condition",
+    "design/reward",
+)
+
+CORE_DESIGN_SLOTS = FOUNDATION_SLOTS
 DESIGN_SLOTS = ALL_DESIGN_SLOTS
-CORE_DESIGN_SLOTS = ALL_DESIGN_SLOTS
 
 
 def _text(value: Any) -> str:
@@ -194,46 +240,67 @@ def resolve_design_slot(
     return slot_id, _deterministic_prompt_fallback(slot_id, prompt, research_context)
 
 
-def _detect_content_needs(slots: Mapping[str, str], prompt: str) -> dict[str, bool]:
-    """Detect which Minecraft content domains are needed based on resolved design slots."""
-    combined = (
-        f"{prompt} "
-        + " ".join(slots.values())
-    ).lower()
+def _fallback_content_domains(prompt: str) -> list[str]:
+    """Fallback classification when router is unavailable or fails."""
+    p = prompt.lower()
+    domains: list[str] = []
+    if any(w in p for w in ("block", "블록", "광석", "ore", "tile")):
+        domains.append("block")
+    if any(w in p for w in ("entity", "mob", "몬스터", "생물", "creature", "boss", "보스")):
+        domains.append("entity")
+    if any(w in p for w in ("machine", "기계", "장치")):
+        domains.append("machine")
+    if any(w in p for w in ("combat", "전투", "무기", "weapon", "sword", "검")):
+        domains.append("combat")
+    if any(w in p for w in ("worldgen", "dimension", "차원", "biome", "바이옴", "우주", "space")):
+        domains.append("worldgen")
+    if any(w in p for w in ("gui", "ui", "hud", "화면", "메뉴")):
+        domains.append("gui")
+    if any(w in p for w in ("item", "아이템", "도구", "tool", "material", "재료")) or not domains:
+        domains.insert(0, "item")
+    return list(dict.fromkeys(domains))[:3]
 
-    # Domain keywords
-    has_item = any(
-        w in combined
-        for w in ("item", "weapon", "tool", "armor", "sword", "gear", "craft", "resource", "material", "ore", "crystal")
-    )
-    has_block = any(
-        w in combined
-        for w in ("block", "ore", "machine", "station", "altar", "workbench", "structure", "build", "tile", "mine")
-    )
-    has_entity = any(
-        w in combined
-        for w in ("mob", "entity", "npc", "boss", "enemy", "creature", "monster", "companion", "villager")
-    )
-    has_ui = any(
-        w in combined
-        for w in ("hud", "screen", "menu", "gui", "overlay", "bar", "display", "gauge")
-    )
 
-    # If nothing specific was triggered, ensure at least one primary item exists as the interaction vehicle
-    if not (has_item or has_block or has_entity):
-        has_item = True
-
-    return {
-        "item": has_item,
-        "block": has_block,
-        "entity": has_entity,
-        "ui": has_ui,
-    }
+def resolve_content_domains(
+    router: Any,
+    *,
+    prompt: str,
+    research_context: str = "",
+) -> list[str]:
+    """Resolve which Minecraft content domains are required using the model or prompt fallback."""
+    if router is not None:
+        try:
+            template = load_template("design/content_domains")
+            schema = template.get("record_schema") or template.get("output_schema")
+            slot_def = SlotDefinition(
+                slot_id="domains",
+                schema=dict(schema),
+                description=str(template.get("task", "Select content domains")),
+            )
+            slot_def.validate_schema()
+            slot_context = {
+                "prompt": prompt,
+                "task": slot_def.description,
+                "research": research_context,
+            }
+            result = fill_one_slot(router, slot_def, slot_context, role="planner")
+            if isinstance(result, Mapping) and "domains" in result:
+                domains = result["domains"]
+                if isinstance(domains, list) and domains:
+                    valid = [str(d).lower() for d in domains if str(d).lower() in DOMAIN_SLOTS]
+                    if valid:
+                        return valid[:3]
+            elif isinstance(result, list):
+                valid = [str(d).lower() for d in result if str(d).lower() in DOMAIN_SLOTS]
+                if valid:
+                    return valid[:3]
+        except Exception:
+            pass
+    return _fallback_content_domains(prompt)
 
 
 def _extract_identifiers(text: str, default_stem: str) -> list[str]:
     """Extract clean identifier tokens from a design slot text."""
-    # Find words with letters/digits/underscores
     tokens = re.findall(r"\b[a-zA-Z][a-zA-Z0-9_]{2,20}\b", text.lower())
     stopwords = {
         "define", "primary", "minecraft", "custom", "player", "mechanic", "gameplay",
@@ -250,6 +317,7 @@ def compile_atomic_design(
     router: Any = None,
     *,
     research: Mapping[str, Any] | None = None,
+    request_catalog: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile discrete atomic design slots into an authoritative canonical game design specification."""
     prompt_text = _text(prompt)
@@ -259,7 +327,27 @@ def compile_atomic_design(
     research_context = _format_research_context(research)
     resolved_slots: dict[str, str] = {}
 
-    for slot_tmpl in CORE_DESIGN_SLOTS:
+    # 1. Foundation slots
+    active_slots: list[str] = list(FOUNDATION_SLOTS)
+
+    # 2. Dynamic content domains (model-classified or fallback)
+    domains = resolve_content_domains(
+        router,
+        prompt=prompt_text,
+        research_context=research_context,
+    )
+    for domain in domains:
+        for s in DOMAIN_SLOTS.get(domain, ()):
+            if s not in active_slots:
+                active_slots.append(s)
+
+    # 3. Progression condition
+    for s in PROGRESSION_SLOTS:
+        if s not in active_slots:
+            active_slots.append(s)
+
+    # Resolve active slots dynamically
+    for slot_tmpl in active_slots:
         slot_id, value = resolve_design_slot(
             router,
             slot_tmpl,
@@ -267,6 +355,12 @@ def compile_atomic_design(
             research_context=research_context,
         )
         resolved_slots[slot_id] = value
+
+    # Populate all remaining slots with deterministic bounded fallbacks so downstream never sees missing keys
+    for slot_tmpl in ALL_DESIGN_SLOTS:
+        s_id = slot_tmpl.rsplit("/", 1)[-1]
+        if s_id not in resolved_slots:
+            resolved_slots[s_id] = _deterministic_prompt_fallback(s_id, prompt_text, research_context)
 
     stem = _sanitize_stem(prompt_text)
     mod_id = f"{stem}_mod"
@@ -279,15 +373,39 @@ def compile_atomic_design(
     visual_identity_val = resolved_slots.get("visual_identity") or f"Pixel art styling for {stem}"
     texture_req_val = resolved_slots.get("texture_requirement") or f"{stem}_item and {stem}_block textures"
 
-    needs = _detect_content_needs(resolved_slots, prompt_text)
+    # Derive requirements from request_catalog or active requirement ledger
+    from .design_requirement_contract import _active_requirement_ledger
+    ledger = ()
+    if request_catalog and isinstance(request_catalog.get("requirements"), list):
+        ledger = tuple(request_catalog["requirements"])
+    else:
+        ledger = _active_requirement_ledger(prompt_text)
+
+    all_req_ids = [
+        str(r.get("requirement_id")).strip()
+        for r in ledger
+        if str(r.get("requirement_id")).strip()
+    ]
 
     facts: list[ImplementationFact] = []
     modules: list[ProductionModule] = []
     assets: list[AssetRequest] = []
 
+    has_item = "item" in domains
+    has_block = "block" in domains
+    if not (has_item or has_block):
+        has_item = True
+
     # Dynamic Items
-    if needs["item"]:
+    if has_item:
         item_id = f"{stem}_item"
+        req_refs = list(all_req_ids) if all_req_ids else [f"req_{item_id}"]
+        item_obligations = [f"Register item {item_id}", first_goal_val]
+        if ledger:
+            for r in ledger:
+                st = _text(r.get("statement") or r.get("semantic_statement"))
+                if st and st not in item_obligations:
+                    item_obligations.append(st)
         facts.append(
             ImplementationFact(
                 fact_id=f"fact_{item_id}_exists",
@@ -310,12 +428,15 @@ def compile_atomic_design(
         )
         modules.append(
             ProductionModule(
-                module_id=f"module_{item_id}",
+                module_id=item_id,
                 kind="item",
                 config={
                     "item_id": item_id,
+                    "name": f"{item_id.replace('_', ' ').title()}",
+                    "plugin_id": item_id,
+                    "requirement_refs": req_refs,
+                    "implementation_obligations": item_obligations,
                     "reason": first_goal_val,
-                    "implementation_obligations": [f"Register item {item_id}", first_goal_val],
                 },
                 depends_on=(),
                 required_gates=(),
@@ -333,9 +454,16 @@ def compile_atomic_design(
         )
 
     # Dynamic Blocks
-    if needs["block"]:
+    if has_block:
         block_id = f"{stem}_block"
-        drop_target = f"{stem}_item" if needs["item"] else block_id
+        drop_target = f"{stem}_item" if has_item else block_id
+        req_refs = list(all_req_ids) if all_req_ids else [f"req_{block_id}"]
+        block_obligations = [f"Register block {block_id}", core_loop_val]
+        if ledger:
+            for r in ledger:
+                st = _text(r.get("statement") or r.get("semantic_statement"))
+                if st and st not in block_obligations:
+                    block_obligations.append(st)
         facts.append(
             ImplementationFact(
                 fact_id=f"fact_{block_id}_exists",
@@ -358,13 +486,16 @@ def compile_atomic_design(
         )
         modules.append(
             ProductionModule(
-                module_id=f"module_{block_id}",
+                module_id=block_id,
                 kind="block",
                 config={
                     "block_id": block_id,
+                    "name": f"{block_id.replace('_', ' ').title()}",
+                    "plugin_id": block_id,
+                    "requirement_refs": req_refs,
+                    "implementation_obligations": block_obligations,
                     "reason": core_loop_val,
                     "drop": drop_target,
-                    "implementation_obligations": [f"Register block {block_id}", core_loop_val],
                 },
                 depends_on=(),
                 required_gates=(),
@@ -409,6 +540,7 @@ def compile_atomic_design(
         "acceptance_tests": acceptance_tests,
         "_design_slots": resolved_slots,
         "_implementation_facts": facts,
+        "_content_domains": domains,
     }
     return canonical_design
 

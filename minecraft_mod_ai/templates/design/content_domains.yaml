@@ -1,0 +1,25 @@
+id: design/content_domains
+task: Select which Minecraft content domains are required for this mod (up to 3).
+record_schema:
+  type: object
+  properties:
+    domains:
+      type: array
+      items:
+        type: string
+        enum:
+          - item
+          - block
+          - entity
+          - machine
+          - combat
+          - worldgen
+          - gui
+        maxLength: 32
+      maxItems: 3
+  required:
+    - domains
+  additionalProperties: false
+rules:
+  - Select only domains directly required by the requested gameplay.
+  - Return at most 3 domains.

@@ -18,7 +18,7 @@ _HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _HEX_SHA256 = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
 _DONOR_ROOT_FRAGMENT = ".minecraft_ai/reuse/donors/"
 _CONTINUATION_REASON = "previous_tool_enabled_page_exhausted_output"
-_INTERNAL_GROUNDING_SCHEMA = "mmm/host-owned-coder-grounding-v1"
+from .host_grounding import _SCHEMA_VERSION as _INTERNAL_GROUNDING_SCHEMA
 _SOURCE_OBSERVATION_SCHEMA = "mmm/source-observation-receipt-v1"
 
 

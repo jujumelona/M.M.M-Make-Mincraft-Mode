@@ -338,7 +338,7 @@ def test_main_only_policy_is_injected_into_native_tool_decisions(monkeypatch) ->
         tool_name="choose_action",
         parameters={
             "type": "object",
-            "properties": {"choice": {"type": "string"}},
+            "properties": {"choice": {"type": "string", "maxLength": 256}},
             "required": ["choice"],
             "additionalProperties": False,
         },

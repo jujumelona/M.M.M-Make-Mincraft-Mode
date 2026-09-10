@@ -53,6 +53,18 @@ def _required_names(schema: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(value) for value in raw)
 
 
+def _bounded_property(schema: Mapping[str, Any]) -> dict[str, Any]:
+    copy = dict(schema)
+    if copy.get("type") == "string" and "enum" not in copy and "maxLength" not in copy:
+        copy["maxLength"] = 256
+    elif copy.get("type") == "array":
+        if "maxItems" not in copy:
+            copy["maxItems"] = 4
+        if "items" in copy and isinstance(copy["items"], Mapping):
+            copy["items"] = _bounded_property(copy["items"])
+    return copy
+
+
 def _page_schema(
     source: Mapping[str, Any],
     names: Sequence[str],
@@ -62,7 +74,7 @@ def _page_schema(
         return dict(source)
     required = set(_required_names(source))
     page_properties = {
-        name: dict(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+        name: _bounded_property(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
         for name in names
     }
     page: dict[str, Any] = {
@@ -148,7 +160,7 @@ def _source_edit_detail_schema(
     page: dict[str, Any] = {
         "type": "object",
         "properties": {
-            name: dict(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+            name: _bounded_property(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
             for name in names
         },
         "required": list(required),
@@ -250,12 +262,11 @@ def _fingerprint(value: Any) -> str:
             value,
             ensure_ascii=False,
             sort_keys=True,
-            separators=(",", ":"),
             default=str,
-        ).encode("utf-8")
-    except (TypeError, ValueError):
-        encoded = repr(value).encode("utf-8", errors="replace")
-    return hashlib.sha256(encoded).hexdigest()
+        )
+    except Exception:
+        encoded = str(value)
+    return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _page_owned_arguments(
@@ -263,10 +274,9 @@ def _page_owned_arguments(
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Keep this page's fields while preserving truly unknown fields for rejection.
+    """Filter out only those fields that are legitimately owned by a different page.
 
-    A page is only a transport slice of the original function schema. The model still sees
-    the original planning context and can therefore emit a property that is legal in the
+    Small models forced to output JSON will sometimes mirror schema fields declared in the
     complete schema but owned by a later page. Such a field must not make the current page
     fail `additionalProperties: false`; its owning page remains responsible for producing
     and validating it. Fields absent from the complete schema are deliberately retained so
@@ -288,13 +298,17 @@ def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
-    action_name: str,
+    action_name: str = "submit_action",
 ) -> tuple[dict[str, Any] | None, str, str]:
     """Consume only one native forced ToolCall; message content is never parsed as JSON."""
 
     forced = _forced_module()
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
-    matches = tuple(call for call in calls if str(getattr(call, "name", "")) == action_name)
+    matches = tuple(
+        call
+        for call in calls
+        if not action_name or str(getattr(call, "name", "")) == action_name
+    )
     if len(calls) != 1 or len(matches) != 1:
         reason = (
             f"argument page must return exactly one forced {action_name!r} tool call; "
@@ -315,6 +329,7 @@ def _page_result(
     if not isinstance(raw_arguments, Mapping):
         reason = "forced argument page tool call did not expose an arguments object"
         return None, reason, _fingerprint({"arguments": raw_arguments})
+
     normalized = _page_owned_arguments(dict(raw_arguments), page_schema, parameters)
     if not forced._arguments_match_schema(normalized, page_schema):
         diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(
@@ -334,7 +349,7 @@ def _page_attempt(
     request: Any,
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
-    action_name: str,
+    action_name: str = "submit_action",
 ) -> tuple[dict[str, Any] | None, str, str]:
     try:
         turn = current(adapter, request)

@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-_HOST_GROUNDING_SCHEMA = "mmm/host-owned-coder-grounding-v1"
+from .host_grounding import _SCHEMA_VERSION as _HOST_GROUNDING_SCHEMA
 _HOST_BASELINE_CAUSAL_FACTS = frozenset(
     {"project_observed", "code_evidence", "evidence_ready"}
 )

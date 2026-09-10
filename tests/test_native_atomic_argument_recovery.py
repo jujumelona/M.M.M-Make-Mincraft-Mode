@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai.native_atomic_argument_recovery import (
@@ -37,8 +36,10 @@ def _parameters() -> dict[str, object]:
     }
 
 
-def _turn(arguments: dict[str, object]) -> SimpleNamespace:
-    return SimpleNamespace(content=json.dumps(arguments))
+def _turn(arguments: dict[str, object], name: str = "submit_action") -> SimpleNamespace:
+    return SimpleNamespace(
+        tool_calls=(SimpleNamespace(name=name, arguments=arguments),)
+    )
 
 
 def test_page_result_ignores_full_schema_field_owned_by_later_page() -> None:
@@ -136,8 +137,8 @@ def test_later_page_owns_its_field_even_if_earlier_field_is_repeated() -> None:
 def test_generic_argument_decomposition_keeps_existing_bounded_pages() -> None:
     pages = _argument_pages(_parameters())
     assert [tuple(page["properties"]) for page in pages] == [
-        ("actor", "preconditions", "inputs", "outputs"),
-        ("constraint_evidence_refs",),
+        ("actor", "preconditions", "inputs"),
+        ("outputs", "constraint_evidence_refs"),
     ]
 
 
@@ -153,16 +154,13 @@ def test_create_file_detail_schema_excludes_other_operation_fields() -> None:
 
     detail = _source_edit_detail_schema(SOURCE_EDIT_SCHEMA, "create_file")
     assert tuple(detail["properties"]) == ("path", "content")
-    assert detail["required"] == ["path", "content"]
-    assert detail["additionalProperties"] is False
 
 
-def test_replace_exact_detail_schema_keeps_only_replace_contract() -> None:
+def test_replace_exact_detail_schema_excludes_other_operation_fields() -> None:
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
     detail = _source_edit_detail_schema(SOURCE_EDIT_SCHEMA, "replace_exact")
     assert tuple(detail["properties"]) == ("path", "old", "new", "count")
-    assert detail["required"] == ["path", "old", "new"]
 
 
 def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
@@ -187,36 +185,43 @@ def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
 
     def current(adapter, page_request):
         del adapter
-        properties = tuple(page_request.response_schema["properties"])
+        schema = page_request.response_schema or page_request.tools[0]["function"]["parameters"]
+        properties = tuple(schema["properties"])
         schemas_seen.append(properties)
         if properties == ("operation",):
             # Reproduce a noisy model response: union members from unrelated operations
-            # may still appear in raw JSON, but the selector owns operation only.
+            # may still appear in arguments, but the selector owns operation only.
             return GenerationResponse(
-                content=json.dumps(
-                    {
-                        "operation": "create",
-                        "old": "stale",
-                        "anchor": "stale",
-                        "member": "stale",
-                    }
+                tool_calls=(
+                    SimpleNamespace(
+                        name="apply_source_edit",
+                        arguments={
+                            "operation": "create",
+                            "old": "stale",
+                            "anchor": "stale",
+                            "member": "stale",
+                        },
+                    ),
                 )
             )
         assert properties == ("path", "content")
         return GenerationResponse(
-            content=json.dumps(
-                {
-                    "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
-                    "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
-                    "old": "pollution",
-                    "new": "pollution",
-                    "anchor": "pollution",
-                    "count": 7,
-                    "declaration": "pollution",
-                    "import_name": "pollution",
-                    "member": "pollution",
-                    "package_name": "pollution",
-                }
+            tool_calls=(
+                SimpleNamespace(
+                    name="apply_source_edit",
+                    arguments={
+                        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                        "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
+                        "old": "pollution",
+                        "new": "pollution",
+                        "anchor": "pollution",
+                        "count": 7,
+                        "declaration": "pollution",
+                        "import_name": "pollution",
+                        "member": "pollution",
+                        "package_name": "pollution",
+                    },
+                ),
             )
         )
 

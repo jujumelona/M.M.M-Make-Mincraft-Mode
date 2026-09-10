@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from .fixed_template_generation import generate_fixed_template_text
+from .model_response_templates import response_template_prompt
 
-from .model_response_templates import response_schema, response_template_prompt
 
 import hashlib
 import json
@@ -743,10 +742,10 @@ class CustomModuleGenerator:
                 staged_root,
                 checkpoint_identity,
             ):
-                summary = generate_fixed_template_text(self.router,
+                summary = self.router.generate_text(
                     "coder",
                     initial_messages,
-                    response_schema=response_schema("coder_summary"),
+                    response_format="text",
                     tool_stage="generation",
                     enable_tools=True,
                 )

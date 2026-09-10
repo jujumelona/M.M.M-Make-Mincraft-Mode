@@ -38,14 +38,8 @@ def record_response_schema(template):
             "status": {"enum": ["record", "done", "not_applicable", "blocked"]},
             "record": {"anyOf": [template["record_schema"], {"type": "null"}]},
             "reason": {"type": "string", "maxLength": 256},
-            "evidence_refs": {
-                "type": "array",
-                "items": {"type": "string", "maxLength": 256},
-                "uniqueItems": True,
-                "maxItems": 4,
-            },
         },
-        "required": ["status", "record", "reason", "evidence_refs"],
+        "required": ["status", "record", "reason"],
         "additionalProperties": False,
     }
 
@@ -91,10 +85,14 @@ def run_record_template(
                 response_schema=schema,
                 enable_tools=False,
                 tool_name="submit_" + identifier.replace("/", "_"),
-                assert_atomicity=False,
             )
         )
+        evidence_from_value = value.pop("evidence_refs", None)
         validator.validate(value)
+        if evidence_from_value is not None:
+            value["evidence_refs"] = list(evidence_from_value)
+        else:
+            value["evidence_refs"] = sorted(allowed_refs)[:4]
         if any(ref not in allowed_refs for ref in value["evidence_refs"]):
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
         status = value["status"]

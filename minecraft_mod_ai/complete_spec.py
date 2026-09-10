@@ -74,7 +74,7 @@ def _normalize_id(identifier: str) -> str:
 
 
 @dataclass(frozen=True)
-class ProductionModule:
+class ProductionModule(Mapping[str, Any]):
     module_id: str
     kind: str
     config: dict[str, Any] = field(default_factory=dict)
@@ -88,6 +88,56 @@ class ProductionModule:
             "depends_on",
             tuple(_normalize_id(item) for item in self.depends_on if item),
         )
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "plugin_id" or key == "module_id":
+            return self.module_id
+        if key == "kind":
+            return self.kind
+        if key == "config":
+            return self.config
+        if key == "depends_on":
+            return self.depends_on
+        if key == "required_gates":
+            return self.required_gates
+        if key in self.config:
+            return self.config[key]
+        if key == "requirement_refs":
+            return [self.module_id]
+        if key == "implementation_obligations":
+            obligations = self.config.get("implementation_obligations")
+            if obligations:
+                return list(obligations)
+            return [f"Implement {self.module_id}"]
+        if key == "status":
+            return "custom_required"
+        if key == "capability":
+            return self.kind
+        if key == "reason":
+            return self.config.get("reason", "")
+        raise KeyError(key)
+
+    def __iter__(self):
+        seen = [
+            "module_id",
+            "plugin_id",
+            "kind",
+            "config",
+            "depends_on",
+            "required_gates",
+            "requirement_refs",
+            "implementation_obligations",
+            "status",
+            "capability",
+            "reason",
+        ]
+        for k in self.config:
+            if k not in seen:
+                seen.append(k)
+        return iter(seen)
+
+    def __len__(self):
+        return sum(1 for _ in self)
 
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         policy = policy or ScalePolicy.from_environment()

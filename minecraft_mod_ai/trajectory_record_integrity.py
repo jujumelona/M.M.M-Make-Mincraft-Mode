@@ -14,9 +14,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-_TRAJECTORY_SCHEMA = "mmm/verified-trajectory-v3"
-_VERIFICATION_SCHEMA = "mmm/trajectory-verification-v1"
-_PROCEDURE_SCHEMA = "mmm/procedure-trace-v1"
+from .procedure_trace import _SCHEMA as _PROCEDURE_SCHEMA
+from .trajectory_verification import (
+    TRAJECTORY_SCHEMA_VERSION as _TRAJECTORY_SCHEMA,
+    VERIFICATION_SCHEMA_VERSION as _VERIFICATION_SCHEMA,
+)
 _REMOTE_SCHEMA = "v3"
 _CODE_TASKS = {"repair", "generation", "build", "runtime", "quality", "release"}
 _TASK_CLASSES = _CODE_TASKS | {"research", "planning", "general"}

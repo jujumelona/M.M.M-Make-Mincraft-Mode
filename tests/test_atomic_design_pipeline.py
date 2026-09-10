@@ -79,9 +79,13 @@ class _MockSlotRouter:
     def generate_tool_decision(self, _role, _messages, *, tool_name, parameters, description=""):
         self.calls.append(tool_name)
         props = parameters.get("properties", {})
-        for slot_id in props:
-            val = self.mapping.get(slot_id, f"Valid mock {slot_id}")
-            return {slot_id: val}
+        for slot_id, p_schema in props.items():
+            val = self.mapping.get(slot_id)
+            if val is not None:
+                return {slot_id: val}
+            if isinstance(p_schema, dict) and p_schema.get("type") == "array":
+                return {slot_id: ["item"]}
+            return {slot_id: f"Valid mock {slot_id}"}
         return {}
 
 
@@ -111,3 +115,13 @@ def test_compile_atomic_design_with_research_context():
     assert len(design["_design_slots"]) == 32
     assert len(design["modules"]) >= 1
     assert len(design["assets"]) >= 1
+
+
+def test_dynamic_slot_execution_count_is_bounded():
+    router = _MockSlotRouter({
+        "domains": ["item"],
+    })
+    design = compile_atomic_design("simple ruby item mod", router=router)
+    assert 8 <= len(router.calls) < 20
+    assert len(design["_design_slots"]) == 32
+
