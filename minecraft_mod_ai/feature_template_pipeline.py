@@ -158,3 +158,25 @@ def atomic_leaves(feature_tree):
         raise ValueError("FEATURE_TREE: non-atomic node must have children")
     for child in feature_tree["children"]:
         yield from atomic_leaves(child)
+
+
+def discover_features(router, *, context, allowed_refs=(), progress=None, checkpoint=None):
+    """Discover candidate features explicitly supported by the supplied context."""
+    result = run_record_template(
+        router, "feature/discover", context=context,
+        allowed_refs=allowed_refs, progress=progress, checkpoint=checkpoint,
+    )
+    return result["records"]
+
+
+def decompose_features_pipeline(router, features, *, allowed_refs=(), progress=None, checkpoint=None):
+    """Complete and decompose each feature, returning only host-verified atomic leaves."""
+    atomic_results = []
+    for feature in features:
+        tree = complete_feature(
+            router, feature, allowed_refs=allowed_refs,
+            progress=progress, checkpoint=checkpoint,
+        )
+        atomic_results.extend(atomic_leaves(tree))
+    return atomic_results
+
