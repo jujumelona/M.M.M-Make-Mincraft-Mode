@@ -23,17 +23,22 @@ from .ledger_traceability import (
 from .ledger_traceability import REGRESSION_MANIFEST as _LEDGER_REGRESSION_METADATA
 
 
-if set(_LEDGER_REGRESSION_METADATA) != set(REGRESSION_EXECUTION_ROUTES):
-    missing_execution = sorted(
-        set(_LEDGER_REGRESSION_METADATA) - set(REGRESSION_EXECUTION_ROUTES)
-    )
-    orphan_execution = sorted(
-        set(REGRESSION_EXECUTION_ROUTES) - set(_LEDGER_REGRESSION_METADATA)
-    )
+def _validate_regression_registry_parity() -> None:
+    """Reject missing/orphan routes without coupling validity to a magic row count."""
+
+    metadata_ids = set(_LEDGER_REGRESSION_METADATA)
+    execution_ids = set(REGRESSION_EXECUTION_ROUTES)
+    if metadata_ids == execution_ids:
+        return
+    missing_execution = sorted(metadata_ids - execution_ids)
+    orphan_execution = sorted(execution_ids - metadata_ids)
     raise RuntimeError(
         "ledger regression/execution registry drift: "
         f"missing_execution={missing_execution}, orphan_execution={orphan_execution}"
     )
+
+
+_validate_regression_registry_parity()
 
 
 REGRESSION_MANIFEST: dict[str, RegressionRoute] = {
@@ -47,15 +52,17 @@ REGRESSION_MANIFEST: dict[str, RegressionRoute] = {
 
 
 def validate_executable_manifest_snapshot() -> None:
-    """Validate ID parity and executable-state projection without claiming ACC PASS."""
+    """Validate semantic parity and executable projection without fixed ID/count shape."""
 
     validate_manifest_snapshot()
-    if len(REGRESSION_MANIFEST) != 39:
-        raise ValueError("REGRESSION_EXECUTABLE_COUNT")
+    _validate_regression_registry_parity()
+    if not REGRESSION_MANIFEST:
+        raise ValueError("REGRESSION_EXECUTABLE_EMPTY")
     for regression_id, route in REGRESSION_MANIFEST.items():
         if route.execution_status != "executable":
             raise ValueError(f"REGRESSION_NOT_EXECUTABLE:{regression_id}")
-        if route.test_case != REGRESSION_EXECUTION_ROUTES[regression_id].pytest_target:
+        expected = REGRESSION_EXECUTION_ROUTES.get(regression_id)
+        if expected is None or route.test_case != expected.pytest_target:
             raise ValueError(f"REGRESSION_ROUTE_DRIFT:{regression_id}")
 
 
