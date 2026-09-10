@@ -1,0 +1,14 @@
+id: minecraft/animation
+execution: sequence
+steps:
+- minecraft/animation/requirement
+- minecraft/animation/format
+- minecraft/animation/skeleton
+- minecraft/animation/clip
+- minecraft/animation/keyframe
+- minecraft/animation/interpolation
+- minecraft/animation/transition
+- minecraft/animation/trigger
+- minecraft/animation/resource_path
+- minecraft/animation/integration
+- minecraft/animation/validation

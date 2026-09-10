@@ -1,0 +1,16 @@
+id: minecraft/block
+execution: sequence
+steps:
+- minecraft/block/requirement
+- minecraft/block/registry
+- minecraft/block/properties
+- minecraft/block/state
+- minecraft/block/placement
+- minecraft/block/interaction
+- minecraft/block/shape
+- minecraft/block/drops
+- minecraft/block/model
+- minecraft/block/texture
+- minecraft/block/datagen
+- minecraft/block/integration
+- minecraft/block/validation

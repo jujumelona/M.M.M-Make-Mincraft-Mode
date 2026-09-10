@@ -1,0 +1,12 @@
+id: minecraft/event
+execution: sequence
+steps:
+- minecraft/event/requirement
+- minecraft/event/callback
+- minecraft/event/registration
+- minecraft/event/priority
+- minecraft/event/cancellation
+- minecraft/event/side
+- minecraft/event/lifecycle
+- minecraft/event/integration
+- minecraft/event/validation

@@ -1,0 +1,12 @@
+id: minecraft/command
+execution: sequence
+steps:
+- minecraft/command/requirement
+- minecraft/command/registration
+- minecraft/command/argument
+- minecraft/command/permission
+- minecraft/command/execution
+- minecraft/command/suggestion
+- minecraft/command/feedback
+- minecraft/command/integration
+- minecraft/command/validation

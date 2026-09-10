@@ -1,0 +1,20 @@
+id: minecraft/datagen/run
+task: Implement only the run responsibility of the supplied datagen artifact.
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- run
+anchor_kinds:
+- symbol
+- test
+rules:
+- Use the supplied artifact identity and acceptance contract.
+- Use only target-compatible symbols verified in the supplied bindings.
+- If this concern is inapplicable, record its concrete reason and perform no edit.
+- If information is missing, return blocked; never invent a default implementation.
+- Modify only the owned anchor for this responsibility.
+- Complete only after its declared postcondition is checked.

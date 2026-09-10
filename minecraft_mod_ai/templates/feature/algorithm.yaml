@@ -1,0 +1,11 @@
+id: feature/algorithm
+execution: sequence
+steps:
+- feature/algorithm/steps
+- feature/algorithm/branches
+- feature/algorithm/formulae
+- feature/algorithm/iterations
+- feature/algorithm/randomness
+- feature/algorithm/edge_cases
+- feature/algorithm/atomic_mutations
+- feature/algorithm/cost_bounds

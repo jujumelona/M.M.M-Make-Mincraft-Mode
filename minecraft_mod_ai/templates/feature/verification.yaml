@@ -1,0 +1,12 @@
+id: feature/verification
+execution: sequence
+steps:
+- feature/verification/success_cases
+- feature/verification/failure_cases
+- feature/verification/boundary_cases
+- feature/verification/invariant_cases
+- feature/verification/persistence_cases
+- feature/verification/multiplayer_cases
+- feature/verification/resource_cases
+- feature/verification/static_gates
+- feature/verification/coverage

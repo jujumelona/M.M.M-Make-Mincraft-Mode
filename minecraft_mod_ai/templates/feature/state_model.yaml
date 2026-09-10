@@ -1,0 +1,10 @@
+id: feature/state_model
+execution: sequence
+steps:
+- feature/state_model/variables
+- feature/state_model/transitions
+- feature/state_model/invariants
+- feature/state_model/initialization
+- feature/state_model/updates
+- feature/state_model/cleanup
+- feature/state_model/concurrency

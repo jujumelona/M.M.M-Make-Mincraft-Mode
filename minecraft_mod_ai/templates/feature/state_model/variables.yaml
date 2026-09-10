@@ -1,0 +1,44 @@
+id: feature/state_model/variables
+task: Resolve exactly one variables record for the supplied feature and acceptance
+  criterion.
+input_fields:
+- requirement
+- criterion
+- evidence
+- accepted_records
+record_schema:
+  type: object
+  properties:
+    name:
+      type: string
+      minLength: 1
+    owner:
+      type: string
+      minLength: 1
+    type:
+      type: string
+      minLength: 1
+    unit:
+      type: string
+      minLength: 1
+    default:
+      type: string
+      minLength: 1
+    domain:
+      type: string
+      minLength: 1
+  required:
+  - name
+  - owner
+  - type
+  - unit
+  - default
+  - domain
+  additionalProperties: false
+rules:
+- Return only the next record for this concern; do not plan neighboring concerns.
+- Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
+- Return done only after all records for this concern are supplied.
+- Return not_applicable with a concrete reason only when this concern does not apply.
+- Return blocked with the missing information when it cannot be resolved.
+- Do not turn missing information into an inapplicability claim.

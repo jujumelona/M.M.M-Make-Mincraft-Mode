@@ -1,0 +1,15 @@
+id: minecraft/network_payload
+execution: sequence
+steps:
+- minecraft/network_payload/requirement
+- minecraft/network_payload/identifier
+- minecraft/network_payload/direction
+- minecraft/network_payload/field
+- minecraft/network_payload/codec
+- minecraft/network_payload/registration
+- minecraft/network_payload/validation
+- minecraft/network_payload/permission
+- minecraft/network_payload/handler
+- minecraft/network_payload/scheduling
+- minecraft/network_payload/synchronization
+- minecraft/network_payload/integration

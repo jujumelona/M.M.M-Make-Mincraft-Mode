@@ -1,0 +1,14 @@
+id: minecraft/mob
+execution: sequence
+steps:
+- minecraft/mob/requirement
+- minecraft/mob/type
+- minecraft/mob/attributes
+- minecraft/mob/ai
+- minecraft/mob/targeting
+- minecraft/mob/navigation
+- minecraft/mob/breeding
+- minecraft/mob/spawning
+- minecraft/mob/despawn
+- minecraft/mob/integration
+- minecraft/mob/validation

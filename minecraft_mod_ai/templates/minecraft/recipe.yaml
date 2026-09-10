@@ -1,0 +1,13 @@
+id: minecraft/recipe
+execution: sequence
+steps:
+- minecraft/recipe/requirement
+- minecraft/recipe/identifier
+- minecraft/recipe/type
+- minecraft/recipe/ingredient
+- minecraft/recipe/result
+- minecraft/recipe/serializer
+- minecraft/recipe/condition
+- minecraft/recipe/datagen
+- minecraft/recipe/integration
+- minecraft/recipe/validation

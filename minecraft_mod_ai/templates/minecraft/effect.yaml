@@ -1,0 +1,12 @@
+id: minecraft/effect
+execution: sequence
+steps:
+- minecraft/effect/requirement
+- minecraft/effect/registry
+- minecraft/effect/duration
+- minecraft/effect/amplifier
+- minecraft/effect/tick
+- minecraft/effect/removal
+- minecraft/effect/rendering
+- minecraft/effect/integration
+- minecraft/effect/validation

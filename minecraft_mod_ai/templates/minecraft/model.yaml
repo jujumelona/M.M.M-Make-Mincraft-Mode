@@ -1,0 +1,14 @@
+id: minecraft/model
+execution: sequence
+steps:
+- minecraft/model/requirement
+- minecraft/model/format
+- minecraft/model/parent
+- minecraft/model/geometry
+- minecraft/model/uv
+- minecraft/model/transform
+- minecraft/model/material
+- minecraft/model/animation
+- minecraft/model/resource_path
+- minecraft/model/integration
+- minecraft/model/validation

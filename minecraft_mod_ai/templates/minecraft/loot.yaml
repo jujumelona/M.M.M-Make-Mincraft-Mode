@@ -1,0 +1,13 @@
+id: minecraft/loot
+execution: sequence
+steps:
+- minecraft/loot/requirement
+- minecraft/loot/identifier
+- minecraft/loot/pool
+- minecraft/loot/entry
+- minecraft/loot/condition
+- minecraft/loot/function
+- minecraft/loot/reference
+- minecraft/loot/datagen
+- minecraft/loot/integration
+- minecraft/loot/validation

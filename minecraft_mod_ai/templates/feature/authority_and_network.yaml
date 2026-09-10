@@ -1,0 +1,11 @@
+id: feature/authority_and_network
+execution: sequence
+steps:
+- feature/authority_and_network/decisions
+- feature/authority_and_network/client_boundaries
+- feature/authority_and_network/packets
+- feature/authority_and_network/payloads
+- feature/authority_and_network/security_checks
+- feature/authority_and_network/synchronization
+- feature/authority_and_network/reconnection
+- feature/authority_and_network/invalid_packets

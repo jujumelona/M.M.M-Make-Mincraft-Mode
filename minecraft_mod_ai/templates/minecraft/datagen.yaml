@@ -1,0 +1,13 @@
+id: minecraft/datagen
+execution: sequence
+steps:
+- minecraft/datagen/requirement
+- minecraft/datagen/provider
+- minecraft/datagen/registration
+- minecraft/datagen/lookup
+- minecraft/datagen/output
+- minecraft/datagen/dependency
+- minecraft/datagen/collision
+- minecraft/datagen/run
+- minecraft/datagen/integration
+- minecraft/datagen/validation

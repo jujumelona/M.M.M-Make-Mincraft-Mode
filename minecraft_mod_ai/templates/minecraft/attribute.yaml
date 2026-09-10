@@ -1,0 +1,12 @@
+id: minecraft/attribute
+execution: sequence
+steps:
+- minecraft/attribute/requirement
+- minecraft/attribute/registry
+- minecraft/attribute/type
+- minecraft/attribute/default
+- minecraft/attribute/bounds
+- minecraft/attribute/modifier
+- minecraft/attribute/synchronization
+- minecraft/attribute/integration
+- minecraft/attribute/validation

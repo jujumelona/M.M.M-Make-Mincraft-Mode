@@ -1,0 +1,13 @@
+id: minecraft/biome
+execution: sequence
+steps:
+- minecraft/biome/requirement
+- minecraft/biome/registry
+- minecraft/biome/climate
+- minecraft/biome/generation
+- minecraft/biome/spawning
+- minecraft/biome/effects
+- minecraft/biome/tags
+- minecraft/biome/datagen
+- minecraft/biome/integration
+- minecraft/biome/validation

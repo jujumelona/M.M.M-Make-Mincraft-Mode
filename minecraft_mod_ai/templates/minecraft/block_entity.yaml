@@ -1,0 +1,16 @@
+id: minecraft/block_entity
+execution: sequence
+steps:
+- minecraft/block_entity/requirement
+- minecraft/block_entity/registry
+- minecraft/block_entity/type
+- minecraft/block_entity/constructor
+- minecraft/block_entity/state
+- minecraft/block_entity/tick
+- minecraft/block_entity/inventory
+- minecraft/block_entity/persistence
+- minecraft/block_entity/synchronization
+- minecraft/block_entity/removal
+- minecraft/block_entity/renderer
+- minecraft/block_entity/integration
+- minecraft/block_entity/validation

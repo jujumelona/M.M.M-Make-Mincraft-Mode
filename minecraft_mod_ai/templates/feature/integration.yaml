@@ -1,0 +1,11 @@
+id: feature/integration
+execution: sequence
+steps:
+- feature/integration/entry_points
+- feature/integration/responsibilities
+- feature/integration/target_bindings
+- feature/integration/initialization_order
+- feature/integration/module_interfaces
+- feature/integration/side_placement
+- feature/integration/compatibility
+- feature/integration/missing_hooks

@@ -1,0 +1,14 @@
+id: minecraft/dimension
+execution: sequence
+steps:
+- minecraft/dimension/requirement
+- minecraft/dimension/registry
+- minecraft/dimension/type
+- minecraft/dimension/generator
+- minecraft/dimension/biome_source
+- minecraft/dimension/travel
+- minecraft/dimension/spawn
+- minecraft/dimension/lifecycle
+- minecraft/dimension/datagen
+- minecraft/dimension/integration
+- minecraft/dimension/validation
