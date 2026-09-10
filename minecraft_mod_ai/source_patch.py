@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
-from .project_write_lock import project_write_lock
+from .project_write_lock import project_path_write_locks
 from .residual_generation_contract import (
     ResidualContractLoadError,
     ResidualGenerationContract,
@@ -110,8 +110,8 @@ class TransactionalSourcePatcher:
     use atomic ``os.replace`` and all touched files are rolled back if any commit step
     fails. No-op operations remain valid/idempotent but never rewrite or fsync the
     unchanged file. Symlinks, path traversal and broad directory deletion are rejected.
-    Concurrent transactions for the same project root are serialized so rollback from
-    one transaction cannot overwrite another transaction's commit.
+    Concurrent transactions serialize only when their target-path sets overlap; a
+    coarse project read/merge/write section still excludes every scoped transaction.
     """
 
     _OPERATION_FIELDS = {
@@ -141,12 +141,18 @@ class TransactionalSourcePatcher:
             raise SourcePatchError(f"Residual write policy is invalid: {exc}") from exc
 
     def apply(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        # Keep the lock around validation/staging as well as commit. expected_sha256
-        # must be checked against the same project state that is ultimately mutated.
-        # The lock is re-entrant because higher-level generators may already hold it
-        # while performing an atomic read/merge/write sequence.
-        with project_write_lock(self.project_root):
-            return self._apply_locked(operations)
+        # Normalize first so the exact collision set is host-known before acquiring
+        # filesystem mutation locks. Multi-path locks are acquired in canonical order
+        # by project_path_write_locks, preserving hash preconditions and rollback while
+        # allowing disjoint transactions to run concurrently.
+        normalized = [self._normalize(item) for item in operations]
+        if not normalized:
+            raise SourcePatchError("At least one patch operation is required.")
+        paths = [item["path"] for item in normalized]
+        if len(paths) != len(set(paths)):
+            raise SourcePatchError("A patch transaction may touch each path only once.")
+        with project_path_write_locks(self.project_root, paths):
+            return self._apply_locked(normalized)
 
     def _apply_locked(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
         normalized = [self._normalize(item) for item in operations]
@@ -159,7 +165,7 @@ class TransactionalSourcePatcher:
         staged: dict[Path, bytes | None] = {}
         originals: dict[Path, bytes | None] = {}
         receipts: list[PatchReceipt] = []
-        # The project lock freezes every in-process transaction for this root. Parent
+        # The path-set lock freezes every overlapping in-process transaction. Parent
         # safety therefore only needs to be checked once per unique directory during
         # this transaction instead of once per file. Large generated catalogs commonly
         # contain thousands of sibling files under the same three or four directories.
