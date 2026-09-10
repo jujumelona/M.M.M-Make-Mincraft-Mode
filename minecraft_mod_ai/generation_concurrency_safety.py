@@ -78,6 +78,32 @@ def _install_project_index_snapshot_lock(project_index_module: Any) -> None:
         wrap(method_name)
 
 
+def _replace_stage_locks_with_anchor_fencing() -> None:
+    """Remove coarse stage mutexes after the WorkGraph has exact collision fences.
+
+    WorkGraph construction records each module's exclusive ``owned_anchors`` and
+    adds a dependency edge only when two nodes own the same anchor.  The old
+    scheduler additionally serialized every content/system/entity node, turning
+    unrelated files into one global critical section.  Once exact anchor fencing is
+    available, keeping those stage locks only destroys safe parallelism.
+
+    Unknown/unannotated mutation is still protected by the generator's own mutation
+    authority/write-scope contracts. Shared ProjectIndex commits remain serialized by
+    the snapshot lock above. CustomModuleGenerator remains protected per instance.
+    """
+    from . import scheduler_parallel_safety_contract as scheduler_safety
+    from . import work_graph
+
+    anchor_resolver = getattr(work_graph, "_exclusive_anchor_keys", None)
+    if not callable(anchor_resolver):
+        # Fail closed on older/incomplete runtimes: retain the coarse locks rather
+        # than allowing potentially colliding writes to run concurrently.
+        return
+
+    scheduler_safety._STAGE_WRITE_LOCKS.clear()
+    scheduler_safety._SERIAL_CPU_STAGES = ()
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -89,6 +115,7 @@ def install() -> None:
 
         _install_custom_generator_lock(custom_module_generator)
         _install_project_index_snapshot_lock(project_index)
+        _replace_stage_locks_with_anchor_fencing()
         _INSTALLED = True
 
 
