@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .java import validate_java_fragment
 from .registry import validate_registry_identifier
