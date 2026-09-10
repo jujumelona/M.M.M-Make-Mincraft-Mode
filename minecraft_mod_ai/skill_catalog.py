@@ -9,8 +9,16 @@ from typing import Any
 
 import yaml
 
-CANONICAL_SKILLS = ('intake-mod-brief', 'research-minecraft-evidence', 'plan-game-design', 'freeze-approved-spec', 'inspect-existing-project', 'generate-fabric-core', 'generate-datagen', 'generate-worldgen', 'generate-geckolib-entity', 'generate-quest-progression', 'generate-gui-networking', 'generate-textures', 'model-with-blockbench', 'compile-and-repair', 'runtime-playtest', 'visual-review', 'release-security', 'execute-complete-production', 'patch-existing-project', 'publish-release', 'compile-massive-work-graph', 'gather-adaptive-minecraft-evidence', 'ground-production-with-live-evidence', 'resume-production-run', 'route-generic-game-research', 'select-compatible-ai-technique', 'converge-game-quality')
-POLICY_NATIVE_SKILLS = frozenset({'compile-massive-work-graph', 'gather-adaptive-minecraft-evidence', 'resume-production-run', 'route-generic-game-research', 'select-compatible-ai-technique', 'execute-complete-production', 'converge-game-quality'})
+CANONICAL_SKILLS = (
+    'compile-massive-work-graph',
+    'converge-game-quality',
+    'execute-complete-production',
+    'gather-adaptive-minecraft-evidence',
+    'resume-production-run',
+    'route-generic-game-research',
+    'select-compatible-ai-technique',
+)
+POLICY_NATIVE_SKILLS = frozenset(CANONICAL_SKILLS)
 REQUIRED_SECTIONS = ('activate_when:', 'inputs:', 'required_rag:', 'allowed_tools:', 'validators:', 'retry_policy:', 'approval_required:', 'forbidden_actions:', 'exit_conditions:')
 REVIEWED_STAGES = frozenset({'frontdoor', 'planning', 'research', 'generation', 'quality', 'runtime', 'release', 'training'})
 REVIEWED_TOOL_STAGES: dict[str, frozenset[str]] = {'discover_mmm_capabilities': REVIEWED_STAGES, 'plan_game': frozenset({'planning'}), 'plan_complete_game': frozenset({'frontdoor', 'planning'}), 'revise_plan': frozenset({'planning'}), 'revise_complete_plan': frozenset({'frontdoor', 'planning'}), 'approve_plan': frozenset({'planning', 'generation'}), 'approve_complete_plan': frozenset({'planning', 'generation'}), 'read_complete_plan_section': frozenset({'planning', 'generation'}), 'read_quality_contract': frozenset({'planning', 'generation', 'quality'}), 'quality_status': frozenset({'frontdoor', 'planning', 'generation', 'quality', 'release'}), 'discover_ecosystem_resources': frozenset({'frontdoor', 'planning', 'research', 'generation'}), 'inspect_modrinth_project': frozenset({'planning', 'research', 'generation'}), 'inspect_github_repository': frozenset({'planning', 'research', 'generation'}), 'inspect_huggingface_model': frozenset({'planning', 'research', 'generation'}), 'build_technology_radar': frozenset({'frontdoor', 'planning', 'research'}), 'assess_technology_compatibility': frozenset({'planning', 'research', 'generation'}), 'search_project_rag': frozenset({'frontdoor', 'planning', 'research', 'generation', 'quality'}), 'search_code_rag': frozenset({'research', 'generation', 'quality'}), 'read_reuse_source': frozenset({'generation'}), 'index_project_rag': frozenset({'research'}), 'inspect_existing_mod': frozenset({'frontdoor', 'planning', 'research', 'generation', 'quality'}), 'work_status': frozenset({'frontdoor', 'planning', 'generation', 'quality'}), 'work_tasks': frozenset({'frontdoor', 'planning', 'generation', 'quality'}), 'work_cancel_run': frozenset({'frontdoor', 'planning', 'generation'}), 'work_resume_run': frozenset({'frontdoor', 'planning', 'generation'}), 'execute_complete_project': frozenset({'generation'}), 'generate_fabric_project': frozenset({'generation'}), 'generate_assets': frozenset({'generation'}), 'generate_geckolib_entity': frozenset({'generation'}), 'generate_system_plugin': frozenset({'generation'}), 'apply_source_patch': frozenset({'generation'}), 'repair_project': frozenset({'quality'}), 'java_diagnostics': frozenset({'generation', 'quality'}), 'java_workspace_symbols': frozenset({'generation', 'quality'}), 'blockbench_list_tools': frozenset({'quality'}), 'blockbench_execute': frozenset({'quality'}), 'run_static_validation': frozenset({'quality'}), 'run_gradle_build': frozenset({'quality'}), 'run_gametest': frozenset({'quality'}), 'inspect_jar': frozenset({'quality', 'release'}), 'runtime_prepare_instance': frozenset({'runtime'}), 'runtime_start_server': frozenset({'runtime'}), 'runtime_start_client': frozenset({'runtime'}), 'runtime_send_command': frozenset({'runtime'}), 'runtime_logs': frozenset({'runtime'}), 'runtime_register_screenshot': frozenset({'runtime'}), 'runtime_status': frozenset({'runtime'}), 'runtime_stop': frozenset({'runtime'}), 'mineflayer_connect': frozenset({'runtime'}), 'mineflayer_status': frozenset({'runtime'}), 'mineflayer_walk_to': frozenset({'runtime'}), 'mineflayer_interact_block': frozenset({'runtime'}), 'mineflayer_inventory': frozenset({'runtime'}), 'mineflayer_disconnect': frozenset({'runtime'}), 'package_release': frozenset({'release'}), 'run_model_smoke': frozenset({'training'})}
@@ -42,7 +50,6 @@ _LEGACY_VALIDATOR_ALIASES = {
     'transactional rollback on any failed operation': 'transaction_atomic',
     'upload endpoint is HTTPS and reviewed': 'reviewed_https',
     'ZIP bomb, path traversal, symlink and credential rejection': 'archive_safety',
-    # Compatibility for packaged skill data produced before validator IDs became canonical.
     'fabric.mod.json id, version, environment, entrypoint and dependency fields match the approved PlatformLock and proposal': 'version_lock',
     'source-set and client/server entrypoint placement prevents dedicated-server loading of client-only classes': 'source_validation',
     'every registry identifier is valid, unique and referenced by the intended registration path': 'source_validation',
@@ -178,142 +185,99 @@ def compile_skill_contract(skill: str, root: str | Path | None=None) -> SkillCon
         candidates = REVIEWED_TOOL_STAGES[tool] & stage_set
         if not candidates:
             raise SkillPolicyError(f'{skill} allows {tool}, but none of its reviewed stages are enabled.')
-        tool_routes[tool] = next(stage for stage in _STAGE_PRIORITY if stage in candidates)
-    validator_values = _string_tuple(policy.get('validators'), 'validators', skill)
-    validator_ids: list[str] = []
-    unreviewed_validators: list[str] = []
-    for value in validator_values:
-        validator_id = value if value in REVIEWED_VALIDATORS else _LEGACY_VALIDATOR_ALIASES.get(value)
-        if validator_id is None:
-            unreviewed_validators.append(value)
-            continue
-        if validator_id not in validator_ids:
-            validator_ids.append(validator_id)
-    if unreviewed_validators:
-        raise SkillPolicyError(
-            f"{skill} contains unreviewed validators: {', '.join(unreviewed_validators)}"
-        )
-    retry_raw = _mapping(policy.get('retry_policy'), 'retry_policy', skill)
-    max_attempts = retry_raw.get('max_attempts')
-    if max_attempts is not None:
-        if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):
-            raise SkillPolicyError(f'{skill} retry max_attempts must be null or an integer.')
-        if not 1 <= max_attempts <= 10:
-            raise SkillPolicyError(f'{skill} retry max_attempts must be between 1 and 10 when set.')
-    strategy = retry_raw.get('strategy')
-    if not isinstance(strategy, str) or not strategy.strip():
-        raise SkillPolicyError(f'{skill} retry strategy must be non-empty.')
-    retry = RetryContract(max_attempts=max_attempts, strategy=strategy.strip(), stop_on_repeated_error_signature=_bool_field(retry_raw, 'stop_on_repeated_error_signature', skill), require_fresh_evidence=bool(retry_raw.get('require_fresh_evidence', 'new ' in strategy.casefold() or 'diagnostic' in strategy.casefold())))
-    approvals_raw = _mapping(policy.get('approval_required'), 'approval_required', skill)
-    approvals = {key: _bool_field(approvals_raw, key, skill) for key in ('writes', 'runtime', 'read_only_research')}
-    exit_raw = _mapping(policy.get('exit_conditions'), 'exit_conditions', skill)
-    exit_contract = ExitContract(success=_string_tuple(exit_raw.get('success'), 'exit.success', skill), blocked=_string_tuple(exit_raw.get('blocked'), 'exit.blocked', skill), failed=_string_tuple(exit_raw.get('failed'), 'exit.failed', skill))
-    return SkillContract(name=skill, description=str(frontmatter['description']).strip(), activate_when=_string_tuple(policy.get('activate_when'), 'activate_when', skill), stages=tuple(stage for stage in _STAGE_PRIORITY if stage in stage_set), required_rag=required_rag, allowed_tools=tools, tool_routes=tool_routes, validators=tuple(validator_ids), retry=retry, approvals=approvals, forbidden_actions=_string_tuple(policy.get('forbidden_actions'), 'forbidden_actions', skill), exit=exit_contract)
+    for tool in tools:
+        candidates = REVIEWED_TOOL_STAGES[tool] & stage_set
+        selected = next((stage for stage in _STAGE_PRIORITY if stage in candidates), None)
+        if selected is None:
+            raise SkillPolicyError(f'{skill} has no deterministic route for {tool}.')
+        tool_routes[tool] = selected
+    validators = tuple(_LEGACY_VALIDATOR_ALIASES.get(item, item) for item in _string_tuple(policy.get('validators'), 'validators', skill))
+    unknown_validators = sorted(set(validators) - REVIEWED_VALIDATORS)
+    if unknown_validators:
+        raise SkillPolicyError(f"{skill} contains unreviewed validators: {', '.join(unknown_validators)}")
+    retry = _retry_contract(policy.get('retry_policy'), skill)
+    approvals = _approval_contract(policy.get('approval_required'), skill)
+    exit_contract = _exit_contract(policy.get('exit_conditions'), skill)
+    return SkillContract(name=frontmatter['name'], description=frontmatter['description'], activate_when=_string_tuple(policy.get('activate_when'), 'activate_when', skill), stages=tuple(stage for stage in _STAGE_PRIORITY if stage in stage_set), required_rag=required_rag, allowed_tools=tools, tool_routes=tool_routes, validators=validators, retry=retry, approvals=approvals, forbidden_actions=_string_tuple(policy.get('forbidden_actions'), 'forbidden_actions', skill), exit=exit_contract)
 
 
 def compile_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:
-    contracts: dict[str, SkillContract] = {}
-    failures: list[str] = []
-    for skill in CANONICAL_SKILLS:
-        try:
-            contracts[skill] = compile_skill_contract(skill, root)
-        except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:
-            failures.append(f'{skill}: {exc}')
-    if failures:
-        raise SkillPolicyError(
-            'Canonical skill catalog contains invalid contracts:\n- ' + '\n- '.join(failures)
-        )
-    return contracts
-
-
-def validate_skill_catalog(root: str | Path | None=None) -> dict[str, Any]:
     texts = _skill_texts(root)
-    findings: list[str] = []
-    contracts: dict[str, dict[str, Any]] = {}
-    for skill in CANONICAL_SKILLS:
-        text = texts.get(skill)
-        if text is None:
-            findings.append(f'missing:{skill}')
-            continue
-        if '[TODO' in text or 'TODO:' in text:
-            findings.append(f'todo:{skill}')
-        for section in REQUIRED_SECTIONS:
-            if section not in text:
-                findings.append(f'missing-section:{skill}:{section}')
-        try:
-            frontmatter, _ = _parse_skill(text, skill)
-            if skill in POLICY_NATIVE_SKILLS and set(frontmatter) != {'name', 'description'}:
-                findings.append(f'frontmatter-fields:{skill}')
-            contracts[skill] = compile_skill_contract(skill, root).to_dict()
-        except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:
-            findings.append(f'invalid-contract:{skill}:{exc}')
-    return {'schema_version': 'mmm/skill-catalog-validation-v2', 'skills': list(CANONICAL_SKILLS), 'contracts': contracts, 'findings': findings, 'passed': not findings}
+    missing = [name for name in CANONICAL_SKILLS if name not in texts]
+    if missing:
+        raise SkillPolicyError(f'Missing canonical Skills: {missing}')
+    return {name: compile_skill_contract(name, root=root) for name in CANONICAL_SKILLS}
 
 
-def _parse_skill(text: str, expected_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    match = _FRONTMATTER_RE.match(text)
-    if match is None:
-        raise SkillPolicyError(f'{expected_name} has invalid frontmatter boundaries.')
-    frontmatter = yaml.safe_load(match.group('frontmatter'))
-    if not isinstance(frontmatter, dict):
-        raise SkillPolicyError(f'{expected_name} frontmatter must be a mapping.')
-    if frontmatter.get('name') != expected_name:
-        raise SkillPolicyError(f'{expected_name} frontmatter name does not match.')
-    description = frontmatter.get('description')
-    if not isinstance(description, str) or not description.strip():
-        raise SkillPolicyError(f'{expected_name} description must be non-empty.')
-    body = match.group('body')
-    policy: dict[str, Any] | None = None
-    for fenced in _YAML_FENCE_RE.finditer(body):
-        candidate = yaml.safe_load(fenced.group('yaml'))
-        if isinstance(candidate, dict) and candidate.get('schema_version') == 'mmm/skill-policy-v1':
-            policy = candidate
-            break
-    if policy is None:
-        candidate = yaml.safe_load(body)
-        if isinstance(candidate, dict):
-            policy = candidate
-    if policy is None:
-        raise SkillPolicyError(f'{expected_name} has no compilable runtime policy.')
-    return (frontmatter, policy)
-
-
-def _string_tuple(value: Any, field: str, skill: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value:
-        raise SkillPolicyError(f'{skill} {field} must be a non-empty list.')
-    result: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise SkillPolicyError(f'{skill} {field} contains an invalid item.')
-        result.append(item.strip())
-    return tuple(result)
-
-
-def _mapping(value: Any, field: str, skill: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise SkillPolicyError(f'{skill} {field} must be a mapping.')
-    return value
-
-
-def _bool_field(value: Mapping[str, Any], field: str, skill: str) -> bool:
-    result = value.get(field)
-    if not isinstance(result, bool):
-        raise SkillPolicyError(f'{skill} {field} must be boolean.')
-    return result
+def load_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:
+    return compile_skill_catalog(root)
 
 
 def _skill_texts(root: str | Path | None) -> dict[str, str]:
-    """Load packaged Skills, then overlay Skill files from a source checkout."""
-    texts: dict[str, str] = {}
-    packaged = Path(__file__).resolve().parent / 'packaged_skills.json'
-    if root is None and packaged.is_file():
-        raw = json.loads(packaged.read_text(encoding='utf-8'))
-        skills = raw.get('skills', {})
-        texts.update({str(name): str(text) for name, text in skills.items() if isinstance(name, str) and isinstance(text, str)})
-    base = Path(root).expanduser().resolve() if root is not None else Path(__file__).resolve().parents[1] / 'skills'
-    if base.is_dir():
-        for skill in CANONICAL_SKILLS:
-            path = base / skill / 'SKILL.md'
-            if path.is_file():
-                texts[skill] = path.read_text(encoding='utf-8')
-    return texts
+    if root is None:
+        from .packaged_skill_runtime import packaged_skill_texts
+        return packaged_skill_texts()
+    base = Path(root).expanduser().resolve()
+    return {name: (base / name / 'SKILL.md').read_text(encoding='utf-8') for name in CANONICAL_SKILLS if (base / name / 'SKILL.md').is_file()}
+
+
+def _parse_skill(text: str, skill: str) -> tuple[dict[str, str], dict[str, Any]]:
+    matched = _FRONTMATTER_RE.match(text)
+    if not matched:
+        raise SkillPolicyError(f'{skill} must start with YAML frontmatter.')
+    frontmatter_raw = yaml.safe_load(matched.group('frontmatter'))
+    if not isinstance(frontmatter_raw, dict):
+        raise SkillPolicyError(f'{skill} frontmatter must be an object.')
+    if set(frontmatter_raw) != {'name', 'description'}:
+        raise SkillPolicyError(f'{skill} frontmatter must contain exactly name and description.')
+    name = frontmatter_raw['name']
+    description = frontmatter_raw['description']
+    if name != skill or not isinstance(description, str) or not description.strip():
+        raise SkillPolicyError(f'{skill} frontmatter is invalid.')
+    fences = list(_YAML_FENCE_RE.finditer(matched.group('body')))
+    if len(fences) != 1:
+        raise SkillPolicyError(f'{skill} must contain exactly one YAML policy block.')
+    policy = yaml.safe_load(fences[0].group('yaml'))
+    if not isinstance(policy, dict):
+        raise SkillPolicyError(f'{skill} policy block must be an object.')
+    missing_sections = [section for section in REQUIRED_SECTIONS if section[:-1] not in policy]
+    if missing_sections:
+        raise SkillPolicyError(f'{skill} is missing required policy sections: {missing_sections}')
+    return {'name': name, 'description': description}, policy
+
+
+def _string_tuple(value: Any, field: str, skill: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+        raise SkillPolicyError(f'{skill} {field} must be a non-empty string list.')
+    return tuple(value)
+
+
+def _retry_contract(value: Any, skill: str) -> RetryContract:
+    if not isinstance(value, dict):
+        raise SkillPolicyError(f'{skill} retry_policy must be an object.')
+    attempts = value.get('max_attempts')
+    if attempts is not None and (type(attempts) is not int or attempts < 1):
+        raise SkillPolicyError(f'{skill} retry_policy.max_attempts must be null or a positive integer.')
+    strategy = value.get('strategy')
+    if not isinstance(strategy, str) or not strategy.strip():
+        raise SkillPolicyError(f'{skill} retry_policy.strategy must be a string.')
+    stop = value.get('stop_on_repeated_error_signature')
+    fresh = value.get('require_fresh_evidence')
+    if type(stop) is not bool or type(fresh) is not bool:
+        raise SkillPolicyError(f'{skill} retry policy booleans are invalid.')
+    return RetryContract(attempts, strategy, stop, fresh)
+
+
+def _approval_contract(value: Any, skill: str) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        raise SkillPolicyError(f'{skill} approval_required must be an object.')
+    expected = {'writes', 'runtime', 'release'}
+    if set(value) != expected or any(type(value[key]) is not bool for key in expected):
+        raise SkillPolicyError(f'{skill} approval_required must contain boolean writes/runtime/release.')
+    return {key: bool(value[key]) for key in sorted(expected)}
+
+
+def _exit_contract(value: Any, skill: str) -> ExitContract:
+    if not isinstance(value, dict) or set(value) != {'success', 'blocked', 'failed'}:
+        raise SkillPolicyError(f'{skill} exit_conditions must contain success/blocked/failed.')
+    return ExitContract(success=_string_tuple(value['success'], 'exit_conditions.success', skill), blocked=_string_tuple(value['blocked'], 'exit_conditions.blocked', skill), failed=_string_tuple(value['failed'], 'exit_conditions.failed', skill))
