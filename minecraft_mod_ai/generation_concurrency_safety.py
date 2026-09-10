@@ -21,6 +21,10 @@ _PATH_LIST_KEYS = frozenset({
     "paths", "target_paths", "source_paths", "output_paths", "files",
     "touched_paths", "written_files",
 })
+_EXTENDED_CONTENT_KINDS = frozenset({
+    'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine',
+    'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot',
+})
 _SYSTEM_PACK_BY_KIND = {
     "quest": "quest-system",
     "class": "class-skill-system",
@@ -137,8 +141,10 @@ def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
     packs can prepare in parallel and meet only at the short shared-file commit lock.
     """
     kind = str(getattr(module, "kind", ""))
-    if stage == "content" and kind != "integration":
-        return ("mmm://builtin/content/shared-registration",)
+    if stage == "content" and kind in _EXTENDED_CONTENT_KINDS:
+        module_id = str(getattr(module, "module_id", "")).strip()
+        if module_id:
+            return (f"mmm://builtin/content/module/{module_id}",)
     if stage == "system":
         pack = _SYSTEM_PACK_BY_KIND.get(kind)
         if pack:
@@ -154,6 +160,8 @@ def _configure_pipeline_granularity() -> None:
     absent default here removes the built-in two-entity serial loop without overriding
     an operator's intentional batching choice.
     """
+    os.environ.setdefault("MMM_CONTENT_PIPELINE_SHARD_SIZE", "1")
+    os.environ.setdefault("MMM_SYSTEM_PIPELINE_SHARD_SIZE", "1")
     os.environ.setdefault("MMM_ENTITY_PIPELINE_SHARD_SIZE", "1")
 
 

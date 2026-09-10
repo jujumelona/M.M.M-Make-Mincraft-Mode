@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Iterator
-from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -48,19 +47,6 @@ _CATALOG_NODE_SCHEMA = "mmm/extended-module-catalog-node-v1"
 _CATALOG_SHARD_SCHEMA = "mmm/extended-module-shard-v1"
 
 
-def _serialized_extended_content(func):
-    @wraps(func)
-    def wrapped(*args, **kwargs):
-        project_root = kwargs.get("project_root")
-        if project_root is None:
-            return func(*args, **kwargs)
-        with project_write_lock(project_root):
-            return func(*args, **kwargs)
-
-    return wrapped
-
-
-@_serialized_extended_content
 def generate_extended_content(
     *,
     project_root: str | Path,
@@ -80,31 +66,32 @@ def generate_extended_content(
     for module in selected:
         module.validate(policy=policy)
 
-    existing = {
-        str(item["module_id"]): item
-        for item in iter_extended_module_records(info.root)
-    }
-    for module in selected:
-        existing[module.module_id] = {
-            "module_id": module.module_id,
-            "kind": module.kind,
-            "config": module.config,
-            "depends_on": list(module.depends_on),
-            "required_gates": list(module.required_gates),
+    with project_write_lock(info.root):
+        existing = {
+            str(item["module_id"]): item
+            for item in iter_extended_module_records(info.root)
         }
-    ordered = [existing[key] for key in sorted(existing)]
-    catalog_path = info.root / ".minecraft_ai/extended-modules.json"
-    already_directory = False
-    if catalog_path.is_file() and not catalog_path.is_symlink():
-        try:
-            already_directory = (
-                json.loads(catalog_path.read_text(encoding="utf-8")).get(
-                    "schema_version"
+        for module in selected:
+            existing[module.module_id] = {
+                "module_id": module.module_id,
+                "kind": module.kind,
+                "config": module.config,
+                "depends_on": list(module.depends_on),
+                "required_gates": list(module.required_gates),
+            }
+        ordered = [existing[key] for key in sorted(existing)]
+        catalog_path = info.root / ".minecraft_ai/extended-modules.json"
+        already_directory = False
+        if catalog_path.is_file() and not catalog_path.is_symlink():
+            try:
+                already_directory = (
+                    json.loads(catalog_path.read_text(encoding="utf-8")).get(
+                        "schema_version"
+                    )
+                    == _DIRECTORY_CATALOG_SCHEMA
                 )
-                == _DIRECTORY_CATALOG_SCHEMA
-            )
-        except (json.JSONDecodeError, OSError, AttributeError):
-            already_directory = False
+            except (json.JSONDecodeError, OSError, AttributeError):
+                already_directory = False
     selected_records = [existing[module.module_id] for module in selected]
     generation_records = (
         selected_records if already_directory else ordered
@@ -182,15 +169,42 @@ def generate_extended_content(
         mod_id,
     )
 
-    _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/en_us.json", lang_en)
-    _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/ko_kr.json", lang_ko)
-    receipt = write_text_files(info, files, replace_existing=True)
-    binding = ensure_main_initializer_call(
-        info,
-        import_line=f"import {package_name}.extended.GeneratedExtendedContent",
-        call_line="GeneratedExtendedContent.register()",
-        marker="extended:content",
-    )
+    with project_write_lock(info.root):
+        # Refresh the shared catalog after concurrent preparation so module_count
+        # and directory records converge to the exact committed project state.
+        committed = {
+            str(item["module_id"]): item
+            for item in iter_extended_module_records(info.root)
+        }
+        for module in selected:
+            committed[module.module_id] = {
+                "module_id": module.module_id,
+                "kind": module.kind,
+                "config": module.config,
+                "depends_on": list(module.depends_on),
+                "required_gates": list(module.required_gates),
+            }
+        directory = ".minecraft_ai/extended-module-records"
+        files[".minecraft_ai/extended-modules.json"] = _json_text(
+            {
+                "schema_version": _DIRECTORY_CATALOG_SCHEMA,
+                "module_count": len(committed),
+                "directory": directory,
+            }
+        )
+        for module in selected:
+            files[f"{directory}/{module.module_id}.json"] = _json_text(
+                committed[module.module_id]
+            )
+        _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/en_us.json", lang_en)
+        _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/ko_kr.json", lang_ko)
+        receipt = write_text_files(info, files, replace_existing=True)
+        binding = ensure_main_initializer_call(
+            info,
+            import_line=f"import {package_name}.extended.GeneratedExtendedContent",
+            call_line="GeneratedExtendedContent.register()",
+            marker="extended:content",
+        )
     written_paths = [str(info.root / path) for path in files] + generated_binary
     return {
         "schema_version": "mmm/extended-content-v2",

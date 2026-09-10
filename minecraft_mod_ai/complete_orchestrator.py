@@ -6,6 +6,7 @@ import os
 import shutil
 import traceback
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -297,25 +298,38 @@ class CompleteProductionOrchestrator:
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
-        source_report = run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))
-        if source_report.get('status') != 'PASS':
-            raise CompleteProductionError('Generated complete project failed deterministic validation.')
-        self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})
-        self._persist_work_evidence(project_root, ledger, work_plan)
-        if options.run_jdt and (not options.source_only):
+        validation_manifest = self._project_manifest_hash(project_root)
 
+        def validate_source() -> dict[str, Any]:
+            return run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))
+
+        def validate_jdt() -> dict[str, Any]:
             def run_jdt() -> dict[str, Any]:
                 return run_jdt_diagnostics(
                     JavaLanguageService,
                     project_root,
                     timeout_seconds=90,
                 )
-            jdt_receipt = run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
+            return run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
+
+        jdt_receipt = None
+        if options.run_jdt and (not options.source_only):
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='mmm-validate') as pool:
+                source_future = pool.submit(validate_source)
+                jdt_future = pool.submit(validate_jdt)
+                source_report = source_future.result()
+                jdt_receipt = jdt_future.result()
+        else:
+            source_report = validate_source()
+
+        if source_report.get('status') != 'PASS':
+            raise CompleteProductionError('Generated complete project failed deterministic validation.')
+        self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})
+        self._persist_work_evidence(project_root, ledger, work_plan)
+        if jdt_receipt is not None:
             module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})
             print('[JDT RECEIPT] ' + json.dumps(jdt_receipt, ensure_ascii=False, sort_keys=True, default=str), flush=True)
-            # JDT is an auxiliary source diagnostic.  Its publication gap must
-            # remain visible and non-PASS, but must not abort the node before
-            # the authoritative clean Gradle verifier can run.
+            # JDT is auxiliary; actual diagnostics may fail closed when repair is disabled.
             errors = jdt_diagnostic_errors(jdt_receipt)
             if errors and (not options.auto_repair):
                 raise CompleteProductionError('JDT reported errors and automatic repair is disabled.')
