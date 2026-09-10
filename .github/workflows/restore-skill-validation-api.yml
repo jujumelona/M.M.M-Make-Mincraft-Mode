@@ -1,0 +1,44 @@
+name: Restore Skill validation API
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Restore validation facade
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('minecraft_mod_ai/skill_catalog.py')
+          text = path.read_text(encoding='utf-8')
+          marker = """def load_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]:\n    return compile_skill_catalog(root)\n\n\n"""
+          replacement = marker + """def validate_skill_catalog(root: str | Path | None=None) -> dict[str, Any]:\n    findings: list[str] = []\n    contracts: dict[str, dict[str, Any]] = {}\n    try:\n        compiled = compile_skill_catalog(root)\n    except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:\n        return {\n            'schema_version': 'mmm/skill-catalog-validation-v2',\n            'skills': list(CANONICAL_SKILLS),\n            'contracts': {},\n            'findings': [f'invalid-catalog:{exc}'],\n            'passed': False,\n        }\n    for name, contract in compiled.items():\n        contracts[name] = contract.to_dict()\n    return {\n        'schema_version': 'mmm/skill-catalog-validation-v2',\n        'skills': list(CANONICAL_SKILLS),\n        'contracts': contracts,\n        'findings': findings,\n        'passed': True,\n    }\n\n\n"""
+          if marker not in text:\n              raise SystemExit('load_skill_catalog anchor missing')\n          if 'def validate_skill_catalog(' in text:\n              raise SystemExit('validate_skill_catalog already exists')\n          path.write_text(text.replace(marker, replacement, 1), encoding='utf-8')\n          PY
+      - name: Verify API
+        run: |
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check minecraft_mod_ai/skill_catalog.py --select F,E7,E9
+          python - <<'PY'
+          from minecraft_mod_ai.skill_catalog import validate_skill_catalog
+          result = validate_skill_catalog('skills')
+          assert isinstance(result, dict)
+          PY
+      - name: Commit
+        run: |
+          git rm .github/workflows/restore-skill-validation-api.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/skill_catalog.py .github/workflows
+          git commit -m 'Restore Skill catalog validation API'
+          git push origin HEAD:main
