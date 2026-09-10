@@ -2,7 +2,9 @@ from __future__ import annotations
 
 """Deterministic dependency executor for already-expanded ArtifactJobs."""
 
+import os
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .artifact_job import ArtifactJob
@@ -29,6 +31,37 @@ def _producer_index(jobs: list[ArtifactJob]) -> dict[str, str]:
     return producers
 
 
+def _parallelism(job_count: int) -> int:
+    """Bound fan-out so a large graph cannot overwhelm local model/I/O resources."""
+    configured = os.getenv("MMM_ARTIFACT_MAX_WORKERS", "").strip()
+    if configured:
+        try:
+            limit = max(1, int(configured))
+        except ValueError as exc:
+            raise ArtifactGraphError("MMM_ARTIFACT_MAX_WORKERS must be a positive integer") from exc
+    else:
+        limit = min(8, max(2, os.cpu_count() or 2))
+    return min(job_count, limit)
+
+
+def _execute_one(
+    job: ArtifactJob,
+    *,
+    context: dict[str, Any] | None,
+    router: Any,
+    registry: PortRegistry,
+    base_dir: Any,
+) -> dict[str, Any]:
+    return execute_checkpointed_job(
+        job,
+        context=context,
+        router=router,
+        registry=registry,
+        base_dir=base_dir,
+        execute=execute_artifact_template,
+    )
+
+
 def execute_artifact_graph(
     jobs: Iterable[ArtifactJob],
     *,
@@ -37,7 +70,7 @@ def execute_artifact_graph(
     port_registry: PortRegistry | None = None,
     base_dir: Any = None,
 ) -> dict[str, Any]:
-    """Run jobs only when every declared scoped dependency is available."""
+    """Run each dependency-ready wave concurrently, preserving deterministic receipts."""
     pending = list(jobs)
     if len({job.job_id for job in pending}) != len(pending):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
@@ -69,15 +102,46 @@ def execute_artifact_graph(
             }
             raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
-        for job in runnable:
-            receipt = execute_checkpointed_job(
+        # Jobs in one wave have all dependencies satisfied before the wave starts.
+        # Execute them concurrently, then commit receipts in original graph order so
+        # scheduling jitter never changes externally visible output ordering.
+        wave_results: dict[str, dict[str, Any]] = {}
+        if len(runnable) == 1:
+            job = runnable[0]
+            wave_results[job.job_id] = _execute_one(
                 job,
                 context=context,
                 router=router,
                 registry=registry,
                 base_dir=base_dir,
-                execute=execute_artifact_template,
             )
+        else:
+            with ThreadPoolExecutor(
+                max_workers=_parallelism(len(runnable)),
+                thread_name_prefix="mmm-artifact",
+            ) as pool:
+                futures = {
+                    pool.submit(
+                        _execute_one,
+                        job,
+                        context=context,
+                        router=router,
+                        registry=registry,
+                        base_dir=base_dir,
+                    ): job
+                    for job in runnable
+                }
+                try:
+                    for future in as_completed(futures):
+                        job = futures[future]
+                        wave_results[job.job_id] = future.result()
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+
+        for job in runnable:
+            receipt = wave_results[job.job_id]
             if receipt.get("status") != "PASS":
                 raise ArtifactGraphError(
                     f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
