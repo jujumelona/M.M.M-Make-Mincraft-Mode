@@ -1,22 +1,19 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-"""Single-slot atomic AI filler with bounded retry.
+"""Single-slot AI filler with fail-closed evidence and bounded context."""
 
-Resolves exactly ONE scalar, enum, or short identifier at a time without
-asking the model to author complex records or document sections.
-"""
-
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import (
-    MAX_MODEL_FIELDS,
-    MAX_MODEL_STRING_CHARS,
-    MAX_SCHEMA_DEPTH,
-)
+from .model_output_atomicity_contract import assert_strict_atomicity_bounds
+
+
+MAX_SLOT_CONTEXT_CHARS = 4096
 
 
 class SlotFillError(RuntimeError):
@@ -31,16 +28,42 @@ class SlotDefinition:
     default: Any = None
 
     def validate_schema(self) -> None:
-        schema = self.schema
-        if not isinstance(schema, Mapping):
-            raise SlotFillError(f"SLOT_SCHEMA: Slot {self.slot_id} schema must be a mapping")
-        # Ensure slot schema is narrow and atomic
-        props = schema.get("properties", {})
-        if len(props) > MAX_MODEL_FIELDS:
+        if not isinstance(self.schema, Mapping):
             raise SlotFillError(
-                f"SLOT_ATOMICITY_VIOLATION: Slot {self.slot_id} has {len(props)} fields, "
-                f"exceeding maximum of {MAX_MODEL_FIELDS}"
+                f"SLOT_SCHEMA: Slot {self.slot_id} schema must be a mapping"
             )
+        if self.default is not None:
+            raise SlotFillError(
+                f"SLOT_DEFAULT_FORBIDDEN: Slot {self.slot_id} cannot invent a fallback value"
+            )
+        try:
+            Draft202012Validator.check_schema(self.schema)
+            assert_strict_atomicity_bounds(
+                self.schema, surface=f"atomic slot {self.slot_id!r}"
+            )
+        except Exception as exc:
+            raise SlotFillError(
+                f"SLOT_ATOMICITY_VIOLATION: Slot {self.slot_id} is not a bounded atomic schema: {exc}"
+            ) from exc
+
+
+def _bounded_context(context: Mapping[str, Any]) -> str:
+    try:
+        encoded = json.dumps(
+            dict(context),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except Exception as exc:
+        raise SlotFillError(f"SLOT_CONTEXT_INVALID: context is not serializable: {exc}") from exc
+    if len(encoded) > MAX_SLOT_CONTEXT_CHARS:
+        raise SlotFillError(
+            f"SLOT_CONTEXT_TOO_LARGE: {len(encoded)} characters exceeds "
+            f"{MAX_SLOT_CONTEXT_CHARS}; pass only the evidence slice needed for this slot"
+        )
+    return encoded
 
 
 def fill_one_slot(
@@ -51,7 +74,7 @@ def fill_one_slot(
     max_retries: int = 2,
     role: str = "planner",
 ) -> Any:
-    """Resolve a single slot value using a strictly bounded model call."""
+    """Resolve exactly one bounded value; missing evidence never becomes a default."""
     if isinstance(slot, SlotDefinition):
         slot_def = slot
     else:
@@ -63,44 +86,47 @@ def fill_one_slot(
         )
 
     slot_def.validate_schema()
+    if router is None:
+        raise SlotFillError(
+            f"SLOT_NO_ROUTER: No router supplied to resolve {slot_def.slot_id}; "
+            "leave the slot unresolved instead of inventing a value"
+        )
+
     schema = slot_def.schema
     validator = Draft202012Validator(schema)
-
+    context_text = _bounded_context(context)
     messages = [
         {
             "role": "system",
             "content": (
-                f"Provide exactly one value for property '{slot_def.slot_id}'.\n"
-                f"Description: {slot_def.description or slot_def.slot_id}\n"
-                "Return only the exact requested field."
+                f"Resolve exactly one bounded value for '{slot_def.slot_id}'.\n"
+                f"Meaning: {slot_def.description or slot_def.slot_id}.\n"
+                "Use only the supplied evidence context. Do not guess a missing value."
             ),
         },
         {
             "role": "user",
-            "content": f"Context:\n{context}\nResolve slot '{slot_def.slot_id}'.",
+            "content": f"Evidence context:\n{context_text}",
         },
     ]
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
-        if router is None:
-            # Deterministic fallback if default provided or test mode without model
-            if slot_def.default is not None:
-                return slot_def.default
-            raise SlotFillError(f"SLOT_NO_ROUTER: No router provided to fill slot {slot_def.slot_id}")
-
         try:
             value = generate_fixed_template_value(
                 router,
                 role,
                 messages,
                 response_schema=schema,
-                tool_name=f"resolve_{slot_def.slot_id}".replace(".", "_").replace("-", "_")[:64],
-                description=f"Resolve single slot {slot_def.slot_id}",
+                tool_name=(
+                    f"resolve_{slot_def.slot_id}"
+                    .replace(".", "_")
+                    .replace("-", "_")[:64]
+                ),
+                description=f"Resolve one atomic slot: {slot_def.slot_id}",
                 enable_tools=False,
             )
             validator.validate(value)
-            # If wrapped in object with slot_id or 'value', extract
             if isinstance(value, Mapping):
                 if slot_def.slot_id in value:
                     return value[slot_def.slot_id]
@@ -113,12 +139,15 @@ def fill_one_slot(
                 messages.append(
                     {
                         "role": "user",
-                        "content": f"Previous response for '{slot_def.slot_id}' was invalid: {exc}. Retry with valid value.",
+                        "content": (
+                            f"The prior value violated the declared slot schema: "
+                            f"{type(exc).__name__}. Return only a valid value supported "
+                            "by the same evidence."
+                        ),
                     }
                 )
 
-    if slot_def.default is not None:
-        return slot_def.default
     raise SlotFillError(
-        f"SLOT_RETRY_EXHAUSTED: Failed to fill slot {slot_def.slot_id} after {max_retries + 1} attempts: {last_error}"
+        f"SLOT_RETRY_EXHAUSTED: Failed to resolve {slot_def.slot_id} after "
+        f"{max_retries + 1} attempts: {last_error}"
     )

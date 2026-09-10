@@ -1,11 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-"""Typed ports for artifact connection and composition.
-
-Artifacts communicate across Minecraft domain boundaries using statically typed
-ports (RegistryId<Item>, TextureRef<Block>, JavaSymbol<Item>, etc.) preventing
-invalid inter-artifact connections.
-"""
+"""Typed artifact ports used to connect leaf jobs without semantic guessing."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -17,13 +12,13 @@ class PortKind(str, Enum):
     JAVA_SYMBOL = "JAVA_SYMBOL"
     TEXTURE_REF = "TEXTURE_REF"
     MODEL_REF = "MODEL_REF"
+    CLIENT_ITEM_REF = "CLIENT_ITEM_REF"
     SCREEN_HANDLER_TYPE = "SCREEN_HANDLER_TYPE"
     PAYLOAD_TYPE = "PAYLOAD_TYPE"
     TRANSLATION_KEY = "TRANSLATION_KEY"
 
 
 class PortConnectionError(ValueError):
-    """Raised when an incompatible port is connected or required port is missing."""
     pass
 
 
@@ -31,7 +26,7 @@ class PortConnectionError(ValueError):
 class TypedPort:
     name: str
     port_kind: PortKind
-    target_type: str  # e.g. "Item", "Block", "EntityType", "C2S", etc.
+    target_type: str
     value: str
 
     def to_dict(self) -> dict[str, str]:
@@ -43,7 +38,7 @@ class TypedPort:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TypedPort:
+    def from_dict(cls, data: dict[str, Any]) -> "TypedPort":
         return cls(
             name=str(data["name"]),
             port_kind=PortKind(data["port_kind"]),
@@ -53,7 +48,10 @@ class TypedPort:
 
     def matches(self, expected_kind: PortKind | str, expected_target_type: str) -> bool:
         kind = PortKind(expected_kind) if isinstance(expected_kind, str) else expected_kind
-        return self.port_kind == kind and self.target_type.casefold() == expected_target_type.casefold()
+        return (
+            self.port_kind == kind
+            and self.target_type.casefold() == expected_target_type.casefold()
+        )
 
 
 def validate_port_compatibility(
@@ -69,27 +67,27 @@ def validate_port_compatibility(
         )
     if port.target_type.casefold() != expected_target_type.casefold():
         raise PortConnectionError(
-            f"PORT_TARGET_TYPE_MISMATCH: Port {port.name} targets type {port.target_type}, "
+            f"PORT_TARGET_TYPE_MISMATCH: Port {port.name} targets {port.target_type}, "
             f"but consumer expected {expected_target_type}"
         )
 
 
 class PortRegistry:
-    """Session container for all published and resolved typed ports."""
+    """Session-local immutable-by-name port table."""
 
     def __init__(self) -> None:
         self._ports: dict[str, TypedPort] = {}
 
     def publish(self, port: TypedPort) -> None:
-        key = port.name
-        if key in self._ports:
-            existing = self._ports[key]
-            if existing != port:
-                raise PortConnectionError(
-                    f"PORT_DUPLICATE: Port {key} is already published with {existing.to_dict()}, "
-                    f"conflicting with {port.to_dict()}"
-                )
-        self._ports[key] = port
+        if not port.name or not port.value:
+            raise PortConnectionError("PORT_EMPTY: published ports need non-empty name and value")
+        existing = self._ports.get(port.name)
+        if existing is not None and existing != port:
+            raise PortConnectionError(
+                f"PORT_DUPLICATE: Port {port.name} already has {existing.to_dict()}, "
+                f"conflicting with {port.to_dict()}"
+            )
+        self._ports[port.name] = port
 
     def resolve(
         self,
@@ -97,9 +95,11 @@ class PortRegistry:
         expected_kind: PortKind | str,
         expected_target_type: str,
     ) -> TypedPort:
-        if name not in self._ports:
-            raise PortConnectionError(f"PORT_MISSING: Required port {name!r} has not been published")
-        port = self._ports[name]
+        port = self._ports.get(name)
+        if port is None:
+            raise PortConnectionError(
+                f"PORT_MISSING: Required port {name!r} has not been published"
+            )
         validate_port_compatibility(port, expected_kind, expected_target_type)
         return port
 
