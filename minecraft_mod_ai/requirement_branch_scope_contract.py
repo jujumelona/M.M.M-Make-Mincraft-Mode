@@ -7,8 +7,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import evidence_first_planning as _planning
-from .structural_artifact_mapping import detect_structural_artifacts
 from .structural_minecraft_runtime_contract import install as install_structural_runtime
+from .translation_runtime import translate_requirement
 
 _INSTALLED = False
 
@@ -45,7 +45,7 @@ def _component_supports_requirement(
 
 
 def _structural_features(requirement: Mapping[str, Any]) -> frozenset[str]:
-    plan = detect_structural_artifacts(requirement)
+    plan = translate_requirement(requirement)
     if plan.unresolved_inputs:
         raise ValueError(
             "STRUCTURAL_ARTIFACT_UNRESOLVED: " + ", ".join(plan.unresolved_inputs)
