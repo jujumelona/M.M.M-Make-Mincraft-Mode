@@ -187,6 +187,16 @@ class PlanningPipeline:
             request_catalog,
             planning_state=planning_state,
         ):
+            from .atomic_design_pipeline import compile_atomic_design
+
+            atomic_design = _host_operation(
+                "compile_atomic_design_slots",
+                lambda: compile_atomic_design(
+                    prompt,
+                    self.router,
+                    research={"planning_state_sha256": planning_state.get("state_sha256")},
+                ),
+            )
             design = _host_operation(
                 "generate_sectioned_game_design",
                 lambda: host_design.generate_sectioned_game_design(
@@ -210,6 +220,8 @@ class PlanningPipeline:
                 **design,
                 "_evidence_request_catalog": request_catalog,
                 "_planning_state": dict(planning_state),
+                "_design_slots": atomic_design.get("_design_slots", {}),
+                "_atomic_facts": atomic_design.get("_implementation_facts", []),
             }
             try:
                 pre_retrieval_plan = _host_operation(
@@ -231,11 +243,11 @@ class PlanningPipeline:
                 **design,
                 "_research_brief": research_brief,
                 "_planning_authority": {
-                    "owner": "prompt_first_grounded_state_machine",
+                    "owner": "atomic_design_slot_pipeline",
                     "planning_state_sha256": planning_state.get("state_sha256", ""),
                     "request_catalog_sha256": request_catalog.get("catalog_sha256", ""),
                     "raw_prompt_compiler": False,
-                    "model_generated_json": True,
+                    "model_generated_json": False,
                 },
             }
 

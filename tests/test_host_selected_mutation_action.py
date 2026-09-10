@@ -29,9 +29,9 @@ def _schema(name: str) -> dict[str, object]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "operation": {"type": "string"},
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
+                    "operation": {"type": "string", "maxLength": 256},
+                    "path": {"type": "string", "maxLength": 256},
+                    "content": {"type": "string", "maxLength": 256},
                 },
                 "required": ["operation", "path", "content"],
             },
@@ -48,7 +48,7 @@ def _query_schema(name: str) -> dict[str, object]:
             "parameters": {
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {"query": {"type": "string"}},
+                "properties": {"query": {"type": "string", "maxLength": 256}},
                 "required": ["query"],
             },
         },

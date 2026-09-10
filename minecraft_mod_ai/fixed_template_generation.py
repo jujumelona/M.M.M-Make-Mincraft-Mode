@@ -106,12 +106,14 @@ def generate_fixed_template_value(
     enable_tools: bool = True,
     tool_name: str = _DEFAULT_TOOL_NAME,
     description: str = "",
+    assert_atomicity: bool = True,
 ) -> Any:
     """Return host-validated structured data without model-authored JSON syntax."""
 
     if not isinstance(response_schema, Mapping):
         raise TypeError("fixed-template generation requires a response_schema mapping")
-    assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
+    if assert_atomicity:
+        assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
     # ``mock`` is a deterministic fixture engine, not a model. Preserve its existing
     # schema-aware fixture transport without providing this escape hatch to real adapters.

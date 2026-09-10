@@ -1,0 +1,16 @@
+id: design/reward
+slot_id: reward
+task: "Define the tangible reward or unlocked capability upon meeting the progression condition in one sentence."
+rules:
+  - "Concrete reward (e.g. powerful gear, unique tool, special buff, new recipe)."
+  - "Must cite concrete Minecraft interaction mechanics."
+  - "Must stay strictly under 256 characters."
+record_schema:
+  type: object
+  properties:
+    reward:
+      type: string
+      maxLength: 256
+  required:
+    - reward
+  additionalProperties: false

@@ -37,11 +37,12 @@ def record_response_schema(template):
         "properties": {
             "status": {"enum": ["record", "done", "not_applicable", "blocked"]},
             "record": {"anyOf": [template["record_schema"], {"type": "null"}]},
-            "reason": {"type": "string"},
+            "reason": {"type": "string", "maxLength": 256},
             "evidence_refs": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {"type": "string", "maxLength": 256},
                 "uniqueItems": True,
+                "maxItems": 4,
             },
         },
         "required": ["status", "record", "reason", "evidence_refs"],
@@ -90,6 +91,7 @@ def run_record_template(
                 response_schema=schema,
                 enable_tools=False,
                 tool_name="submit_" + identifier.replace("/", "_"),
+                assert_atomicity=False,
             )
         )
         validator.validate(value)

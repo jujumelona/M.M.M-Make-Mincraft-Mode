@@ -1,0 +1,16 @@
+id: design/progression_condition
+slot_id: progression_condition
+task: "Define the condition required to progress to the next gameplay tier in one sentence."
+rules:
+  - "Observable trigger (e.g. collect N items, defeat an entity, discover a structure)."
+  - "Must cite concrete Minecraft interaction mechanics."
+  - "Must stay strictly under 256 characters."
+record_schema:
+  type: object
+  properties:
+    progression_condition:
+      type: string
+      maxLength: 256
+  required:
+    - progression_condition
+  additionalProperties: false

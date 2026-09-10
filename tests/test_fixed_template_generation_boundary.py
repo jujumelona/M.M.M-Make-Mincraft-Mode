@@ -8,7 +8,7 @@ from minecraft_mod_ai import model_output_atomicity_contract as contract
 
 SCHEMA = {
     "type": "object",
-    "properties": {"answer": {"type": "string"}},
+    "properties": {"answer": {"type": "string", "maxLength": 256}},
     "required": ["answer"],
     "additionalProperties": False,
 }
@@ -138,7 +138,11 @@ def test_non_object_root_is_wrapped_only_for_function_transport():
     )
     contract.install(model_router_module=module)
     router = Router()
-    schema = {"type": "array", "items": {"type": "string"}}
+    schema = {
+        "type": "array",
+        "items": {"type": "string", "maxLength": 256},
+        "maxItems": 4,
+    }
 
     output = router.generate_text(
         "planner",
