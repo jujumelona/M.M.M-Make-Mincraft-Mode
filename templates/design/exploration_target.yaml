@@ -2,8 +2,7 @@ id: design/exploration_target
 slot_id: exploration_target
 task: "Define key biomes, structures, or dimensions to explore."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent locations or mechanics."
 record_schema:
   type: object
   properties:
