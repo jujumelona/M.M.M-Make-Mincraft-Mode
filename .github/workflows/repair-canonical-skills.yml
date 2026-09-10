@@ -1,3 +1,4 @@
+# one-shot repair; self-deletes after successful validation
 name: Repair canonical skills
 
 on:
