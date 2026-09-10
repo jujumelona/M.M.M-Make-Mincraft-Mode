@@ -34,6 +34,7 @@ def execute_artifact_graph(
     context: dict[str, Any] | None = None,
     router: Any = None,
     port_registry: PortRegistry | None = None,
+    base_dir: Any = None,
 ) -> dict[str, Any]:
     """Run jobs only when every declared scoped dependency is available."""
     pending = list(jobs)
@@ -73,6 +74,7 @@ def execute_artifact_graph(
                 context=context,
                 router=router,
                 port_registry=registry,
+                base_dir=base_dir,
             )
             if receipt.get("status") != "PASS":
                 raise ArtifactGraphError(

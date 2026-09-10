@@ -146,10 +146,15 @@ class CompleteGameDesignPlanner:
             acceptance_tests=acceptance_tests,
             evidence_plan=evidence_plan,
         )
+        facts_data, jobs_data = _lower_implementation_facts_and_jobs(
+            modules, artifacts.base_proposal.spec
+        )
         internal_design = {
             **internal_design,
             "production_outline": [_batch_dict(batch) for batch in batches],
             "_production_contract": compiled.contract,
+            "_implementation_facts": facts_data,
+            "_artifact_jobs": jobs_data,
         }
         proposal = complete_proposal_from_parts(
             requested_prompt=prompt,
@@ -367,4 +372,69 @@ def _batch_dict(batch: _ProductionBatch) -> dict[str, Any]:
     return value
 
 
+def _lower_implementation_facts_and_jobs(
+    modules: Sequence[ProductionModule],
+    spec: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    from .artifact_expansion import expand_facts_to_jobs
+    from .implementation_fact import FactProvenance, ImplementationFact
+    from .prompt_fact_types import FactType
+
+    implementation_facts: list[ImplementationFact] = []
+    for module in modules:
+        if module.kind == "item":
+            config = module.config if isinstance(module.config, dict) else {}
+            display_name = str(
+                config.get("name")
+                or config.get("display_name")
+                or config.get("display_name_en")
+                or module.module_id.replace("_", " ").title()
+            )
+            implementation_facts.append(
+                ImplementationFact(
+                    fact_id=f"{module.module_id}.item_exists",
+                    fact_type=FactType.ITEM_EXISTS,
+                    subject=module.module_id,
+                    display_name=display_name,
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=module.module_id,
+                )
+            )
+            stack_limit = (
+                config.get("stack_limit")
+                or config.get("max_stack")
+                or config.get("max_count")
+            )
+            if stack_limit is not None:
+                try:
+                    stack_val = int(stack_limit)
+                    if 1 <= stack_val <= 64:
+                        implementation_facts.append(
+                            ImplementationFact(
+                                fact_id=f"{module.module_id}.stack_limit",
+                                fact_type=FactType.ITEM_STACK_LIMIT,
+                                subject=module.module_id,
+                                value=stack_val,
+                                display_name=display_name,
+                                provenance=FactProvenance.DESIGN,
+                                parent_requirement=module.module_id,
+                            )
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+    artifact_jobs: list[dict[str, Any]] = []
+    if implementation_facts:
+        jobs = expand_facts_to_jobs(
+            implementation_facts,
+            mod_id=spec.mod_id,
+            package_name=spec.package_name,
+            main_class=getattr(spec, "main_class", "") or "",
+        )
+        artifact_jobs = [job.to_dict() for job in jobs]
+
+    return [fact.to_dict() for fact in implementation_facts], artifact_jobs
+
+
 __all__ = ["CompleteGameDesignPlanner"]
+

@@ -338,7 +338,7 @@ def install(
             # Inner repair/build loops stay incremental. The build quality
             # dimension above is stricter and requires the clean-room proof.
             actual = "build" if name == "clean_build" else name
-            return original_command(build_report, actual)
+            return original_command(build_report, actual) or original_command(build_report, name)
 
         command_receipt_passed._mmm_incremental_gate_alias = True
         cls._command_receipt_passed = staticmethod(command_receipt_passed)

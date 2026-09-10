@@ -32,6 +32,10 @@ class MaterializeReceipt:
     status: str
     details: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def path(self) -> str:
+        return self.target_path
+
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -230,3 +234,113 @@ def materialize_job_output(
         else str(rendered_content)
     )
     return materialize_whole_file(target_file, content_str, base_dir=base_dir)
+
+
+def ensure_artifact_scaffolding(
+    project_root: Path | str,
+    *,
+    mod_id: str,
+    package_name: str,
+    main_class: str = "",
+) -> None:
+    """Ensure prerequisite skeleton Java/resource files and anchors exist for leaf template execution."""
+    root = Path(project_root).resolve()
+    pkg_path = package_name.replace(".", "/")
+    main_class_name = (
+        main_class or "".join(part.capitalize() for part in mod_id.split("_")) + "Mod"
+    )
+
+    # 1. ModItemIds.java
+    ids_path = root / "src" / "main" / "java" / pkg_path / "registry" / "ModItemIds.java"
+    if not ids_path.is_file():
+        mod_item_ids_skeleton = (
+            f"package {package_name}.registry;\n\n"
+            "import net.minecraft.core.registries.Registries;\n"
+            "import net.minecraft.resources.ResourceKey;\n"
+            "import net.minecraft.resources.Identifier;\n"
+            "import net.minecraft.world.item.Item;\n\n"
+            "public final class ModItemIds {\n"
+            "    private ModItemIds() {}\n\n"
+            "    /* MMM:item_keys */\n"
+            "}\n"
+        )
+        materialize_whole_file(ids_path, mod_item_ids_skeleton)
+    else:
+        content = ids_path.read_text(encoding="utf-8")
+        if "/* MMM:item_keys */" not in content:
+            last_brace = content.rfind("}")
+            if last_brace != -1:
+                content = content[:last_brace] + "    /* MMM:item_keys */\n" + content[last_brace:]
+                ids_path.write_text(content, encoding="utf-8")
+
+    # 2. ModItems.java
+    items_path = root / "src" / "main" / "java" / pkg_path / "registry" / "ModItems.java"
+    if not items_path.is_file():
+        mod_items_skeleton = (
+            f"package {package_name}.registry;\n\n"
+            "import net.minecraft.core.Registry;\n"
+            "import net.minecraft.core.registries.BuiltInRegistries;\n"
+            "import net.minecraft.world.item.Item;\n\n"
+            "public final class ModItems {\n"
+            "    private ModItems() {}\n\n"
+            "    /* MMM:item_registry */\n\n"
+            "    public static void initialize() {}\n"
+            "}\n"
+        )
+        materialize_whole_file(items_path, mod_items_skeleton)
+    else:
+        content = items_path.read_text(encoding="utf-8")
+        if "/* MMM:item_registry */" not in content:
+            last_brace = content.rfind("}")
+            if last_brace != -1:
+                content = content[:last_brace] + "    /* MMM:item_registry */\n" + content[last_brace:]
+                items_path.write_text(content, encoding="utf-8")
+
+    # 3. Main class initializer
+    main_path = root / "src" / "main" / "java" / pkg_path / f"{main_class_name}.java"
+    if not main_path.is_file():
+        main_skeleton = (
+            f"package {package_name};\n\n"
+            "import net.fabricmc.api.ModInitializer;\n"
+            f"import {package_name}.registry.ModItems;\n\n"
+            f"public final class {main_class_name} implements ModInitializer {{\n"
+            f'    public static final String MOD_ID = "{mod_id}";\n\n'
+            "    @Override\n"
+            "    public void onInitialize() {\n"
+            "        /* MMM:init */\n"
+            "    }\n"
+            "}\n"
+        )
+        materialize_whole_file(main_path, main_skeleton)
+    else:
+        main_text = main_path.read_text(encoding="utf-8")
+        dirty = False
+        if f"{package_name}.registry.ModItems;" not in main_text:
+            pkg_decl = f"package {package_name};"
+            if pkg_decl in main_text:
+                main_text = main_text.replace(
+                    pkg_decl,
+                    f"{pkg_decl}\n\nimport {package_name}.registry.ModItems;",
+                    1,
+                )
+                dirty = True
+        if "/* MMM:init */" not in main_text:
+            init_idx = main_text.find("onInitialize()")
+            if init_idx != -1:
+                brace_idx = main_text.find("{", init_idx)
+                if brace_idx != -1:
+                    main_text = (
+                        main_text[: brace_idx + 1]
+                        + "\n        /* MMM:init */"
+                        + main_text[brace_idx + 1 :]
+                    )
+                    dirty = True
+        if dirty:
+            main_path.write_text(main_text, encoding="utf-8")
+
+    # 4. en_us.json
+    lang_path = root / "src" / "main" / "resources" / "assets" / mod_id / "lang" / "en_us.json"
+    if not lang_path.is_file():
+        lang_path.parent.mkdir(parents=True, exist_ok=True)
+        lang_path.write_text("{}\n", encoding="utf-8")
+

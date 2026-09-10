@@ -11,6 +11,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .artifact_graph_executor import execute_artifact_graph
+from .artifact_job import ArtifactJob
+from .artifact_materializer import ensure_artifact_scaffolding
 from .complete_orchestrator_services import (
     blockbench_review,
     generate_assets,
@@ -681,7 +684,82 @@ class CompleteProductionOrchestrator:
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
                 receipts.extend(write_research_shard(project_root, module=module) for module in research_shards)
-                deterministic = [module for module in members if module.kind in extended_kinds and module not in research_shards]
+
+                raw_jobs = approved.game_design.get("_artifact_jobs") or []
+                jobs_by_owner: dict[str, list[Any]] = {}
+                for rj in raw_jobs:
+                    owner = (
+                        rj.get("owner_module")
+                        if isinstance(rj, dict)
+                        else getattr(rj, "owner_module", "")
+                    )
+                    if owner:
+                        jobs_by_owner.setdefault(owner, []).append(rj)
+
+                artifact_handled_members: list[ProductionModule] = []
+                artifact_jobs_to_run: list[ArtifactJob] = []
+                for module in members:
+                    if module.kind == "item" and module.module_id in jobs_by_owner:
+                        artifact_handled_members.append(module)
+                        for j in jobs_by_owner[module.module_id]:
+                            artifact_jobs_to_run.append(
+                                ArtifactJob.from_dict(j) if isinstance(j, dict) else j
+                            )
+
+                if artifact_jobs_to_run:
+                    ensure_artifact_scaffolding(
+                        project_root,
+                        mod_id=spec.mod_id,
+                        package_name=spec.package_name,
+                        main_class=getattr(spec, "main_class", "") or "",
+                    )
+                    graph_receipt = execute_artifact_graph(
+                        artifact_jobs_to_run,
+                        context={"project_root": project_root, "base_dir": project_root},
+                        base_dir=project_root,
+                    )
+                    touched_paths: list[str] = [
+                        str(r["materialization"]["path"])
+                        for r in graph_receipt.get("receipts", [])
+                        if isinstance(r, dict)
+                        and r.get("materialization")
+                        and r["materialization"].get("path")
+                    ]
+                    from .generator import make_texture_png
+
+                    for module in artifact_handled_members:
+                        tex_path = (
+                            project_root
+                            / f"src/main/resources/assets/{spec.mod_id}/textures/item/{module.module_id}.png"
+                        )
+                        if not tex_path.is_file():
+                            tex_path.parent.mkdir(parents=True, exist_ok=True)
+                            color = str(module.config.get("color", "#74c7ec"))
+                            tex_path.write_bytes(
+                                make_texture_png(color, module.module_id, kind="item", size=16)
+                            )
+                            touched_paths.append(str(tex_path))
+
+                    receipts.append(
+                        {
+                            "schema_version": "mmm/artifact-graph-execution-receipt-v1",
+                            "status": "SUCCEEDED",
+                            "module_ids": [m.module_id for m in artifact_handled_members],
+                            "files": touched_paths,
+                            "touched_paths": touched_paths,
+                            "completed_jobs": graph_receipt.get("completed_jobs", []),
+                            "receipts": graph_receipt.get("receipts", []),
+                            "ports": graph_receipt.get("ports", {}),
+                        }
+                    )
+
+                deterministic = [
+                    module
+                    for module in members
+                    if module.kind in extended_kinds
+                    and module not in research_shards
+                    and module not in artifact_handled_members
+                ]
                 if deterministic:
                     receipts.append(generate_extended_content(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, modules=deterministic, policy=self.policy))
                 sidecars = [module for module in members if module.kind == 'integration' and module.config.get('integration_type') == LOCAL_AI_SIDECAR_INTEGRATION_TYPE]

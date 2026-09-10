@@ -1,7 +1,9 @@
 "One declared concern per model call, plus deterministic executable leaf templates."
 
+from collections.abc import Mapping
 import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -164,12 +166,33 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
         values[alias] = port.value
 
 
-def _logical_port(logical_name: str, published_name: str, values: dict[str, Any], template_id: str):
+def _logical_port(
+    logical_name: str | Mapping[str, Any],
+    published_name: str,
+    values: dict[str, Any],
+    template_id: str,
+):
     from .artifact_ports import PortKind, TypedPort
+    from .implementation_template_renderer import render_template
+
+    if isinstance(logical_name, Mapping):
+        kind_str = str(logical_name.get("kind") or "GENERIC")
+        kind = PortKind(kind_str) if kind_str in PortKind.__members__.values() else PortKind.GENERIC
+        target_type = str(logical_name.get("target_type") or "Object")
+        raw_val = logical_name.get("value", "")
+        if isinstance(raw_val, str) and "{{" in raw_val:
+            rendered_val = render_template({"render": raw_val}, values)
+        else:
+            rendered_val = str(raw_val)
+        return TypedPort(published_name, kind, target_type, rendered_val)
 
     mod_id = str(values.get("mod_id") or "")
     registry_path = str(values.get("registry_path") or "")
     constant = str(values.get("java_constant") or "")
+    if logical_name == "item_key_symbol":
+        return TypedPort(
+            published_name, PortKind.JAVA_SYMBOL, "ResourceKey<Item>", f"ModItemIds.{constant}_KEY"
+        )
     if logical_name == "item_registry_id":
         return TypedPort(
             published_name, PortKind.REGISTRY_ID, "Item", f"{mod_id}:{registry_path}"
@@ -206,6 +229,34 @@ def _logical_port(logical_name: str, published_name: str, values: dict[str, Any]
             "Item",
             f"{mod_id}:items/{registry_path}",
         )
+    if logical_name == "block_key_symbol":
+        return TypedPort(
+            published_name, PortKind.JAVA_SYMBOL, "ResourceKey<Block>", f"ModBlockIds.{constant}_KEY"
+        )
+    if logical_name == "block_registry_id":
+        return TypedPort(
+            published_name, PortKind.REGISTRY_ID, "Block", f"{mod_id}:{registry_path}"
+        )
+    if logical_name == "block_symbol":
+        return TypedPort(
+            published_name, PortKind.JAVA_SYMBOL, "Block", f"ModBlocks.{constant}"
+        )
+    if logical_name == "blockstate_ref":
+        return TypedPort(
+            published_name, PortKind.MODEL_REF, "Block", f"{mod_id}:block/{registry_path}"
+        )
+    if logical_name == "block_model_ref":
+        return TypedPort(
+            published_name, PortKind.MODEL_REF, "Block", f"{mod_id}:block/{registry_path}"
+        )
+    if logical_name == "block_translation_key":
+        return TypedPort(
+            published_name, PortKind.TRANSLATION_KEY, "Block", f"block.{mod_id}.{registry_path}"
+        )
+    if logical_name == "block_loot_table_ref":
+        return TypedPort(
+            published_name, PortKind.GENERIC, "LootTable", f"{mod_id}:blocks/{registry_path}"
+        )
     raise ValueError(
         f"TEMPLATE_PORT_UNDECLARED_SEMANTICS: template {template_id!r} publishes "
         f"unknown logical port {logical_name!r}"
@@ -218,6 +269,7 @@ def execute_artifact_template(
     *,
     router: Any = None,
     port_registry: Any = None,
+    base_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     from .artifact_validators import (
         validate_java_fragment,
@@ -317,6 +369,26 @@ def execute_artifact_template(
         if port_registry is not None:
             port_registry.publish(port_obj)
 
+    effective_base_dir = (
+        base_dir or context_map.get("project_root") or context_map.get("base_dir")
+    )
+    materialization_data = None
+    if effective_base_dir:
+        from .artifact_materializer import materialize_job_output
+
+        mat_receipt = materialize_job_output(
+            job, rendered_output, base_dir=effective_base_dir
+        )
+        materialization_data = {
+            "status": mat_receipt.status,
+            "path": mat_receipt.target_path,
+            "target_path": mat_receipt.target_path,
+            "operation": mat_receipt.operation,
+            "before_sha256": mat_receipt.before_sha256,
+            "after_sha256": mat_receipt.after_sha256,
+            "details": mat_receipt.details,
+        }
+
     receipt = {
         "status": "PASS",
         "job_id": str(_job_value(job, "job_id", "")),
@@ -325,6 +397,7 @@ def execute_artifact_template(
         "anchor": anchor,
         "rendered_output": rendered_output,
         "validations": validation_receipts,
+        "materialization": materialization_data,
         "ports_published": {name: port.to_dict() for name, port in ports_published.items()},
     }
     if hasattr(job, "status"):

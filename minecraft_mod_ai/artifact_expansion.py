@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .artifact_job import ArtifactJob
+from .implementation_fact import ImplementationFact
 from .prompt_fact_types import FactType, PromptFact
 from .task_template_catalog import load_template
 
@@ -110,7 +111,7 @@ def validate_expansion_catalog() -> None:
 
 
 def expand_facts_to_jobs(
-    facts: Iterable[PromptFact],
+    facts: Iterable[PromptFact | ImplementationFact],
     *,
     mod_id: str,
     package_name: str,
@@ -187,8 +188,9 @@ def expand_facts_to_jobs(
                 produces = [f"{subject}.model_ref"]
             elif template_id == "fabric/item/lang_en":
                 target_path = f"src/main/resources/assets/{mod_id}/lang/en_us.json"
-                deterministic_inputs["display_name"] = " ".join(
-                    part.capitalize() for part in subject.split("_")
+                deterministic_inputs["display_name"] = (
+                    getattr(fact, "display_name", "")
+                    or " ".join(part.capitalize() for part in subject.split("_"))
                 )
                 requires = [f"{subject}.registry_id"]
                 produces = [f"{subject}.translation_key"]
@@ -213,7 +215,10 @@ def expand_facts_to_jobs(
                 requires = [f"{subject}.block_registry_id"]
             elif template_id == "fabric/block/lang_en":
                 target_path = f"src/main/resources/assets/{mod_id}/lang/en_us.json"
-                deterministic_inputs["display_name"] = " ".join(part.capitalize() for part in subject.split("_"))
+                deterministic_inputs["display_name"] = (
+                    getattr(fact, "display_name", "")
+                    or " ".join(part.capitalize() for part in subject.split("_"))
+                )
                 requires = [f"{subject}.block_registry_id"]
             elif template_id == "fabric/block/initializer":
                 target_path = f"src/main/java/{pkg_path}/{main_class_val}.java"
