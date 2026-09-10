@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
 
 from minecraft_mod_ai import generation_concurrency_safety as safety
+from minecraft_mod_ai.project_index import ProjectIndex
 
 
 def test_infers_nested_reviewed_output_paths():
@@ -34,7 +36,7 @@ def test_rejects_unsafe_or_ambiguous_paths():
 
 
 def test_builtin_generators_keep_only_required_shared_collision_domains():
-    content = SimpleNamespace(kind="item")
+    content = SimpleNamespace(kind="item", module_id="item_a")
     integration = SimpleNamespace(kind="integration")
     entity = SimpleNamespace(kind="entity")
     quest = SimpleNamespace(kind="quest")
@@ -81,3 +83,29 @@ def test_cpu_generation_width_fails_closed_on_invalid_value(monkeypatch):
     monkeypatch.setenv("MMM_CPU_IO_WORKERS", "0")
     with pytest.raises(ValueError, match="MMM_CPU_IO_WORKERS"):
         scheduler._cpu_capacity()
+
+
+def test_project_index_initial_file_work_overlaps_and_preserves_order(tmp_path, monkeypatch):
+    monkeypatch.setenv("MMM_PROJECT_INDEX_WORKERS", "2")
+    first = tmp_path / "a.java"
+    second = tmp_path / "b.json"
+    first.write_text("class A {}", encoding="utf-8")
+    second.write_text('{"b": true}', encoding="utf-8")
+
+    entered = Barrier(2)
+    original = ProjectIndex._indexed_file
+
+    def coordinated(self, normalized, path):
+        entered.wait(timeout=2)
+        return original(self, normalized, path)
+
+    monkeypatch.setattr(ProjectIndex, "_indexed_file", coordinated)
+    index = ProjectIndex(tmp_path)
+
+    assert tuple(item.path for item in index.files) == ("a.java", "b.json")
+
+
+def test_project_index_worker_override_fails_closed(monkeypatch):
+    monkeypatch.setenv("MMM_PROJECT_INDEX_WORKERS", "0")
+    with pytest.raises(ValueError, match="MMM_PROJECT_INDEX_WORKERS"):
+        safety._project_index_scan_workers(2)
