@@ -1,0 +1,18 @@
+input:
+  atomic_feature:
+  explicit_structure:
+
+task:
+  collect_minecraft_implementation_surfaces:
+
+rules:
+  - Read structural trigger, state, persistence, networking, UI, resource, asset, and external-interaction requirements only.
+  - Do not route from the feature name, reference-game name, or semantic domain label.
+  - Leave a surface empty when the feature does not require it.
+
+output:
+  implementation_surfaces:
+  evidence_links:
+
+proof:
+  predicate: every emitted surface is backed by an explicit structural requirement

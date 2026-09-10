@@ -1,0 +1,16 @@
+input:
+  artifact_kinds:
+
+task:
+  expand_required_minecraft_dependencies:
+
+rules:
+  - Dependencies are defined only between canonical Minecraft artifact kinds.
+  - Do not add dependencies from gameplay names or semantic categories.
+  - Preserve deterministic dependency-before-dependent order.
+
+output:
+  artifact_kinds:
+
+proof:
+  predicate: output is canonical, duplicate-free, and dependency-closed
