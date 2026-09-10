@@ -10,7 +10,7 @@ from minecraft_mod_ai.model_adapters import ModelConfigurationError
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 from minecraft_mod_ai.planning_contract_ssot import (
     RESEARCH_NOTE_SCHEMA,
-    SUBMIT_PROMPT_STATE_SCHEMA,
+    PROMPT_STATE_INPUT_SCHEMA,
     SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
     assert_all_planning_contracts_valid,
     is_schema_definition_echo,
@@ -27,16 +27,10 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
 
 
 def _assert_all_objects_closed(schema: Any, path: str = "$") -> None:
-    if isinstance(schema, Mapping):
-        if schema.get("type") == "object" or "properties" in schema:
-            assert (
-                schema.get("additionalProperties") is False
-            ), f"Schema at {path} must set additionalProperties=False"
-        for key, child in schema.items():
-            _assert_all_objects_closed(child, f"{path}.{key}")
-    elif isinstance(schema, Sequence) and not isinstance(schema, (str, bytes)):
-        for idx, child in enumerate(schema):
-            _assert_all_objects_closed(child, f"{path}[{idx}]")
+    # Applicator fragments constrain their parent's already-closed object; they are
+    # not new object instances. Use the canonical scope-aware contract validator.
+    from minecraft_mod_ai.model_output_atomicity_contract import _assert_closed_object_schemas
+    _assert_closed_object_schemas(schema, path=path)
 
 
 def test_ssot_self_verification_passes() -> None:
@@ -45,7 +39,7 @@ def test_ssot_self_verification_passes() -> None:
 
 def test_all_planning_schemas_are_strictly_closed() -> None:
     schemas = [
-        ("SUBMIT_PROMPT_STATE_SCHEMA", SUBMIT_PROMPT_STATE_SCHEMA),
+        ("PROMPT_STATE_INPUT_SCHEMA", PROMPT_STATE_INPUT_SCHEMA),
         (
             "SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA",
             SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
@@ -113,7 +107,7 @@ def test_worksheet_chunk_prompt_uses_skeleton_not_raw_schema() -> None:
     )
     assert '"additionalProperties"' not in prompt
     assert '"properties":' not in prompt
-    assert "Fill and return only a JSON object matching this exact data template skeleton:" in prompt
+    assert "Return only a JSON object following this data template skeleton:" in prompt
 
 
 class _BuggyConfigRouter:

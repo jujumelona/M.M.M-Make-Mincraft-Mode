@@ -68,7 +68,7 @@ def test_prompt_convergence_runs_with_empty_research_queue_before_requirement_se
     monkeypatch.setattr(
         pipeline,
         "build_initial_planning_state",
-        lambda _router, _prompt: deepcopy(initial_state),
+        lambda _router, _prompt, **_kwargs: deepcopy(initial_state),
     )
     monkeypatch.setattr(
         pipeline,

@@ -10,11 +10,15 @@ from minecraft_mod_ai.planning_authority import build_authoritative_request_cata
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet
 from minecraft_mod_ai.planning_state_contract import (
     _hash_without,
-    build_initial_planning_state,
+    _build_host_state,
     validate_planning_state,
 )
 from minecraft_mod_ai.planning_state_pipeline import prepare_planning_state
 from minecraft_mod_ai.planning_state_resolution import compile_researched_requirements
+
+
+def _host_state(router, prompt):
+    return _build_host_state(prompt, router.responses.pop(0))
 
 
 class _Router:
@@ -41,7 +45,7 @@ def _payload(*, unresolved=None):
 
 
 def _user_only_state():
-    return build_initial_planning_state(
+    return _host_state(
         _Router(
             [
                 _payload(
@@ -106,7 +110,7 @@ def test_pipeline_stops_at_original_user_only_blocker_before_detail_planning():
 
 def test_implementation_only_unknown_does_not_block_requirement_selection():
     prompt = "Keep the weather compass."
-    state = build_initial_planning_state(_Router([_payload()]), prompt)
+    state = _host_state(_Router([_payload()]), prompt)
     state["unresolved"].append(
         {
             "unresolved_id": "u_001",
@@ -200,7 +204,7 @@ def test_external_fact_is_host_owned_and_cannot_be_authored_by_prompt_model():
         ValueError,
         match="PROMPT_STATE_UNRESOLVED: model cannot author reason 'external_fact'",
     ):
-        build_initial_planning_state(
+        _host_state(
             _Router([raw]),
             "Keep the weather compass.",
         )

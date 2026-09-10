@@ -1,15 +1,37 @@
 id: prompt/output_requirements
-input:
-  raw_prompt:
-  clauses:
-task:
-  extract_requested_deliverables:
+execution: records
+task: Extract one explicitly requested delivery, packaging, language or output-format
+  requirement. Do not invent a default deliverable or restate gameplay behavior handled
+  by parse.
+record_schema:
+  type: object
+  properties:
+    statement: &id001
+      type: string
+      minLength: 1
+    source_quote:
+      type: string
+      minLength: 0
+  required:
+  - statement
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt: *id001
+  required:
+  - original_prompt
+  additionalProperties: false
 rules:
-  - Record only explicitly requested outputs and completion conditions.
-  - Leave format or scope unspecified when the prompt does not state them.
-output:
-  deliverables:
-  completion_conditions:
-  unresolved_output_requirements:
-proof:
-  predicate: every emitted requirement is source-backed and unstated requirements remain absent
+- Use only the original user prompt as evidence. Do not invent behavior, parameters,
+  APIs, versions, files, defaults or implementation details.
+- Game and feature names are input data, never template categories. Preserve the authored
+  meaning and exclusions.
+- Return one record at a time for this concern only. Return done after all applicable
+  records have been supplied.
+- If the prompt contains no records for this concern, return not_applicable with a
+  concrete reason. Never emit empty or placeholder records.
+- Return blocked only for information necessary to resolve this concern. Missing implementation
+  choices are not prompt ambiguity.
+- External evidence IDs are unavailable at prompt capture; return evidence_refs as
+  an empty array.

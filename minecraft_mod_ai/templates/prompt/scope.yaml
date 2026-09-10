@@ -1,23 +1,26 @@
-id: prompt/intent
+id: prompt/scope
 execution: value
-task: State only the primary user goal. Preserve requested behavior and do not plan
-  how to implement it.
+task: 'Classify only how explicitly the original prompt defines scope: explicit when
+  it specifies the intended scope, partial when it leaves some scope open, unspecified
+  when it leaves scope selection open. Do not choose or enlarge the scope.'
 output_schema:
   type: object
   properties:
-    statement: &id001
+    scope_status:
       type: string
-      minLength: 1
-    source_quote:
-      type: string
-      minLength: 0
+      enum:
+      - explicit
+      - partial
+      - unspecified
   required:
-  - statement
+  - scope_status
   additionalProperties: false
 input_schema:
   type: object
   properties:
-    original_prompt: *id001
+    original_prompt:
+      type: string
+      minLength: 1
   required:
   - original_prompt
   additionalProperties: false

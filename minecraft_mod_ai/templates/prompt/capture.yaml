@@ -1,13 +1,19 @@
 id: prompt/capture
-input:
-  user_prompt:
-task:
-  preserve_prompt_exactly:
+execution: host
+task: Preserve the exact original prompt without rewriting or truncation.
+input_schema: &id001
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false
+output_schema: *id001
+operation: identity
 rules:
-  - Copy the supplied prompt without semantic rewriting.
-  - Record source boundaries; do not infer missing text.
-output:
-  raw_prompt:
-  source_receipt:
-proof:
-  predicate: raw_prompt is byte-for-byte equivalent to the supplied prompt
+- Use only the original user prompt as evidence. Do not invent behavior, parameters,
+  APIs, versions, files, defaults or implementation details.
+- Game and feature names are input data, never template categories. Preserve the authored
+  meaning and exclusions.

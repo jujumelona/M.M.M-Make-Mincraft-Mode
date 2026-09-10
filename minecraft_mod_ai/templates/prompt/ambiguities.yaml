@@ -1,21 +1,26 @@
-id: prompt/entity_resolution
+id: prompt/ambiguities
 execution: records
-task: Identify one external game, mod, product, style or named work explicitly referenced
-  in the original prompt, plus what must be learned about it. Do not research it yet,
-  infer unnamed references or mistake ordinary feature nouns for external references.
+task: Identify one genuine contradiction or user preference whose answer is necessary
+  to understand the authored request. Missing counts, prices, balance, mechanics,
+  algorithms, platform APIs, source files and design choices are not ambiguities here.
+  Ordinary explicit restrictions belong to parse. Do not choose blockers or research
+  routes.
 record_schema:
   type: object
   properties:
-    name: &id001
+    question: &id001
       type: string
       minLength: 1
-    source_quote:
+    reason:
       type: string
-      minLength: 0
-    what_must_be_learned: *id001
+      enum:
+      - contradiction
+      - user_preference
+    information_needed: *id001
   required:
-  - name
-  - what_must_be_learned
+  - question
+  - reason
+  - information_needed
   additionalProperties: false
 input_schema:
   type: object

@@ -24,8 +24,9 @@ def _load(identifier):
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("id") != identifier:
         raise ValueError(f"TEMPLATE_ID: invalid template {identifier}")
-    if "record_schema" in value:
-        Draft202012Validator.check_schema(value["record_schema"])
+    for key in ("record_schema", "input_schema", "output_schema"):
+        if key in value:
+            Draft202012Validator.check_schema(value[key])
     return value
 
 

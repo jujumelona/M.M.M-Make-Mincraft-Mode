@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Canonical task-state SSOT for prompt understanding and grounded planning.
 
-The model performs exactly one bounded semantic extraction at the request boundary. It
+The model resolves one declared prompt concern per call at the request boundary. It
 may report authored facts, named references, scope status, and only genuine prompt-level
 ambiguities. Host code owns IDs, blocker semantics, reason->route policy, allowed sources,
 query compilation, evidence, state transitions, decisions, coverage, and readiness.
@@ -14,11 +14,9 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from .planner_operation import planner_operation
-from .planning_contract_ssot import MODEL_UNRESOLVED_REASONS, SUBMIT_PROMPT_STATE_SCHEMA
+from .planning_contract_ssot import MODEL_UNRESOLVED_REASONS
 
 SCHEMA = "mmm/planning-state-v1"
-MODEL_TOOL = "submit_prompt_state"
 
 UNRESOLVED_REASONS = (
     "reference_semantics",
@@ -108,8 +106,6 @@ ROUTE_SOURCES: dict[str, tuple[str, ...]] = {
     "default_policy": (),
     "user_only": (),
 }
-
-MODEL_PARAMETERS: dict[str, Any] = SUBMIT_PROMPT_STATE_SCHEMA
 
 
 def _canonical(value: Any) -> str:
@@ -521,53 +517,29 @@ def _validate_initial_state(state: Mapping[str, Any]) -> None:
         )
 
 
-def build_initial_planning_state(router: Any, prompt: str) -> dict[str, Any]:
-    """Perform the sole model-owned semantic extraction for an authored request."""
+def build_initial_planning_state(router: Any, prompt: str, *, existing_checkpoint=None, checkpoint=None) -> dict[str, Any]:
+    """Extract one prompt concern per call, then construct the host-owned state."""
+    from jsonschema import Draft202012Validator
+    from .planning_contract_ssot import PROMPT_STATE_INPUT_SCHEMA
+    from .prompt_template_pipeline import extract_prompt_records
+    from .prompt_task_checkpoint import prompt_checkpoint, restore_prompt_progress
+
     authored = str(prompt or "")
     if not authored.strip():
         raise ValueError("PROMPT_STATE_PROMPT: prompt must not be empty")
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Fill the canonical prompt-understanding template only. Preserve the user's "
-                "goal. known contains only facts and requested behavior explicitly authored by "
-                "the user. references contains named games, mods, products, styles, works, or "
-                "external concepts that must be understood; if none are referenced, leave "
-                "references as an empty array []. Set scope_status from the request; the host owns "
-                "scope policy. unresolved is only for a prompt-level fact, contradiction, or user "
-                "preference whose answer is actually required to understand the authored request; "
-                "if there are none, leave unresolved as an empty array []. Missing prices, counts, "
-                "balance values, mechanics, algorithms, Minecraft APIs, repository details, "
-                "compatibility methods, files, classes, architecture, or other design freedom are "
-                "NOT prompt unknowns: later host-owned design and implementation stages resolve "
-                "them. Never state what an unknown blocks and never choose routes, sources, IDs, "
-                "queries, APIs, files, architecture, mechanics, or implementation details. Do not "
-                "use model memory as evidence. source_quote is optional provenance metadata. There "
-                "is no target number of rows: represent the authored request faithfully without "
-                "count-driven splitting."
-            ),
-        },
-        {"role": "user", "content": "USER REQUEST:\n" + authored},
-    ]
-    with planner_operation("prompt_state", output_tokens=1536):
-        raw = router.generate_tool_decision(
-            "planner",
-            messages,
-            tool_name=MODEL_TOOL,
-            parameters=MODEL_PARAMETERS,
-            description=(
-                "Submit authored facts, references, scope status, and prompt-level ambiguities only."
-            ),
-        )
-    if not isinstance(raw, Mapping):
-        raise ValueError("PROMPT_STATE_MODEL: planner did not return an object")
+    progress = restore_prompt_progress(existing_checkpoint, authored)
+
+    def save_record(binding, responses):
+        progress[binding] = deepcopy(responses)
+        if checkpoint is not None:
+            checkpoint(prompt_checkpoint(authored, progress))
+
+    raw = extract_prompt_records(router, authored, progress=progress, checkpoint=save_record)
+    Draft202012Validator(PROMPT_STATE_INPUT_SCHEMA).validate(raw)
     return _build_host_state(authored, raw)
 
 
 __all__ = [
-    "MODEL_PARAMETERS",
-    "MODEL_TOOL",
     "RESOLUTION_ROUTES",
     "ROUTE_SOURCES",
     "SCHEMA",

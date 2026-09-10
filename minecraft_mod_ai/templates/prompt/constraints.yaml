@@ -1,14 +1,36 @@
 id: prompt/constraints
-input:
-  raw_prompt:
-  clauses:
-task:
-  extract_explicit_constraints:
+execution: records
+task: Extract one explicit user-stated limit, exclusion, target requirement or invariant.
+  Do not infer defaults or convert implementation choices into constraints.
+record_schema:
+  type: object
+  properties:
+    statement: &id001
+      type: string
+      minLength: 1
+    source_quote:
+      type: string
+      minLength: 0
+  required:
+  - statement
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt: *id001
+  required:
+  - original_prompt
+  additionalProperties: false
 rules:
-  - Record only user-stated limits, exclusions, target requirements, and invariants.
-  - Do not turn defaults or conventions into user constraints.
-output:
-  constraints:
-  source_refs:
-proof:
-  predicate: every constraint points to an exact supporting prompt clause
+- Use only the original user prompt as evidence. Do not invent behavior, parameters,
+  APIs, versions, files, defaults or implementation details.
+- Game and feature names are input data, never template categories. Preserve the authored
+  meaning and exclusions.
+- Return one record at a time for this concern only. Return done after all applicable
+  records have been supplied.
+- If the prompt contains no records for this concern, return not_applicable with a
+  concrete reason. Never emit empty or placeholder records.
+- Return blocked only for information necessary to resolve this concern. Missing implementation
+  choices are not prompt ambiguity.
+- External evidence IDs are unavailable at prompt capture; return evidence_refs as
+  an empty array.

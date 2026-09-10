@@ -19,75 +19,18 @@ from .model_output_atomicity_contract import (
 )
 from .planning_detail_slots import DETAIL_RECORDS
 
-# ---------------------------------------------------------------------------
-# 1. submit_prompt_state contract
-# ---------------------------------------------------------------------------
-# The request-boundary model may only report ambiguities that truly require the user.
-# External facts and implementation details are host-owned research concerns; allowing a
-# small model to invent them here creates false pre-requirement blockers and unsafe search
-# routes before a concrete requirement exists.
-MODEL_UNRESOLVED_REASONS = (
-    "contradiction",
-    "user_preference",
-)
+# The host assembly schema is derived from task files, never supplied as one model call.
+from .task_template_catalog import load_template
 
-SUBMIT_PROMPT_STATE_SCHEMA: dict[str, Any] = {
+MODEL_UNRESOLVED_REASONS = tuple(load_template("prompt/ambiguities")["record_schema"]["properties"]["reason"]["enum"])
+PROMPT_STATE_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "goal": {
-            "type": "object",
-            "properties": {
-                "statement": {"type": "string"},
-                "source_quote": {"type": "string"},
-            },
-            "required": ["statement"],
-            "additionalProperties": False,
-        },
-        "known": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "statement": {"type": "string"},
-                    "source_quote": {"type": "string"},
-                },
-                "required": ["statement"],
-                "additionalProperties": False,
-            },
-        },
-        "references": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "source_quote": {"type": "string"},
-                    "what_must_be_learned": {"type": "string"},
-                },
-                "required": ["name", "what_must_be_learned"],
-                "additionalProperties": False,
-            },
-        },
-        "scope_status": {
-            "type": "string",
-            "enum": ["explicit", "partial", "unspecified"],
-        },
-        "unresolved": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string"},
-                    "reason": {
-                        "type": "string",
-                        "enum": list(MODEL_UNRESOLVED_REASONS),
-                    },
-                    "information_needed": {"type": "string"},
-                },
-                "required": ["question", "reason", "information_needed"],
-                "additionalProperties": False,
-            },
-        },
+        "goal": load_template("prompt/intent")["output_schema"],
+        "known": {"type": "array", "items": load_template("prompt/parse")["record_schema"]},
+        "references": {"type": "array", "items": load_template("prompt/entity_resolution")["record_schema"]},
+        "scope_status": load_template("prompt/scope")["output_schema"]["properties"]["scope_status"],
+        "unresolved": {"type": "array", "items": load_template("prompt/ambiguities")["record_schema"]},
     },
     "required": ["goal", "known", "references", "scope_status", "unresolved"],
     "additionalProperties": False,
@@ -282,7 +225,7 @@ def assert_all_planning_contracts_valid() -> None:
     from .worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
 
     fixed_schemas: list[tuple[str, Mapping[str, Any]]] = [
-        ("SUBMIT_PROMPT_STATE_SCHEMA", SUBMIT_PROMPT_STATE_SCHEMA),
+        ("PROMPT_STATE_INPUT_SCHEMA", PROMPT_STATE_INPUT_SCHEMA),
         (
             "SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA",
             SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,

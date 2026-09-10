@@ -54,9 +54,9 @@ def test_changed_inputs_or_contract_do_not_reuse_prior_records(monkeypatch, chan
     elif changed == 'allowed_refs':
         kwargs['allowed_refs'] = {'new_source'}
     else:
-        template = runner.load_template(IDENTIFIER)
+        template = runner.load_record_template(IDENTIFIER)
         template['task'] += ' Clarified instruction.'
-        monkeypatch.setattr(runner, 'load_template', lambda _: template)
+        monkeypatch.setattr(runner, 'load_record_template', lambda _: template)
     with pytest.raises(StopIteration):
         runner.run_record_template(None, IDENTIFIER, **kwargs)
 

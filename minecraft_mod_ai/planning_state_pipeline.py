@@ -24,6 +24,7 @@ from .planning_detail_applicability import (
 )
 from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
 from .planning_state_contract import build_initial_planning_state, validate_planning_state
+from .prompt_task_checkpoint import is_prompt_checkpoint
 from .root_cause_trace import emit_root_cause, traced_callable
 
 _T = TypeVar("_T")
@@ -253,8 +254,10 @@ def prepare_planning_state(
         "bootstrap_or_restore",
         lambda: (
             deepcopy(dict(existing_state))
-            if existing_state is not None
-            else build_initial_planning_state(router, prompt)
+            if existing_state is not None and not is_prompt_checkpoint(existing_state)
+            else build_initial_planning_state(
+                router, prompt, existing_checkpoint=existing_state, checkpoint=checkpoint,
+            )
         ),
         input_state=existing_state,
     )

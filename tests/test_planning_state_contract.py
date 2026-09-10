@@ -3,9 +3,14 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.planning_authority import build_authoritative_request_catalog
-from minecraft_mod_ai.planning_state_contract import MODEL_PARAMETERS, build_initial_planning_state
+from minecraft_mod_ai.planning_state_contract import _build_host_state
+from minecraft_mod_ai.planning_contract_ssot import PROMPT_STATE_INPUT_SCHEMA
 from minecraft_mod_ai.planning_state_research import _compile_queries, _research_brief
 from minecraft_mod_ai.reference_source_research import _wikipedia_languages
+
+
+def _host_state(router, prompt):
+    return _build_host_state(prompt, router.responses.pop(0))
 
 
 class _Router:
@@ -40,7 +45,7 @@ def test_reference_prompt_creates_reference_and_scope_research_without_mod_guess
         ]
     )
 
-    state = build_initial_planning_state(router, prompt)
+    state = _host_state(router, prompt)
 
     assert state["original_prompt"] == prompt
     assert state["references"][0]["name"] == "메이플스토리"
@@ -79,7 +84,7 @@ def test_model_cannot_author_scope_or_route_it_to_bypass_host_policy() -> None:
         ValueError,
         match="PROMPT_STATE_UNRESOLVED: model cannot author reason 'scope'",
     ):
-        build_initial_planning_state(router, prompt)
+        _host_state(router, prompt)
 
 
 @pytest.mark.parametrize(
@@ -110,11 +115,11 @@ def test_prompt_model_cannot_create_host_owned_or_downstream_unknowns(reason: st
         ValueError,
         match=f"PROMPT_STATE_UNRESOLVED: model cannot author reason '{reason}'",
     ):
-        build_initial_planning_state(router, prompt)
+        _host_state(router, prompt)
 
 
 def test_prompt_model_schema_cannot_author_blocker_topology() -> None:
-    unresolved = MODEL_PARAMETERS["properties"]["unresolved"]["items"]
+    unresolved = PROMPT_STATE_INPUT_SCHEMA["properties"]["unresolved"]["items"]
     assert "blocks" not in unresolved["properties"]
     assert set(unresolved["properties"]["reason"]["enum"]) == {
         "contradiction",
@@ -143,7 +148,7 @@ def test_creative_unspecified_values_do_not_become_prompt_research() -> None:
         ]
     )
 
-    state = build_initial_planning_state(router, prompt)
+    state = _host_state(router, prompt)
 
     assert {item["reason"] for item in state["unresolved"]} == {"scope"}
     assert not any(
@@ -173,7 +178,7 @@ def test_nonexact_model_quote_falls_back_to_valid_full_prompt_receipt() -> None:
         ]
     )
 
-    state = build_initial_planning_state(router, prompt)
+    state = _host_state(router, prompt)
     source = state["goal"]["source"]
 
     assert source["char_start"] == 0
@@ -288,7 +293,7 @@ def test_empty_or_placeholder_references_and_known_are_cleanly_filtered() -> Non
         ]
     )
 
-    state = build_initial_planning_state(router, prompt)
+    state = _host_state(router, prompt)
 
     # Invalid scope defaults to unspecified
     assert state["scope_status"] == "unspecified"

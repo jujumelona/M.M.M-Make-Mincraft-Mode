@@ -1,25 +1,27 @@
 """One declared concern, one record per model call, deterministic completion."""
 import json
 from copy import deepcopy
-from hashlib import sha256
 
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
 from .task_template_catalog import load_record_template
+from .task_template_input import task_binding, task_context
 
 
 class TemplateBlocked(ValueError):
     pass
 
 
-def _contains_blank_string(value):
+def _contains_blank_string(value, schema=None):
+    schema = schema or {}
     if isinstance(value, str):
-        return not value.strip()
+        return not value.strip() and schema.get("minLength", 1) > 0
     if isinstance(value, dict):
-        return any(_contains_blank_string(item) for item in value.values())
+        return any(_contains_blank_string(item, schema.get("properties", {}).get(key))
+                   for key, item in value.items())
     if isinstance(value, list):
-        return any(_contains_blank_string(item) for item in value)
+        return any(_contains_blank_string(item, schema.get("items")) for item in value)
     return False
 
 
@@ -39,13 +41,11 @@ def record_response_schema(template):
 
 def run_record_template(router, identifier, *, context, allowed_refs, progress=None, checkpoint=None):
     template = load_record_template(identifier)
+    context = task_context(template, context)
     schema = record_response_schema(template)
     validator = Draft202012Validator(schema)
     records, refs, seen = [], [], set()
-    binding = sha256(json.dumps(
-        [template, context, sorted(allowed_refs)], sort_keys=True,
-        ensure_ascii=False, allow_nan=False,
-    ).encode("utf-8")).hexdigest()
+    binding = task_binding(template, context, allowed_refs)
     saved = (progress or {}).get(binding, [])
     if not isinstance(saved, list):
         raise ValueError("TEMPLATE_PROGRESS: expected response array")
@@ -67,7 +67,7 @@ def run_record_template(router, identifier, *, context, allowed_refs, progress=N
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
         status, record, reason = value["status"], value["record"], value["reason"].strip()
         if status == "record":
-            if record is None or _contains_blank_string(record):
+            if record is None or _contains_blank_string(record, template["record_schema"]):
                 raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
             key = json.dumps(record, sort_keys=True, ensure_ascii=False)
             if key in seen:
