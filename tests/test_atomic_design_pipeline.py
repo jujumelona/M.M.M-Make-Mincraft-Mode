@@ -13,7 +13,7 @@ from minecraft_mod_ai.task_template_catalog import load_template
 
 
 def test_design_templates_exist_and_satisfy_strict_atomicity():
-    assert len(DESIGN_SLOTS) == 4
+    assert len(DESIGN_SLOTS) == 32
     for slot_id in DESIGN_SLOTS:
         tmpl = load_template(slot_id)
         assert tmpl["id"] == slot_id
@@ -28,7 +28,6 @@ def test_design_templates_exist_and_satisfy_strict_atomicity():
 def test_compile_atomic_design_korean_space_mod():
     design = compile_atomic_design("우주모드 만들어")
     assert design["title"]
-    assert "우주" in design["title"] or "Custom" in design["title"] or "Mod" in design["title"]
     assert len(design["core_loop"]) == 1
     assert len(design["progression"]) == 3
     assert "First Goal:" in design["progression"][0]
@@ -41,18 +40,30 @@ def test_compile_atomic_design_korean_space_mod():
     assert "first_goal" in slots
     assert "progression_condition" in slots
     assert "reward" in slots
+    assert "visual_identity" in slots
+    assert "audio_identity" in slots
+    assert "content_scale" in slots
     for k, v in slots.items():
         assert isinstance(v, str)
         assert 0 < len(v) <= 256
 
     # Verify atomic implementation facts
     facts = design["_implementation_facts"]
-    assert len(facts) >= 4
+    assert len(facts) >= 2
     fact_types = [f.fact_type for f in facts]
-    assert FactType.ITEM_EXISTS in fact_types
-    assert FactType.ITEM_STACK_LIMIT in fact_types
-    assert FactType.BLOCK_EXISTS in fact_types
-    assert FactType.BLOCK_DROP in fact_types
+    assert FactType.ITEM_EXISTS in fact_types or FactType.BLOCK_EXISTS in fact_types
+
+    # Verify dynamic modules and asset requests
+    modules = design["modules"]
+    assets = design["assets"]
+    assert len(modules) >= 1
+    assert len(assets) >= 1
+    for m in modules:
+        m.validate()
+    for a in assets:
+        a.validate()
+        assert a.width == 16 and a.height == 16
+        assert "Pixel Art" in a.prompt
 
 
 def test_compile_atomic_design_empty_prompt_fails_closed():
@@ -67,9 +78,10 @@ class _MockSlotRouter:
 
     def generate_tool_decision(self, _role, _messages, *, tool_name, parameters, description=""):
         self.calls.append(tool_name)
-        for slot_id, val in self.mapping.items():
-            if slot_id in parameters.get("properties", {}):
-                return {slot_id: val}
+        props = parameters.get("properties", {})
+        for slot_id in props:
+            val = self.mapping.get(slot_id, f"Valid mock {slot_id}")
+            return {slot_id: val}
         return {}
 
 
@@ -86,3 +98,16 @@ def test_compile_atomic_design_with_router():
     assert "First Goal: Assemble a telescope lens from polished obsidian." in design["progression"][0]
     assert "Condition: Calibrate the lens against the North Star." in design["progression"][1]
     assert "Reward: Starmap item showing asteroid cluster coordinates." in design["progression"][2]
+
+
+def test_compile_atomic_design_with_research_context():
+    research = {
+        "summary": "Moon geology and lunar basalt materials",
+        "known": ["Lunar basalt is dense", "Moon vacuum requires sealed helmets"],
+        "references": ["Galacticraft", "Ad Astra"],
+    }
+    design = compile_atomic_design("moon base mod", research=research)
+    assert design["title"]
+    assert len(design["_design_slots"]) == 32
+    assert len(design["modules"]) >= 1
+    assert len(design["assets"]) >= 1

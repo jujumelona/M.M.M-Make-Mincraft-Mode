@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/resource_sink
+slot_id: resource_sink
+task: "Define how gathered resources are spent, consumed, or maintained."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    resource_sink:
       type: string
       maxLength: 256
   required:
-    - reward
+    - resource_sink
   additionalProperties: false

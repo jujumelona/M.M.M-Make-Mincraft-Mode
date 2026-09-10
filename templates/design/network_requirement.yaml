@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/network_requirement
+slot_id: network_requirement
+task: "Define client-server synchronized packets, HUD states, or effects."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    network_requirement:
       type: string
       maxLength: 256
   required:
-    - reward
+    - network_requirement
   additionalProperties: false

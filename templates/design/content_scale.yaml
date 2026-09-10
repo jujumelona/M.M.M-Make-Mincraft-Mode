@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/content_scale
+slot_id: content_scale
+task: "Define the content footprint in terms of items, blocks, and entities."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    content_scale:
       type: string
       maxLength: 256
   required:
-    - reward
+    - content_scale
   additionalProperties: false

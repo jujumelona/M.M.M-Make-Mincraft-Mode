@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/machine_role
+slot_id: machine_role
+task: "Define automated machines, processing units, or energy systems."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    machine_role:
       type: string
       maxLength: 256
   required:
-    - reward
+    - machine_role
   additionalProperties: false

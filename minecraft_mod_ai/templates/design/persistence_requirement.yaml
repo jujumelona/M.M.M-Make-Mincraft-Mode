@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/persistence_requirement
+slot_id: persistence_requirement
+task: "Define custom data, capability state, or player statistics saved to disk."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    persistence_requirement:
       type: string
       maxLength: 256
   required:
-    - reward
+    - persistence_requirement
   additionalProperties: false

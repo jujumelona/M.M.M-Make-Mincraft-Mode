@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/ui_requirement
+slot_id: ui_requirement
+task: "Define custom screens, container menus, or HUD overlays required."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    ui_requirement:
       type: string
       maxLength: 256
   required:
-    - reward
+    - ui_requirement
   additionalProperties: false

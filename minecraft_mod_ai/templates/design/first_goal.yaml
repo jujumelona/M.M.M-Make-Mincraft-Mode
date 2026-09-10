@@ -1,8 +1,7 @@
 id: design/first_goal
 slot_id: first_goal
-task: "Define the first immediate player objective upon spawning or starting this mod in one sentence."
+task: "Define the initial immediate player objective upon starting the mod."
 rules:
-  - "Concrete first step (e.g. acquire a specific block, craft a starter tool)."
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:

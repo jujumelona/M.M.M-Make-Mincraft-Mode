@@ -4,7 +4,10 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .implementation_fact import ImplementationFact
 
 from . import production_contract
 from .complete_spec import (
@@ -132,6 +135,39 @@ class CompleteGameDesignPlanner:
             ),
         )
 
+        atomic_modules = (
+            internal_design.get("_atomic_modules")
+            or ()
+        )
+        all_modules = list(modules)
+        existing_module_ids = {m.module_id for m in all_modules}
+        for item in atomic_modules:
+            if isinstance(item, ProductionModule) and item.module_id not in existing_module_ids:
+                all_modules.append(item)
+                existing_module_ids.add(item.module_id)
+            elif isinstance(item, Mapping) and item.get("module_id") not in existing_module_ids:
+                mod_obj = _module(item)
+                all_modules.append(mod_obj)
+                existing_module_ids.add(mod_obj.module_id)
+        modules = tuple(all_modules)
+
+        atomic_assets = (
+            internal_design.get("_atomic_assets")
+            or internal_design.get("assets")
+            or ()
+        )
+        all_assets = list(assets)
+        existing_asset_ids = {a.asset_id for a in all_assets}
+        for item in atomic_assets:
+            if isinstance(item, AssetRequest) and item.asset_id not in existing_asset_ids:
+                all_assets.append(item)
+                existing_asset_ids.add(item.asset_id)
+            elif isinstance(item, Mapping) and item.get("asset_id") not in existing_asset_ids:
+                asset_obj = _asset(item)
+                all_assets.append(asset_obj)
+                existing_asset_ids.add(asset_obj.asset_id)
+        assets = tuple(all_assets)
+
         contract_design = {
             key: value
             for key, value in internal_design.items()
@@ -146,8 +182,13 @@ class CompleteGameDesignPlanner:
             acceptance_tests=acceptance_tests,
             evidence_plan=evidence_plan,
         )
+        existing_facts = (
+            internal_design.get("_atomic_facts")
+            or internal_design.get("_implementation_facts")
+            or ()
+        )
         facts_data, jobs_data = _lower_implementation_facts_and_jobs(
-            modules, artifacts.base_proposal.spec
+            modules, artifacts.base_proposal.spec, existing_facts=existing_facts
         )
         internal_design = {
             **internal_design,
@@ -375,13 +416,25 @@ def _batch_dict(batch: _ProductionBatch) -> dict[str, Any]:
 def _lower_implementation_facts_and_jobs(
     modules: Sequence[ProductionModule],
     spec: Any,
+    existing_facts: Sequence[ImplementationFact | Mapping[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from .artifact_expansion import expand_facts_to_jobs
     from .implementation_fact import FactProvenance, ImplementationFact
     from .prompt_fact_types import FactType
 
-    item_module_ids = {m.module_id for m in modules if m.kind == "item"}
     implementation_facts: list[ImplementationFact] = []
+    seen_facts: set[tuple[str, str]] = set()
+
+    if existing_facts:
+        for ef in existing_facts:
+            fact_obj = ef if isinstance(ef, ImplementationFact) else ImplementationFact.from_dict(dict(ef))
+            raw_type = fact_obj.fact_type.value if isinstance(fact_obj.fact_type, FactType) else str(fact_obj.fact_type)
+            key = (raw_type, str(fact_obj.subject))
+            if key not in seen_facts:
+                implementation_facts.append(fact_obj)
+                seen_facts.add(key)
+
+    item_module_ids = {m.module_id for m in modules if m.kind == "item"}
     for module in modules:
         if module.kind == "item":
             config = module.config if isinstance(module.config, dict) else {}
@@ -391,16 +444,19 @@ def _lower_implementation_facts_and_jobs(
                 or config.get("display_name_en")
                 or module.module_id.replace("_", " ").title()
             )
-            implementation_facts.append(
-                ImplementationFact(
-                    fact_id=f"{module.module_id}.item_exists",
-                    fact_type=FactType.ITEM_EXISTS,
-                    subject=module.module_id,
-                    display_name=display_name,
-                    provenance=FactProvenance.DESIGN,
-                    parent_requirement=module.module_id,
+            key_exists = (FactType.ITEM_EXISTS.value, module.module_id)
+            if key_exists not in seen_facts:
+                implementation_facts.append(
+                    ImplementationFact(
+                        fact_id=f"{module.module_id}.item_exists",
+                        fact_type=FactType.ITEM_EXISTS,
+                        subject=module.module_id,
+                        display_name=display_name,
+                        provenance=FactProvenance.DESIGN,
+                        parent_requirement=module.module_id,
+                    )
                 )
-            )
+                seen_facts.add(key_exists)
             stack_limit = (
                 config.get("stack_limit")
                 or config.get("max_stack")
@@ -417,17 +473,20 @@ def _lower_implementation_facts_and_jobs(
                     raise ValueError(
                         f"Stack limit {stack_val} for {module.module_id} out of bounds [1, 64]"
                     )
-                implementation_facts.append(
-                    ImplementationFact(
-                        fact_id=f"{module.module_id}.stack_limit",
-                        fact_type=FactType.ITEM_STACK_LIMIT,
-                        subject=module.module_id,
-                        value=stack_val,
-                        display_name=display_name,
-                        provenance=FactProvenance.DESIGN,
-                        parent_requirement=module.module_id,
+                key_stack = (FactType.ITEM_STACK_LIMIT.value, module.module_id)
+                if key_stack not in seen_facts:
+                    implementation_facts.append(
+                        ImplementationFact(
+                            fact_id=f"{module.module_id}.stack_limit",
+                            fact_type=FactType.ITEM_STACK_LIMIT,
+                            subject=module.module_id,
+                            value=stack_val,
+                            display_name=display_name,
+                            provenance=FactProvenance.DESIGN,
+                            parent_requirement=module.module_id,
+                        )
                     )
-                )
+                    seen_facts.add(key_stack)
         elif module.kind == "block":
             config = module.config if isinstance(module.config, dict) else {}
             display_name = str(
@@ -436,16 +495,19 @@ def _lower_implementation_facts_and_jobs(
                 or config.get("display_name_en")
                 or module.module_id.replace("_", " ").title()
             )
-            implementation_facts.append(
-                ImplementationFact(
-                    fact_id=f"{module.module_id}.block_exists",
-                    fact_type=FactType.BLOCK_EXISTS,
-                    subject=module.module_id,
-                    display_name=display_name,
-                    provenance=FactProvenance.DESIGN,
-                    parent_requirement=module.module_id,
+            key_block = (FactType.BLOCK_EXISTS.value, module.module_id)
+            if key_block not in seen_facts:
+                implementation_facts.append(
+                    ImplementationFact(
+                        fact_id=f"{module.module_id}.block_exists",
+                        fact_type=FactType.BLOCK_EXISTS,
+                        subject=module.module_id,
+                        display_name=display_name,
+                        provenance=FactProvenance.DESIGN,
+                        parent_requirement=module.module_id,
+                    )
                 )
-            )
+                seen_facts.add(key_block)
             drop_item = str(
                 config.get("drop")
                 or config.get("drops")
@@ -453,21 +515,21 @@ def _lower_implementation_facts_and_jobs(
                 or config.get("loot_table_drop")
                 or module.module_id
             )
-            implementation_facts.append(
-                ImplementationFact(
-                    fact_id=f"{module.module_id}.block_drop",
-                    fact_type=FactType.BLOCK_DROP,
-                    subject=module.module_id,
-                    object=drop_item,
-                    display_name=display_name,
-                    provenance=FactProvenance.DESIGN,
-                    parent_requirement=module.module_id,
+            key_drop = (FactType.BLOCK_DROP.value, module.module_id)
+            if key_drop not in seen_facts:
+                implementation_facts.append(
+                    ImplementationFact(
+                        fact_id=f"{module.module_id}.block_drop",
+                        fact_type=FactType.BLOCK_DROP,
+                        subject=module.module_id,
+                        object=drop_item,
+                        display_name=display_name,
+                        provenance=FactProvenance.DESIGN,
+                        parent_requirement=module.module_id,
+                    )
                 )
-            )
-            if drop_item not in item_module_ids and not any(
-                f.fact_type == FactType.ITEM_EXISTS and f.subject == drop_item
-                for f in implementation_facts
-            ):
+                seen_facts.add(key_drop)
+            if drop_item not in item_module_ids and (FactType.ITEM_EXISTS.value, drop_item) not in seen_facts:
                 implementation_facts.append(
                     ImplementationFact(
                         fact_id=f"{drop_item}.item_exists",
@@ -478,6 +540,7 @@ def _lower_implementation_facts_and_jobs(
                         parent_requirement=module.module_id,
                     )
                 )
+                seen_facts.add((FactType.ITEM_EXISTS.value, drop_item))
 
     artifact_jobs: list[dict[str, Any]] = []
     if implementation_facts:

@@ -2,7 +2,6 @@ id: design/core_loop
 slot_id: core_loop
 task: "Define the single primary gameplay loop for this Minecraft mod in one sentence."
 rules:
-  - "Exactly one sentence describing player actions and world reaction (e.g. gather resources, craft equipment, explore frontiers)."
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:

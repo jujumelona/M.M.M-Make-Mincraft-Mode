@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/unlock
+slot_id: unlock
+task: "Define the persistent milestone or system unlocked upon reaching the reward."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    unlock:
       type: string
       maxLength: 256
   required:
-    - reward
+    - unlock
   additionalProperties: false

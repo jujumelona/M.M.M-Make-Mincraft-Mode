@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/theme
+slot_id: theme
+task: "Define the primary thematic domain and setting of this mod."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    theme:
       type: string
       maxLength: 256
   required:
-    - reward
+    - theme
   additionalProperties: false

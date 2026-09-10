@@ -194,7 +194,13 @@ class PlanningPipeline:
                 lambda: compile_atomic_design(
                     prompt,
                     self.router,
-                    research={"planning_state_sha256": planning_state.get("state_sha256")},
+                    research={
+                        "planning_state_sha256": planning_state.get("state_sha256"),
+                        "goal": planning_state.get("goal"),
+                        "known": planning_state.get("known", []),
+                        "references": planning_state.get("references", []),
+                        "evidence": planning_state.get("evidence", []),
+                    },
                 ),
             )
             design = _host_operation(
@@ -222,6 +228,8 @@ class PlanningPipeline:
                 "_planning_state": dict(planning_state),
                 "_design_slots": atomic_design.get("_design_slots", {}),
                 "_atomic_facts": atomic_design.get("_implementation_facts", []),
+                "_atomic_modules": atomic_design.get("modules", []),
+                "_atomic_assets": atomic_design.get("assets", []),
             }
             try:
                 pre_retrieval_plan = _host_operation(

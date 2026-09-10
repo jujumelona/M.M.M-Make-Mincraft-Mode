@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/progression_edge
+slot_id: progression_edge
+task: "Define the trigger or requirement linking progression nodes."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    progression_edge:
       type: string
       maxLength: 256
   required:
-    - reward
+    - progression_edge
   additionalProperties: false

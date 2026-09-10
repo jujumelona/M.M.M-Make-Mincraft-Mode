@@ -1,15 +1,15 @@
-id: design/reward
-slot_id: reward
-task: "Define the tangible reward or unlocked capability upon meeting the progression goal."
+id: design/audio_identity
+slot_id: audio_identity
+task: "Define ambient soundscapes, sound effects, or musical cues."
 rules:
   - "Must cite concrete Minecraft interaction mechanics."
   - "Must stay strictly under 256 characters."
 record_schema:
   type: object
   properties:
-    reward:
+    audio_identity:
       type: string
       maxLength: 256
   required:
-    - reward
+    - audio_identity
   additionalProperties: false
