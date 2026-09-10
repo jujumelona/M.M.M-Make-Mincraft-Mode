@@ -1,0 +1,22 @@
+id: translation/ui_mapping
+input:
+  atomic_feature:
+  ui_requirement:
+  authoritative_state_projection:
+
+task:
+  map_ui_artifacts:
+
+rules:
+  - Emit UI artifacts only for explicitly required presentation or interaction surfaces.
+  - Bind displayed mutable state to an authoritative projection.
+  - Keep menu, screen, HUD, keybind, and language concerns separate.
+
+output:
+  ui_artifacts:
+  state_projection:
+  interaction_boundary:
+  unresolved_inputs:
+
+proof:
+  predicate: every UI artifact traces to one explicit presentation or interaction requirement
