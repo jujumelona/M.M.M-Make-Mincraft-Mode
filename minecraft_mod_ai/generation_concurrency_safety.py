@@ -5,12 +5,21 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from functools import wraps
+from pathlib import PurePosixPath
 from typing import Any
 
 _INSTALLED = False
 _INIT_LOCK = threading.RLock()
 _CUSTOM_LOCK_ATTR = "_mmm_custom_generation_lock"
 _INDEX_LOCK_ATTR = "_mmm_project_index_lock"
+_PATH_KEYS = frozenset({
+    "path", "target_path", "source_path", "output_path", "file", "target_file",
+    "source_file", "manifest_path", "registry_path", "resource_path",
+})
+_PATH_LIST_KEYS = frozenset({
+    "paths", "target_paths", "source_paths", "output_paths", "files",
+    "touched_paths", "written_files",
+})
 
 
 def _lock_for(instance: Any, attribute: str) -> threading.RLock:
@@ -59,54 +68,102 @@ def _install_project_index_snapshot_lock(project_index_module: Any) -> None:
         setattr(cls, name, locked)
 
     for method_name in (
-        "update_files",
-        "write_manifest",
-        "manifest",
-        "manifest_receipt",
-        "select",
-        "select_page",
+        "update_files", "write_manifest", "manifest", "manifest_receipt",
+        "select", "select_page",
     ):
         wrap(method_name)
 
 
-def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
-    """Give unscoped writers a conservative collision key.
+def _safe_path_anchor(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    rendered = value.strip().replace("\\", "/")
+    if not rendered or rendered.startswith("/"):
+        return None
+    path = PurePosixPath(rendered)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return "file://" + path.as_posix()
 
-    Explicit exclusive owned_anchors are the precise file/registry collision domain.
-    A module without such provenance must not silently become concurrent, so it gets
-    a stage-scoped fallback anchor. This preserves fail-closed behavior while letting
-    correctly scoped modules in the same stage run independently.
-    """
+
+def _inferred_config_anchors(config: Any) -> tuple[str, ...]:
+    """Extract only high-confidence filesystem collision keys from reviewed config."""
+    found: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).strip().casefold()
+                if normalized in _PATH_KEYS:
+                    anchor = _safe_path_anchor(nested)
+                    if anchor:
+                        found.add(anchor)
+                elif normalized in _PATH_LIST_KEYS and isinstance(nested, (list, tuple)):
+                    for item in nested:
+                        anchor = _safe_path_anchor(item)
+                        if anchor:
+                            found.add(anchor)
+                if isinstance(nested, (dict, list, tuple)):
+                    visit(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                visit(nested)
+
+    visit(config)
+    return tuple(sorted(found))
+
+
+def _builtin_shared_anchors(module: Any, stage: str) -> tuple[str, ...]:
+    """Model shared files that built-in generators are known to read/merge/rewrite."""
+    kind = str(getattr(module, "kind", ""))
+    if stage == "content" and kind != "integration":
+        # ExtendedContentGenerator merges its catalog/language files and rewrites the
+        # shared GeneratedExtendedContent registrar plus the main initializer binding.
+        return ("mmm://builtin/content/shared-registration",)
+    if stage == "system":
+        # Every system pack emits the common persistent/config classes and edits the
+        # shared main initializer. Different pack-specific files alone are not enough.
+        return ("mmm://builtin/system/shared-runtime",)
+    if stage == "entity":
+        # GeckoLib generation rewrites shared entity registrars, dependency metadata,
+        # fabric.mod.json and main/client entrypoint bindings.
+        return ("mmm://builtin/entity/shared-runtime",)
+    return ()
+
+
+def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
+    """Resolve explicit, inferred and built-in collision domains; fail closed last."""
     current = work_graph_module._exclusive_anchor_keys
     if getattr(current, "_mmm_unscoped_fallback", False):
         return
 
     @wraps(current)
     def exclusive_anchor_keys(module: Any) -> tuple[str, ...]:
-        exact = tuple(current(module))
-        if exact:
-            return exact
+        explicit = tuple(current(module))
         stage = work_graph_module._module_stage(module)
+        config = getattr(module, "config", {})
+        inferred = _inferred_config_anchors(config)
+        shared = _builtin_shared_anchors(module, stage)
+        anchors = tuple(dict.fromkeys((*explicit, *inferred, *shared)))
+        if anchors:
+            return anchors
         if stage in {"content", "system", "entity"}:
             return (f"mmm://unscoped-stage/{stage}",)
         return ()
 
     exclusive_anchor_keys._mmm_unscoped_fallback = True  # type: ignore[attr-defined]
+    exclusive_anchor_keys._mmm_config_anchor_inference = True  # type: ignore[attr-defined]
     exclusive_anchor_keys.__wrapped__ = current  # type: ignore[attr-defined]
     work_graph_module._exclusive_anchor_keys = exclusive_anchor_keys
 
 
 def _replace_stage_locks_with_anchor_fencing(work_graph_module: Any) -> None:
-    """Replace global stage critical sections with exact WorkGraph collision edges."""
+    """Replace global stage critical sections with WorkGraph collision edges."""
     from . import scheduler_parallel_safety_contract as scheduler_safety
 
     anchor_resolver = getattr(work_graph_module, "_exclusive_anchor_keys", None)
     if not callable(anchor_resolver) or not getattr(anchor_resolver, "_mmm_unscoped_fallback", False):
         return
-
-    # claim_ready reads these globals dynamically. Emptying them removes the old
-    # stage-wide admission barrier; WorkGraph dependency edges now serialize only
-    # nodes that own the same exact anchor (or the conservative unscoped fallback).
     scheduler_safety._STAGE_WRITE_LOCKS.clear()
     scheduler_safety._SERIAL_CPU_STAGES = ()
 
