@@ -33,11 +33,6 @@ def _install_custom_generator_lock(custom_module_generator_module: Any) -> None:
 
     @wraps(current)
     def generate(self: Any, *args: Any, **kwargs: Any):
-        # CompleteProductionOrchestrator can dispatch multiple LLM work nodes at the
-        # same time while reusing one CustomModuleGenerator. The search contract
-        # temporarily rebinds self.router/_cached_index/_cached_root, so one instance
-        # must never execute two generation calls concurrently. This lock is per
-        # generator instance; independent generators remain parallel.
         with _lock_for(self, _CUSTOM_LOCK_ATTR):
             return current(self, *args, **kwargs)
 
@@ -63,10 +58,6 @@ def _install_project_index_snapshot_lock(project_index_module: Any) -> None:
         locked.__wrapped__ = current  # type: ignore[attr-defined]
         setattr(cls, name, locked)
 
-    # update_files rebuilds _by_path from a snapshot, so concurrent writers can lose
-    # each other's updates. Reads such as select_page derive ranked files and a
-    # manifest fingerprint in multiple steps; guarding the full operation prevents a
-    # writer from changing the snapshot halfway through that derivation.
     for method_name in (
         "update_files",
         "write_manifest",
@@ -78,28 +69,44 @@ def _install_project_index_snapshot_lock(project_index_module: Any) -> None:
         wrap(method_name)
 
 
-def _replace_stage_locks_with_anchor_fencing() -> None:
-    """Remove coarse stage mutexes after the WorkGraph has exact collision fences.
+def _install_exact_anchor_fallback(work_graph_module: Any) -> None:
+    """Give unscoped writers a conservative collision key.
 
-    WorkGraph construction records each module's exclusive ``owned_anchors`` and
-    adds a dependency edge only when two nodes own the same anchor.  The old
-    scheduler additionally serialized every content/system/entity node, turning
-    unrelated files into one global critical section.  Once exact anchor fencing is
-    available, keeping those stage locks only destroys safe parallelism.
-
-    Unknown/unannotated mutation is still protected by the generator's own mutation
-    authority/write-scope contracts. Shared ProjectIndex commits remain serialized by
-    the snapshot lock above. CustomModuleGenerator remains protected per instance.
+    Explicit exclusive owned_anchors are the precise file/registry collision domain.
+    A module without such provenance must not silently become concurrent, so it gets
+    a stage-scoped fallback anchor. This preserves fail-closed behavior while letting
+    correctly scoped modules in the same stage run independently.
     """
-    from . import scheduler_parallel_safety_contract as scheduler_safety
-    from . import work_graph
-
-    anchor_resolver = getattr(work_graph, "_exclusive_anchor_keys", None)
-    if not callable(anchor_resolver):
-        # Fail closed on older/incomplete runtimes: retain the coarse locks rather
-        # than allowing potentially colliding writes to run concurrently.
+    current = work_graph_module._exclusive_anchor_keys
+    if getattr(current, "_mmm_unscoped_fallback", False):
         return
 
+    @wraps(current)
+    def exclusive_anchor_keys(module: Any) -> tuple[str, ...]:
+        exact = tuple(current(module))
+        if exact:
+            return exact
+        stage = work_graph_module._module_stage(module)
+        if stage in {"content", "system", "entity"}:
+            return (f"mmm://unscoped-stage/{stage}",)
+        return ()
+
+    exclusive_anchor_keys._mmm_unscoped_fallback = True  # type: ignore[attr-defined]
+    exclusive_anchor_keys.__wrapped__ = current  # type: ignore[attr-defined]
+    work_graph_module._exclusive_anchor_keys = exclusive_anchor_keys
+
+
+def _replace_stage_locks_with_anchor_fencing(work_graph_module: Any) -> None:
+    """Replace global stage critical sections with exact WorkGraph collision edges."""
+    from . import scheduler_parallel_safety_contract as scheduler_safety
+
+    anchor_resolver = getattr(work_graph_module, "_exclusive_anchor_keys", None)
+    if not callable(anchor_resolver) or not getattr(anchor_resolver, "_mmm_unscoped_fallback", False):
+        return
+
+    # claim_ready reads these globals dynamically. Emptying them removes the old
+    # stage-wide admission barrier; WorkGraph dependency edges now serialize only
+    # nodes that own the same exact anchor (or the conservative unscoped fallback).
     scheduler_safety._STAGE_WRITE_LOCKS.clear()
     scheduler_safety._SERIAL_CPU_STAGES = ()
 
@@ -111,11 +118,12 @@ def install() -> None:
     with _INIT_LOCK:
         if _INSTALLED:
             return
-        from . import custom_module_generator, project_index
+        from . import custom_module_generator, project_index, work_graph
 
         _install_custom_generator_lock(custom_module_generator)
         _install_project_index_snapshot_lock(project_index)
-        _replace_stage_locks_with_anchor_fencing()
+        _install_exact_anchor_fallback(work_graph)
+        _replace_stage_locks_with_anchor_fencing(work_graph)
         _INSTALLED = True
 
 
