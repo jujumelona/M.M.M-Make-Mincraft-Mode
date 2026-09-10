@@ -242,11 +242,42 @@ class DurableWorkLedger:
                 connection.commit()
                 return None
             node_id = str(row[0])
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, attempt = attempt + 1, lease_owner = ?,\n                    lease_until = ?, error = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.RUNNING.value, worker_id, now + lease_seconds, now, node_id))
+            connection.execute('\n                UPDATE tasks\n                SET state = ?, attempt = attempt + 1, lease_owner = ?,\n                    lease_until = ?, error = NULL, updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (WorkState.RUNNING.value, worker_id, now + lease_seconds, now, node_id, WorkState.PENDING.value))
             connection.commit()
-        return self.task(node_id)
+            return self.task(node_id)
 
-    def begin(self, node_id: str, *, worker_id: str='local') -> dict[str, Any]:
+    def task(self, node_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute('\n                SELECT node_id, stage, input_hash, payload_json, state, attempt,\n                       lease_owner, lease_until, output_hash, receipt_json, error, updated_at\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
+            if row is None:
+                raise WorkGraphError(f'Unknown work node: {node_id}')
+            dependencies = tuple(row[0] for row in connection.execute('SELECT dependency_id FROM edges WHERE node_id = ? ORDER BY dependency_id', (node_id,)))
+        return {'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'payload': json.loads(row[3]), 'state': row[4], 'attempt': row[5], 'lease_owner': row[6], 'lease_until': row[7], 'output_hash': row[8], 'receipt': json.loads(row[9]) if row[9] else None, 'error': row[10], 'updated_at': row[11], 'dependencies': dependencies}
+
+    def cached_receipt(self, node_id: str, *, input_hash: str | None=None) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            if input_hash is None:
+                row = connection.execute('SELECT input_hash, state, receipt_json FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
+            else:
+                row = connection.execute('SELECT input_hash, state, receipt_json FROM tasks WHERE node_id = ? AND input_hash = ?', (node_id, input_hash)).fetchone()
+        if row is None or row[1] != WorkState.SUCCEEDED.value or not row[2]:
+            return None
+        return json.loads(row[2])
+
+    def begin(self, node_id: str, *, worker_id: str='local', lease_seconds: int=900) -> None:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute('SELECT state FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
+            if row is None:
+                raise WorkGraphError(f'Unknown work node: {node_id}')
+            if row[0] not in {WorkState.PENDING.value, WorkState.RUNNING.value}:
+                raise WorkGraphError(f'Work node is not pending: {node_id} ({row[0]})')
+            connection.execute('UPDATE tasks SET state = ?, attempt = CASE WHEN state = ? THEN attempt + 1 ELSE attempt END, lease_owner = ?, lease_until = ?, error = NULL, updated_at = ? WHERE node_id = ?', (WorkState.RUNNING.value, WorkState.PENDING.value, worker_id, now + lease_seconds, now, node_id))
+            connection.commit()
+
+    def succeed(self, node_id: str, receipt: dict[str, Any]) -> None:
+        output_hash = _hash_json(receipt)
         now = time.time()
         with self._connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
@@ -254,167 +285,110 @@ class DurableWorkLedger:
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
             if row[0] == WorkState.SUCCEEDED.value:
-                connection.commit()
-                return self.task(node_id)
-            blockers = connection.execute('\n                SELECT dependency.node_id, dependency.state\n                FROM edges\n                JOIN tasks AS dependency ON dependency.node_id = edges.dependency_id\n                WHERE edges.node_id = ? AND dependency.state != ?\n                ORDER BY dependency.node_id\n                ', (node_id, WorkState.SUCCEEDED.value)).fetchall()
-            if blockers:
-                raise WorkGraphError(f'Work node {node_id} has incomplete dependencies: {blockers[:8]}')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, attempt = attempt + 1, lease_owner = ?,\n                    lease_until = NULL, error = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.RUNNING.value, worker_id, now, node_id))
+                existing = connection.execute('SELECT output_hash FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
+                if existing is not None and existing[0] == output_hash:
+                    connection.commit()
+                    return
+                raise WorkGraphError(f'Work node already succeeded with different output: {node_id}')
+            if row[0] != WorkState.RUNNING.value:
+                raise WorkGraphError(f'Work node is not running: {node_id} ({row[0]})')
+            connection.execute('UPDATE tasks SET state = ?, output_hash = ?, receipt_json = ?, error = NULL, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE node_id = ?', (WorkState.SUCCEEDED.value, output_hash, canonical_json(receipt), now, node_id))
             connection.commit()
-        return self.task(node_id)
 
-    def succeed(self, node_id: str, receipt: dict[str, Any], *, output_hash: str='') -> dict[str, Any]:
-        receipt_json = canonical_json(receipt)
-        digest = output_hash or 'sha256:' + hashlib.sha256(receipt_json.encode('utf-8')).hexdigest()
+    def fail(self, node_id: str, error: str, *, input_required: bool=False) -> None:
+        now = time.time()
+        state = WorkState.INPUT_REQUIRED.value if input_required else WorkState.FAILED.value
         with self._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
             row = connection.execute('SELECT state FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
-            if row[0] not in {WorkState.RUNNING.value, WorkState.SUCCEEDED.value}:
-                raise WorkGraphError(f'Work node {node_id} is not running: {row[0]}')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.SUCCEEDED.value, digest, receipt_json, time.time(), node_id))
+            if row[0] == WorkState.SUCCEEDED.value:
+                raise WorkGraphError(f'Cannot fail an already succeeded work node: {node_id}')
+            connection.execute('UPDATE tasks SET state = ?, error = ?, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE node_id = ?', (state, error, now, node_id))
             connection.commit()
-        return self.task(node_id)
 
-    def fail(self, node_id: str, error: str, *, input_required: bool=False) -> dict[str, Any]:
-        state = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
+    def retry(self, node_id: str) -> None:
+        now = time.time()
         with self._connect() as connection:
-            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ? AND state != ?\n                ', (
-                    state.value,
-                    error[:16384],
-                    time.time(),
-                    node_id,
-                    WorkState.CANCELLED.value,
-                ))
-            if cursor.rowcount == 0:
-                row = connection.execute(
-                    'SELECT state FROM tasks WHERE node_id = ?',
-                    (node_id,),
-                ).fetchone()
-                if row is None:
-                    raise WorkGraphError(f'Unknown work node: {node_id}')
-                if row[0] != WorkState.CANCELLED.value:
-                    raise WorkGraphError(f'Work node {node_id} changed while failing: {row[0]}')
-            connection.commit()
-        return self.task(node_id)
-
-    def retry(self, node_id: str) -> dict[str, Any]:
-        with self._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
             row = connection.execute('SELECT state FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
             if row[0] not in {WorkState.FAILED.value, WorkState.INPUT_REQUIRED.value, WorkState.CANCELLED.value}:
-                raise WorkGraphError(f'Only stopped work can be retried, got {row[0]}.')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, error = NULL, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.PENDING.value, time.time(), node_id))
+                raise WorkGraphError(f'Work node is not retryable: {node_id} ({row[0]})')
+            connection.execute('UPDATE tasks SET state = ?, error = NULL, lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE node_id = ?', (WorkState.PENDING.value, now, node_id))
             connection.commit()
-        return self.task(node_id)
-
-    def cancel(self, node_id: str, *, reason: str='cancelled') -> dict[str, Any]:
-        with self._connect() as connection:
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ? AND state != ?\n                ', (WorkState.CANCELLED.value, reason[:16384], time.time(), node_id, WorkState.SUCCEEDED.value))
-            connection.commit()
-        return self.task(node_id)
-
-    def cancel_run(self, *, reason: str='cancelled by user') -> dict[str, Any]:
-        message = reason.strip() or 'cancelled by user'
-        with self._connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
-            connection.execute('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)', ('cancel_requested', message[:16384]))
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE state != ?\n                ', (WorkState.CANCELLED.value, message[:16384], time.time(), WorkState.SUCCEEDED.value))
-            connection.execute('\n                UPDATE checkpoints\n                SET state = ?, error = ?, updated_at = ?\n                WHERE state != ?\n                ', (WorkState.CANCELLED.value, message[:16384], time.time(), WorkState.SUCCEEDED.value))
-            connection.commit()
-        return self.summary()
-
-    def resume_run(self) -> dict[str, Any]:
-        with self._connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
-            connection.execute("DELETE FROM metadata WHERE key = 'cancel_requested'")
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, error = NULL, updated_at = ?\n                WHERE state = ?\n                ', (WorkState.PENDING.value, time.time(), WorkState.CANCELLED.value))
-            connection.execute('\n                UPDATE checkpoints\n                SET state = ?, error = NULL, updated_at = ?\n                WHERE state = ?\n                ', (WorkState.FAILED.value, time.time(), WorkState.CANCELLED.value))
-            connection.commit()
-        return self.summary()
-
-    def raise_if_cancelled(self) -> None:
-        reason = self._read_meta('cancel_requested')
-        if reason:
-            raise WorkGraphError(f'Production run is cancelled: {reason}')
 
     def invalidate(self, node_id: str) -> tuple[str, ...]:
         with self._connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
-            changed = self._invalidate_many(connection, [node_id])
+            affected = self._invalidate_many(connection, (node_id,))
             connection.commit()
-        return changed
+        return affected
 
-    def cached_receipt(self, node_id: str, *, input_hash: str | None=None) -> dict[str, Any] | None:
+    def request_cancel(self) -> None:
         with self._connect() as connection:
-            row = connection.execute('\n                SELECT state, input_hash, receipt_json\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
-        if row is None or row[0] != WorkState.SUCCEEDED.value:
-            return None
-        if input_hash is not None and row[1] != input_hash:
-            return None
-        return json.loads(row[2]) if row[2] else {}
+            connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('cancel_requested', ?)", (str(time.time()),))
+            connection.commit()
+
+    def raise_if_cancelled(self) -> None:
+        with self._connect() as connection:
+            if self._meta(connection, 'cancel_requested'):
+                raise WorkGraphError('Run cancellation requested.')
+
+    def begin_checkpoint(self, checkpoint_id: str, *, stage: str, input_hash: str) -> None:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute('SELECT input_hash, state FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,)).fetchone()
+            if row is None:
+                connection.execute('INSERT INTO checkpoints(checkpoint_id, stage, input_hash, state, attempt, updated_at) VALUES (?, ?, ?, ?, ?, ?)', (checkpoint_id, stage, input_hash, WorkState.RUNNING.value, 1, now))
+            else:
+                connection.execute('UPDATE checkpoints SET stage = ?, input_hash = ?, state = ?, attempt = attempt + 1, output_hash = NULL, receipt_json = NULL, error = NULL, updated_at = ? WHERE checkpoint_id = ?', (stage, input_hash, WorkState.RUNNING.value, now, checkpoint_id))
+            connection.commit()
 
     def cached_checkpoint(self, checkpoint_id: str, *, input_hash: str) -> dict[str, Any] | None:
         with self._connect() as connection:
-            row = connection.execute('\n                SELECT state, input_hash, receipt_json\n                FROM checkpoints WHERE checkpoint_id = ?\n                ', (checkpoint_id,)).fetchone()
-        if row is None or row[0] != WorkState.SUCCEEDED.value or row[1] != input_hash:
+            row = connection.execute('SELECT input_hash, state, receipt_json FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,)).fetchone()
+        if row is None or row[0] != input_hash or row[1] != WorkState.SUCCEEDED.value or not row[2]:
             return None
-        return json.loads(row[2]) if row[2] else {}
-
-    def begin_checkpoint(self, checkpoint_id: str, *, stage: str, input_hash: str) -> None:
-        with self._connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
-            row = connection.execute('\n                SELECT input_hash, state FROM checkpoints\n                WHERE checkpoint_id = ?\n                ', (checkpoint_id,)).fetchone()
-            if row is None:
-                connection.execute('\n                    INSERT INTO checkpoints(\n                        checkpoint_id, stage, input_hash, state, attempt, updated_at\n                    ) VALUES (?, ?, ?, ?, 1, ?)\n                    ', (checkpoint_id, stage, input_hash, WorkState.RUNNING.value, time.time()))
-            else:
-                connection.execute('\n                    UPDATE checkpoints\n                    SET stage = ?, input_hash = ?, state = ?,\n                        attempt = attempt + 1, receipt_json = NULL,\n                        output_hash = NULL, error = NULL, updated_at = ?\n                    WHERE checkpoint_id = ?\n                    ', (stage, input_hash, WorkState.RUNNING.value, time.time(), checkpoint_id))
-            connection.commit()
+        return json.loads(row[2])
 
     def succeed_checkpoint(self, checkpoint_id: str, *, input_hash: str, receipt: dict[str, Any]) -> None:
-        rendered = canonical_json(receipt)
-        output_hash = 'sha256:' + hashlib.sha256(rendered.encode('utf-8')).hexdigest()
+        output_hash = _hash_json(receipt)
+        now = time.time()
         with self._connect() as connection:
-            cursor = connection.execute('\n                UPDATE checkpoints\n                SET state = ?, receipt_json = ?, output_hash = ?,\n                    error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (WorkState.SUCCEEDED.value, rendered, output_hash, time.time(), checkpoint_id, input_hash, WorkState.RUNNING.value))
-            if cursor.rowcount == 0:
-                raise WorkGraphError(f'Checkpoint changed while running: {checkpoint_id}')
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute('SELECT input_hash, state FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,)).fetchone()
+            if row is None or row[0] != input_hash or row[1] != WorkState.RUNNING.value:
+                raise WorkGraphError(f'Checkpoint is not running with the expected input: {checkpoint_id}')
+            connection.execute('UPDATE checkpoints SET state = ?, output_hash = ?, receipt_json = ?, error = NULL, updated_at = ? WHERE checkpoint_id = ?', (WorkState.SUCCEEDED.value, output_hash, canonical_json(receipt), now, checkpoint_id))
             connection.commit()
 
     def fail_checkpoint(self, checkpoint_id: str, *, input_hash: str, error: str) -> None:
+        now = time.time()
         with self._connect() as connection:
-            connection.execute('\n                UPDATE checkpoints\n                SET state = ?, error = ?, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state != ?\n                ', (WorkState.FAILED.value, error[:16384], time.time(), checkpoint_id, input_hash, WorkState.CANCELLED.value))
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute('SELECT input_hash FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,)).fetchone()
+            if row is not None and row[0] == input_hash:
+                connection.execute('UPDATE checkpoints SET state = ?, error = ?, updated_at = ? WHERE checkpoint_id = ?', (WorkState.FAILED.value, error, now, checkpoint_id))
             connection.commit()
 
-    def task(self, node_id: str) -> dict[str, Any]:
-        with self._connect() as connection:
-            row = connection.execute('\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, error, updated_at\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
-            if row is None:
-                raise WorkGraphError(f'Unknown work node: {node_id}')
-            dependencies = [value[0] for value in connection.execute('\n                    SELECT dependency_id FROM edges\n                    WHERE node_id = ? ORDER BY dependency_id\n                    ', (node_id,))]
-        return {'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'payload': json.loads(row[3]), 'state': row[4], 'attempt': row[5], 'lease_owner': row[6], 'lease_until': row[7], 'output_hash': row[8], 'receipt': json.loads(row[9]) if row[9] else None, 'error': row[10], 'updated_at': row[11], 'dependencies': dependencies}
-
-    def tasks(self, *, cursor: str='', limit: int=100, state: WorkState | None=None) -> dict[str, Any]:
-        if not 1 <= limit <= 1000:
-            raise WorkGraphError('Task page size must be between 1 and 1000.')
-        clauses = ['node_id > ?']
+    def page(self, *, cursor: str='', limit: int=100, state: WorkState | str | None=None) -> dict[str, Any]:
+        if limit < 1:
+            raise WorkGraphError('limit must be positive.')
+        normalized_state = WorkState(state).value if state is not None else None
         params: list[Any] = [cursor]
-        if state is not None:
-            clauses.append('state = ?')
-            params.append(state.value)
+        state_sql = ''
+        if normalized_state is not None:
+            state_sql = ' AND task.state = ?'
+            params.append(normalized_state)
         params.append(limit + 1)
         with self._connect() as connection:
-            rows = connection.execute(f"\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, error, updated_at\n                FROM tasks\n                WHERE {' AND '.join(clauses)}\n                ORDER BY node_id LIMIT ?\n                ", tuple(params)).fetchall()
+            rows = connection.execute(f'\n            SELECT task.node_id, task.stage, task.input_hash, task.payload_json,\n                   task.state, task.attempt, task.lease_owner, task.lease_until,\n                   task.output_hash, task.receipt_json, task.error, task.updated_at\n            FROM tasks AS task\n            WHERE task.node_id > ? {state_sql}\n            ORDER BY task.node_id\n            LIMIT ?\n            ', tuple(params)).fetchall()
             page_rows = rows[:limit]
-            node_ids = [str(row[0]) for row in page_rows]
-            dependencies: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-            for start in range(0, len(node_ids), 900):
-                batch = node_ids[start:start + 900]
-                if not batch:
-                    continue
-                placeholders = ','.join('?' for _ in batch)
-                for node_id, dependency_id in connection.execute(f"\n                    SELECT node_id, dependency_id FROM edges\n                    WHERE node_id IN ({placeholders})\n                    ORDER BY node_id, dependency_id\n                    ", tuple(batch)):
-                    dependencies[str(node_id)].append(str(dependency_id))
+            dependencies = {str(row[0]): tuple(dep[0] for dep in connection.execute('SELECT dependency_id FROM edges WHERE node_id = ? ORDER BY dependency_id', (row[0],))) for row in page_rows}
         page = [
             {
                 'node_id': row[0],
@@ -636,10 +610,6 @@ def _module_stage(
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
         return 'system'
-    # Only kinds both implemented by ExtendedContentGenerator and explicitly
-    # reviewed by the authoritative target adapter belong on the deterministic
-    # content lane. Unsupported target/kind pairs must use target-grounded source
-    # editing instead of reaching the fail-closed mutation guard.
     extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
     if module.kind in extended_kinds:
         if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
@@ -669,7 +639,7 @@ def _module_shards(
     deterministic_module_kinds: frozenset[str] | None = None,
     artifact_owners: frozenset[str] = frozenset(),
 ) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
-    """Emit bounded dependency-ready waves while exposing safe stage parallelism."""
+    """Emit fine-grained dependency-ready units so the outer DAG owns parallelism."""
     staged = [
         (
             module,
@@ -689,17 +659,36 @@ def _module_shards(
     open_by_key: dict[tuple[str, frozenset[int]], int] = {}
 
     def shard_size_for(stage: str) -> int:
+        # Generation stages that contain per-member loops default to one member per
+        # WorkNode. This exposes dependency and validation pipelining to the outer DAG,
+        # while collision anchors still serialize nodes that share mutation domains.
         if stage == 'entity':
             return _pipeline_shard_size(
                 'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                2,
+                1,
                 max(1, int(policy.entity_shard_size)),
+            )
+        if stage == 'content':
+            return _pipeline_shard_size(
+                'MMM_CONTENT_PIPELINE_SHARD_SIZE',
+                1,
+                max(1, int(policy.java_shard_size)),
+            )
+        if stage == 'system':
+            return _pipeline_shard_size(
+                'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
+                1,
+                max(1, int(policy.java_shard_size)),
             )
         if stage == 'custom':
             count = max(1, stage_counts.get(stage, 1))
             slots = min(_active_llm_slots(), count)
             per_slot = (count + slots - 1) // slots
-            return min(max(1, int(policy.java_shard_size)), max(1, per_slot))
+            return _pipeline_shard_size(
+                'MMM_CUSTOM_PIPELINE_SHARD_SIZE',
+                max(1, per_slot),
+                max(1, int(policy.java_shard_size)),
+            )
         return max(1, int(policy.java_shard_size))
 
     for module, stage in staged:
@@ -783,6 +772,7 @@ def _module_shards(
 
 _module_shards._mmm_dependency_wave_shards = True  # type: ignore[attr-defined]
 _module_shards._mmm_entity_pipeline_granularity = True  # type: ignore[attr-defined]
+_module_shards._mmm_module_level_generation = True  # type: ignore[attr-defined]
 
 def _topological_modules(modules: Sequence[ProductionModule]) -> tuple[ProductionModule, ...]:
     import heapq
