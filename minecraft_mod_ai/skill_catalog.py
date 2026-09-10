@@ -212,6 +212,30 @@ def load_skill_catalog(root: str | Path | None=None) -> dict[str, SkillContract]
     return compile_skill_catalog(root)
 
 
+def validate_skill_catalog(root: str | Path | None=None) -> dict[str, Any]:
+    findings: list[str] = []
+    contracts: dict[str, dict[str, Any]] = {}
+    try:
+        compiled = compile_skill_catalog(root)
+    except (SkillPolicyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        return {
+            "schema_version": "mmm/skill-catalog-validation-v2",
+            "skills": list(CANONICAL_SKILLS),
+            "contracts": {},
+            "findings": [f"invalid-catalog:{exc}"],
+            "passed": False,
+        }
+    for name, contract in compiled.items():
+        contracts[name] = contract.to_dict()
+    return {
+        "schema_version": "mmm/skill-catalog-validation-v2",
+        "skills": list(CANONICAL_SKILLS),
+        "contracts": contracts,
+        "findings": findings,
+        "passed": True,
+    }
+
+
 def _skill_texts(root: str | Path | None) -> dict[str, str]:
     if root is None:
         from .packaged_skill_runtime import packaged_skill_texts
