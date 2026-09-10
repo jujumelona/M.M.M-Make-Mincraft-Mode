@@ -151,16 +151,24 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
             "TEMPLATE_PORT_REGISTRY_REQUIRED: job declares dependencies but no port registry was supplied"
         )
     for dependency in dependencies:
-        port = port_registry.get(dependency)
-        if port is None:
-            raise ValueError(
-                f"TEMPLATE_JOB_DEPENDENCY_MISSING: required scoped port {dependency!r} is unavailable"
-            )
-        alias = dependency.rsplit(".", 1)[-1]
+        if isinstance(dependency, Mapping) or hasattr(dependency, "port_kind"):
+            name = getattr(dependency, "name", None) or dependency.get("name")
+            kind = getattr(dependency, "port_kind", None) or dependency.get("kind")
+            ttype = getattr(dependency, "target_type", None) or dependency.get("target_type")
+            port = port_registry.resolve(name, kind, ttype)
+            dep_name = name
+        else:
+            dep_name = str(dependency)
+            port = port_registry.get(dep_name)
+            if port is None:
+                raise ValueError(
+                    f"TEMPLATE_JOB_DEPENDENCY_MISSING: required scoped port {dep_name!r} is unavailable"
+                )
+        alias = dep_name.rsplit(".", 1)[-1]
         existing = values.get(alias)
         if existing is not None and str(existing) != port.value:
             raise ValueError(
-                f"TEMPLATE_JOB_DEPENDENCY_CONFLICT: {dependency!r} resolves to {port.value!r} "
+                f"TEMPLATE_JOB_DEPENDENCY_CONFLICT: {dep_name!r} resolves to {port.value!r} "
                 f"but input {alias!r} already has {existing!r}"
             )
         values[alias] = port.value
@@ -366,8 +374,6 @@ def execute_artifact_template(
     for logical_name, published_name in zip(logical_outputs, published_names, strict=True):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
         ports_published[published_name] = port_obj
-        if port_registry is not None:
-            port_registry.publish(port_obj)
 
     effective_base_dir = (
         base_dir or context_map.get("project_root") or context_map.get("base_dir")
@@ -388,6 +394,16 @@ def execute_artifact_template(
             "after_sha256": mat_receipt.after_sha256,
             "details": mat_receipt.details,
         }
+
+        # Post-write validation: verify the materialized target file exists
+        target_p = Path(mat_receipt.target_path)
+        if not target_p.exists():
+            raise ValueError(f"TEMPLATE_POST_WRITE_FAILED: Target file {target_p} was not written")
+
+    # Transactional commit: publish ports only after successful materialization and validations
+    if port_registry is not None:
+        for port_obj in ports_published.values():
+            port_registry.publish(port_obj)
 
     receipt = {
         "status": "PASS",

@@ -53,6 +53,7 @@ def materialize_whole_file(
     content: str | bytes,
     *,
     base_dir: Path | None = None,
+    expected_sha256: str | None = None,
 ) -> MaterializeReceipt:
     """Write complete file to target path and return SHA256 receipt."""
     p = _resolve_path(target_path, base_dir)
@@ -61,6 +62,10 @@ def materialize_whole_file(
     before_sha: str | None = None
     if p.is_file():
         before_sha = _sha256(p.read_bytes())
+        if expected_sha256 is not None and before_sha != expected_sha256:
+            raise MaterializeError(
+                f"SHA_MISMATCH: Target file {p} sha256 is {before_sha}, expected {expected_sha256}"
+            )
 
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
@@ -93,8 +98,13 @@ def materialize_java_patch(
     before_sha = _sha256(original_bytes)
     original_text = original_bytes.decode("utf-8")
 
-    if anchor not in original_text:
+    anchor_count = original_text.count(anchor)
+    if anchor_count == 0:
         raise MaterializeError(f"ANCHOR_NOT_FOUND: Anchor {anchor!r} not found in {p}")
+    if anchor_count > 1:
+        raise MaterializeError(
+            f"ANCHOR_AMBIGUOUS: Anchor {anchor!r} found {anchor_count} times in {p}; ambiguous patch location"
+        )
 
     if keep_anchor:
         # Check indentation of the anchor line
@@ -120,8 +130,15 @@ def materialize_java_patch(
 def _deep_merge_dicts(base: dict[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for k, v in updates.items():
-        if k in merged and isinstance(merged[k], dict) and isinstance(v, Mapping):
-            merged[k] = _deep_merge_dicts(merged[k], v)
+        if k in merged:
+            if isinstance(merged[k], dict) and isinstance(v, Mapping):
+                merged[k] = _deep_merge_dicts(merged[k], v)
+            elif merged[k] != v:
+                raise MaterializeError(
+                    f"JSON_KEY_CONFLICT: Conflicting value for key {k!r}: existing {merged[k]!r} vs new {v!r}"
+                )
+            else:
+                merged[k] = v
         else:
             merged[k] = v
     return merged
@@ -141,12 +158,14 @@ def materialize_json_merge(
     if p.is_file():
         raw_bytes = p.read_bytes()
         before_sha = _sha256(raw_bytes)
-        try:
-            parsed = json.loads(raw_bytes.decode("utf-8"))
-            if isinstance(parsed, dict):
-                existing_data = parsed
-        except Exception:
-            existing_data = {}
+        if raw_bytes.strip():
+            try:
+                parsed = json.loads(raw_bytes.decode("utf-8"))
+            except Exception as exc:
+                raise MaterializeError(f"JSON_CORRUPTED: Failed to parse existing JSON {p}: {exc}") from exc
+            if not isinstance(parsed, dict):
+                raise MaterializeError(f"JSON_CORRUPTED: Existing JSON {p} root is not an object: {type(parsed)}")
+            existing_data = parsed
 
     merged = _deep_merge_dicts(existing_data, fragment)
     formatted = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
@@ -296,17 +315,66 @@ def ensure_artifact_scaffolding(
                 content = content[:last_brace] + "    /* MMM:item_registry */\n" + content[last_brace:]
                 items_path.write_text(content, encoding="utf-8")
 
-    # 3. Main class initializer
+    # 3. ModBlockIds.java
+    block_ids_path = root / "src" / "main" / "java" / pkg_path / "registry" / "ModBlockIds.java"
+    if not block_ids_path.is_file():
+        mod_block_ids_skeleton = (
+            f"package {package_name}.registry;\n\n"
+            "import net.minecraft.core.registries.Registries;\n"
+            "import net.minecraft.resources.ResourceKey;\n"
+            "import net.minecraft.resources.Identifier;\n"
+            "import net.minecraft.world.level.block.Block;\n\n"
+            "public final class ModBlockIds {\n"
+            "    private ModBlockIds() {}\n\n"
+            "    /* MMM:block_keys */\n"
+            "}\n"
+        )
+        materialize_whole_file(block_ids_path, mod_block_ids_skeleton)
+    else:
+        content = block_ids_path.read_text(encoding="utf-8")
+        if "/* MMM:block_keys */" not in content:
+            last_brace = content.rfind("}")
+            if last_brace != -1:
+                content = content[:last_brace] + "    /* MMM:block_keys */\n" + content[last_brace:]
+                block_ids_path.write_text(content, encoding="utf-8")
+
+    # 4. ModBlocks.java
+    blocks_path = root / "src" / "main" / "java" / pkg_path / "registry" / "ModBlocks.java"
+    if not blocks_path.is_file():
+        mod_blocks_skeleton = (
+            f"package {package_name}.registry;\n\n"
+            "import net.minecraft.core.Registry;\n"
+            "import net.minecraft.core.registries.BuiltInRegistries;\n"
+            "import net.minecraft.world.level.block.Block;\n\n"
+            "public final class ModBlocks {\n"
+            "    private ModBlocks() {}\n\n"
+            "    /* MMM:block_registry */\n\n"
+            "    public static void initialize() {}\n"
+            "}\n"
+        )
+        materialize_whole_file(blocks_path, mod_blocks_skeleton)
+    else:
+        content = blocks_path.read_text(encoding="utf-8")
+        if "/* MMM:block_registry */" not in content:
+            last_brace = content.rfind("}")
+            if last_brace != -1:
+                content = content[:last_brace] + "    /* MMM:block_registry */\n" + content[last_brace:]
+                blocks_path.write_text(content, encoding="utf-8")
+
+    # 5. Main class initializer
     main_path = root / "src" / "main" / "java" / pkg_path / f"{main_class_name}.java"
     if not main_path.is_file():
         main_skeleton = (
             f"package {package_name};\n\n"
             "import net.fabricmc.api.ModInitializer;\n"
+            f"import {package_name}.registry.ModBlocks;\n"
             f"import {package_name}.registry.ModItems;\n\n"
             f"public final class {main_class_name} implements ModInitializer {{\n"
             f'    public static final String MOD_ID = "{mod_id}";\n\n'
             "    @Override\n"
             "    public void onInitialize() {\n"
+            "        ModBlocks.initialize();\n"
+            "        ModItems.initialize();\n"
             "        /* MMM:init */\n"
             "    }\n"
             "}\n"
@@ -315,15 +383,26 @@ def ensure_artifact_scaffolding(
     else:
         main_text = main_path.read_text(encoding="utf-8")
         dirty = False
-        if f"{package_name}.registry.ModItems;" not in main_text:
-            pkg_decl = f"package {package_name};"
-            if pkg_decl in main_text:
-                main_text = main_text.replace(
-                    pkg_decl,
-                    f"{pkg_decl}\n\nimport {package_name}.registry.ModItems;",
-                    1,
-                )
-                dirty = True
+        for reg_name in ("ModBlocks", "ModItems"):
+            import_stmt = f"import {package_name}.registry.{reg_name};"
+            if import_stmt not in main_text:
+                pkg_decl = f"package {package_name};"
+                if pkg_decl in main_text:
+                    main_text = main_text.replace(
+                        pkg_decl,
+                        f"{pkg_decl}\n\n{import_stmt}",
+                        1,
+                    )
+                    dirty = True
+        for init_call in ("ModBlocks.initialize();", "ModItems.initialize();"):
+            if init_call not in main_text:
+                if "/* MMM:init */" in main_text:
+                    main_text = main_text.replace(
+                        "/* MMM:init */",
+                        f"{init_call}\n        /* MMM:init */",
+                        1,
+                    )
+                    dirty = True
         if "/* MMM:init */" not in main_text:
             init_idx = main_text.find("onInitialize()")
             if init_idx != -1:
@@ -331,14 +410,14 @@ def ensure_artifact_scaffolding(
                 if brace_idx != -1:
                     main_text = (
                         main_text[: brace_idx + 1]
-                        + "\n        /* MMM:init */"
+                        + "\n        ModBlocks.initialize();\n        ModItems.initialize();\n        /* MMM:init */"
                         + main_text[brace_idx + 1 :]
                     )
                     dirty = True
         if dirty:
             main_path.write_text(main_text, encoding="utf-8")
 
-    # 4. en_us.json
+    # 6. en_us.json
     lang_path = root / "src" / "main" / "resources" / "assets" / mod_id / "lang" / "en_us.json"
     if not lang_path.is_file():
         lang_path.parent.mkdir(parents=True, exist_ok=True)

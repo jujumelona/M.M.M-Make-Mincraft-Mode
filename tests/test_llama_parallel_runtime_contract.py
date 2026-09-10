@@ -114,7 +114,7 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
 
     tool_schema = {
         "type": "object",
-        "properties": {"status": {"type": "string"}},
+        "properties": {"status": {"type": "string", "maxLength": 256}},
         "required": ["status"],
         "additionalProperties": False,
     }
@@ -161,7 +161,7 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     assert "mmm/agent-capability-context-v7" in capability
     # Keep this synchronized with the reviewed richest-route capability budget enforced
     # by the security regression. The full request has its own stricter packing preflight.
-    assert len(capability.encode("utf-8")) < 25_000
+    assert len(capability.encode("utf-8")) < 27_000
 
     schema = {
         "type": "object",

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from minecraft_mod_ai.artifact_validators.reference import validate_item_vertical_slice
+from minecraft_mod_ai.artifact_validators.reference import (
+    validate_block_vertical_slice,
+    validate_item_vertical_slice,
+)
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
     CompleteProductionOrchestrator,
@@ -111,3 +114,88 @@ def test_orchestrator_executes_artifact_jobs_and_materializes_to_disk(tmp_path: 
         r.get("schema_version") == "mmm/artifact-graph-execution-receipt-v1"
         for r in result.module_receipts
     )
+
+
+def test_orchestrator_executes_artifact_jobs_for_blocks_and_materializes_to_disk(tmp_path: Path):
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan("Add lunite ore block")
+    mod_id = base.spec.mod_id
+    pkg = base.spec.package_name
+
+    modules = (
+        ProductionModule(
+            "raw_lunite",
+            "item",
+            {"name": "Raw Lunite"},
+        ),
+        ProductionModule(
+            "lunite_ore",
+            "block",
+            {"name": "Lunite Ore", "drop": "raw_lunite"},
+        ),
+    )
+
+    facts, jobs = _lower_implementation_facts_and_jobs(modules, base.spec)
+    game_design = {
+        "title": "Artifact Block Execution Mod",
+        "_implementation_facts": facts,
+        "_artifact_jobs": jobs,
+    }
+    compiled = compile_production_contract(
+        requested_prompt="Add lunite ore block",
+        game_design=game_design,
+        modules=modules,
+        acceptance_tests=("lunite ore exists",),
+    )
+    proposal = complete_proposal_from_parts(
+        requested_prompt="Add lunite ore block",
+        base_proposal=base,
+        game_design={**game_design, "_production_contract": compiled.contract},
+        modules=modules,
+        acceptance_tests=compiled.acceptance_tests,
+    )
+
+    orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path / "out")
+    result = orchestrator.execute(
+        proposal,
+        approval_hash=proposal.calculate_hash(),
+        run_name="artifact-block-run",
+        options=CompleteExecutionOptions(
+            source_only=True,
+            run_jdt=False,
+            run_blockbench=False,
+            run_runtime=False,
+        ),
+    )
+
+    assert result.status == "SOURCE_READY"
+    project_root = Path(result.project_root)
+
+    # Verify that the item slice was generated and validated
+    val_item = validate_item_vertical_slice(
+        project_root,
+        mod_id=mod_id,
+        item_name="raw_lunite",
+        package_name=pkg,
+        main_class=getattr(base.spec, "main_class", "") or "",
+    )
+    assert val_item["status"] == "PASS"
+
+    # Verify that the block slice was generated and validated
+    val_block = validate_block_vertical_slice(
+        project_root,
+        mod_id=mod_id,
+        block_name="lunite_ore",
+        package_name=pkg,
+        main_class=getattr(base.spec, "main_class", "") or "",
+        expected_drop_item="raw_lunite",
+    )
+    assert val_block["status"] == "PASS"
+
+    # Verify receipt records both modules
+    receipt = next(
+        r for r in result.module_receipts
+        if r.get("schema_version") == "mmm/artifact-graph-execution-receipt-v1"
+    )
+    assert "raw_lunite" in receipt["module_ids"]
+    assert "lunite_ore" in receipt["module_ids"]
+

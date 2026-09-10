@@ -96,3 +96,64 @@ def test_materialize_job_output_dispatch(tmp_path: Path):
     receipt = materialize_job_output(job, "Item RAW_LUNITE;", base_dir=tmp_path)
     assert receipt.operation == "java_patch"
     assert "Item RAW_LUNITE;" in java_file.read_text(encoding="utf-8")
+
+
+def test_materialize_whole_file_expected_sha256(tmp_path: Path):
+    target = tmp_path / "guarded.txt"
+    r1 = materialize_whole_file(target, "version 1")
+    assert r1.status == "SUCCESS"
+
+    # Mismatch raises
+    with pytest.raises(MaterializeError, match="SHA_MISMATCH"):
+        materialize_whole_file(target, "version 2", expected_sha256="bad_sha")
+
+    # Match succeeds
+    r2 = materialize_whole_file(target, "version 2", expected_sha256=r1.after_sha256)
+    assert r2.status == "SUCCESS"
+    assert target.read_text(encoding="utf-8") == "version 2"
+
+
+def test_materialize_java_patch_ambiguous_anchor(tmp_path: Path):
+    target = tmp_path / "Ambiguous.java"
+    target.write_text("/* MMM:dup */\n/* MMM:dup */", encoding="utf-8")
+    with pytest.raises(MaterializeError, match="ANCHOR_AMBIGUOUS"):
+        materialize_java_patch(target, "/* MMM:dup */", "code")
+
+
+def test_materialize_json_merge_corrupted_fails_closed(tmp_path: Path):
+    target = tmp_path / "corrupted.json"
+    target.write_text("{ not valid json !!!", encoding="utf-8")
+    with pytest.raises(MaterializeError, match="JSON_CORRUPTED"):
+        materialize_json_merge(target, {"key": "val"})
+
+
+def test_materialize_json_merge_conflict_fails_closed(tmp_path: Path):
+    target = tmp_path / "lang.json"
+    target.write_text(json.dumps({"item.test": "Existing"}), encoding="utf-8")
+    with pytest.raises(MaterializeError, match="JSON_KEY_CONFLICT"):
+        materialize_json_merge(target, {"item.test": "Conflicting"})
+
+
+def test_ensure_artifact_scaffolding_includes_blocks(tmp_path: Path):
+    from minecraft_mod_ai.artifact_materializer import ensure_artifact_scaffolding
+
+    ensure_artifact_scaffolding(
+        tmp_path,
+        mod_id="space",
+        package_name="net.space",
+        main_class="SpaceMod",
+    )
+    block_ids = tmp_path / "src" / "main" / "java" / "net" / "space" / "registry" / "ModBlockIds.java"
+    assert block_ids.is_file()
+    assert "/* MMM:block_keys */" in block_ids.read_text(encoding="utf-8")
+
+    blocks = tmp_path / "src" / "main" / "java" / "net" / "space" / "registry" / "ModBlocks.java"
+    assert blocks.is_file()
+    assert "/* MMM:block_registry */" in blocks.read_text(encoding="utf-8")
+
+    main_class = tmp_path / "src" / "main" / "java" / "net" / "space" / "SpaceMod.java"
+    assert main_class.is_file()
+    main_content = main_class.read_text(encoding="utf-8")
+    assert "ModBlocks.initialize();" in main_content
+    assert "ModItems.initialize();" in main_content
+

@@ -106,7 +106,7 @@ def assert_strict_atomicity_bounds(
     *,
     surface: str = "",
     path: str = "$",
-    depth: int = 1,
+    depth: int = 0,
 ) -> None:
     """Enforce physical and structural atomicity bounds for small model reliability."""
     if depth > MAX_SCHEMA_DEPTH:

@@ -10,8 +10,8 @@ def test_closed_object_allows_same_instance_anyof_property_constraints() -> None
     schema = {
         "type": "object",
         "properties": {
-            "records": {"type": "array", "items": {"type": "string"}},
-            "inapplicable": {"type": "array", "items": {"type": "string"}},
+            "records": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 4},
+            "inapplicable": {"type": "array", "items": {"type": "string", "maxLength": 256}, "maxItems": 4},
         },
         "required": [],
         "anyOf": [
@@ -42,11 +42,11 @@ def test_unscoped_properties_schema_still_must_be_closed() -> None:
 def test_explicit_object_inside_anyof_still_must_be_closed() -> None:
     schema = {
         "type": "object",
-        "properties": {"value": {"type": "string"}},
+        "properties": {"value": {"type": "string", "maxLength": 256}},
         "anyOf": [
             {
                 "type": "object",
-                "properties": {"value": {"type": "string"}},
+                "properties": {"value": {"type": "string", "maxLength": 256}},
                 "required": ["value"],
             }
         ],

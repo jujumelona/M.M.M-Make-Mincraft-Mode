@@ -380,6 +380,7 @@ def _lower_implementation_facts_and_jobs(
     from .implementation_fact import FactProvenance, ImplementationFact
     from .prompt_fact_types import FactType
 
+    item_module_ids = {m.module_id for m in modules if m.kind == "item"}
     implementation_facts: list[ImplementationFact] = []
     for module in modules:
         if module.kind == "item":
@@ -408,20 +409,75 @@ def _lower_implementation_facts_and_jobs(
             if stack_limit is not None:
                 try:
                     stack_val = int(stack_limit)
-                    if 1 <= stack_val <= 64:
-                        implementation_facts.append(
-                            ImplementationFact(
-                                fact_id=f"{module.module_id}.stack_limit",
-                                fact_type=FactType.ITEM_STACK_LIMIT,
-                                subject=module.module_id,
-                                value=stack_val,
-                                display_name=display_name,
-                                provenance=FactProvenance.DESIGN,
-                                parent_requirement=module.module_id,
-                            )
-                        )
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        f"Invalid stack limit for {module.module_id}: {stack_limit}"
+                    ) from exc
+                if not (1 <= stack_val <= 64):
+                    raise ValueError(
+                        f"Stack limit {stack_val} for {module.module_id} out of bounds [1, 64]"
+                    )
+                implementation_facts.append(
+                    ImplementationFact(
+                        fact_id=f"{module.module_id}.stack_limit",
+                        fact_type=FactType.ITEM_STACK_LIMIT,
+                        subject=module.module_id,
+                        value=stack_val,
+                        display_name=display_name,
+                        provenance=FactProvenance.DESIGN,
+                        parent_requirement=module.module_id,
+                    )
+                )
+        elif module.kind == "block":
+            config = module.config if isinstance(module.config, dict) else {}
+            display_name = str(
+                config.get("name")
+                or config.get("display_name")
+                or config.get("display_name_en")
+                or module.module_id.replace("_", " ").title()
+            )
+            implementation_facts.append(
+                ImplementationFact(
+                    fact_id=f"{module.module_id}.block_exists",
+                    fact_type=FactType.BLOCK_EXISTS,
+                    subject=module.module_id,
+                    display_name=display_name,
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=module.module_id,
+                )
+            )
+            drop_item = str(
+                config.get("drop")
+                or config.get("drops")
+                or config.get("drop_item")
+                or config.get("loot_table_drop")
+                or module.module_id
+            )
+            implementation_facts.append(
+                ImplementationFact(
+                    fact_id=f"{module.module_id}.block_drop",
+                    fact_type=FactType.BLOCK_DROP,
+                    subject=module.module_id,
+                    object=drop_item,
+                    display_name=display_name,
+                    provenance=FactProvenance.DESIGN,
+                    parent_requirement=module.module_id,
+                )
+            )
+            if drop_item not in item_module_ids and not any(
+                f.fact_type == FactType.ITEM_EXISTS and f.subject == drop_item
+                for f in implementation_facts
+            ):
+                implementation_facts.append(
+                    ImplementationFact(
+                        fact_id=f"{drop_item}.item_exists",
+                        fact_type=FactType.ITEM_EXISTS,
+                        subject=drop_item,
+                        display_name=display_name,
+                        provenance=FactProvenance.DESIGN,
+                        parent_requirement=module.module_id,
+                    )
+                )
 
     artifact_jobs: list[dict[str, Any]] = []
     if implementation_facts:

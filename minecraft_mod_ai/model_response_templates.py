@@ -9,11 +9,11 @@ def _object(properties):
 
 
 def _array(items):
-    return {"type": "array", "items": items}
+    return {"type": "array", "items": items, "maxItems": 4}
 
 
-_TEXT = {"type": "string"}
-_NONEMPTY = {"type": "string", "minLength": 1}
+_TEXT = {"type": "string", "maxLength": 256}
+_NONEMPTY = {"type": "string", "minLength": 1, "maxLength": 256}
 _STATUS = {"type": "string", "enum": ["PASS", "FAIL"]}
 _REPLACEMENT = _object({"old": _NONEMPTY, "new": _TEXT,
                         "count": {"type": "integer", "minimum": 1}})
@@ -21,7 +21,7 @@ _PATCH_OPERATIONS = []
 for _kind in ("create", "replace", "edit"):
     _fields = {"operation": {"type": "string", "enum": [_kind]}, "path": _NONEMPTY}
     if _kind != "create":
-        _fields["expected_sha256"] = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        _fields["expected_sha256"] = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "maxLength": 71}
     if _kind == "edit":
         _fields["replacements"] = {**_array(_REPLACEMENT), "minItems": 1}
     else:

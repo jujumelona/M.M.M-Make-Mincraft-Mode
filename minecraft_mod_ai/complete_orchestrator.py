@@ -698,13 +698,22 @@ class CompleteProductionOrchestrator:
 
                 artifact_handled_members: list[ProductionModule] = []
                 artifact_jobs_to_run: list[ArtifactJob] = []
+                seen_job_ids: set[str] = set()
                 for module in members:
-                    if module.kind == "item" and module.module_id in jobs_by_owner:
+                    if module.module_id in jobs_by_owner:
                         artifact_handled_members.append(module)
                         for j in jobs_by_owner[module.module_id]:
-                            artifact_jobs_to_run.append(
-                                ArtifactJob.from_dict(j) if isinstance(j, dict) else j
-                            )
+                            job_obj = ArtifactJob.from_dict(j) if isinstance(j, dict) else j
+                            if job_obj.job_id not in seen_job_ids:
+                                artifact_jobs_to_run.append(job_obj)
+                                seen_job_ids.add(job_obj.job_id)
+
+                # Also include prerequisite artifact jobs (such as drop items)
+                for rj in raw_jobs:
+                    job_obj = ArtifactJob.from_dict(rj) if isinstance(rj, dict) else rj
+                    if job_obj.job_id not in seen_job_ids:
+                        artifact_jobs_to_run.append(job_obj)
+                        seen_job_ids.add(job_obj.job_id)
 
                 if artifact_jobs_to_run:
                     ensure_artifact_scaffolding(
@@ -728,15 +737,19 @@ class CompleteProductionOrchestrator:
                     from .generator import make_texture_png
 
                     for module in artifact_handled_members:
+                        subfolder = "block" if module.kind == "block" else "item"
                         tex_path = (
                             project_root
-                            / f"src/main/resources/assets/{spec.mod_id}/textures/item/{module.module_id}.png"
+                            / f"src/main/resources/assets/{spec.mod_id}/textures/{subfolder}/{module.module_id}.png"
                         )
                         if not tex_path.is_file():
                             tex_path.parent.mkdir(parents=True, exist_ok=True)
-                            color = str(module.config.get("color", "#74c7ec"))
+                            color = str(
+                                (module.config.get("color") if isinstance(module.config, dict) else None)
+                                or "#74c7ec"
+                            )
                             tex_path.write_bytes(
-                                make_texture_png(color, module.module_id, kind="item", size=16)
+                                make_texture_png(color, module.module_id, kind=subfolder, size=16)
                             )
                             touched_paths.append(str(tex_path))
 
@@ -764,7 +777,7 @@ class CompleteProductionOrchestrator:
                     receipts.append(generate_extended_content(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, modules=deterministic, policy=self.policy))
                 sidecars = [module for module in members if module.kind == 'integration' and module.config.get('integration_type') == LOCAL_AI_SIDECAR_INTEGRATION_TYPE]
                 receipts.extend(generate_local_ai_sidecar(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, module=module, policy=self.policy) for module in sidecars)
-                receipts.extend(generate_custom(module) for module in members if module.kind not in extended_kinds and module not in sidecars and (module not in research_shards))
+                receipts.extend(generate_custom(module) for module in members if module.kind not in extended_kinds and module not in sidecars and (module not in research_shards) and (module not in artifact_handled_members))
             elif stage == 'system':
                 for pack_id, pack_modules in _system_groups(members).items():
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
