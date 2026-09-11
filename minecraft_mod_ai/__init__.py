@@ -2,6 +2,7 @@
 
 import os
 
+from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
@@ -36,8 +37,10 @@ def _configure_default_llama_parallelism() -> None:
 _configure_default_llama_parallelism()
 install_hardware_concurrency()
 initialize_runtime()
+from . import custom_module_generator as _custom_module_generator
 from . import java_lsp as _java_lsp
 
+install_checkpoint_performance(_custom_module_generator)
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
 install_versioned_reference_context()
