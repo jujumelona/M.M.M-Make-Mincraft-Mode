@@ -5,6 +5,8 @@ record_schema:
   properties:
     property:
       type: string
+      minLength: 1
+      maxLength: 32
       pattern: >-
         ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|category|health|attack_damage|speed|tracking_range|width|height|archetype|behavior|screen_type|slot_count|packet_name|channel|direction|sync_type|container_size|component_name|value_type|codec|feature_type|step|biomes|dimension_type|ambient_light|coordinate_scale|temperature|downfall|precipitation|color|beneficial|sound_id|subtitle|particle_name|override_limiter|loot_table_id|type|parent|frame_type|slot|defense|toughness|action|cooldown|trigger|interaction|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind)$
     value:
