@@ -42,6 +42,7 @@ def finalize_runtime() -> None:
             host_grounding,
             llama_server_autotune,
             llama_server_runtime_tuning,
+            llama_tuning_pipeline,
             mcp_transport_pool,
             model_router,
             model_tool_aliases,
@@ -82,6 +83,7 @@ def finalize_runtime() -> None:
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
         from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
+        from .llama_native_context_authority_contract import install as install_llama_native_context_authority
         from .llama_server_response_resilience import install as install_llama_server_response_resilience
         from .mcp_child_trace_contract import install as install_mcp_child_trace
         from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
@@ -142,6 +144,7 @@ def finalize_runtime() -> None:
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
+        install_llama_native_context_authority(llama_server_autotune, llama_tuning_pipeline)
         install_tool_validation_surface()
         install_llama_finish_reason(llama_cpp_adapter)
         install_llama_server_response_resilience(llama_cpp_adapter)
