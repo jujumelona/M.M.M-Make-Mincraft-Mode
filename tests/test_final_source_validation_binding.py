@@ -1,5 +1,7 @@
-from minecraft_mod_ai.complete_orchestrator import _refresh_validation_after_build
-from minecraft_mod_ai.complete_spec import CompleteProductionError
+from minecraft_mod_ai.complete_orchestrator import (
+    CompleteProductionError,
+    _refresh_validation_after_build,
+)
 
 
 def test_final_validation_reuses_prebuild_evidence_when_manifest_is_unchanged():
