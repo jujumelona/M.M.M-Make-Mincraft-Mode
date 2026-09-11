@@ -85,7 +85,7 @@ def test_profile_authority_honors_explicit_generic_context_override(monkeypatch)
     assert args[args.index("--ctx-size") + 1] == "24576"
 
 
-def test_qwen_hotpath_alone_defaults_to_model_native_context(monkeypatch) -> None:
+def test_qwen_hotpath_alone_preserves_inherited_context_without_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
 
     def base(binary, model, config, port):
@@ -94,10 +94,10 @@ def test_qwen_hotpath_alone_defaults_to_model_native_context(monkeypatch) -> Non
     holder = SimpleNamespace(_base_args=base)
     _install_measured_fast_base_args(holder)
     args = holder._base_args("server", "model", _qwen_config(), 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
+    assert args[args.index("--ctx-size") + 1] == "4096"
 
 
-def test_qwen_hotpath_cannot_shrink_model_native_context(monkeypatch) -> None:
+def test_final_profile_authority_restores_native_qwen_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
 
@@ -108,12 +108,13 @@ def test_qwen_hotpath_cannot_shrink_model_native_context(monkeypatch) -> None:
     _install_measured_fast_base_args(holder)
     _install_context_authority(holder)
     args = holder._base_args("server", "model", _qwen_config(), 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
+    assert "--ctx-size" not in args
+    assert "-c" not in args
 
 
 def test_qwen_context_helper_uses_only_explicit_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    assert _context_size(_qwen_config()) == 0
+    assert _context_size(_qwen_config()) is None
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
     assert _context_size(_qwen_config()) == 16384
 
@@ -139,6 +140,5 @@ def test_qwen_registry_capacity_is_not_forced_into_server_ctx(monkeypatch) -> No
     holder = SimpleNamespace(_base_args=base)
     _install_context_authority(holder)
     args = holder._base_args("server", "model", _qwen_config(262144), 8910)
-    # The Qwen hotpath owns its native-auto sentinel. Profile authority must not
-    # substitute registry max_context when no explicit override exists.
-    assert args[args.index("--ctx-size") + 1] == "8192"
+    assert "--ctx-size" not in args
+    assert "-c" not in args
