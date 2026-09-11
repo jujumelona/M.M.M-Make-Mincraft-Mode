@@ -21,6 +21,12 @@ from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 
 
+_ENTITY_DESIGN = {
+    "spawn_group": "monster",
+    "texture_color": "#5BA6D8",
+}
+
+
 def _project(root: Path) -> Path:
     spec = ModSpec(
         mod_id="gecko_scale",
@@ -87,6 +93,7 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
         mod_id="gecko_scale",
         package_name="ai.minecraft.gecko_scale",
         entity_id="frost_guard",
+        **_ENTITY_DESIGN,
     )
     first_paths = _unit_paths(project, "frost_guard")
     assert all(path.is_file() for path in first_paths)
@@ -100,6 +107,7 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
         mod_id="gecko_scale",
         package_name="ai.minecraft.gecko_scale",
         entity_id="ember_guard",
+        **_ENTITY_DESIGN,
     )
     assert {path: _sha256(path) for path in first_paths} == first_hashes
     assert (_sha256(server_root), _sha256(client_root)) == root_hashes
@@ -117,6 +125,7 @@ def test_entity_generation_is_incremental_and_does_not_replay_prior_units(
         package_name="ai.minecraft.gecko_scale",
         entity_id="frost_guard",
         max_health=120.0,
+        **_ENTITY_DESIGN,
     )
     assert {path: _sha256(path) for path in second_paths} == second_hashes
     assert (_sha256(server_root), _sha256(client_root)) == root_hashes
