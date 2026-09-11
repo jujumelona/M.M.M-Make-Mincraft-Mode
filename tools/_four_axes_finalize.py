@@ -80,7 +80,7 @@ def test_relation_atomic_schemas_are_bounded():
 
 def test_passive_entity_does_not_require_positive_attack_damage_in_graph():
     source = Path("minecraft_mod_ai/content_design_graph.py").read_text(encoding="utf-8")
-    numeric = source[source.index("for numeric_key in ("):source.index("if \"attack_damage\" in props:")]
+    numeric = source[source.index("for numeric_key in ("):source.index('if "attack_damage" in props:')]
     assert '"attack_damage"' not in numeric
     assert 'float(props.get("attack_damage", "0"))' in source
     assert 'behavior_value in {"hostile_melee", "neutral_melee"}' in source
