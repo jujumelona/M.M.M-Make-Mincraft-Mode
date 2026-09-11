@@ -20,6 +20,7 @@ _BUILD_POLICY_ENV = (
     "PATH",
     "GRADLE_OPTS",
     "JAVA_OPTS",
+    "MMM_GRADLE_WORKERS",
 )
 
 
@@ -127,6 +128,30 @@ def _passing_gametest_xml(root: Path, path_value: str | Path | None) -> bool:
     except (ET.ParseError, OSError):
         return False
     return not failed and test_count > 0 and suite_count > 0
+
+
+def _gradle_worker_count() -> int:
+    raw = os.environ.get("MMM_GRADLE_WORKERS", "").strip()
+    if raw:
+        try:
+            return max(1, min(128, int(raw)))
+        except ValueError:
+            pass
+    logical = max(1, int(os.cpu_count() or 1))
+    if logical <= 2:
+        return logical
+    return max(2, min(32, logical - 1))
+
+
+def _gradle_execution_arguments(*tasks: str) -> tuple[str, ...]:
+    return (
+        "--daemon",
+        "--parallel",
+        f"--max-workers={_gradle_worker_count()}",
+        *tasks,
+        "--build-cache",
+        "--stacktrace",
+    )
 
 
 def _build_cache_profile(self: Any) -> tuple[Any, ...]:
@@ -460,15 +485,9 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             )
 
         build_result = self._run(
-            name="clean_build",
+            name="incremental_build",
             executable=gradle,
-            arguments=(
-                "--no-daemon",
-                "clean",
-                "build",
-                "--build-cache",
-                "--stacktrace",
-            ),
+            arguments=_gradle_execution_arguments("build"),
             cwd=root,
             env=environment,
             log_path=logs / "gradle-build.log",
@@ -481,19 +500,14 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 commands=tuple(commands),
                 jar_path=None,
                 gametest_report=None,
-                error="Gradle clean build failed.",
+                error="Gradle build failed.",
             )
 
         if run_gametest:
             gametest_result = self._run(
                 name="gametest",
                 executable=gradle,
-                arguments=(
-                    "--no-daemon",
-                    "runGameTestServer",
-                    "--build-cache",
-                    "--stacktrace",
-                ),
+                arguments=_gradle_execution_arguments("runGameTestServer"),
                 cwd=root,
                 env=environment,
                 log_path=logs / "gradle-gametest.log",
@@ -631,7 +645,9 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
     parallel_cached_build._mmm_project_parallel_validation = True
     parallel_cached_build._mmm_exact_input_cache = True
     parallel_cached_build._mmm_output_bound_validation_cache = True
-    parallel_cached_build._mmm_clean_build_evidence = True
+    parallel_cached_build._mmm_clean_build_evidence = False
+    parallel_cached_build._mmm_incremental_build_evidence = True
+    parallel_cached_build._mmm_gradle_daemon_reuse = True
     cls.build = parallel_cached_build
 
 
