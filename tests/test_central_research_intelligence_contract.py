@@ -39,7 +39,8 @@ class _CouncilRouter:
         **_kwargs,
     ):
         assert response_format == "json"
-        required = set((response_schema or {}).get("required", ()))
+        schema = response_schema or {}
+        required = set(schema.get("required", ()))
         if "analysis" in required:
             with self._lock:
                 self.committee_active += 1
@@ -49,30 +50,26 @@ class _CouncilRouter:
             finally:
                 with self._lock:
                     self.committee_active -= 1
-            return json.dumps(
-                {
-                    "analysis": {
-                        "must_preserve": ["requested feature"],
-                        "must_not_invent": ["unrequested map"],
-                        "subproblems": ["state", "behavior"],
-                        "risks": ["integration"],
-                        "research_questions": ["which API is authoritative?"],
-                        "confidence": 0.8,
-                    }
-                }
-            )
+            values = {
+                "must_preserve": ["requested feature"],
+                "must_not_invent": ["unrequested map"],
+                "subproblems": ["state", "behavior"],
+                "risks": ["integration"],
+                "research_questions": ["which API is authoritative?"],
+                "confidence": 0.8,
+            }
+            allowed = schema["properties"]["analysis"]["properties"]
+            return json.dumps({"analysis": {key: values[key] for key in allowed}})
         if "synthesis" in required:
-            return json.dumps(
-                {
-                    "synthesis": {
-                        "requirements": ["requested feature"],
-                        "negative_constraints": ["unrequested map"],
-                        "subproblem_order": ["state", "behavior"],
-                        "acceptance_observables": ["observable in game"],
-                        "unresolved_questions": [],
-                    }
-                }
-            )
+            values = {
+                "requirements": ["requested feature"],
+                "negative_constraints": ["unrequested map"],
+                "subproblem_order": ["state", "behavior"],
+                "acceptance_observables": ["observable in game"],
+                "unresolved_questions": [],
+            }
+            allowed = schema["properties"]["synthesis"]["properties"]
+            return json.dumps({"synthesis": {key: values[key] for key in allowed}})
         if "review" in required:
             with self._lock:
                 self.review_active += 1
@@ -82,19 +79,17 @@ class _CouncilRouter:
             finally:
                 with self._lock:
                     self.review_active -= 1
-            return json.dumps(
-                {
-                    "review": {
-                        "missing_requirements": [],
-                        "unsupported_additions": [],
-                        "contradictions": [],
-                        "research_gaps": [],
-                        "affected_sections": [],
-                        "severity": "none",
-                        "confidence": 0.9,
-                    }
-                }
-            )
+            values = {
+                "missing_requirements": [],
+                "unsupported_additions": [],
+                "contradictions": [],
+                "research_gaps": [],
+                "affected_sections": [],
+                "severity": "none",
+                "confidence": 0.9,
+            }
+            allowed = schema["properties"]["review"]["properties"]
+            return json.dumps({"review": {key: values[key] for key in allowed}})
         raise AssertionError(f"unexpected schema: {response_schema}")
 
 
