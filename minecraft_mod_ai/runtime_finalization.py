@@ -30,6 +30,7 @@ def finalize_runtime() -> None:
         from . import (
             agent_capability_context,
             agent_tool_runtime,
+            central_intelligence_amplifier,
             complete_orchestrator,
             complete_orchestrator_support,
             complete_spec,
@@ -61,6 +62,7 @@ def finalize_runtime() -> None:
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .authored_scope_research_contract import install as install_authored_scope_research
+        from .central_atomic_generation_contract import install as install_central_atomic_generation
         from .coder_mutation_authority_contract import assert_installed as assert_coder_mutation_authority
         from .coder_mutation_authority_contract import install as install_coder_mutation_authority
         from .context_budget_preflight import run_context_budget_preflight
@@ -146,6 +148,7 @@ def finalize_runtime() -> None:
         install_work_graph_receipt_integrity(work_graph)
         install_verifier_receipt_truth(work_graph)
         install_reference_query_parallelism(reference_source_research)
+        install_central_atomic_generation(central_intelligence_amplifier)
 
         install_evidence_first_pipeline()
         install_planner_design_readiness()
