@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import yaml
 
@@ -11,6 +12,7 @@ FORBIDDEN_DESIGN_RULE_FRAGMENTS = (
     "Return not_applicable",
     "Return blocked",
 )
+PLACEHOLDER = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 
 
 def _load(path: Path) -> dict:
@@ -50,3 +52,22 @@ def test_design_templates_do_not_reintroduce_invalid_generic_or_sentinel_rules()
         text = path.read_text(encoding="utf-8")
         for fragment in FORBIDDEN_DESIGN_RULE_FRAGMENTS:
             assert fragment not in text, f"forbidden rule fragment {fragment!r} in {path}"
+
+
+def test_asset_render_placeholders_have_explicit_required_input_contracts() -> None:
+    for path in sorted((TEMPLATES / "asset").glob("*.yaml")):
+        data = _load(path)
+        render = data.get("render")
+        assert isinstance(render, dict), f"asset render must be a mapping: {path}"
+        body = render.get("body")
+        assert isinstance(body, str) and body, f"asset render body must be non-empty: {path}"
+        inputs = data.get("inputs")
+        assert isinstance(inputs, dict), f"asset inputs must be declared: {path}"
+        placeholders = set(PLACEHOLDER.findall(body))
+        assert placeholders, f"asset render has no declared substitution point: {path}"
+        assert placeholders == set(inputs), f"asset placeholder/input mismatch: {path}"
+        for name, contract in inputs.items():
+            assert isinstance(contract, dict), f"asset input contract must be a mapping: {path}:{name}"
+            assert contract.get("type") == "string", f"asset input must be a string: {path}:{name}"
+            assert contract.get("required") is True, f"asset input must be required: {path}:{name}"
+            assert contract.get("minLength", 0) >= 1, f"asset input must reject empty strings: {path}:{name}"
