@@ -7,7 +7,6 @@ from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .versioned_reference_context_installation import install as install_versioned_reference_context
-from .reference_query_fanout_contract import install as install_reference_query_fanout
 
 
 def _configure_default_llama_parallelism() -> None:
@@ -40,7 +39,6 @@ from . import java_lsp as _java_lsp
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
 install_versioned_reference_context()
-install_reference_query_fanout()
 
 from .api import (
     ChatReply,
