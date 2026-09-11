@@ -1,12 +1,8 @@
 id: asset/asset_requirement
+execution: host
 input:
   atomic_feature:
   resource_mapping:
-task:
-  identify_one_asset_need:
-rules:
-  - Emit only assets required by observable behavior or explicit presentation requirements.
-  - Do not add decorative assets by convention.
 output:
   asset_requirements:
 proof:

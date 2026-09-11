@@ -1,11 +1,8 @@
 id: asset/resource_validation
+execution: host
 input:
   generated_resource:
   resource_contract:
-task:
-  validate_resource_against_contract:
-rules:
-  - Check path, identifier, references, syntax, and required properties independently.
 output:
   valid:
   failed_checks:

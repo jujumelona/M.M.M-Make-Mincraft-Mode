@@ -1,12 +1,8 @@
 id: asset/sound_plan
+execution: host
 input:
   sound_requirement:
   audio_evidence:
-task:
-  define_sound_contract:
-rules:
-  - Preserve trigger, category, looping, spatial behavior, and source only when known.
-  - Do not invent missing audio.
 output:
   sound_contract:
   unresolved_properties:
