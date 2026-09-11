@@ -20,13 +20,13 @@ def test_fast_mode_preserves_coder_project_context_budget() -> None:
         fast_mode=True,
     )
 
-    assert normal_budget == 12 * 1024
+    assert normal_budget == 4 * 1024
     assert fast_budget == normal_budget
 
 
 def test_fast_mode_still_honors_host_context_cap() -> None:
     router = SimpleNamespace(profile="", registry=None)
-    policy = SimpleNamespace(model_context_bytes=8 * 1024)
+    policy = SimpleNamespace(model_context_bytes=2 * 1024)
 
-    assert _coder_project_context_budget(router, policy, fast_mode=False) == 8 * 1024
-    assert _coder_project_context_budget(router, policy, fast_mode=True) == 8 * 1024
+    assert _coder_project_context_budget(router, policy, fast_mode=False) == 2 * 1024
+    assert _coder_project_context_budget(router, policy, fast_mode=True) == 2 * 1024
