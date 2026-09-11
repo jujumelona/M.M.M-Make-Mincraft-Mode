@@ -1,0 +1,47 @@
+id: fabric/item/register_direct_resource_location_factory
+artifact: java_fragment
+target:
+  operation: JAVA_PATCH
+  file: src/main/java/{{package_path}}/registry/ModItems.java
+  anchor: "/* MMM:item_registry */"
+requires:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+dependencies: []
+produces:
+  - name: item_registry_id
+    binding: "{{subject}}.registry_id"
+    kind: REGISTRY_ID
+    target_type: "Item"
+    value: "{{mod_id}}:{{registry_path}}"
+  - name: item_symbol
+    binding: "{{subject}}.java_symbol"
+    kind: JAVA_SYMBOL
+    target_type: "Item"
+    value: "ModItems.{{java_constant}}"
+ai_slots: []
+render:
+  language: java
+  body: |
+    public static final Item {{java_constant}} =
+        Registry.register(
+            BuiltInRegistries.ITEM,
+            ResourceLocation.fromNamespaceAndPath("{{mod_id}}", "{{registry_path}}"),
+            new Item(new Item.Properties()/* MMM:properties:{{registry_path}} */)
+        );
+validators:
+  - java_parse
+  - registry_identifier_unique
+fixture:
+  input:
+    mod_id: space
+    package_path: com/foo/space
+    java_constant: RAW_LUNITE
+    registry_path: raw_lunite
+  expected_contains:
+    - "Registry.register"
+    - "BuiltInRegistries.ITEM"
+    - "ResourceLocation.fromNamespaceAndPath"
+    - "RAW_LUNITE"
