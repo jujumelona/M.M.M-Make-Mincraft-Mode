@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import minecraft_mod_ai.asset_resume_efficiency_contract as asset_contract
 from minecraft_mod_ai.asset_resume_efficiency_contract import (
     _CachedImageRouter,
     install,
@@ -121,37 +120,51 @@ def test_corrupted_cached_source_is_regenerated(tmp_path) -> None:
     assert backend.calls == 2
 
 
-def _services(current):
+def _proposal(relative: str):
     return SimpleNamespace(
-        _generate_single_asset_source=current,
-        _generate_tiled_asset_source=current,
+        game_design={
+            "_asset_generation_plan": {
+                "schema_version": "mmm/resource-asset-generation-plan-v2",
+                "assets": [
+                    {
+                        "asset_id": "test_asset",
+                        "container": "mod",
+                        "textures": [{"target_path": relative}],
+                        "documents": [],
+                    }
+                ],
+            }
+        }
     )
 
 
-def _asset_call(service, project_root: Path, concept_dir: Path):
-    target = project_root / "src/main/resources/assets/example/textures/item/test.png"
-    request = SimpleNamespace(
-        asset_id="test_asset",
-        target_path="src/main/resources/assets/example/textures/item/test.png",
-    )
-    return service(
-        object(),
-        request=request,
-        concept_dir=concept_dir,
-        target=target,
-    ), target
+def _canonical_module(current):
+    module = SimpleNamespace()
+
+    def atomic_write(target: Path, data: bytes) -> None:
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+
+    module._atomic_write_bytes = atomic_write
+    module.generate_assets = current
+    return module
 
 
 def test_expensive_asset_phase_does_not_hold_project_write_lock(tmp_path) -> None:
+    import threading
+
     project_root = tmp_path / "project"
-    concept_dir = tmp_path / "run" / "asset-concepts"
     project_root.mkdir()
+    relative = "src/main/resources/assets/example/textures/item/test.png"
+    target = project_root / relative
     lock_was_free = False
+    module = None
 
-    def current(router, *, request, concept_dir, target):
+    def current(router, proposal, project_root, run_root):
         nonlocal lock_was_free
-        import threading
-
         entered = threading.Event()
 
         def contender():
@@ -162,70 +175,71 @@ def test_expensive_asset_phase_does_not_hold_project_write_lock(tmp_path) -> Non
         thread.start()
         lock_was_free = entered.wait(timeout=1)
         thread.join(timeout=1)
-        Path(target).parent.mkdir(parents=True, exist_ok=True)
-        Path(target).write_bytes(b"generated")
-        return {"status": "GENERATED"}
+        module._atomic_write_bytes(target, b"generated")
+        return {"status": "TEXTURE_PRODUCTION_PASS"}
 
-    services = _services(current)
-    install(services)
-    receipt, target = _asset_call(
-        services._generate_single_asset_source,
+    module = _canonical_module(current)
+    install(module)
+    receipt = module.generate_assets(
+        object(),
+        _proposal(relative),
         project_root,
-        concept_dir,
+        tmp_path / "run",
     )
 
     assert lock_was_free is True
     assert target.read_bytes() == b"generated"
-    assert receipt["asset_commit_mode"] == "staged_atomic_replace"
+    assert receipt["status"] == "TEXTURE_PRODUCTION_PASS"
+    assert module.generate_assets._mmm_path_scoped_asset_commit is True
 
 
 def test_asset_commit_refuses_stale_overwrite(tmp_path) -> None:
     project_root = tmp_path / "project"
-    concept_dir = tmp_path / "run" / "asset-concepts"
-    target = project_root / "src/main/resources/assets/example/textures/item/test.png"
+    project_root.mkdir()
+    relative = "src/main/resources/assets/example/textures/item/test.png"
+    target = project_root / relative
     target.parent.mkdir(parents=True)
     target.write_bytes(b"initial")
+    module = None
 
-    def current(router, *, request, concept_dir, target: Path):
-        Path(target).parent.mkdir(parents=True, exist_ok=True)
-        Path(target).write_bytes(b"generated")
-        final_target = project_root / request.target_path
+    def current(router, proposal, project_root, run_root):
         with project_write_lock(project_root):
-            final_target.write_bytes(b"concurrent-writer")
-        return {"status": "GENERATED"}
+            target.write_bytes(b"concurrent-writer")
+        module._atomic_write_bytes(target, b"generated")
+        return {"status": "TEXTURE_PRODUCTION_PASS"}
 
-    services = _services(current)
-    install(services)
+    module = _canonical_module(current)
+    install(module)
 
     with pytest.raises(RuntimeError, match="changed while generation was in flight"):
-        _asset_call(
-            services._generate_single_asset_source,
+        module.generate_assets(
+            object(),
+            _proposal(relative),
             project_root,
-            concept_dir,
+            tmp_path / "run",
         )
 
     assert target.read_bytes() == b"concurrent-writer"
 
 
-def test_same_filesystem_atomic_commit_does_not_copy_staged_bytes(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_unplanned_run_local_write_is_not_fenced_as_project_output(tmp_path) -> None:
     project_root = tmp_path / "project"
-    staged = tmp_path / "run" / "asset-concepts" / ".final-staging" / "asset.png"
-    target = project_root / "src/main/resources/assets/example/textures/item/asset.png"
-    staged.parent.mkdir(parents=True)
-    target.parent.mkdir(parents=True)
-    payload = b"final-image" * 4096
-    staged.write_bytes(payload)
+    project_root.mkdir()
+    relative = "src/main/resources/assets/example/textures/item/test.png"
+    run_local = tmp_path / "run" / "candidate.png"
+    module = None
 
-    def forbidden_temp_copy(*_args, **_kwargs):
-        raise AssertionError("same-filesystem commit must not allocate a copy temp file")
+    def current(router, proposal, project_root, run_root):
+        module._atomic_write_bytes(run_local, b"candidate")
+        return {"status": "TEXTURE_PRODUCTION_PASS"}
 
-    monkeypatch.setattr(asset_contract.tempfile, "mkstemp", forbidden_temp_copy)
+    module = _canonical_module(current)
+    install(module)
+    module.generate_assets(
+        object(),
+        _proposal(relative),
+        project_root,
+        tmp_path / "run",
+    )
 
-    digest = asset_contract._atomic_commit(staged, target, project_root)
-
-    assert not staged.exists()
-    assert target.read_bytes() == payload
-    assert digest == asset_contract._sha256(target)
+    assert run_local.read_bytes() == b"candidate"
