@@ -46,12 +46,8 @@ class GraphRouter:
                 and edge["target_id"] == context["target_id"]
             ]
             return {"count": len(selected)}
-        if tool_name == "submit_one_design_continue_record":
-            target = str(context.get("target_template") or "")
-            return {
-                "required": target == "design/research_fact"
-                and not context.get("accepted_record_ids")
-            }
+        if tool_name == "submit_design_decision_count":
+            return {"count": 0, "blocked_reason": ""}
         single_record = tool_name.startswith("submit_one_")
         normalized_tool = (
             tool_name.replace("submit_one_", "submit_", 1)
@@ -318,6 +314,10 @@ def test_research_facts_are_bound_to_their_actual_source():
         def generate_tool_decision(
             self, role, messages, *, tool_name, parameters, **kwargs
         ):
+            if tool_name == "submit_design_research_fact_count":
+                context = json.loads(messages[-1]["content"])
+                assert context["source_ref"] == "source_b"
+                return {"count": 1, "blocked_reason": ""}
             if tool_name in {
                 "submit_design_research_fact",
                 "submit_one_design_research_fact",
