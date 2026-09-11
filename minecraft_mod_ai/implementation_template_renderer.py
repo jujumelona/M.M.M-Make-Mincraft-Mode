@@ -51,6 +51,7 @@ def _substitute_json_data(data: Any, values: Mapping[str, Any]) -> Any:
 
 def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> str:
     validate_template_contract(template)
+    has_resolved_context = "resolved_version_context" in values
     render_values = resolved_template_values(values)
     if "inputs" in template:
         contracts = template["inputs"]
@@ -63,14 +64,19 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
             "required": [name for name, spec in contracts.items() if spec.get("required") is True],
             "additionalProperties": False,
         }
-        # The execution context may carry unrelated deterministic facts. Validate only the
-        # inputs this template declares; required version inputs can be satisfied by HOST
-        # injection above, while undeclared execution metadata never becomes model input.
-        contract_values = {
-            name: render_values[name]
-            for name in contracts
-            if name in render_values
-        }
+        if has_resolved_context:
+            # A resolved execution context intentionally carries immutable HOST facts and
+            # unrelated project metadata.  Validate only the inputs this leaf declares;
+            # required version inputs may be satisfied by HOST injection above.
+            contract_values = {
+                name: render_values[name]
+                for name in contracts
+                if name in render_values
+            }
+        else:
+            # Direct renderer calls remain fail-closed: undeclared caller values are not
+            # execution metadata and must still be rejected as accidental/invented input.
+            contract_values = dict(values)
         try:
             Draft202012Validator(schema).validate(contract_values)
         except Exception as exc:
