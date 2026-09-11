@@ -1,6 +1,5 @@
 id: design/content_entity
-task: Identify one distinct content entity required by this requirement. Semantic
-  kinds describe content roles, not implementation modules.
+task: Identify exactly one distinct content entity explicitly required by the current requirement.
 record_schema:
   type: object
   properties:
@@ -13,18 +12,17 @@ record_schema:
       type: string
       minLength: 1
       maxLength: 32
+      pattern: ^[a-z][a-z0-9_]*$
     role:
       type: string
       minLength: 1
       maxLength: 128
   required:
-  - entity_id
-  - kind
-  - role
+    - entity_id
+    - kind
+    - role
   additionalProperties: false
 rules:
-- Return one entity per record. Do not derive a single generic entity from the whole
-  prompt.
-- Reuse the exact ID of an existing entity only when its meaning and role are identical.
-- Continue until the requirement has no further content entities. Return blocked if
-  meaning is unresolved.
+  - Describe a semantic content role, not an implementation module.
+  - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
+  - Emit one entity per record. The host controls repetition and must stop or block before invoking this template when meaning is unresolved.

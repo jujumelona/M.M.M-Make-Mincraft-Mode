@@ -1,9 +1,8 @@
 id: design/resource_sink
 slot_id: resource_sink
-task: "Define how gathered resources are spent, consumed, or maintained."
+task: "Define how explicitly required resources are spent, consumed, or maintained."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent resources, costs, upkeep, or mechanics."
 record_schema:
   type: object
   properties:

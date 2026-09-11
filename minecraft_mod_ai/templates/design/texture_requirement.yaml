@@ -1,9 +1,8 @@
 id: design/texture_requirement
 slot_id: texture_requirement
-task: "Define the primary item and block textures needed for this mod."
+task: "Define the explicit texture assets required by the requested content."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent items, blocks, entities, or visual assets."
 record_schema:
   type: object
   properties:

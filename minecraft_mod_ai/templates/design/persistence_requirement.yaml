@@ -1,9 +1,8 @@
 id: design/persistence_requirement
 slot_id: persistence_requirement
-task: "Define custom data, capability state, or player statistics saved to disk."
+task: "Define custom state that must persist across saves or sessions."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent saved state, capabilities, or statistics."
 record_schema:
   type: object
   properties:

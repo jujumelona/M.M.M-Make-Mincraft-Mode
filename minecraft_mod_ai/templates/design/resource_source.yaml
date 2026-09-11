@@ -1,9 +1,8 @@
 id: design/resource_source
 slot_id: resource_source
-task: "Define where and how foundational resources are gathered in the world."
+task: "Define where and how explicitly required foundational resources are gathered."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent resources, locations, drops, or gathering mechanics."
 record_schema:
   type: object
   properties:

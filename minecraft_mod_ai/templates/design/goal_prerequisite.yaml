@@ -2,8 +2,7 @@ id: design/goal_prerequisite
 slot_id: goal_prerequisite
 task: "Define the prerequisite condition or materials required before the first goal."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent prerequisites."
 record_schema:
   type: object
   properties:

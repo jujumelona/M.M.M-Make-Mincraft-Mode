@@ -2,8 +2,7 @@ id: design/audio_identity
 slot_id: audio_identity
 task: "Define ambient soundscapes, sound effects, or musical cues."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent mechanics."
 record_schema:
   type: object
   properties:

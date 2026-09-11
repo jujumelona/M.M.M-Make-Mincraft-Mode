@@ -1,5 +1,5 @@
 id: design/decision
-task: Resolve one design decision required by this requirement.
+task: Resolve exactly one required design decision for a host-supplied slot.
 record_schema:
   type: object
   properties:
@@ -12,10 +12,10 @@ record_schema:
       minLength: 1
       maxLength: 256
   required:
-  - slot_id
-  - value
+    - slot_id
+    - value
   additionalProperties: false
 rules:
-- Use an exact slot_id from the allowed_slots supplied by the host.
-- Return one decision per record. Do not fill unrelated slots.
-- Return not_applicable if the requirement needs no additional design decisions.
+  - Use exactly one slot_id from allowed_slots supplied by the host.
+  - Resolve only that slot from explicit requirement/context evidence; do not fill unrelated slots or invent missing requirements.
+  - The host must skip this template when no unresolved allowed slot is required.

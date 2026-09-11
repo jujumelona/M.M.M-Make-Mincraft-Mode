@@ -1,9 +1,8 @@
 id: design/world_interaction
 slot_id: world_interaction
-task: "Define unique physics, environmental hazards, or world interactions."
+task: "Define explicitly required physics, environmental hazards, or world interactions."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent physics, hazards, structures, or world mechanics."
 record_schema:
   type: object
   properties:

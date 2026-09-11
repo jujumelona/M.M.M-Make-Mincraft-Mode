@@ -1,9 +1,9 @@
 id: design/core_loop_step
 slot_id: core_loop_step
-task: "Define the sequential steps forming the cyclical gameplay loop."
+task: "Define one sequential step in the cyclical gameplay loop."
 rules:
-  - "Must cite concrete Minecraft interaction mechanics."
-  - "Must stay strictly under 256 characters."
+  - "Use only explicit requirements and supplied context; do not invent steps or mechanics."
+  - "Return one loop step only."
 record_schema:
   type: object
   properties:
