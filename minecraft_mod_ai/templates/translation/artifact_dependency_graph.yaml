@@ -1,3 +1,4 @@
+id: translation/artifact_dependency_graph
 input:
   artifact_kinds: []
 
