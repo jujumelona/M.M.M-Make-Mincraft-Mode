@@ -2,7 +2,8 @@ name: Finish parallel generation lanes
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,7 +11,7 @@ permissions:
 
 jobs:
   patch-and-verify:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,166 +21,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Patch remaining serial generation bottlenecks
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          work = Path('minecraft_mod_ai/work_graph.py')
-          text = work.read_text(encoding='utf-8')
-          old = """        if stage == 'content':
-            # Deterministic extended-content aggregation is governed by the explicit
-            # ScalePolicy. Environment-tuned pipeline widths belong to model-owned
-            # stages; allowing them here can silently explode one bounded aggregate
-            # into one work node per deterministic content module.
-            return max(1, int(policy.java_shard_size))
-"""
-          new = """        if stage == 'content':
-            return _pipeline_shard_size(
-                'MMM_CONTENT_PIPELINE_SHARD_SIZE',
-                1,
-                max(1, int(policy.java_shard_size)),
-            )
-"""
-          if old not in text:
-              raise SystemExit('content shard target not found')
-          text = text.replace(old, new, 1)
-          old = """        if stage == 'entity':
-            return _pipeline_shard_size(
-                'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                2,
-                max(1, int(policy.entity_shard_size)),
-            )
-"""
-          new = """        if stage == 'entity':
-            return _pipeline_shard_size(
-                'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                1,
-                max(1, int(policy.entity_shard_size)),
-            )
-"""
-          if old not in text:
-              raise SystemExit('entity shard target not found')
-          work.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          orch = Path('minecraft_mod_ai/complete_orchestrator.py')
-          text = orch.read_text(encoding='utf-8')
-          old = """        blockbench_receipts: list[dict[str, Any]] = []
-        unresolved: list[str] = []
-        asset_shards: list[dict[str, Any]] = []
-        runtime_init_lock = threading.RLock()
-"""
-          new = """        blockbench_receipts: list[dict[str, Any]] = []
-        unresolved: list[str] = []
-        asset_shards: list[dict[str, Any]] = []
-        review_futures: list[tuple[str, Future[dict[str, Any]]]] = []
-        review_futures_lock = threading.Lock()
-        runtime_init_lock = threading.RLock()
-"""
-          if old not in text:
-              raise SystemExit('review state target not found')
-          text = text.replace(old, new, 1)
-
-          old = """                        if options.run_blockbench and (not options.source_only):
-                            blockbench_receipts.append(run_named_checkpoint(ledger, f'blockbench-review-{module.module_id}', stage='validate:blockbench', input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': entity_receipt}, action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file()))
-                        elif options.run_blockbench:
-"""
-          new = """                        if options.run_blockbench and (not options.source_only):
-                            review_future = review_pool.submit(
-                                run_named_checkpoint,
-                                ledger,
-                                f'blockbench-review-{module.module_id}',
-                                stage='validate:blockbench',
-                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': entity_receipt},
-                                action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root),
-                                encode=lambda value: value,
-                                decode=lambda cached: cached,
-                                validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
-                            )
-                            with review_futures_lock:
-                                review_futures.append((module.module_id, review_future))
-                        elif options.run_blockbench:
-"""
-          if old not in text:
-              raise SystemExit('inline blockbench target not found')
-          text = text.replace(old, new, 1)
-
-          old = """        commit_pool = ThreadPoolExecutor(max_workers=max(1, int(capacities['commit'])), thread_name_prefix='commit')
-        node_futures: dict[str, Future[Any]] = {}
-"""
-          new = """        commit_pool = ThreadPoolExecutor(max_workers=max(1, int(capacities['commit'])), thread_name_prefix='commit')
-        review_workers_raw = os.environ.get('MMM_BLOCKBENCH_REVIEW_WORKERS', '').strip()
-        try:
-            review_workers = int(review_workers_raw) if review_workers_raw else max(1, min(4, int(capacities['cpu_io'])))
-        except ValueError:
-            review_workers = max(1, min(4, int(capacities['cpu_io'])))
-        review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
-        node_futures: dict[str, Future[Any]] = {}
-"""
-          if old not in text:
-              raise SystemExit('pool target not found')
-          text = text.replace(old, new, 1)
-
-          old = """                break
-        finally:
-            cpu_pool.shutdown(wait=True, cancel_futures=True)
-            llm_pool.shutdown(wait=True, cancel_futures=True)
-            image_pool.shutdown(wait=True, cancel_futures=True)
-            commit_pool.shutdown(wait=True, cancel_futures=True)
-        asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
-"""
-          new = """                break
-            review_results = [(module_id, future.result()) for module_id, future in tuple(review_futures)]
-            blockbench_receipts.extend(receipt for _, receipt in sorted(review_results, key=lambda item: item[0]))
-        finally:
-            cpu_pool.shutdown(wait=True, cancel_futures=True)
-            llm_pool.shutdown(wait=True, cancel_futures=True)
-            image_pool.shutdown(wait=True, cancel_futures=True)
-            commit_pool.shutdown(wait=True, cancel_futures=True)
-            review_pool.shutdown(wait=True, cancel_futures=True)
-        asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
-"""
-          if old not in text:
-              raise SystemExit('review join target not found')
-          orch.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          test = Path('tests/test_pipeline_parallel_bottlenecks.py')
-          text = test.read_text(encoding='utf-8')
-          text = text.replace(
-              'from minecraft_mod_ai.complete_spec import ProductionModule\n',
-              'from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator\nfrom minecraft_mod_ai.complete_spec import ProductionModule\n',
-              1,
-          )
-          addition = """
-
-
-def test_blockbench_review_uses_dedicated_parallel_lane():
-    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
-    assert "thread_name_prefix='blockbench_review'" in source
-    assert 'review_pool.submit(' in source
-    assert 'blockbench_receipts.append(run_named_checkpoint' not in source
-    assert 'MMM_BLOCKBENCH_REVIEW_WORKERS' in source
-"""
-          if 'test_blockbench_review_uses_dedicated_parallel_lane' not in text:
-              text += addition
-          test.write_text(text, encoding='utf-8')
-          PY
+      - name: Apply patch
+        run: python tools/apply_parallel_generation_lanes.py
       - name: Install package
         run: python -m pip install -e . pytest ruff
-      - name: Verify focused concurrency contracts
+      - name: Verify
         run: |
           python -m compileall -q minecraft_mod_ai tests/test_pipeline_parallel_bottlenecks.py
           python -m ruff check minecraft_mod_ai/work_graph.py minecraft_mod_ai/complete_orchestrator.py tests/test_pipeline_parallel_bottlenecks.py --select F,E7,E9
           python -m pytest -q tests/test_pipeline_parallel_bottlenecks.py tests/test_extended_content_lock_parallelism.py
-      - name: Commit validated changes and self-delete workflow
+      - name: Commit
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/workflows/finish-parallel-generation-lanes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/finish-parallel-generation-lanes.yml tools/apply_parallel_generation_lanes.py
           git add minecraft_mod_ai/work_graph.py minecraft_mod_ai/complete_orchestrator.py tests/test_pipeline_parallel_bottlenecks.py
-          if git diff --cached --quiet; then
-            exit 0
-          fi
           git commit -m 'Parallelize entity review and restore singleton generation shards'
           git pull --rebase origin main
           git push origin HEAD:main
