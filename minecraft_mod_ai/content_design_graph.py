@@ -381,7 +381,6 @@ def compile_content_graph(
                 )
             for numeric_key in (
                 "health",
-                "attack_damage",
                 "speed",
                 "tracking_range",
                 "width",

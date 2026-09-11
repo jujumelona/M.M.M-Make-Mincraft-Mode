@@ -1,7 +1,6 @@
 "One declared concern per model call, plus deterministic executable leaf templates."
 
 import json
-import re
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -152,20 +151,7 @@ def _run_host_owned_records(
         return {"records": records, "reason": "", "evidence_refs": refs}
 
     if identifier == "design/content_entity":
-        requirement = str(normalized_context.get("requirement") or "").lower()
-        number_words = {
-            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-            "한": 1, "하나": 1, "두": 2, "둘": 2, "세": 3, "셋": 3,
-            "네": 4, "넷": 4, "다섯": 5, "여섯": 6, "일곱": 7,
-            "여덟": 8, "아홉": 9, "열": 10,
-        }
-        explicit_counts = [int(value) for value in re.findall(r"(?<![A-Za-z0-9_])(\d{1,2})(?![A-Za-z0-9_])", requirement)]
-        tokens = re.findall(r"[a-z]+|[가-힣]+", requirement)
-        explicit_counts.extend(number_words[token] for token in tokens if token in number_words)
-        target_count = max(explicit_counts, default=1)
-        if not 1 <= target_count <= 64:
-            raise TemplateBlocked(f"TEMPLATE_ENTITY_CARDINALITY_UNSUPPORTED: {target_count}")
+        target_count = 1
         for index in range(target_count):
             record = run_single_record_template(
                 router,
