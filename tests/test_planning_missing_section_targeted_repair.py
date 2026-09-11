@@ -164,10 +164,9 @@ def test_repairs_only_missing_criterion_section_and_preserves_existing_records(m
 
 
 def test_section_repair_resumes_an_interrupted_concern(monkeypatch):
-    import json
     from copy import deepcopy
     import pytest
-    from minecraft_mod_ai import task_template_runner as runner
+    from minecraft_mod_ai import bounded_record_template as bounded
     from minecraft_mod_ai.planning_criterion_fragments import store_criterion_progress, load_requirement_progress
 
     criteria = ('State survives restart.',)
@@ -184,17 +183,17 @@ def test_section_repair_resumes_an_interrupted_concern(monkeypatch):
     monkeypatch.setattr(adaptive, '_assemble_requirement_plan', lambda *args: {})
 
     def generate(*args, response_schema, tool_name, **kwargs):
-        context = json.loads(args[2][1]['content'])
-        calls.append((tool_name, len(context['accepted_records'])))
+        calls.append(tool_name)
         if len(calls) == 2:
             raise TimeoutError('repair interrupted')
-        record = None if context['accepted_records'] else {
+        if 'count' in response_schema.get('properties', {}):
+            return {'count': 1, 'blocked_reason': ''}
+        return {
             field: f'authored {field}'
-            for field in response_schema['properties']['record']['anyOf'][0]['required']}
-        return {'status': 'record' if record is not None else 'done', 'record': record,
-                'reason': '', 'evidence_refs': []}
+            for field in response_schema['required']
+        }
 
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', generate)
+    monkeypatch.setattr(bounded, 'generate_fixed_template_value', generate)
     kwargs = dict(requirement_order=('req',), completed_details={}, checkpoint=snapshots.append)
     with pytest.raises(TimeoutError):
         adaptive._finish_requirement(job, None, working_state=state, **kwargs)
