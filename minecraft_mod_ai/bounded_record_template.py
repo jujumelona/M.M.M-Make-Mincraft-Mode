@@ -13,10 +13,10 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import MAX_MODEL_FIELDS, MAX_MODEL_STRING_CHARS
+from .model_output_atomicity_contract import MAX_MODEL_STRING_CHARS
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
-from .task_template_runner import TemplateBlocked
+from .template_errors import TemplateBlocked
 
 _EMPTY_REASON = "No applicable records in the supplied context."
 
@@ -27,19 +27,22 @@ def _contains_blank_string(value: Any, schema: dict[str, Any] | None = None) -> 
         return not value.strip() and schema.get("minLength", 1) > 0
     if isinstance(value, dict):
         properties = schema.get("properties", {})
-        return any(_contains_blank_string(item, properties.get(key)) for key, item in value.items())
+        return any(
+            _contains_blank_string(item, properties.get(key))
+            for key, item in value.items()
+        )
     if isinstance(value, list):
         return any(_contains_blank_string(item, schema.get("items")) for item in value)
     return False
 
 
 def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
+    """Schema for one complete concern result; no arbitrary record-count ceiling."""
     return {
         "type": "object",
         "properties": {
             "records": {
                 "type": "array",
-                "maxItems": MAX_MODEL_FIELDS,
                 "items": deepcopy(template["record_schema"]),
             },
             "blocked_reason": {
@@ -48,7 +51,6 @@ def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
             },
             "evidence_refs": {
                 "type": "array",
-                "maxItems": MAX_MODEL_FIELDS,
                 "items": {"type": "string", "minLength": 1},
                 "uniqueItems": True,
             },
@@ -70,7 +72,9 @@ def normalize_bounded_record_response(identifier, template, value, allowed_refs)
         raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}: {unknown_refs}")
     if blocked_reason:
         if records:
-            raise ValueError(f"TEMPLATE_BLOCKED: {identifier} cannot carry records and a blocker")
+            raise ValueError(
+                f"TEMPLATE_BLOCKED: {identifier} cannot carry records and a blocker"
+            )
         raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {blocked_reason}")
 
     seen: set[str] = set()
@@ -78,9 +82,16 @@ def normalize_bounded_record_response(identifier, template, value, allowed_refs)
     for record in records:
         if _contains_blank_string(record, template["record_schema"]):
             raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
-        key = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        key = json.dumps(
+            record,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         if key in seen:
-            raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: duplicate record in {identifier}")
+            raise TemplateBlocked(
+                f"TEMPLATE_NO_PROGRESS: duplicate record in {identifier}"
+            )
         seen.add(key)
         accepted.append(record)
     return {
@@ -99,12 +110,16 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Return the complete bounded record set for one narrowed concern in one model call."""
+    """Return the complete record set for one narrowed concern in one model call."""
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     allowed_refs = {str(ref) for ref in allowed_refs}
     schema = record_batch_response_schema(template)
-    binding = "bounded-record-v2:" + task_binding(template, normalized_context, allowed_refs)
+    binding = "bounded-record-v3:" + task_binding(
+        template,
+        normalized_context,
+        allowed_refs,
+    )
     saved = (progress or {}).get(binding)
 
     if saved is None:
@@ -112,10 +127,10 @@ def run_bounded_record_template(
         system_prompt = (
             str(template.get("task") or "Produce the requested records.")
             + ("\n" + rules if rules else "")
-            + "\nReturn the complete bounded record set supported by this narrowed context in this single call. "
-              "Return an empty records array when the concern has no authored/applicable record. "
-              "Do not emit continuation, done, applicability, retry, or loop-control decisions. "
-              "Set blocked_reason only when a missing fact makes a correct result impossible."
+            + "\nReturn the complete record set supported by this narrowed context in this single call. "
+            "Return an empty records array when the concern has no authored/applicable record. "
+            "Do not emit continuation, done, applicability, retry, or loop-control decisions. "
+            "Set blocked_reason only when a missing fact makes a correct result impossible."
         )
         value = generate_fixed_template_value(
             router,
@@ -125,7 +140,10 @@ def run_bounded_record_template(
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {**normalized_context, "allowed_evidence_refs": sorted(allowed_refs)},
+                        {
+                            **normalized_context,
+                            "allowed_evidence_refs": sorted(allowed_refs),
+                        },
                         ensure_ascii=False,
                     ),
                 },
@@ -142,7 +160,10 @@ def run_bounded_record_template(
         value = deepcopy(saved)
 
     return normalize_bounded_record_response(
-        identifier, template, value, allowed_refs
+        identifier,
+        template,
+        value,
+        allowed_refs,
     )
 
 
