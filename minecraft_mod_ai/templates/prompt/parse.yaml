@@ -1,37 +1,32 @@
 id: prompt/parse
 execution: records
-task: Extract one explicitly authored fact or requested behavior. Do not group independent
-  statements or infer additional features. Explicit restrictions and delivery requirements
-  have separate tasks.
+task: Extract one explicitly authored fact or requested behavior. Do not group independent statements or infer additional features. Explicit restrictions and delivery requirements have separate tasks.
 record_schema:
   type: object
   properties:
-    statement: &id001
+    statement:
       type: string
       minLength: 1
+      maxLength: 256
     source_quote:
       type: string
       minLength: 0
+      maxLength: 256
   required:
-  - statement
+    - statement
   additionalProperties: false
 input_schema:
   type: object
   properties:
-    original_prompt: *id001
+    original_prompt:
+      type: string
+      minLength: 1
   required:
-  - original_prompt
+    - original_prompt
   additionalProperties: false
 rules:
-- Use only the original user prompt as evidence. Do not invent behavior, parameters,
-  APIs, versions, files, defaults or implementation details.
-- Game and feature names are input data, never template categories. Preserve the authored
-  meaning and exclusions.
-- Return one record at a time for this concern only. Return done after all applicable
-  records have been supplied.
-- If the prompt contains no records for this concern, return not_applicable with a
-  concrete reason. Never emit empty or placeholder records.
-- Return blocked only for information necessary to resolve this concern. Missing implementation
-  choices are not prompt ambiguity.
-- External evidence IDs are unavailable at prompt capture; return evidence_refs as
-  an empty array.
+  - Use only the original user prompt as evidence. Do not invent behavior, parameters, APIs, versions, files, defaults or implementation details.
+  - Game and feature names are input data, never template categories. Preserve the authored meaning and exclusions.
+  - Return one record at a time for this concern only; the host controls repetition and termination.
+  - If the prompt contains no record for this concern, emit no content record and let the host terminate the record loop.
+  - Missing implementation choices are not prompt ambiguity; only explicitly authored prompt facts belong here.
