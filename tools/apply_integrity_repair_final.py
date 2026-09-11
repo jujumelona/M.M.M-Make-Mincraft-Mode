@@ -17,7 +17,7 @@ def write(path: str, value: str) -> None:
 def replace_once(path: str, old: str, new: str) -> None:
     value = read(path)
     old_count = value.count(old)
-    if old_count == 0 and value.count(new) == 1:
+    if old_count == 0 and value.count(new) >= 1:
         return
     if old_count != 1:
         raise RuntimeError(f"{path}: expected exactly one patch target, found {old_count}")
