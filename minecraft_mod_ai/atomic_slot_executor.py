@@ -54,9 +54,9 @@ def _bounded_context(context: Mapping[str, Any]) -> str:
     # Project the immutable HOST snapshot into its compact deterministic target facts.
     # The full resolved_version_context contains schemas/evidence/admission data that the
     # small model neither needs nor should spend context budget reading.
-    from .implementation_template_renderer import _resolved_render_values
+    from .version_template_context import resolved_template_values
 
-    projected = _resolved_render_values(context)
+    projected = resolved_template_values(context)
     projected.pop("resolved_version_context", None)
     try:
         encoded = json.dumps(
