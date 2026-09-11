@@ -13,6 +13,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import MAX_MODEL_FIELDS
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 from .task_template_runner import TemplateBlocked
@@ -38,11 +39,13 @@ def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
         "properties": {
             "records": {
                 "type": "array",
+                "maxItems": MAX_MODEL_FIELDS,
                 "items": deepcopy(template["record_schema"]),
             },
             "blocked_reason": {"type": "string", "maxLength": 512},
             "evidence_refs": {
                 "type": "array",
+                "maxItems": MAX_MODEL_FIELDS,
                 "items": {"type": "string", "minLength": 1},
                 "uniqueItems": True,
             },
@@ -93,7 +96,7 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Return the complete record set for one concern in exactly one model call."""
+    """Return the complete bounded record set for one narrowed concern in one model call."""
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     allowed_refs = {str(ref) for ref in allowed_refs}
@@ -106,7 +109,7 @@ def run_bounded_record_template(
         system_prompt = (
             str(template.get("task") or "Produce the requested records.")
             + ("\n" + rules if rules else "")
-            + "\nReturn the complete record set supported by this narrowed context in this single call. "
+            + "\nReturn the complete bounded record set supported by this narrowed context in this single call. "
               "Return an empty records array when the concern has no authored/applicable record. "
               "Do not emit continuation, done, applicability, retry, or loop-control decisions. "
               "Set blocked_reason only when a missing fact makes a correct result impossible."
