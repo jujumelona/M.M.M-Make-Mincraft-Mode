@@ -13,7 +13,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import MAX_MODEL_FIELDS
+from .model_output_atomicity_contract import MAX_MODEL_FIELDS, MAX_MODEL_STRING_CHARS
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 from .task_template_runner import TemplateBlocked
@@ -42,7 +42,10 @@ def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
                 "maxItems": MAX_MODEL_FIELDS,
                 "items": deepcopy(template["record_schema"]),
             },
-            "blocked_reason": {"type": "string", "maxLength": 512},
+            "blocked_reason": {
+                "type": "string",
+                "maxLength": MAX_MODEL_STRING_CHARS,
+            },
             "evidence_refs": {
                 "type": "array",
                 "maxItems": MAX_MODEL_FIELDS,
