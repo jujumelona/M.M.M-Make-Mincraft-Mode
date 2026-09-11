@@ -16,7 +16,6 @@ _MARKER = "_mmm_exact_source_observation_budget_v1"
 _CONTEXT_BUDGET_MARKER = "_mmm_atomic_source_context_budget_v1"
 _MIN_FRAGMENT_BYTES = 128
 _PAGE_RESERVE_BYTES = 128
-_ATOMIC_SOURCE_CONTEXT_BYTES = 4 * 1024
 
 
 def _utf8_fragments(text: str, max_bytes: int) -> tuple[tuple[int, bytes], ...]:
@@ -183,7 +182,7 @@ def _bounded_pages(
 
 
 def _install_context_budget(target_module: ModuleType) -> None:
-    """Keep the initial source page atomic even when the live model context is huge."""
+    """Preserve the live coder budget; atomicity is enforced by page fragmentation."""
 
     current = target_module._coder_project_context_budget
     if bool(getattr(current, _CONTEXT_BUDGET_MARKER, False)):
@@ -198,7 +197,7 @@ def _install_context_budget(target_module: ModuleType) -> None:
     ) -> int:
         live_budget = int(current(router, policy, fast_mode=fast_mode))
         host_budget = max(1024, int(getattr(policy, "model_context_bytes", 1024)))
-        return min(_ATOMIC_SOURCE_CONTEXT_BYTES, host_budget, max(1024, live_budget))
+        return min(host_budget, max(1024, live_budget))
 
     setattr(atomic_source_context_budget, _CONTEXT_BUDGET_MARKER, True)
     target_module._coder_project_context_budget = atomic_source_context_budget
