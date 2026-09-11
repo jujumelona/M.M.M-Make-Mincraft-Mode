@@ -8,6 +8,7 @@ record_schema:
   properties:
     core_loop:
       type: string
+      minLength: 1
       maxLength: 256
   required:
     - core_loop

@@ -8,6 +8,7 @@ record_schema:
   properties:
     network_requirement:
       type: string
+      minLength: 1
       maxLength: 256
   required:
     - network_requirement

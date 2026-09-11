@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import assert_strict_atomicity_bounds
@@ -17,7 +18,9 @@ MAX_SLOT_CONTEXT_CHARS = 4096
 
 
 class SlotFillError(RuntimeError):
-    pass
+    def __init__(self, message, *, diagnostic=None):
+        super().__init__(message)
+        self.diagnostic = diagnostic
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ def _bounded_context(context: Mapping[str, Any]) -> str:
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
-            default=str,
+            allow_nan=False,
         )
     except Exception as exc:
         raise SlotFillError(f"SLOT_CONTEXT_INVALID: context is not serializable: {exc}") from exc
@@ -78,6 +81,8 @@ def fill_one_slot(
     if isinstance(slot, SlotDefinition):
         slot_def = slot
     else:
+        if "default" in slot:
+            raise SlotFillError("SLOT_DEFAULT_FORBIDDEN: explicit defaults are not evidence")
         slot_def = SlotDefinition(
             slot_id=str(slot["id"] if "id" in slot else slot["slot_id"]),
             schema=dict(slot["schema"]),
@@ -111,6 +116,7 @@ def fill_one_slot(
     ]
 
     last_error: Exception | None = None
+    diagnostic = None
     for attempt in range(max_retries + 1):
         try:
             value = generate_fixed_template_value(
@@ -133,21 +139,29 @@ def fill_one_slot(
                 if "value" in value:
                     return value["value"]
             return value
-        except Exception as exc:
+        except ValidationError as exc:
             last_error = exc
+            diagnostic = {
+                "code": "SLOT_SCHEMA_VIOLATION",
+                "artifact": slot_def.slot_id,
+                "path": list(exc.absolute_path),
+                "expected": {"validator": exc.validator, "constraint": exc.validator_value},
+                "actual": exc.instance,
+                "repair_scope": [slot_def.slot_id],
+            }
             if attempt < max_retries:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"The prior value violated the declared slot schema: "
-                            f"{type(exc).__name__}. Return only a valid value supported "
-                            "by the same evidence."
-                        ),
-                    }
-                )
+                # Keep one bounded repair request, never accumulate failed prompts.
+                messages = messages[:2] + [{
+                    "role": "user",
+                    "content": _bounded_context({
+                        "invalid_leaf": exc.instance,
+                        "schema": schema,
+                        "validator_error": diagnostic,
+                    }),
+                }]
 
     raise SlotFillError(
         f"SLOT_RETRY_EXHAUSTED: Failed to resolve {slot_def.slot_id} after "
-        f"{max_retries + 1} attempts: {last_error}"
+        f"{max_retries + 1} attempts: {last_error}",
+        diagnostic=diagnostic,
     )

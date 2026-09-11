@@ -8,12 +8,16 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
+from .template_contract_validation import PLACEHOLDER, validate_template_contract
+
 
 class TemplateRenderError(ValueError):
     pass
 
 
-_PLACEHOLDER_PATTERN = re.compile(r"\{\{([a-zA-Z0-9_]+)\}\}")
+_PLACEHOLDER_PATTERN = PLACEHOLDER
 
 
 def _substitute_string(template_str: str, values: Mapping[str, Any]) -> str:
@@ -45,6 +49,22 @@ def _substitute_json_data(data: Any, values: Mapping[str, Any]) -> Any:
 
 
 def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> str:
+    validate_template_contract(template)
+    if "inputs" in template:
+        contracts = template["inputs"]
+        schema = {
+            "type": "object",
+            "properties": {
+                name: {key: value for key, value in spec.items() if key != "required"}
+                for name, spec in contracts.items()
+            },
+            "required": [name for name, spec in contracts.items() if spec.get("required") is True],
+            "additionalProperties": False,
+        }
+        try:
+            Draft202012Validator(schema).validate(dict(values))
+        except Exception as exc:
+            raise TemplateRenderError(f"RENDER_INPUT_CONTRACT: {exc}") from exc
     render_spec = template.get("render")
     if render_spec is None:
         raise TemplateRenderError(

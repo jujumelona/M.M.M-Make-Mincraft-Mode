@@ -8,6 +8,7 @@ record_schema:
   properties:
     crafting_role:
       type: string
+      minLength: 1
       maxLength: 256
   required:
     - crafting_role

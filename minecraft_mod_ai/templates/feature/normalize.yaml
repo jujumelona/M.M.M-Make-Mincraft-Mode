@@ -1,5 +1,7 @@
 id: feature/normalize
 task: Normalize one discovered feature into a stable implementation-neutral statement without adding behavior.
+standalone: true
+# Production preserves discovery without a second model normalization pass.
 rules:
   - Use only the supplied feature and allowed evidence.
   - Preserve scope exactly; do not add or remove behavior.

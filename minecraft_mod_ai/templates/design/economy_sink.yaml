@@ -8,6 +8,7 @@ record_schema:
   properties:
     economy_sink:
       type: string
+      minLength: 1
       maxLength: 256
   required:
     - economy_sink

@@ -6,7 +6,6 @@ steps:
 - minecraft/advancement/parent
 - minecraft/advancement/display
 - minecraft/advancement/criterion
-- minecraft/advancement/requirement
 - minecraft/advancement/reward
 - minecraft/advancement/datagen
 - minecraft/advancement/integration

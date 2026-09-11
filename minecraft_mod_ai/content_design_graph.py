@@ -531,9 +531,9 @@ def compile_content_graph(
                 asset_kind = "gui"
                 w, h = 256, 256
             else:
-                mold_template_id = "asset/item_sprite"
-                asset_kind = "item"
-                w, h = 16, 16
+                raise ValueError(
+                    f"ASSET_KIND_UNSUPPORTED: no texture mold for module kind {kind!r} ({eid})"
+                )
 
             mold_tmpl = load_template(mold_template_id)
             prompt_text = render_template(

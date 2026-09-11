@@ -5,6 +5,7 @@ record_schema:
   properties:
     relation_type:
       type: string
+      minLength: 1
       maxLength: 32
       pattern: ^(consumes|produces|contains|drops|requires|unlocks|upgrades|opens|controls|spawns|transports_to|displays|synchronizes|key_[A-Za-z0-9])$
     source_id:

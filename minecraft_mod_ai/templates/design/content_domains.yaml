@@ -1,5 +1,7 @@
 id: design/content_domains
 task: Select the directly required Minecraft content domains.
+standalone: true
+# Retained for standalone use; production derives domains from the content graph.
 record_schema:
   type: object
   properties:

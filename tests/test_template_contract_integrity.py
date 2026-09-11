@@ -98,6 +98,8 @@ def _assert_placeholders_declared(data: dict[str, Any], path: Path) -> None:
     if not placeholders:
         return
     declared: set[str] = set()
+    declared.update(data.get("requires", ()))
+    declared.update(slot["id"] for slot in data.get("ai_slots", ()))
     for input_key in ("inputs", "input"):
         section = data.get(input_key)
         if isinstance(section, dict):
@@ -150,12 +152,4 @@ def test_all_canonical_templates_are_valid_and_contract_safe() -> None:
 
 
 def test_legacy_root_templates_cannot_drift_from_runtime_ssot() -> None:
-    if not LEGACY_MIRROR_ROOT.exists():
-        return
-    for mirror in _yaml_files(LEGACY_MIRROR_ROOT):
-        relative = mirror.relative_to(LEGACY_MIRROR_ROOT)
-        canonical = CANONICAL_ROOT / relative
-        assert canonical.exists(), f"legacy mirror has no canonical template: {relative}"
-        assert mirror.read_bytes() == canonical.read_bytes(), (
-            f"legacy template drift: {relative}; edit minecraft_mod_ai/templates first"
-        )
+    assert not LEGACY_MIRROR_ROOT.exists(), "A second production template root is forbidden"

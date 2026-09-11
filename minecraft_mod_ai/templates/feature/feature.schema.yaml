@@ -1,4 +1,6 @@
 id: feature/feature.schema
+standalone: true
+# Documentation schema for host-assembled records, not a model generation task.
 schema:
   type: object
   properties:

@@ -6,9 +6,8 @@ from pathlib import Path, PurePosixPath
 import yaml
 from jsonschema import Draft202012Validator
 
-# Runtime code must resolve task contracts only from this package-owned tree.  A
-# repository-level ``templates/`` directory may exist for other tooling, but it is
-# intentionally not a fallback or shadow authority for agent execution.
+# Production templates live only in this package-owned tree. Development fixtures
+# must use an explicitly named fixture directory, never a second templates root.
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
 ROOT = RUNTIME_TEMPLATE_ROOT  # Compatibility for callers that inspect the catalog root.
 
@@ -62,6 +61,9 @@ def _load(identifier: str):
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("id") != identifier:
         raise ValueError(f"TEMPLATE_ID: invalid template {identifier}")
+    from .template_contract_validation import validate_template_contract
+
+    validate_template_contract(value)
     for key in ("record_schema", "input_schema", "output_schema"):
         if key in value:
             Draft202012Validator.check_schema(value[key])

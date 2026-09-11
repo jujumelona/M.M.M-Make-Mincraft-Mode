@@ -1,5 +1,7 @@
 ﻿id: reuse/workflow
 execution: sequence
+standalone: true
+# Descriptive manifest; the runtime executes REUSE_SEQUENCE directly.
 steps:
 - reuse/query_build
 - reuse/official_docs
