@@ -298,14 +298,6 @@ def _call_timeout_seconds(explicit: float | None) -> float:
 
 
 def _default_bridge_path() -> Path:
-    repository = (
-        Path(__file__).resolve().parents[1]
-        / "integrations"
-        / "mineflayer"
-        / "bridge.mjs"
-    )
-    if repository.is_file():
-        return repository
     return (
         Path(__file__).resolve().parent
         / "integrations"

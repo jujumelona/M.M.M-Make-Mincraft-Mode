@@ -82,8 +82,12 @@ Colab = "https://colab.research.google.com/github/jujumelona/M.M.M-Make-Mincraft
 Issues = "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/issues"
 
 [tool.setuptools]
-packages = ["minecraft_mod_ai", "minecraft_mod_ai.config", "minecraft_mod_ai.integrations", "minecraft_mod_ai.model_adapters"]
 py-modules = ["download_resources"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["minecraft_mod_ai*"]
+namespaces = false
 
 [tool.setuptools.package-data]
 minecraft_mod_ai = ["config/*.yaml", "templates/**/*.yaml", "packaged_skills.json", "integrations/mineflayer/*", "data/host_version_catalog.json", "data/official_version_evidence.json"]

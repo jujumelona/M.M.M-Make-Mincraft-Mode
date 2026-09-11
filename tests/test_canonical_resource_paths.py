@@ -19,13 +19,13 @@ def test_config_path_rejects_parent_escape() -> None:
         config_paths.config_path("../pyproject.toml")
 
 
-def test_mineflayer_default_resolves_to_packaged_canonical_bridge() -> None:
+def test_mineflayer_default_is_packaged_canonical_bridge() -> None:
     packaged = (
         Path(mineflayer_bridge.__file__).resolve().parent
         / "integrations"
         / "mineflayer"
         / "bridge.mjs"
     )
-    assert mineflayer_bridge._default_bridge_path().resolve() == packaged.resolve()
+    assert mineflayer_bridge._default_bridge_path() == packaged
     assert packaged.is_file()
     assert (packaged.parent / "package.json").is_file()
