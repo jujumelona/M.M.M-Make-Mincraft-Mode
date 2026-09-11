@@ -151,7 +151,18 @@ def _run_host_owned_records(
         return {"records": records, "reason": "", "evidence_refs": refs}
 
     if identifier == "design/content_entity":
-        target_count = 1
+        cardinality = run_single_record_template(
+            router,
+            "design/content_entity_count",
+            context={**normalized_context, "accepted_records": []},
+            progress=progress,
+            checkpoint=checkpoint,
+        )
+        target_count = int(cardinality["count"])
+        if not 1 <= target_count <= 64:
+            raise TemplateBlocked(
+                f"TEMPLATE_ENTITY_CARDINALITY_INVALID: {target_count}"
+            )
         for index in range(target_count):
             record = run_single_record_template(
                 router,
