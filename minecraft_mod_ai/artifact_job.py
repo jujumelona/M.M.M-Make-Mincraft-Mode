@@ -24,6 +24,7 @@ class ArtifactJob:
     validation_receipts: list[dict[str, Any]] = field(default_factory=list)
     rendered_output: str = ""
     context_id: str = ""
+    canonical_leaf: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class ArtifactJob:
             "validation_receipts": list(self.validation_receipts),
             "rendered_output": self.rendered_output,
             "context_id": self.context_id,
+            "canonical_leaf": self.canonical_leaf,
         }
 
     @classmethod
@@ -64,4 +66,5 @@ class ArtifactJob:
             validation_receipts=list(data.get("validation_receipts", [])),
             rendered_output=str(data.get("rendered_output", "")),
             context_id=str(data.get("context_id", "")),
+            canonical_leaf=str(data.get("canonical_leaf", "")),
         )

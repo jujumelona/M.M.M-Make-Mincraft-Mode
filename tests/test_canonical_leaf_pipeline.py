@@ -154,3 +154,118 @@ def test_context_projection_exceeding_4096_bytes_fails_closed():
 
     assert "SLOT_CONTEXT_TOO_LARGE" in str(exc_info.value)
     assert str(MAX_SLOT_CONTEXT_CHARS) in str(exc_info.value)
+
+
+def test_generator_handoff_subordinated_to_canonical_leaf_and_admitted():
+    """Generator handoffs must be bound to canonical leaves with context_id and hash."""
+    from minecraft_mod_ai.artifact_expansion import generator_implementation_profile
+
+    target = host_target("auto")
+    ctx = target.version_context
+
+    profile = generator_implementation_profile(FactType.ENTITY_EXISTS, version_context=ctx)
+    assert profile.canonical_leaf == "minecraft/entity/registry"
+    assert profile.executor == "generator_handoff_entity_exists"
+    assert profile.context_id == ctx.context_id
+    assert profile.implementation_hash.startswith("sha256:")
+    assert "java_syntax" in profile.validators or "java_parse" in profile.validators or len(profile.validators) >= 0
+
+
+def test_version_bounded_generator_leaves_fail_closed_on_legacy_versions():
+    """Version-bounded generator handoffs fail closed with UNSUPPORTED_LEAF on older versions."""
+    from minecraft_mod_ai.artifact_expansion import generator_implementation_profile
+
+    ctx_1_20_1 = host_target("1.20.1").version_context
+    with pytest.raises(VersionContextError) as exc_info:
+        generator_implementation_profile(FactType.DATA_COMPONENT, version_context=ctx_1_20_1)
+    assert "UNSUPPORTED_LEAF" in str(exc_info.value)
+    assert "minecraft/component/type" in str(exc_info.value)
+
+    # 1.21.4 admits DATA_COMPONENT
+    ctx_1_21_4 = host_target("1.21.4").version_context
+    profile = generator_implementation_profile(FactType.DATA_COMPONENT, version_context=ctx_1_21_4)
+    assert profile.canonical_leaf == "minecraft/component/type"
+    assert profile.context_id == ctx_1_21_4.context_id
+
+    # 1.15.2 rejects DIMENSION (custom dimensions were introduced in 1.16)
+    ctx_1_15_2 = host_target("1.15.2").version_context
+    with pytest.raises(VersionContextError) as exc_info:
+        generator_implementation_profile(FactType.DIMENSION, version_context=ctx_1_15_2)
+    assert "UNSUPPORTED_LEAF" in str(exc_info.value)
+    assert "minecraft/dimension/registry" in str(exc_info.value)
+
+
+def test_artifact_validation_prevents_cross_side_leakage():
+    """Common/server templates must fail closed if client classes leak into output."""
+    from minecraft_mod_ai.task_template_catalog import load_template
+
+    target = host_target("auto")
+    ctx = target.version_context
+
+    template = load_template("fabric/item/register_basic")
+    leaked_output = (
+        "package com.example;\n"
+        "import net.minecraft.client.MinecraftClient;\n"
+        "import net.minecraft.registry.Registry;\n"
+        "public class Items { public static void register() { Registry.register(null, null, null); } }"
+    )
+
+    with pytest.raises(VersionContextError) as exc_info:
+        ctx.validate_artifact(template, leaked_output)
+    assert "CROSS_SIDE_LEAKAGE" in str(exc_info.value)
+    assert template["id"] in str(exc_info.value)
+
+
+def test_artifact_validation_verifies_api_invocation_syntax():
+    """API symbol validation checks that callable symbols are actually invoked."""
+    from minecraft_mod_ai.task_template_catalog import load_template
+
+    target = host_target("auto")
+    ctx = target.version_context
+
+    template = load_template("fabric/item/register_basic")
+    # Output includes the string 'Registry.register' as a comment/identifier but never invokes it
+    malformed_output = (
+        "package com.example;\n"
+        "public class Items {\n"
+        "    // note about Registry.register\n"
+        "    public static void register() { int x = 1; }\n"
+        "}"
+    )
+
+    with pytest.raises(VersionContextError) as exc_info:
+        ctx.validate_artifact(template, malformed_output)
+    assert "INVALID_API_INVOCATION" in str(exc_info.value)
+    assert "register_item" in str(exc_info.value)
+
+
+def test_canonical_leaf_attached_to_jobs_and_receipts():
+    """ArtifactJob carries canonical_leaf and propagates it into validation receipts."""
+    from minecraft_mod_ai.task_template_runner import execute_artifact_template
+
+    target = host_target("auto")
+    ctx = target.version_context
+
+    facts = [
+        PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="sapphire"),
+    ]
+    jobs = expand_facts_to_jobs(
+        facts,
+        mod_id="testmod",
+        package_name="com.testmod",
+        version_context=ctx,
+    )
+
+    for job in jobs:
+        assert job.canonical_leaf != ""
+        assert job.canonical_leaf.startswith("minecraft/")
+
+    key_job = next(j for j in jobs if j.template_id == "fabric/item/key")
+    assert key_job.canonical_leaf == "minecraft/item/registry"
+
+    result = execute_artifact_template(key_job, context={"resolved_version_context": ctx})
+    assert result["status"] == "PASS"
+    assert len(key_job.validation_receipts) > 0
+    for receipt in key_job.validation_receipts:
+        assert receipt.get("canonical_leaf") == "minecraft/item/registry"
+

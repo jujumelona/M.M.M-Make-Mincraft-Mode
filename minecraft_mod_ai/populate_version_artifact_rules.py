@@ -500,6 +500,67 @@ def build_version_facts(
                     "validator_profile": "json_schema",
                 },
             }
+        elif leaf in {
+            "minecraft/entity/registry",
+            "minecraft/screen/registration",
+            "minecraft/network_payload/registration",
+            "minecraft/block_entity/registry",
+            "minecraft/effect/registry",
+            "minecraft/sound/registration",
+            "minecraft/particle/registry",
+            "minecraft/item/interaction",
+            "minecraft/block/interaction",
+        }:
+            suffix = leaf.split("/")[1]
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": {
+                    "executor": f"generator_handoff_{suffix}",
+                    "canonical_leaf": leaf,
+                    "validator_profile": "java_syntax",
+                },
+            }
+        elif leaf == "minecraft/component/type":
+            if v < Version("1.20.5"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "DATA_COMPONENTS_INTRODUCED_IN_1.20.5",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": {
+                        "executor": "generator_handoff_data_component",
+                        "canonical_leaf": leaf,
+                        "validator_profile": "java_syntax",
+                    },
+                }
+        elif leaf in {"minecraft/dimension/registry", "minecraft/biome/registry"}:
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                suffix = leaf.split("/")[1]
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": {
+                        "executor": f"generator_handoff_{suffix}",
+                        "canonical_leaf": leaf,
+                        "validator_profile": "json_schema",
+                    },
+                }
+        elif leaf in {"minecraft/worldgen/configured_feature", "minecraft/advancement/requirement"}:
+            suffix = leaf.split("/")[1]
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": {
+                    "executor": f"generator_handoff_{suffix}",
+                    "canonical_leaf": leaf,
+                    "validator_profile": "json_schema",
+                },
+            }
         elif leaf == "minecraft/item/component":
             if v < Version("1.20.5"):
                 leaf_bindings[leaf] = {
@@ -542,6 +603,20 @@ def build_version_facts(
         "recipe": is_modern_recipes,
         "loot": True,
         "tag": is_modern_recipes,
+        "ENTITY_EXISTS": True,
+        "GUI_EXISTS": True,
+        "NETWORK_PACKET": True,
+        "BLOCK_ENTITY_EXISTS": True,
+        "DATA_COMPONENT": v >= Version("1.20.5"),
+        "WORLDGEN_FEATURE": True,
+        "DIMENSION": v >= Version("1.16"),
+        "BIOME": v >= Version("1.16"),
+        "STATUS_EFFECT": True,
+        "SOUND_EVENT": True,
+        "PARTICLE_TYPE": True,
+        "ADVANCEMENT": True,
+        "CUSTOM_ITEM_BEHAVIOR": True,
+        "CUSTOM_BLOCK_BEHAVIOR": True,
         "UNSUPPORTED": False,
     }
     facts["api_symbols"] = {
@@ -564,7 +639,15 @@ def build_version_facts(
         "registries_block": (
             "Registries.BLOCK" if is_modern_registry else "Registry.BLOCK_KEY"
         ),
+        "EntityType": "net.minecraft.entity.EntityType",
+        "BlockEntityType": "net.minecraft.block.entity.BlockEntityType",
+        "StatusEffect": "net.minecraft.entity.effect.StatusEffect",
+        "SoundEvent": "net.minecraft.sound.SoundEvent",
+        "ParticleType": "net.minecraft.particle.ParticleType",
+        "ScreenHandlerType": "net.minecraft.screen.ScreenHandlerType",
     }
+    if v >= Version("1.20.5"):
+        facts["api_symbols"]["ComponentType"] = "net.minecraft.component.ComponentType"
     facts["schemas"] = {
         k: ARTIFACT_SCHEMAS[k] for k in admitted_templates if k in ARTIFACT_SCHEMAS
     }

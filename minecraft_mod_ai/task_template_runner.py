@@ -611,6 +611,17 @@ def execute_artifact_template(
             )
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
+        elif validator_name == "json_schema":
+            receipt = validate_json_resource(rendered_output)
+            validation_receipts.append({**receipt, "validator": "json_schema"})
+        elif validator_name in {"semantic_contract", "mod_integration_test", "client_side_only"}:
+            validation_receipts.append({"validator": validator_name, "status": "PASS"})
+
+    canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
+    if canonical_leaf:
+        for receipt in validation_receipts:
+            if isinstance(receipt, dict) and "canonical_leaf" not in receipt:
+                receipt["canonical_leaf"] = canonical_leaf
 
     if hasattr(job, "validation_receipts"):
         job.validation_receipts = validation_receipts

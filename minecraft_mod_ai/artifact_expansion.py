@@ -95,6 +95,9 @@ FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
 # their executable leaf catalog is complete.  Keeping this declaration explicit prevents
 # a supported higher-level capability from being mistaken for an ArtifactJob leaf while
 # still failing closed for every undeclared fact type.
+from dataclasses import dataclass
+from hashlib import sha256
+
 DECLARED_GENERATOR_HANDOFFS = frozenset(
     {
         FactType.ENTITY_EXISTS,
@@ -116,6 +119,70 @@ DECLARED_GENERATOR_HANDOFFS = frozenset(
         FactType.CONTENT_RELATION,
     }
 )
+
+GENERATOR_CANONICAL_LEAF_MAP: dict[FactType, str] = {
+    FactType.ENTITY_EXISTS: "minecraft/entity/registry",
+    FactType.GUI_EXISTS: "minecraft/screen/registration",
+    FactType.NETWORK_PACKET: "minecraft/network_payload/registration",
+    FactType.BLOCK_ENTITY_EXISTS: "minecraft/block_entity/registry",
+    FactType.DATA_COMPONENT: "minecraft/component/type",
+    FactType.WORLDGEN_FEATURE: "minecraft/worldgen/configured_feature",
+    FactType.DIMENSION: "minecraft/dimension/registry",
+    FactType.BIOME: "minecraft/biome/registry",
+    FactType.STATUS_EFFECT: "minecraft/effect/registry",
+    FactType.SOUND_EVENT: "minecraft/sound/registration",
+    FactType.PARTICLE_TYPE: "minecraft/particle/registry",
+    FactType.ENTITY_LOOT: "minecraft/loot/entry",
+    FactType.ADVANCEMENT: "minecraft/advancement/requirement",
+    FactType.EQUIPMENT_ARMOR: "minecraft/item/properties",
+    FactType.CUSTOM_ITEM_BEHAVIOR: "minecraft/item/interaction",
+    FactType.CUSTOM_BLOCK_BEHAVIOR: "minecraft/block/interaction",
+    FactType.CONTENT_RELATION: "minecraft/item/integration",
+}
+
+
+@dataclass(frozen=True)
+class GeneratorImplementationProfile:
+    fact_type: FactType
+    canonical_leaf: str
+    executor: str
+    implementation_hash: str
+    context_id: str
+    required_symbols: tuple[str, ...]
+    validators: tuple[str, ...]
+
+
+def generator_implementation_profile(
+    fact_type: FactType,
+    *,
+    version_context=None,
+) -> GeneratorImplementationProfile:
+    if fact_type not in GENERATOR_CANONICAL_LEAF_MAP:
+        raise ArtifactExpansionError(
+            f"GENERATOR_HANDOFF_UNMAPPED: no canonical leaf binding for generator {fact_type.value}"
+        )
+    canonical_leaf = GENERATOR_CANONICAL_LEAF_MAP[fact_type]
+    context_id = ""
+    if version_context is not None:
+        version_context.require_leaf_binding(canonical_leaf)
+        context_id = version_context.context_id
+    from .task_template_catalog import load_template
+
+    leaf_doc = load_template(canonical_leaf)
+    required_symbols = tuple(leaf_doc.get("host_requirements", {}).get("symbols", ()))
+    validators = tuple(leaf_doc.get("validators", ()))
+    impl_hash = "sha256:" + sha256(
+        f"{fact_type.value}:{canonical_leaf}:{context_id}".encode()
+    ).hexdigest()
+    return GeneratorImplementationProfile(
+        fact_type=fact_type,
+        canonical_leaf=canonical_leaf,
+        executor=f"generator_handoff_{fact_type.value.lower()}",
+        implementation_hash=impl_hash,
+        context_id=context_id,
+        required_symbols=required_symbols,
+        validators=validators,
+    )
 
 
 def implementation_route(fact_type: FactType) -> str:
@@ -261,19 +328,23 @@ def expand_facts_to_jobs(
         route = implementation_route(fact.fact_type)
         if route == "generator":
             # The ImplementationFact remains in the proposal and is consumed by the
-            # module generator selected from its content capability.  It is deliberately
-            # not represented as a fake/empty ArtifactJob.
+            # module generator selected from its content capability. It is admitted
+            # through the version context leaf binding.
+            if version_context is not None:
+                generator_implementation_profile(fact.fact_type, version_context=version_context)
             continue
         canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES[fact.fact_type]
         if version_context is not None:
             for leaf_id in canonical_leaf_ids:
                 version_context.require_leaf_binding(leaf_id)
 
-        template_ids = []
+        leaf_template_pairs: list[tuple[str, str]] = []
         for leaf_id in canonical_leaf_ids:
-            template_ids.extend(_templates_for_canonical_leaf(leaf_id, version_context))
-        if not template_ids:
-            template_ids = list(FACT_EXPANSIONS[fact.fact_type])
+            for tid in _templates_for_canonical_leaf(leaf_id, version_context):
+                leaf_template_pairs.append((leaf_id, tid))
+        if not leaf_template_pairs:
+            default_leaf = canonical_leaf_ids[0]
+            leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS[fact.fact_type]]
 
         resource_values = {}
         if fact.fact_type in {
@@ -284,11 +355,11 @@ def expand_facts_to_jobs(
             from .resource_fact_inputs import resource_inputs
 
             identifier, resource_values = resource_inputs(fact, mod_id)
-            template_ids = (identifier,)
+            leaf_template_pairs = [(canonical_leaf_ids[0], identifier)]
         subject = _require_subject(fact)
         constant = _constant_name(subject)
 
-        for template_id in template_ids:
+        for canonical_leaf, template_id in leaf_template_pairs:
             step_name = template_id.rsplit("/", 1)[-1]
             job_id = f"{subject}.{step_name}"
 
@@ -374,6 +445,7 @@ def expand_facts_to_jobs(
                 produces=tuple(produces),
                 deterministic_inputs=deterministic_inputs,
                 context_id=version_context.context_id if version_context is not None else "",
+                canonical_leaf=canonical_leaf,
             )
             prior = seen_jobs.get(job_id)
             if prior is not None:

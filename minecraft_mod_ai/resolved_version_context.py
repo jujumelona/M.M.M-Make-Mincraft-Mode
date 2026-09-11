@@ -248,22 +248,65 @@ class ResolvedVersionContext:
 
     def validate_artifact(self, template, output):
         from jsonschema import Draft202012Validator
+        import re
 
         rule = self.admit_template(template)
+        template_id = template.get("id", "")
+        lang = template.get("render", {}).get("language")
+
+        # 1. Symbol and invocation structure validation
         for name in rule.get("required_symbols", ()):
             sym = self.require_fact("api_symbols", name)
             expected = sym["name"] if isinstance(sym, Mapping) else sym
             if expected not in output:
-                raise VersionContextError("INVALID_API_SYMBOL", artifact=template["id"], symbol=name,
-                                          expected_symbol=expected, context_id=self.context_id,
-                                          repair_scope=[template["id"]])
-        if template.get("render", {}).get("language") == "json":
-            schema = self.to_dict()["host_facts"]["schemas"].get(template["id"])
+                raise VersionContextError(
+                    "INVALID_API_SYMBOL",
+                    artifact=template_id,
+                    symbol=name,
+                    expected_symbol=expected,
+                    context_id=self.context_id,
+                    repair_scope=[template_id],
+                )
+            if "." in expected and any(expected.endswith(suffix) for suffix in (".register", ".create", ".of", ".stacksTo")):
+                escaped = re.escape(expected)
+                if not re.search(rf"\b{escaped}\s*\(", output):
+                    raise VersionContextError(
+                        "INVALID_API_INVOCATION",
+                        artifact=template_id,
+                        symbol=name,
+                        expected_invocation=expected,
+                        context_id=self.context_id,
+                        repair_scope=[template_id],
+                    )
+
+        # 2. Side constraint validation (common/server must not reference client-only classes)
+        template_side = template.get("side", ("common",))
+        if isinstance(template_side, str):
+            template_side = (template_side,)
+        if "client" not in template_side:
+            if "net.minecraft.client." in output:
+                raise VersionContextError(
+                    "CROSS_SIDE_LEAKAGE",
+                    artifact=template_id,
+                    side=list(template_side),
+                    context_id=self.context_id,
+                    repair_scope=[template_id],
+                )
+
+        # 3. JSON schema validation
+        if lang == "json":
+            schema = self.to_dict()["host_facts"]["schemas"].get(template_id)
             if schema is None:
-                raise VersionContextError("HOST_FACT_UNAVAILABLE", category="schemas", name=template["id"])
+                raise VersionContextError("HOST_FACT_UNAVAILABLE", category="schemas", name=template_id)
             Draft202012Validator(schema).validate(json.loads(output))
-        return {"type": "HOST_TEMPLATE_CONTRACT", "status": "PASS", "context_id": self.context_id,
-                "artifact": template["id"], "repair_scope": [template["id"]]}
+
+        return {
+            "type": "HOST_TEMPLATE_CONTRACT",
+            "status": "PASS",
+            "context_id": self.context_id,
+            "artifact": template_id,
+            "repair_scope": [template_id],
+        }
 
 
 class VersionResolver:
@@ -302,7 +345,10 @@ def execution_context(context, job):
         if identifier:
             raise VersionContextError("VERSION_CONTEXT_REQUIRED", artifact=job.job_id)
         return None
-    resolved = ResolvedVersionContext.from_dict(raw)
+    if isinstance(raw, ResolvedVersionContext):
+        resolved = raw
+    else:
+        resolved = ResolvedVersionContext.from_dict(raw)
     resolved.assert_context(identifier)
     actual = job.deterministic_inputs.get("minecraft_version")
     if actual is not None and actual != resolved.minecraft:
