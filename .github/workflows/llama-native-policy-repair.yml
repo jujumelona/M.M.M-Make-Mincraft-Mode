@@ -19,14 +19,13 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('minecraft_mod_ai/qwen35_mtp_hotpath_contract.py')
           s = p.read_text()
           s = s.replace(
               'def _context_size(config: Any | None = None) -> int:\n',
-              'def _context_size(config: Any | None = None) -> int | None:\n',
-              1,
-          )
+              'def _context_size(config: Any | None = None) -> int | None:\n', 1)
           s = s.replace('    return 0\n\n\ndef _draft_gpu_layers()', '    return None\n\n\ndef _draft_gpu_layers()', 1)
           old = '        _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))\n'
           new = '''        context = _context_size(config)\n        if context is not None:\n            _set_option(args, ("--ctx-size", "-c"), str(context))\n'''
@@ -46,38 +45,36 @@ jobs:
               raise SystemExit('draft gpu auto rewrite not found')
           p.write_text(s.replace(old, new, 1))
 
+          p = Path('minecraft_mod_ai/llama_server_kernel_autotune.py')
+          s = p.read_text()
+          old = '''            baseline = _baseline_config()\n            active = _active_config(baseline)\n            explicit_flash = os.environ.get("MMM_LLAMA_FLASH_ATTN", "").strip().lower()\n            flash = explicit_flash if explicit_flash in _ALLOWED_FLASH else active.flash_attn\n            batch = _operator_batch() or active.batch\n            generic_kv = _valid_kv(os.environ.get("MMM_KV_CACHE_QUANT", "q4_0"))\n            k = _valid_kv(os.environ.get("MMM_LLAMA_CACHE_TYPE_K", active.cache_type_k or generic_kv))\n            v = _valid_kv(os.environ.get("MMM_LLAMA_CACHE_TYPE_V", active.cache_type_v or generic_kv))\n            _replace_option(args, ("--flash-attn", "-fa"), flash)\n            _replace_option(args, ("--batch-size", "-b"), str(batch))\n            _replace_option(args, ("--cache-type-k", "-ctk"), k)\n            _replace_option(args, ("--cache-type-v", "-ctv"), v)\n            # Never leave physical batch above logical batch after an auto batch choice.\n            for name in ("--ubatch-size", "-ub"):\n                if name in args:\n                    index = args.index(name)\n                    if index + 1 < len(args):\n                        args[index + 1] = str(min(batch, _int(args[index + 1], batch)))\n                    break\n            return args\n'''
+          new = '''            explicit_flash = os.environ.get("MMM_LLAMA_FLASH_ATTN", "").strip().lower()\n            active_flash = os.environ.get("MMM_LLAMA_ACTIVE_FLASH_ATTN", "").strip().lower()\n            if explicit_flash in _ALLOWED_FLASH:\n                _replace_option(args, ("--flash-attn", "-fa"), explicit_flash)\n            elif active_flash in _ALLOWED_FLASH:\n                _replace_option(args, ("--flash-attn", "-fa"), active_flash)\n\n            explicit_batch = _operator_batch()\n            active_batch = os.environ.get("MMM_LLAMA_ACTIVE_BATCH", "").strip()\n            if explicit_batch is not None:\n                _replace_option(args, ("--batch-size", "-b"), str(explicit_batch))\n            elif active_batch:\n                _replace_option(args, ("--batch-size", "-b"), str(_int(active_batch, 2048)))\n\n            generic_kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()\n            explicit_k = os.environ.get("MMM_LLAMA_CACHE_TYPE_K", "").strip().lower()\n            explicit_v = os.environ.get("MMM_LLAMA_CACHE_TYPE_V", "").strip().lower()\n            active_k = os.environ.get("MMM_LLAMA_ACTIVE_CACHE_TYPE_K", "").strip().lower()\n            active_v = os.environ.get("MMM_LLAMA_ACTIVE_CACHE_TYPE_V", "").strip().lower()\n            k = explicit_k or (generic_kv if generic_kv in _ALLOWED_KV else active_k)\n            v = explicit_v or (generic_kv if generic_kv in _ALLOWED_KV else active_v)\n            if k in _ALLOWED_KV:\n                _replace_option(args, ("--cache-type-k", "-ctk"), k)\n            if v in _ALLOWED_KV:\n                _replace_option(args, ("--cache-type-v", "-ctv"), v)\n            return args\n'''
+          if old not in s:
+              raise SystemExit('kernel base resource block not found')
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              '                return (min(batch, _int(explicit, 512)),)\n',
+              '                return (_int(explicit, 512),)\n', 1)
+          p.write_text(s)
+
           p = Path('tests/test_llama_context_policy.py')
           s = p.read_text()
-          s = s.replace(
-              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
-              '    assert "--ctx-size" not in args\n',
-              1,
-          )
-          s = s.replace(
-              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
-              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
-              1,
-          )
-          s = s.replace(
-              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
-              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
-              1,
-          )
-          s = s.replace(
-              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
-              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
-              1,
-          )
-          s = s.replace(
-              '    assert _context_size(_qwen_config()) == 0\n',
-              '    assert _context_size(_qwen_config()) is None\n',
-              1,
-          )
-          s = s.replace(
-              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
-              '    assert args[args.index("--ctx-size") + 1] == "8192"\n',
-              1,
-          )
+          replacements = {
+              'test_base_args_default_to_model_native_context': '    assert "--ctx-size" not in args',
+              'test_profile_authority_defaults_generic_server_to_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
+              'test_qwen_hotpath_alone_defaults_to_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
+              'test_qwen_hotpath_cannot_shrink_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
+              'test_qwen_registry_capacity_is_not_forced_into_server_ctx': '    assert args[args.index("--ctx-size") + 1] == "8192"',
+          }
+          for name, assertion in replacements.items():
+              pattern = rf'(def {name}\(.*?\n)(.*?)(?=\n\ndef |\Z)'
+              match = re.search(pattern, s, flags=re.S)
+              if not match:
+                  raise SystemExit(f'test function {name} not found')
+              body = match.group(2)
+              body = re.sub(r'    assert (?:"--ctx-size" not in args|args\[args\.index\("--ctx-size"\) \+ 1\] == "[^"]+")\n', assertion + '\n', body, count=1)
+              s = s[:match.start(2)] + body + s[match.end(2):]
+          s = s.replace('    assert _context_size(_qwen_config()) == 0\n', '    assert _context_size(_qwen_config()) is None\n', 1)
           p.write_text(s)
           PY
       - name: Test native llama policies
@@ -88,6 +85,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py minecraft_mod_ai/llama_server_hardware_policy.py tests/test_llama_context_policy.py
+          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_server_kernel_autotune.py tests/test_llama_context_policy.py
           git commit -m 'fix: preserve native llama resource authority'
           git push origin HEAD:main
