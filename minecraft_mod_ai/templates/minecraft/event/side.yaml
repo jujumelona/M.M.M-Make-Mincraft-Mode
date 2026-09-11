@@ -1,5 +1,41 @@
 id: minecraft/event/side
 task: Implement only the side responsibility of the supplied event artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: event_identity
+  type: identifier
+  required: true
+- name: event_side_input
+  type: specification
+  required: true
+outputs:
+- name: event_side_receipt
+  type: receipt
+- name: event_side_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/event/side
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - event_properties
+repair:
+  scope:
+  - minecraft/event/side
+  writable_anchors:
+  - /* MMM:event_side */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement side responsibility for event strictly within declared EVENT_LISTENER
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required event prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- event side matches host version contract
+- event side receipts emitted with verified context

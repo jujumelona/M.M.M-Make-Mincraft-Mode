@@ -1,5 +1,42 @@
 id: minecraft/animation/integration
 task: Implement only the integration responsibility of the supplied animation artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: animation_identity
+  type: identifier
+  required: true
+- name: animation_integration_input
+  type: specification
+  required: true
+outputs:
+- name: animation_integration_receipt
+  type: receipt
+- name: animation_integration_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
+implementation_key: fabric/animation/integration
+validators:
+- java_parse
+- client_side_only
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - animation_properties
+repair:
+  scope:
+  - minecraft/animation/integration
+  writable_anchors:
+  - /* MMM:animation_integration */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +49,12 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement integration responsibility for animation strictly within declared ANIMATION_DEFINITION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required animation prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- animation integration matches host version contract
+- animation integration receipts emitted with verified context

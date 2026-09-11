@@ -1,5 +1,7 @@
 id: minecraft/generation_contract
 execution: contract
+role: semantic_requirement_owner
+may_select_executable_artifact: false
 kinds:
   item:
     required_fields: [display_name, main_color]

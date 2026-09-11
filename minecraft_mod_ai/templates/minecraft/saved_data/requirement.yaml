@@ -1,5 +1,41 @@
 id: minecraft/saved_data/requirement
 task: Implement only the requirement responsibility of the supplied saved data artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: saved_data_identity
+  type: identifier
+  required: true
+- name: saved_data_requirement_input
+  type: specification
+  required: true
+outputs:
+- name: saved_data_requirement_receipt
+  type: receipt
+- name: saved_data_requirement_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/saved_data/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - saved_data_properties
+repair:
+  scope:
+  - minecraft/saved_data/requirement
+  writable_anchors:
+  - /* MMM:saved_data_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,12 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for saved_data strictly within declared PERSISTENT_STATE
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required saved_data prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy semantic_contract validator before completion.
+postconditions:
+- saved_data requirement matches host version contract
+- saved_data requirement receipts emitted with verified context

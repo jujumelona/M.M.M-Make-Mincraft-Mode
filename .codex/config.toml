@@ -1,0 +1,105 @@
+[mcp_servers.minecraft-dev]
+command = "npx"
+args = [
+    "-y",
+    "@mcdxai/minecraft-dev-mcp@1.2.4",
+]
+
+[mcp_servers.mmm-frontdoor]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-frontdoor.env]
+MMM_MCP_STAGE = "frontdoor"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-generation]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mod_generation_mcp_server",
+]
+
+[mcp_servers.mmm-generation.env]
+MMM_MCP_STAGE = "generation"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-quality]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-quality.env]
+MMM_MCP_STAGE = "quality"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-release]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-release.env]
+MMM_MCP_STAGE = "release"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-research]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-research.env]
+MMM_MCP_STAGE = "research"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-runtime]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-runtime.env]
+MMM_MCP_STAGE = "runtime"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.mmm-training]
+command = "python"
+args = [
+    "-m",
+    "minecraft_mod_ai.mcp_stdio_entrypoint",
+    "minecraft_mod_ai.mcp_server",
+]
+
+[mcp_servers.mmm-training.env]
+MMM_MCP_STAGE = "training"
+MMM_MODEL_PROFILE = "t4_local"
+MMM_WORKSPACE = "mmm-output"
+
+[mcp_servers.playwright]
+command = "npx"
+args = [
+    "-y",
+    "@playwright/mcp@0.0.78",
+    "--headless",
+]

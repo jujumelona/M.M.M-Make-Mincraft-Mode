@@ -1,5 +1,41 @@
 id: minecraft/tag/registry
 task: Implement only the registry responsibility of the supplied tag artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: tag_identity
+  type: identifier
+  required: true
+- name: tag_registry_input
+  type: specification
+  required: true
+outputs:
+- name: tag_registry_receipt
+  type: receipt
+- name: tag_registry_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - TAGS
+  symbols: []
+  schemas:
+  - fabric/tag/registry
+implementation_key: fabric/tag/registry
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - tag_properties
+repair:
+  scope:
+  - minecraft/tag/registry
+  writable_anchors:
+  - /* MMM:tag_registry */
 consumes:
 - artifact_requirement
 - target_cell
@@ -13,9 +49,10 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement registry responsibility for tag strictly within declared TAGS capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required tag prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- tag registry matches host version contract
+- tag registry receipts emitted with verified context

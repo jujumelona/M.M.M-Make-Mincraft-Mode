@@ -1,5 +1,41 @@
 id: minecraft/datagen/provider
 task: Implement only the provider responsibility of the supplied datagen artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: datagen_identity
+  type: identifier
+  required: true
+- name: datagen_provider_input
+  type: specification
+  required: true
+outputs:
+- name: datagen_provider_receipt
+  type: receipt
+- name: datagen_provider_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - TAGS
+  - RECIPE_CRAFTING
+  symbols: []
+  schemas: []
+implementation_key: fabric/datagen/provider
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - datagen_properties
+repair:
+  scope:
+  - minecraft/datagen/provider
+  writable_anchors:
+  - /* MMM:datagen_provider */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement provider responsibility for datagen strictly within declared DATA_GENERATOR
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required datagen prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- datagen provider matches host version contract
+- datagen provider receipts emitted with verified context

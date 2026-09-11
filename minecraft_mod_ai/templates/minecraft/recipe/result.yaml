@@ -1,5 +1,43 @@
 id: minecraft/recipe/result
 task: Implement only the result responsibility of the supplied recipe artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: recipe_identity
+  type: identifier
+  required: true
+- name: recipe_result_input
+  type: specification
+  required: true
+outputs:
+- name: recipe_result_receipt
+  type: receipt
+- name: recipe_result_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - RECIPE_CRAFTING
+  - RECIPE_SMELTING
+  symbols: []
+  schemas:
+  - fabric/recipe/shaped
+  - fabric/recipe/shapeless
+implementation_key: fabric/recipe/result
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - recipe_properties
+repair:
+  scope:
+  - minecraft/recipe/result
+  writable_anchors:
+  - /* MMM:recipe_result */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +50,11 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement result responsibility for recipe strictly within declared RECIPE_CRAFTING
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required recipe prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- recipe result matches host version contract
+- recipe result receipts emitted with verified context

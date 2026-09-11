@@ -1,5 +1,41 @@
 id: minecraft/inventory/validation
 task: Implement only the validation responsibility of the supplied inventory artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: inventory_identity
+  type: identifier
+  required: true
+- name: inventory_validation_input
+  type: specification
+  required: true
+outputs:
+- name: inventory_validation_receipt
+  type: receipt
+- name: inventory_validation_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/inventory/validation
+validators:
+- mod_integration_test
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - inventory_properties
+repair:
+  scope:
+  - minecraft/inventory/validation
+  writable_anchors:
+  - /* MMM:inventory_validation */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,12 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement validation responsibility for inventory strictly within declared INVENTORY_CAPABILITY
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required inventory prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- inventory validation matches host version contract
+- inventory validation receipts emitted with verified context

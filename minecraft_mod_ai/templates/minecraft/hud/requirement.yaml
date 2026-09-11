@@ -1,5 +1,41 @@
 id: minecraft/hud/requirement
 task: Implement only the requirement responsibility of the supplied hud artifact.
+execution_mode: deterministic
+side:
+- client
+inputs:
+- name: hud_identity
+  type: identifier
+  required: true
+- name: hud_requirement_input
+  type: specification
+  required: true
+outputs:
+- name: hud_requirement_receipt
+  type: receipt
+- name: hud_requirement_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
+implementation_key: fabric/hud/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - hud_properties
+repair:
+  scope:
+  - minecraft/hud/requirement
+  writable_anchors:
+  - /* MMM:hud_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for hud strictly within declared HUD_RENDER
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required hud prerequisite receipt is missing; never invent defaults.
+- Output must satisfy semantic_contract validator before completion.
+postconditions:
+- hud requirement matches host version contract
+- hud requirement receipts emitted with verified context

@@ -1,5 +1,41 @@
 id: minecraft/advancement/display
 task: Implement only the display responsibility of the supplied advancement artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: advancement_identity
+  type: identifier
+  required: true
+- name: advancement_display_input
+  type: specification
+  required: true
+outputs:
+- name: advancement_display_receipt
+  type: receipt
+- name: advancement_display_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - ADVANCEMENT
+  symbols: []
+  schemas: []
+implementation_key: fabric/advancement/display
+validators:
+- java_parse
+- client_side_only
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - advancement_properties
+repair:
+  scope:
+  - minecraft/advancement/display
+  writable_anchors:
+  - /* MMM:advancement_display */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,12 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement display responsibility for advancement strictly within declared ADVANCEMENT
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required advancement prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- advancement display matches host version contract
+- advancement display receipts emitted with verified context

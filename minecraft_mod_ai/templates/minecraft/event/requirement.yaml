@@ -1,5 +1,41 @@
 id: minecraft/event/requirement
 task: Implement only the requirement responsibility of the supplied event artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: event_identity
+  type: identifier
+  required: true
+- name: event_requirement_input
+  type: specification
+  required: true
+outputs:
+- name: event_requirement_receipt
+  type: receipt
+- name: event_requirement_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/event/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - event_properties
+repair:
+  scope:
+  - minecraft/event/requirement
+  writable_anchors:
+  - /* MMM:event_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for event strictly within declared EVENT_LISTENER
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required event prerequisite receipt is missing; never invent defaults.
+- Output must satisfy semantic_contract validator before completion.
+postconditions:
+- event requirement matches host version contract
+- event requirement receipts emitted with verified context

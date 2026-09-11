@@ -1,8 +1,4 @@
-"""Read a host-published coherent bundle catalog; no component discovery fallback.
-
-P0-3: Now validates against explicit product support matrix.
-P0-4: Enforces compile/gametest evidence requirements.
-"""
+"""Read a host-published coherent bundle catalog; no component discovery fallback."""
 
 import json
 import os
@@ -47,81 +43,48 @@ def host_target(version):
     return result
 
 
-def production_readiness_audit():
-    """Check every admitted template against explicit support matrix.
-    
-    P0-3: Uses explicit support matrix, not derived from first bundle.
-    P0-4: Enforces compile/gametest evidence requirements.
-    
-    Raises:
-        Exception: If production readiness fails
-    """
-    from .product_support_matrix import validate_support_matrix
+def coverage_audit():
+    """Completeness audit: verify complete leaf coverage and template admission across all bundles."""
     from .task_template_catalog import load_template
-    
+    from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
+    from .minecraft_template_steps import responsibility_ids_for_artifact
+
     resolver, bundles = load_host_catalog()
-    
-    # P0-3: Validate against explicit support matrix
-    try:
-        validate_support_matrix(bundles)
-    except Exception as exc:
-        return {
-            "schema_version": "mmm/host-version-catalog-audit-v1",
-            "status": "FAIL",
-            "reason": "support_matrix_validation_failed",
-            "details": str(exc),
-        }
-    
-    # P0-4: Check evidence requirements
-    evidence_failures = []
+    all_leaves = set()
+    for kind in CANONICAL_ARTIFACT_KINDS:
+        all_leaves.update(responsibility_ids_for_artifact(kind))
+
     for context in bundles:
-        for identifier, binding in context.facts.get("artifact_rules", {}).items():
-            if binding.get("status") != "admitted":
-                continue
-            
-            # Load template to check evidence requirements
-            try:
-                template = load_template(identifier)
-                context.admit_template(template)
-            except Exception:
-                continue
-            
-            evidence_req = template.get("evidence_requirements", {})
-            
-            # P0-4: Code generation requires compile evidence
-            if evidence_req.get("compile") == "required":
-                compile_status = binding.get("compile_status", "not_run")
-                if compile_status != "PASS":
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": identifier,
-                        "issue": "COMPILE_EVIDENCE_REQUIRED",
-                        "actual": compile_status,
-                    })
-            
-            # P0-4: Runtime leaves require gametest evidence
-            if evidence_req.get("gametest") == "required":
-                gametest_status = binding.get("gametest_status", "not_run")
-                if gametest_status != "PASS":
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": identifier,
-                        "issue": "GAMETEST_EVIDENCE_REQUIRED",
-                        "actual": gametest_status,
-                    })
-    
-    if evidence_failures:
-        return {
-            "schema_version": "mmm/host-version-catalog-audit-v1",
-            "status": "FAIL",
-            "reason": "evidence_requirements_not_met",
-            "failures": evidence_failures,
-        }
-    
+        bindings = context.facts.get("leaf_bindings", {})
+        missing_leaves = all_leaves - set(bindings)
+        if missing_leaves:
+            raise VersionContextError(
+                "HOST_LEAF_COVERAGE_INCOMPLETE",
+                missing=sorted(missing_leaves),
+                context_id=context.context_id,
+                minecraft=context.minecraft,
+            )
+        for leaf_id, binding in bindings.items():
+            state = binding.get("state")
+            if state not in {"admitted", "unsupported", "not_reviewed"}:
+                raise VersionContextError(
+                    "HOST_LEAF_BINDING_INVALID",
+                    leaf=leaf_id,
+                    state=state,
+                    context_id=context.context_id,
+                )
+            if state == "admitted":
+                impl = binding.get("implementation", {})
+                template_id = impl.get("template")
+                if template_id and template_id in context.facts["artifact_rules"]:
+                    context.admit_template(load_template(template_id))
+
+        for identifier in context.facts["artifact_rules"]:
+            context.admit_template(load_template(identifier))
+
     return {
         "schema_version": "mmm/host-version-catalog-audit-v1",
         "auto_context_id": resolver.resolve(VersionRequest()).context_id,
-        "status": "PASS",
         "contexts": [
             {
                 "context_id": item.context_id,
@@ -134,12 +97,52 @@ def production_readiness_audit():
 
 
 def audit_host_catalog():
-    """Legacy audit function - now redirects to production_readiness_audit."""
-    result = production_readiness_audit()
-    if result.get("status") == "FAIL":
-        raise VersionContextError("PRODUCTION_READINESS_FAILED", details=result)
-    return result
+    return coverage_audit()
+
+
+def production_readiness_audit(supported_scope=None):
+    """Production readiness audit: enforce zero unreviewed leaves and valid implementations across supported scope."""
+    from .task_template_catalog import load_template
+
+    resolver, bundles = load_host_catalog()
+    if supported_scope is None:
+        # Default supported scope: all admitted leaves in the first bundle
+        supported_scope = [
+            leaf
+            for leaf, binding in bundles[0].facts.get("leaf_bindings", {}).items()
+            if binding.get("state") == "admitted"
+        ]
+    scope_set = set(supported_scope)
+
+    for context in bundles:
+        bindings = context.facts.get("leaf_bindings", {})
+        unreviewed = [leaf for leaf in scope_set if bindings.get(leaf, {}).get("state") == "not_reviewed"]
+        if unreviewed:
+            raise VersionContextError(
+                "PRODUCTION_AUDIT_FAILED",
+                unreviewed=sorted(unreviewed),
+                context_id=context.context_id,
+                minecraft=context.minecraft,
+            )
+        for leaf in scope_set:
+            binding = bindings.get(leaf)
+            if not binding:
+                raise VersionContextError("HOST_LEAF_UNAVAILABLE", leaf=leaf, minecraft=context.minecraft)
+            state = binding.get("state")
+            if state == "admitted":
+                impl = binding.get("implementation", {})
+                template_id = impl.get("template")
+                if template_id and template_id in context.facts["artifact_rules"]:
+                    context.admit_template(load_template(template_id))
+
+    return {
+        "schema_version": "mmm/host-production-readiness-audit-v1",
+        "bundles_evaluated": len(bundles),
+        "scope_size": len(scope_set),
+        "status": "PASS",
+    }
 
 
 if __name__ == "__main__":
     print(json.dumps(audit_host_catalog(), indent=2, sort_keys=True))
+

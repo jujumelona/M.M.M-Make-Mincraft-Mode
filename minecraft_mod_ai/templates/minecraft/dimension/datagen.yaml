@@ -1,5 +1,40 @@
 id: minecraft/dimension/datagen
 task: Implement only the datagen responsibility of the supplied dimension artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: dimension_identity
+  type: identifier
+  required: true
+- name: dimension_datagen_input
+  type: specification
+  required: true
+outputs:
+- name: dimension_datagen_receipt
+  type: receipt
+- name: dimension_datagen_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - DIMENSION
+  symbols: []
+  schemas: []
+implementation_key: fabric/dimension/datagen
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - dimension_properties
+repair:
+  scope:
+  - minecraft/dimension/datagen
+  writable_anchors:
+  - /* MMM:dimension_datagen */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +47,12 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement datagen responsibility for dimension strictly within declared DIMENSION
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required dimension prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- dimension datagen matches host version contract
+- dimension datagen receipts emitted with verified context

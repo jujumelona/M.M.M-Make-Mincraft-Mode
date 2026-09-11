@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from hashlib import sha256
 import json
 from types import MappingProxyType
@@ -15,6 +16,12 @@ class VersionContextError(ValueError):
 
 def _encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+@lru_cache(maxsize=256)
+def _check_schema_cached(encoded_schema: str):
+    from jsonschema import Draft202012Validator
+    Draft202012Validator.check_schema(json.loads(encoded_schema))
 
 
 def _freeze(value):
@@ -57,7 +64,7 @@ class VersionRequest:
 
 _FACT_FIELDS = frozenset({
     "host_revision", "capabilities", "api_symbols", "schemas", "artifact_rules",
-    "dependency_coordinates", "repositories", "replacements",
+    "dependency_coordinates", "repositories", "replacements", "leaf_bindings",
 })
 
 
@@ -84,21 +91,72 @@ class ResolvedVersionContext:
                 raise VersionContextError("HOST_FACT_TYPE", field=key)
         if any(type(item) is not bool for item in facts["capabilities"].values()):
             raise VersionContextError("HOST_CAPABILITY_TYPE")
-        from jsonschema import Draft202012Validator
-
         for name, schema in facts["schemas"].items():
             if not isinstance(schema, dict):
                 raise VersionContextError("HOST_SCHEMA_INVALID", name=name)
-            Draft202012Validator.check_schema(schema)
+            try:
+                _check_schema_cached(_encode(schema))
+            except Exception as exc:
+                raise VersionContextError("HOST_SCHEMA_INVALID", name=name) from exc
         for name, rule in facts["artifact_rules"].items():
             if not isinstance(rule, dict) or set(rule) != {"template_sha256", "required_symbols", "requires_capabilities"}:
                 raise VersionContextError("HOST_ARTIFACT_RULE_INVALID", name=name)
             for category, field in (("api_symbols", "required_symbols"), ("capabilities", "requires_capabilities")):
                 if not isinstance(rule[field], list) or any(not isinstance(key, str) or key not in facts[category] for key in rule[field]):
                     raise VersionContextError("HOST_ARTIFACT_RULE_INVALID", name=name, field=field)
-        for key in ("api_symbols", "dependency_coordinates", "replacements"):
+        for sym_name, sym_val in facts["api_symbols"].items():
+            if isinstance(sym_val, str):
+                if not sym_val.strip():
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols")
+            elif isinstance(sym_val, dict):
+                required_sym_fields = ("owner", "name", "descriptor", "kind", "static", "side", "namespace")
+                if not all(k in sym_val for k in required_sym_fields):
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if not isinstance(sym_val["name"], str) or not sym_val["name"].strip():
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if not isinstance(sym_val["owner"], str):
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if not isinstance(sym_val["descriptor"], str):
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if sym_val["kind"] not in {"method", "field", "class", "constructor"}:
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if not isinstance(sym_val["static"], bool):
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if sym_val["side"] not in {"common", "client", "server"}:
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+                if sym_val["namespace"] not in {"minecraft", "fabric"}:
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols", symbol=sym_name)
+            else:
+                raise VersionContextError("HOST_FACT_TYPE", field="api_symbols")
+        for key in ("dependency_coordinates", "replacements"):
             if any(not isinstance(item, str) or not item.strip() for item in facts[key].values()):
                 raise VersionContextError("HOST_FACT_TYPE", field=key)
+        for leaf_name, binding in facts.get("leaf_bindings", {}).items():
+            if not isinstance(binding, dict) or "state" not in binding:
+                raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name)
+            state = binding["state"]
+            if state not in {"admitted", "unsupported", "not_reviewed"}:
+                raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name, state=state)
+            if state == "admitted":
+                impl = binding.get("implementation")
+                if not isinstance(impl, dict):
+                    raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name)
+                required_impl_fields = (
+                    "implementation_id",
+                    "executor_type",
+                    "implementation_sha256",
+                    "validator_profile",
+                    "validator_sha256",
+                    "input_schema_sha256",
+                    "output_schema_sha256",
+                    "evidence_id",
+                )
+                missing = [f for f in required_impl_fields if not isinstance(impl.get(f), str) or not impl.get(f, "").strip()]
+                if missing:
+                    raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name, missing_fields=missing)
+                for hash_key in ("implementation_sha256", "validator_sha256", "input_schema_sha256", "output_schema_sha256"):
+                    if not impl[hash_key].startswith("sha256:"):
+                        raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name, field=hash_key)
         if not isinstance(facts["repositories"], list) or any(
             not isinstance(url, str) or not url.startswith("https://") for url in facts["repositories"]
         ):
@@ -136,8 +194,16 @@ class ResolvedVersionContext:
         return self.target["resource_pack_format"]
 
     @property
-    def data_pack_format(self):
-        return int(self.target["data_pack_version"].split(".", 1)[0])
+    def data_pack_version(self) -> str:
+        return str(self.target["data_pack_version"])
+
+    @property
+    def data_pack_major(self) -> int:
+        return int(str(self.target["data_pack_version"]).split(".", 1)[0])
+
+    @property
+    def data_pack_format(self) -> str:
+        return self.data_pack_version
 
     @property
     def facts(self):
@@ -150,6 +216,10 @@ class ResolvedVersionContext:
     @property
     def api_symbols(self):
         return self.facts["api_symbols"]
+
+    @property
+    def leaf_bindings(self):
+        return self.facts.get("leaf_bindings", {})
 
     def to_dict(self):
         return {**json.loads(self.snapshot_json), "context_id": self.context_id}
@@ -198,23 +268,161 @@ class ResolvedVersionContext:
             self.require_fact("api_symbols", name)
         return rule
 
+    def require_leaf_binding(self, leaf_id: str):
+        bindings = self.facts.get("leaf_bindings", {})
+        if not isinstance(bindings, Mapping) or leaf_id not in bindings:
+            raise VersionContextError("HOST_FACT_UNAVAILABLE", category="leaf_bindings", name=leaf_id, context_id=self.context_id)
+        binding = bindings[leaf_id]
+        state = binding.get("state") if isinstance(binding, Mapping) else None
+        if state != "admitted":
+            raise VersionContextError("UNSUPPORTED_LEAF", leaf=leaf_id, state=state, context_id=self.context_id)
+        impl = binding.get("implementation")
+        if not isinstance(impl, Mapping):
+            raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_id)
+        required_impl_fields = (
+            "implementation_id",
+            "executor_type",
+            "implementation_sha256",
+            "validator_profile",
+            "validator_sha256",
+            "input_schema_sha256",
+            "output_schema_sha256",
+            "evidence_id",
+        )
+        missing = [f for f in required_impl_fields if not isinstance(impl.get(f), str) or not impl.get(f, "").strip()]
+        if missing:
+            raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_id, missing_fields=missing)
+        return binding
+
     def validate_artifact(self, template, output):
         from jsonschema import Draft202012Validator
+        import re
 
         rule = self.admit_template(template)
+        template_id = template.get("id", "")
+        lang = template.get("render", {}).get("language")
+
+        # 0. Strip comments and string literals for AST/executable code checks
+        stripped = re.sub(
+            r'(/\*[\s\S]*?\*/)|(//[^\r\n]*)|("(?:\\.|[^"\\])*")|(\'(?:\\.|[^\'\\])*\')',
+            " ",
+            output,
+        )
+
+        # 1. Symbol and invocation structure validation
         for name in rule.get("required_symbols", ()):
-            expected = self.require_fact("api_symbols", name)
-            if expected not in output:
-                raise VersionContextError("INVALID_API_SYMBOL", artifact=template["id"], symbol=name,
-                                          expected_symbol=expected, context_id=self.context_id,
-                                          repair_scope=[template["id"]])
-        if template.get("render", {}).get("language") == "json":
-            schema = self.to_dict()["host_facts"]["schemas"].get(template["id"])
+            sym = self.require_fact("api_symbols", name)
+            if isinstance(sym, Mapping):
+                owner = sym.get("owner", "")
+                sym_name = sym.get("name", "")
+                kind = sym.get("kind", "method")
+                is_static = bool(sym.get("static", True))
+                short_owner = owner.split(".")[-1] if owner else ""
+                owner_candidates = [c for c in (owner, short_owner) if c]
+                if short_owner == "ResourceKey":
+                    owner_candidates.append("RegistryKey")
+                elif short_owner == "RegistryKey":
+                    owner_candidates.append("ResourceKey")
+
+                owner_regex = "|".join(re.escape(c) for c in owner_candidates)
+                if kind == "method":
+                    if is_static:
+                        pattern = rf"\b(?:{owner_regex})\s*\.\s*{re.escape(sym_name)}\s*\("
+                    else:
+                        pattern = rf"\.\s*{re.escape(sym_name)}\s*\("
+                    if not re.search(pattern, stripped):
+                        raise VersionContextError(
+                            "INVALID_API_INVOCATION",
+                            artifact=template_id,
+                            symbol=name,
+                            expected_invocation=f"{owner}.{sym_name}",
+                            context_id=self.context_id,
+                            repair_scope=[template_id],
+                        )
+                elif kind == "field":
+                    pattern = rf"\b(?:{owner_regex})\s*\.\s*{re.escape(sym_name)}\b"
+                    if not re.search(pattern, stripped):
+                        raise VersionContextError(
+                            "INVALID_API_SYMBOL",
+                            artifact=template_id,
+                            symbol=name,
+                            expected_symbol=f"{owner}.{sym_name}",
+                            context_id=self.context_id,
+                            repair_scope=[template_id],
+                        )
+                elif kind == "class":
+                    pattern = rf"\b(?:{owner_regex})\b"
+                    if not re.search(pattern, stripped):
+                        raise VersionContextError(
+                            "INVALID_API_SYMBOL",
+                            artifact=template_id,
+                            symbol=name,
+                            expected_symbol=owner,
+                            context_id=self.context_id,
+                            repair_scope=[template_id],
+                        )
+                elif kind == "constructor":
+                    pattern = rf"\bnew\s+(?:{owner_regex})\s*\("
+                    if not re.search(pattern, stripped):
+                        raise VersionContextError(
+                            "INVALID_API_INVOCATION",
+                            artifact=template_id,
+                            symbol=name,
+                            expected_invocation=f"new {owner}",
+                            context_id=self.context_id,
+                            repair_scope=[template_id],
+                        )
+            else:
+                expected = str(sym)
+                if expected not in output:
+                    raise VersionContextError(
+                        "INVALID_API_SYMBOL",
+                        artifact=template_id,
+                        symbol=name,
+                        expected_symbol=expected,
+                        context_id=self.context_id,
+                        repair_scope=[template_id],
+                    )
+                if "." in expected and any(expected.endswith(suffix) for suffix in (".register", ".create", ".of", ".stacksTo")):
+                    escaped = re.escape(expected)
+                    if not re.search(rf"\b{escaped}\s*\(", output) and not re.search(rf"\.\s*{re.escape(expected.lstrip('.'))}\s*\(", output):
+                        raise VersionContextError(
+                            "INVALID_API_INVOCATION",
+                            artifact=template_id,
+                            symbol=name,
+                            expected_invocation=expected,
+                            context_id=self.context_id,
+                            repair_scope=[template_id],
+                        )
+
+        # 2. Side constraint validation (common/server must not reference client-only classes)
+        template_side = template.get("side", ("common",))
+        if isinstance(template_side, str):
+            template_side = (template_side,)
+        if "client" not in template_side:
+            if "net.minecraft.client." in stripped or "net/minecraft/client/" in stripped:
+                raise VersionContextError(
+                    "CROSS_SIDE_LEAKAGE",
+                    artifact=template_id,
+                    side=list(template_side),
+                    context_id=self.context_id,
+                    repair_scope=[template_id],
+                )
+
+        # 3. JSON schema validation
+        if lang == "json":
+            schema = self.to_dict()["host_facts"]["schemas"].get(template_id)
             if schema is None:
-                raise VersionContextError("HOST_FACT_UNAVAILABLE", category="schemas", name=template["id"])
+                raise VersionContextError("HOST_FACT_UNAVAILABLE", category="schemas", name=template_id)
             Draft202012Validator(schema).validate(json.loads(output))
-        return {"type": "HOST_TEMPLATE_CONTRACT", "status": "PASS", "context_id": self.context_id,
-                "artifact": template["id"], "repair_scope": [template["id"]]}
+
+        return {
+            "type": "HOST_TEMPLATE_CONTRACT",
+            "status": "PASS",
+            "context_id": self.context_id,
+            "artifact": template_id,
+            "repair_scope": [template_id],
+        }
 
 
 class VersionResolver:
@@ -253,7 +461,10 @@ def execution_context(context, job):
         if identifier:
             raise VersionContextError("VERSION_CONTEXT_REQUIRED", artifact=job.job_id)
         return None
-    resolved = ResolvedVersionContext.from_dict(raw)
+    if isinstance(raw, ResolvedVersionContext):
+        resolved = raw
+    else:
+        resolved = ResolvedVersionContext.from_dict(raw)
     resolved.assert_context(identifier)
     actual = job.deterministic_inputs.get("minecraft_version")
     if actual is not None and actual != resolved.minecraft:

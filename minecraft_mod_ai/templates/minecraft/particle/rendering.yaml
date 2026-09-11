@@ -1,5 +1,41 @@
 id: minecraft/particle/rendering
 task: Implement only the rendering responsibility of the supplied particle artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: particle_identity
+  type: identifier
+  required: true
+- name: particle_rendering_input
+  type: specification
+  required: true
+outputs:
+- name: particle_rendering_receipt
+  type: receipt
+- name: particle_rendering_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - PARTICLE_TYPE
+  symbols:
+  - ParticleType
+  schemas: []
+implementation_key: fabric/particle/rendering
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - particle_properties
+repair:
+  scope:
+  - minecraft/particle/rendering
+  writable_anchors:
+  - /* MMM:particle_rendering */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +48,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement rendering responsibility for particle strictly within declared PARTICLE_TYPE
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required particle prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- particle rendering matches host version contract
+- particle rendering receipts emitted with verified context

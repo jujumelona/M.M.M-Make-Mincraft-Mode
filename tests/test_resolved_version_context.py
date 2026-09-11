@@ -30,6 +30,7 @@ def target_fixture(revision="fixture-a"):
         "dependency_coordinates": {"fabric_api": "fixture:api:1"},
         "repositories": ["https://example.invalid/host-fixture"],
         "replacements": {},
+        "leaf_bindings": {},
     }
     return TargetContract(
         adapter_id="fixture", edition="java", loader="fabric", minecraft_version="26.2",

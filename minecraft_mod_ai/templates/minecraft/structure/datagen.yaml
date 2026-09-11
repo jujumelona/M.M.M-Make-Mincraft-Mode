@@ -1,5 +1,40 @@
 id: minecraft/structure/datagen
 task: Implement only the datagen responsibility of the supplied structure artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: structure_identity
+  type: identifier
+  required: true
+- name: structure_datagen_input
+  type: specification
+  required: true
+outputs:
+- name: structure_datagen_receipt
+  type: receipt
+- name: structure_datagen_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
+implementation_key: fabric/structure/datagen
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - structure_properties
+repair:
+  scope:
+  - minecraft/structure/datagen
+  writable_anchors:
+  - /* MMM:structure_datagen */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +47,12 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement datagen responsibility for structure strictly within declared WORLDGEN_STRUCTURE
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required structure prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- structure datagen matches host version contract
+- structure datagen receipts emitted with verified context

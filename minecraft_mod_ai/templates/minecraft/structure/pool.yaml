@@ -1,5 +1,40 @@
 id: minecraft/structure/pool
 task: Implement only the pool responsibility of the supplied structure artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: structure_identity
+  type: identifier
+  required: true
+- name: structure_pool_input
+  type: specification
+  required: true
+outputs:
+- name: structure_pool_receipt
+  type: receipt
+- name: structure_pool_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
+implementation_key: fabric/structure/pool
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - structure_properties
+repair:
+  scope:
+  - minecraft/structure/pool
+  writable_anchors:
+  - /* MMM:structure_pool */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +47,12 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement pool responsibility for structure strictly within declared WORLDGEN_STRUCTURE
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required structure prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- structure pool matches host version contract
+- structure pool receipts emitted with verified context

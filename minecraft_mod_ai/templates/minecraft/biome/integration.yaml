@@ -1,5 +1,40 @@
 id: minecraft/biome/integration
 task: Implement only the integration responsibility of the supplied biome artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: biome_identity
+  type: identifier
+  required: true
+- name: biome_integration_input
+  type: specification
+  required: true
+outputs:
+- name: biome_integration_receipt
+  type: receipt
+- name: biome_integration_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - BIOME
+  symbols: []
+  schemas: []
+implementation_key: fabric/biome/integration
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - biome_properties
+repair:
+  scope:
+  - minecraft/biome/integration
+  writable_anchors:
+  - /* MMM:biome_integration */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +47,10 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement integration responsibility for biome strictly within declared BIOME capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required biome prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- biome integration matches host version contract
+- biome integration receipts emitted with verified context

@@ -1,5 +1,44 @@
 id: minecraft/item/durability
 task: Implement only the durability responsibility of the supplied item artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: item_identity
+  type: identifier
+  required: true
+- name: item_durability_input
+  type: specification
+  required: true
+outputs:
+- name: item_durability_receipt
+  type: receipt
+- name: item_durability_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  - ITEM_SETTINGS
+  symbols:
+  - register_item
+  - resource_key_create
+  - item_stacks_to
+  schemas: []
+implementation_key: fabric/item/durability
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - item_properties
+repair:
+  scope:
+  - minecraft/item/durability
+  writable_anchors:
+  - /* MMM:item_durability */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +51,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement durability responsibility for item strictly within declared REGISTER_ITEM
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required item prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- item durability matches host version contract
+- item durability receipts emitted with verified context

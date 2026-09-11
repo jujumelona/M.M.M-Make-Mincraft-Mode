@@ -1,5 +1,42 @@
 id: minecraft/block/validation
 task: Implement only the validation responsibility of the supplied block artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: block_identity
+  type: identifier
+  required: true
+- name: block_validation_input
+  type: specification
+  required: true
+outputs:
+- name: block_validation_receipt
+  type: receipt
+- name: block_validation_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
+implementation_key: fabric/block/validation
+validators:
+- mod_integration_test
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - block_properties
+repair:
+  scope:
+  - minecraft/block/validation
+  writable_anchors:
+  - /* MMM:block_validation */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +49,11 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement validation responsibility for block strictly within declared REGISTER_BLOCK
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required block prerequisite receipt is missing; never invent defaults.
+- Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- block validation matches host version contract
+- block validation receipts emitted with verified context

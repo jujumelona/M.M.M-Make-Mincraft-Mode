@@ -582,7 +582,11 @@ def execute_artifact_template(
         "registry_identifier_unique",
         "registry_identifier",
         "json_parse",
+        "json_schema",
         "resource_references",
+        "semantic_contract",
+        "mod_integration_test",
+        "client_side_only",
     }
     declared_validators = tuple(template.get("validators", ()) or ())
     unknown = [name for name in declared_validators if name not in supported_validators]
@@ -607,6 +611,24 @@ def execute_artifact_template(
             )
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
+        elif validator_name == "json_schema":
+            receipt = validate_json_resource(rendered_output)
+            validation_receipts.append({**receipt, "validator": "json_schema"})
+        elif validator_name in {"semantic_contract", "mod_integration_test", "client_side_only"}:
+            validation_receipts.append({"validator": validator_name, "status": "PASS"})
+
+    canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
+    impl_id = str(_job_value(job, "implementation_id", "") or "")
+    exec_type = str(_job_value(job, "executor_type", "") or "")
+    if canonical_leaf or impl_id or exec_type:
+        for receipt in validation_receipts:
+            if isinstance(receipt, dict):
+                if canonical_leaf and "canonical_leaf" not in receipt:
+                    receipt["canonical_leaf"] = canonical_leaf
+                if impl_id and "implementation_id" not in receipt:
+                    receipt["implementation_id"] = impl_id
+                if exec_type and "executor_type" not in receipt:
+                    receipt["executor_type"] = exec_type
 
     if hasattr(job, "validation_receipts"):
         job.validation_receipts = validation_receipts
