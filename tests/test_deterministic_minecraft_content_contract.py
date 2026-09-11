@@ -35,7 +35,7 @@ def test_compile_modules_preserves_strict_semantic_intent() -> None:
                 {
                     "id": "copper_hammer",
                     "kind": "item",
-                    "config": {"display_name_en": "Copper Hammer"},
+                    "config": {"display_name": "Copper Hammer", "main_color": "#B87333"},
                     "depends_on": ["copper_ingot"],
                 }
             ]
@@ -46,7 +46,7 @@ def test_compile_modules_preserves_strict_semantic_intent() -> None:
     assert modules[0].module_id == "copper_hammer"
     assert modules[0].kind == "item"
     assert modules[0].depends_on == ("copper_ingot",)
-    assert modules[0].config == {"display_name_en": "Copper Hammer"}
+    assert modules[0].config == {"display_name": "Copper Hammer", "main_color": "#B87333"}
 
 
 @pytest.mark.parametrize(
@@ -59,8 +59,8 @@ def test_compile_modules_preserves_strict_semantic_intent() -> None:
         (
             {
                 "modules": [
-                    {"id": "copper_hammer", "kind": "item"},
-                    {"id": "copper_hammer", "kind": "block"},
+                    {"id": "copper_hammer", "kind": "item", "config": {"display_name": "Copper Hammer", "main_color": "#B87333"}},
+                    {"id": "copper_hammer", "kind": "block", "config": {"display_name": "Copper Block", "main_color": "#B87333", "hardness": 3.0}},
                 ]
             },
             "Duplicate Minecraft module id",
@@ -87,6 +87,7 @@ def test_compile_modules_preserves_strict_semantic_intent() -> None:
                     {
                         "id": "copper_hammer",
                         "kind": "item",
+                        "config": {"display_name": "Copper Hammer", "main_color": "#B87333"},
                         "depends_on": ["copper_hammer"],
                     }
                 ]
@@ -185,7 +186,7 @@ def test_execute_uses_host_discovered_project_identity(
         _Runtime,
         _GeneratingExtended,
         tmp_path,
-        {"modules": [{"id": "copper_hammer", "kind": "item"}]},
+        {"modules": [{"id": "copper_hammer", "kind": "item", "config": {"display_name": "Copper Hammer", "main_color": "#B87333"}}]},
     )
 
     assert captured["project_root"] == project

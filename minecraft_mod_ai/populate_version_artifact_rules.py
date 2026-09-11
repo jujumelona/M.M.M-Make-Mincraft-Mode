@@ -262,7 +262,7 @@ def make_implementation(
     validator = registry.get_validator(validator_profile)
     result = {
         "implementation_id": identifier,
-        "executor_type": "deterministic_renderer" if template_id else "python_generator",
+        "executor_type": executor_type,
         "implementation_sha256": implementation.content_sha256,
         "validator_profile": validator_profile,
         "validator_sha256": validator.source_hash,

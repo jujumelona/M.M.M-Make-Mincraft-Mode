@@ -36,23 +36,116 @@ class GraphRouter:
     ):
         self.calls.append(tool_name)
         context = json.loads(messages[-1]["content"])
-        accepted = context["accepted_records"]
-        if tool_name == "submit_design_content_entity":
+        if tool_name == "submit_one_design_content_entity_count":
+            return {"count": len(self.nodes)}
+        if tool_name == "submit_one_design_continue_record":
+            target = str(context.get("target_template") or "")
+            return {"required": target == "design/research_fact" and not context.get("accepted_record_ids")}
+        if tool_name == "submit_one_design_relation_set":
+            selected = [
+                edge["relation_type"]
+                for edge in self.edges
+                if edge["source_id"] == context["source_id"] and edge["target_id"] == context["target_id"]
+            ]
+            return {"relations": selected[:4], "key_code": 0, "overflow": len(selected) > 4}
+        single_record = tool_name.startswith("submit_one_")
+        normalized_tool = tool_name.replace("submit_one_", "submit_", 1) if single_record else tool_name
+        accepted = context.get("accepted_records", [])
+        if normalized_tool == "submit_design_content_entity":
             rows = self.nodes
-        elif tool_name == "submit_design_content_relation":
+        elif normalized_tool == "submit_design_content_relation":
             rows = self.edges
-        elif tool_name == "submit_design_content_capability":
+        elif normalized_tool == "submit_design_content_capability":
             rows = [{"fact_type": self.capability}]
-        elif tool_name == "submit_design_content_property":
-            eid = context["entity"]["entity_id"]
+        elif normalized_tool == "submit_design_content_property":
+            entity = context.get("entity")
+            eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
+            if not eid:
+                raise AssertionError("content-property fake requires entity_id or module_id")
             rows = [
                 {"property": "display_name", "value": eid.replace("_", " ").title()},
                 {"property": "shape", "value": "faceted chunk"},
             ]
-        elif tool_name == "submit_design_decision":
+        elif normalized_tool == "submit_design_decision":
             rows = []
         else:
             raise AssertionError(tool_name)
+        if single_record:
+            if normalized_tool == "submit_design_content_entity":
+                index = int(context.get("entity_ordinal", len(accepted) + 1)) - 1
+            elif normalized_tool == "submit_design_content_property" and context.get("requested_property"):
+                requested = context["requested_property"]
+                matching = [row for row in rows if row.get("property") == requested]
+                if len(matching) == 1:
+                    return deepcopy(matching[0])
+                defaults = {
+                    "main_color": "#808080",
+                    "shape": "faceted chunk",
+                    "hardness": "1.5",
+                    "attack_damage": "4",
+                    "attack_speed": "1.0",
+                    "hunger": "4",
+                    "saturation": "0.4",
+                    "seed_color": "#70A050",
+                    "category": "creature",
+                    "health": "20",
+                    "speed": "0.25",
+                    "tracking_range": "32",
+                    "width": "0.6",
+                    "height": "1.8",
+                    "archetype": "biped",
+                    "behavior": "passive",
+                    "screen_type": "container_9x3",
+                    "slot_count": "27",
+                    "packet_name": f"{eid}_packet",
+                    "channel": f"test:{eid}",
+                    "direction": "s2c",
+                    "sync_type": "ticking_block_entity",
+                    "container_size": "9",
+                    "component_name": eid,
+                    "value_type": "string",
+                    "codec": "Codec.STRING",
+                    "feature_type": "ore",
+                    "step": "underground_ores",
+                    "biomes": "minecraft:plains",
+                    "dimension_type": "minecraft:overworld",
+                    "ambient_light": "0.0",
+                    "coordinate_scale": "1.0",
+                    "temperature": "0.8",
+                    "downfall": "0.4",
+                    "precipitation": "rain",
+                    "color": "#808080",
+                    "beneficial": "true",
+                    "sound_id": f"test:{eid}",
+                    "particle_name": eid,
+                    "override_limiter": "false",
+                    "loot_table_id": f"test:entities/{eid}",
+                    "type": "entity",
+                    "frame_type": "task",
+                    "slot": "chestplate",
+                    "defense": "4",
+                    "toughness": "1.0",
+                    "action": "use",
+                    "cooldown": "20",
+                    "trigger": "use",
+                    "interaction": "activate",
+                    "input_item": "minecraft:stone",
+                    "output_item": "minecraft:cobblestone",
+                    "output_count": "1",
+                    "processing_ticks": "20",
+                    "max_level": "1",
+                    "literal": "test",
+                    "message": "test",
+                    "permission_level": "0",
+                }
+                if requested not in defaults:
+                    raise AssertionError(f"missing requested property {requested}")
+                return {"property": requested, "value": defaults[requested]}
+            else:
+                index = len(accepted)
+            if not 0 <= index < len(rows):
+                raise AssertionError(f"single record index out of range for {normalized_tool}: {index}")
+            return deepcopy(rows[index])
         if len(accepted) < len(rows):
             return {
                 "status": "record",
@@ -114,20 +207,20 @@ def test_graph_provenance_is_bound_to_exact_requirement():
     assert all(f.evidence_refs == () for f in design["_implementation_facts"])
 
 
-def test_graph_rejects_dangling_relation():
-    with pytest.raises(SlotFillError, match="DANGLING"):
-        compile_atomic_design(
-            "materials",
-            GraphRouter(
-                edges=[
-                    {
-                        "relation_type": "drops",
-                        "source_id": "missing",
-                        "target_id": "raw_material",
-                    }
-                ]
-            ),
-        )
+def test_relation_pairs_are_host_scoped_and_cannot_be_dangling():
+    design = compile_atomic_design(
+        "materials",
+        GraphRouter(
+            edges=[
+                {
+                    "relation_type": "drops",
+                    "source_id": "missing",
+                    "target_id": "raw_material",
+                }
+            ]
+        ),
+    )
+    assert design["_content_relations"] == []
 
 
 def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
@@ -147,7 +240,7 @@ def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
 
 
 @pytest.mark.parametrize(
-    "capability", ["MAGIC_SPELL", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]
+    "capability", ["UNSUPPORTED"]
 )
 def test_unsupported_capability_never_becomes_item(capability):
     with pytest.raises(SlotFillError, match="CAPABILITY_UNSUPPORTED"):
@@ -175,7 +268,8 @@ def test_graph_resumes_validated_records_without_recalling_model():
 def test_one_content_record_per_model_call():
     router = GraphRouter()
     compile_atomic_design("materials", router)
-    assert router.calls.count("submit_design_content_entity") == 3
+    assert router.calls.count("submit_one_design_content_entity") == 2
+    assert router.calls.count("submit_one_design_content_entity_count") == 1
     assert "resolve_domains" not in router.calls
 
 
@@ -196,9 +290,11 @@ def test_research_facts_are_bound_to_their_actual_source():
         def generate_tool_decision(
             self, role, messages, *, tool_name, parameters, **kwargs
         ):
-            if tool_name == "submit_design_research_fact":
+            if tool_name in {"submit_design_research_fact", "submit_one_design_research_fact"}:
                 context = json.loads(messages[-1]["content"])
                 assert context["source_ref"] == "source_b"
+                if tool_name == "submit_one_design_research_fact":
+                    return {"fact": "Material is brittle"}
                 if not context["accepted_records"]:
                     return {
                         "status": "record",
@@ -243,7 +339,7 @@ def test_research_facts_are_bound_to_their_actual_source():
     ]
 
 
-def test_recipe_content_graph_reaches_artifact_files(tmp_path):
+def test_recipe_content_graph_reaches_artifact_files(tmp_path, monkeypatch):
     from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
     from minecraft_mod_ai.artifact_graph_executor import execute_artifact_graph
     from minecraft_mod_ai.artifact_materializer import ensure_artifact_scaffolding
@@ -254,6 +350,15 @@ def test_recipe_content_graph_reaches_artifact_files(tmp_path):
         ):
             context = json.loads(messages[-1]["content"])
             if context.get("entity", {}).get("entity_id") == "conversion":
+                if tool_name == "submit_one_design_content_capability":
+                    return {"fact_type": "CRAFTING_RECIPE"}
+                if tool_name == "submit_one_design_content_property":
+                    rows = [
+                        {"property": "recipe_kind", "value": "shapeless"},
+                        {"property": "count", "value": "1"},
+                    ]
+                    requested = context.get("requested_property")
+                    return next(row for row in rows if row["property"] == requested)
                 rows = (
                     [{"fact_type": "CRAFTING_RECIPE"}]
                     if tool_name == "submit_design_content_capability"
@@ -262,7 +367,7 @@ def test_recipe_content_graph_reaches_artifact_files(tmp_path):
                         {"property": "count", "value": "1"},
                     ]
                 )
-                index = len(context["accepted_records"])
+                index = len(context.get("accepted_records", []))
                 return (
                     {"status": "record", "record": rows[index], "reason": ""}
                     if index < len(rows)
@@ -298,6 +403,13 @@ def test_recipe_content_graph_reaches_artifact_files(tmp_path):
         mod_id="bound_target",
         package_name="org.demo",
         minecraft_version="1.21.2",
+    )
+    import minecraft_mod_ai.resolved_version_context as resolved_version_context
+
+    monkeypatch.setattr(
+        resolved_version_context,
+        "execution_context",
+        lambda context, job: None,
     )
     execute_artifact_graph(jobs, base_dir=tmp_path)
     data = json.loads(

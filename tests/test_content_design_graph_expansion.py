@@ -20,18 +20,38 @@ class ExpansionGraphRouter:
     def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
         self.calls.append(tool_name)
         context = json.loads(messages[-1]["content"])
-        accepted = context["accepted_records"]
+        if tool_name == "submit_one_design_content_entity_count":
+            return {"count": len(self.nodes)}
+        if tool_name == "submit_one_design_continue_record":
+            target = str(context.get("target_template") or "")
+            return {"required": target == "design/research_fact" and not context.get("accepted_record_ids")}
+        if tool_name == "submit_one_design_relation_set":
+            selected = [
+                edge["relation_type"]
+                for edge in self.edges
+                if edge["source_id"] == context["source_id"] and edge["target_id"] == context["target_id"]
+            ]
+            return {"relations": selected[:4], "key_code": 0, "overflow": len(selected) > 4}
+        single_record = tool_name.startswith("submit_one_")
+        normalized_tool = tool_name.replace("submit_one_", "submit_", 1) if single_record else tool_name
+        accepted = context.get("accepted_records", [])
 
-        if tool_name == "submit_design_content_entity":
+        if normalized_tool == "submit_design_content_entity":
             rows = self.nodes
-        elif tool_name == "submit_design_content_relation":
+        elif normalized_tool == "submit_design_content_relation":
             rows = self.edges
-        elif tool_name == "submit_design_content_capability":
-            eid = context["entity"]["entity_id"]
+        elif normalized_tool == "submit_design_content_capability":
+            entity = context.get("entity")
+            eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
+            if not eid:
+                raise AssertionError("content-property fake requires entity_id or module_id")
             cap = self.capabilities.get(eid, "ITEM_EXISTS")
             rows = [{"fact_type": cap}]
-        elif tool_name == "submit_design_content_property":
-            eid = context["entity"]["entity_id"]
+        elif normalized_tool == "submit_design_content_property":
+            entity = context.get("entity")
+            eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
+            if not eid:
+                raise AssertionError("content-property fake requires entity_id or module_id")
             props = self.properties.get(
                 eid,
                 [
@@ -40,11 +60,87 @@ class ExpansionGraphRouter:
                 ],
             )
             rows = props
-        elif tool_name == "submit_design_decision":
+        elif normalized_tool == "submit_design_decision":
             rows = []
         else:
             raise AssertionError(tool_name)
 
+        if single_record:
+            if normalized_tool == "submit_design_content_entity":
+                index = int(context.get("entity_ordinal", len(accepted) + 1)) - 1
+            elif normalized_tool == "submit_design_content_property" and context.get("requested_property"):
+                requested = context["requested_property"]
+                matching = [row for row in rows if row.get("property") == requested]
+                if len(matching) == 1:
+                    return deepcopy(matching[0])
+                defaults = {
+                    "main_color": "#808080",
+                    "shape": "faceted chunk",
+                    "hardness": "1.5",
+                    "attack_damage": "4",
+                    "attack_speed": "1.0",
+                    "hunger": "4",
+                    "saturation": "0.4",
+                    "seed_color": "#70A050",
+                    "category": "creature",
+                    "health": "20",
+                    "speed": "0.25",
+                    "tracking_range": "32",
+                    "width": "0.6",
+                    "height": "1.8",
+                    "archetype": "biped",
+                    "behavior": "passive",
+                    "screen_type": "container_9x3",
+                    "slot_count": "27",
+                    "packet_name": f"{eid}_packet",
+                    "channel": f"test:{eid}",
+                    "direction": "s2c",
+                    "sync_type": "ticking_block_entity",
+                    "container_size": "9",
+                    "component_name": eid,
+                    "value_type": "string",
+                    "codec": "Codec.STRING",
+                    "feature_type": "ore",
+                    "step": "underground_ores",
+                    "biomes": "minecraft:plains",
+                    "dimension_type": "minecraft:overworld",
+                    "ambient_light": "0.0",
+                    "coordinate_scale": "1.0",
+                    "temperature": "0.8",
+                    "downfall": "0.4",
+                    "precipitation": "rain",
+                    "color": "#808080",
+                    "beneficial": "true",
+                    "sound_id": f"test:{eid}",
+                    "particle_name": eid,
+                    "override_limiter": "false",
+                    "loot_table_id": f"test:entities/{eid}",
+                    "type": "entity",
+                    "frame_type": "task",
+                    "slot": "chestplate",
+                    "defense": "4",
+                    "toughness": "1.0",
+                    "action": "use",
+                    "cooldown": "20",
+                    "trigger": "use",
+                    "interaction": "activate",
+                    "input_item": "minecraft:stone",
+                    "output_item": "minecraft:cobblestone",
+                    "output_count": "1",
+                    "processing_ticks": "20",
+                    "max_level": "1",
+                    "literal": "test",
+                    "message": "test",
+                    "permission_level": "0",
+                }
+                if requested not in defaults:
+                    raise AssertionError(f"missing requested property {requested}")
+                return {"property": requested, "value": defaults[requested]}
+            else:
+                index = len(accepted)
+            if not 0 <= index < len(rows):
+                raise AssertionError(f"single record index out of range for {normalized_tool}: {index}")
+            return deepcopy(rows[index])
         if len(accepted) < len(rows):
             return {
                 "status": "record",
@@ -67,7 +163,7 @@ def test_entity_exists_lowering_and_asset_mold():
                 {"property": "display_name", "value": "Space Boss"},
                 {"property": "health", "value": "300"},
                 {"property": "shape", "value": "humanoid titan"},
-                {"property": "main_color", "value": "void purple"},
+                {"property": "main_color", "value": "#5B2A86"},
             ]
         },
     )
@@ -88,7 +184,7 @@ def test_entity_exists_lowering_and_asset_mold():
     assert asset.width == 64
     assert asset.height == 64
     assert "mob texture map" in asset.prompt
-    assert "void purple" in asset.prompt
+    assert "#5B2A86" in asset.prompt
 
 
 def test_gui_panel_lowering_and_asset_mold():

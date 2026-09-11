@@ -314,6 +314,8 @@ class NativeLlamaTuningPipeline:
         def install_multimodal_stage() -> None:
             install_multimodal(self.autotune, self.hardware_policy)
             self._install_autotune_liveness_guard()
+            # Final launch-context ownership belongs to the last composed stage.
+            self._install_profile_context_authority()
 
         return (
             TuningStage("runtime-types", self._install_runtime_type_ownership),
@@ -335,7 +337,6 @@ class NativeLlamaTuningPipeline:
             TuningStage("kernel-autotune", install_kernel_stage),
             TuningStage("qwen-transport", install_qwen_runtime_transport),
             TuningStage("multimodal", install_multimodal_stage),
-            TuningStage("context-authority", self._install_profile_context_authority),
         )
 
     def _callable_boundaries(self):

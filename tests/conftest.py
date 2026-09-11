@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 
@@ -248,8 +247,12 @@ def _isolate_test_runtime_state(
 
     @wraps(original_generate)
     def generate_with_explicit_test_target(self, spec, root):
+        # Only unresolved legacy scaffolds receive the deterministic test target.
+        # An explicitly resolved target with no reviewed templates must remain visible
+        # to the production fail-closed admission boundary instead of being upgraded by
+        # test infrastructure.
         if spec.platform.is_unresolved():
-            spec = replace(spec, platform=_platform_lock_from_adapter(synthetic_adapter))
+            object.__setattr__(spec, "platform", _platform_lock_from_adapter(synthetic_adapter))
         return original_generate(self, spec, root)
 
     monkeypatch.setattr(

@@ -455,10 +455,20 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
 
             explicit_batch = _operator_batch()
             active_batch = os.environ.get("MMM_LLAMA_ACTIVE_BATCH", "").strip()
+            effective_batch: int | None = None
             if explicit_batch is not None:
+                effective_batch = explicit_batch
                 _replace_option(args, ("--batch-size", "-b"), str(explicit_batch))
             elif active_batch:
-                _replace_option(args, ("--batch-size", "-b"), str(_int(active_batch, 2048)))
+                effective_batch = _int(active_batch, 2048)
+                _replace_option(args, ("--batch-size", "-b"), str(effective_batch))
+            if effective_batch is not None:
+                for ubatch_name in ("--ubatch-size", "-ub"):
+                    if ubatch_name in args:
+                        index = args.index(ubatch_name)
+                        if index + 1 < len(args):
+                            args[index + 1] = str(min(_int(args[index + 1], effective_batch), effective_batch))
+                        break
 
             generic_kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()
             explicit_k = os.environ.get("MMM_LLAMA_CACHE_TYPE_K", "").strip().lower()

@@ -87,7 +87,7 @@ def test_distribution_preserves_geckolib_custom_and_modrinth_dependencies(
     )
 
     by_id = {item["mod_id"]: item for item in metadata["fabric_dependencies"]}
-    assert by_id["fabric-api"]["version_predicates"] == ["test-api"]
+    assert by_id["fabric-api"]["version_predicates"] == [_platform_lock().fabric_api]
     assert by_id["geckolib"]["version_predicates"] == ["4.8.2"]
     assert by_id["custom-library"]["fabric_section"] == "recommends"
     assert metadata["modrinth_dependencies"] == [

@@ -38,26 +38,9 @@ REQUIRED_CANONICAL_LEAVES = [
     "minecraft/block/drops",
 ]
 
-# Version-specific requirements (additions to core set)
-VERSION_SPECIFIC_REQUIREMENTS: dict[str, list[str]] = {
-    "1.21.5": [
-        "minecraft/modern_registry/item",
-        "minecraft/modern_registry/block",
-    ],
-    "1.21.4": [
-        "minecraft/modern_registry/item",
-        "minecraft/modern_registry/block",
-    ],
-    # Older versions don't have modern registry
-}
-
-# Versions that explicitly don't support certain leaves
-VERSION_SPECIFIC_UNSUPPORTED: dict[str, list[str]] = {
-    "1.20.1": [
-        "minecraft/modern_registry/item",
-        "minecraft/modern_registry/block",
-    ],
-}
+# Target-specific implementation details are HOST-owned, not canonical leaves.
+VERSION_SPECIFIC_REQUIREMENTS: dict[str, list[str]] = {}
+VERSION_SPECIFIC_UNSUPPORTED: dict[str, list[str]] = {}
 
 
 @dataclass

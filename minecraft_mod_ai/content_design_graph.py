@@ -299,13 +299,13 @@ def compile_content_graph(
             FactType.REGISTRY_TAG: {"registry_kind"},
         }[fact_type]
         required_properties = {
-            FactType.ITEM_EXISTS: {"display_name"},
-            FactType.BLOCK_EXISTS: {"display_name"},
+            FactType.ITEM_EXISTS: {"display_name", "main_color", "shape"},
+            FactType.BLOCK_EXISTS: {"display_name", "main_color"},
             FactType.ENTITY_EXISTS: {
                 "display_name", "category", "health", "speed", "tracking_range",
                 "width", "height", "archetype", "behavior", "main_color",
             },
-            FactType.GUI_EXISTS: {"display_name", "screen_type"},
+            FactType.GUI_EXISTS: {"display_name", "screen_type", "main_color"},
             FactType.NETWORK_PACKET: {"display_name", "packet_name", "channel", "direction"},
             FactType.BLOCK_ENTITY_EXISTS: {"display_name", "sync_type", "container_size"},
             FactType.DATA_COMPONENT: {"display_name", "component_name", "value_type", "codec"},
@@ -317,7 +317,7 @@ def compile_content_graph(
             FactType.PARTICLE_TYPE: {"display_name", "particle_name", "override_limiter"},
             FactType.ENTITY_LOOT: {"display_name", "loot_table_id", "type"},
             FactType.ADVANCEMENT: {"display_name", "frame_type"},
-            FactType.EQUIPMENT_ARMOR: {"display_name", "slot", "defense", "toughness"},
+            FactType.EQUIPMENT_ARMOR: {"display_name", "slot", "defense", "toughness", "main_color"},
             FactType.CUSTOM_ITEM_BEHAVIOR: {"display_name", "action", "cooldown"},
             FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
             FactType.CRAFTING_RECIPE: {"recipe_kind", "count"},

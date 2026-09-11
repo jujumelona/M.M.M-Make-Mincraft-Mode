@@ -108,9 +108,12 @@ def test_generator_fails_closed_without_reviewed_deterministic_templates(
 ) -> None:
     adapter = _fabric_1211()
     assert adapter.deterministic_module_kinds == frozenset()
+    project_root = tmp_path / "project"
 
     with pytest.raises(
         GenerationError,
         match="no reviewed deterministic module templates",
     ):
-        FabricProjectGenerator().generate(_simple_spec(adapter), tmp_path / "project")
+        FabricProjectGenerator().generate(_simple_spec(adapter), project_root)
+
+    assert not project_root.exists()

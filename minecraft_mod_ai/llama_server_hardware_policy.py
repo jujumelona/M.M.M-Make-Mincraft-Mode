@@ -621,6 +621,12 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 def _apply_hardware_launch_policy(args: list[str]) -> list[str]:
     """Apply managed llama-server launch policy without enabling unused endpoints."""
 
+    for option in ("--gpu-layers", "-ngl"):
+        if option in args:
+            index = args.index(option)
+            if index + 1 < len(args) and str(args[index + 1]).strip().casefold() == "all":
+                args[index + 1] = "auto"
+            break
     if "--parallel" not in args and "-np" not in args:
         args.extend(["--parallel", "1"])
     if _auxiliary_native_telemetry_enabled():
