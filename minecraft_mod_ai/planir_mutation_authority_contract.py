@@ -593,7 +593,10 @@ def install(loop_module: Any) -> None:
             target
             and target in set(creatable)
             and bool(context.is_new_file)
-            and str(context.evidence_source or "") == "evidence_fresh_owned_anchor"
+            and str(context.evidence_source or "") in {
+                "evidence_fresh_owned_anchor",
+                "evidence_host_reserved_owned_anchor",
+            }
         )
         return _authorize_context(
             context,

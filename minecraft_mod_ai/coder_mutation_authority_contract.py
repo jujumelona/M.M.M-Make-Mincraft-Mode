@@ -226,9 +226,16 @@ def _install_creation_conflict_classification(loop_module: Any) -> None:
             pinned = loop_module._canonical_mutation_path(
                 getattr(context, "target_path", None)
             )
+            supplied = ""
+            for key in loop_module._SOURCE_EDIT_PATH_KEYS:
+                value = arguments.get(key)
+                if isinstance(value, str) and value.strip():
+                    supplied = loop_module._canonical_mutation_path(value)
+                    break
             operation = str(arguments.get("operation") or "").strip().casefold()
             if (
                 pinned
+                and supplied == pinned
                 and not bool(getattr(context, "is_new_file", False))
                 and operation in loop_module._SOURCE_CREATE_OPERATIONS
             ):
