@@ -17,6 +17,23 @@ class TemplateBlocked(ValueError):
     pass
 
 
+_HOST_EXACT_SINGLE_TEMPLATES = frozenset({
+    "design/content_capability",
+})
+
+_HOST_SEQUENCE_TEMPLATES = frozenset({
+    "design/research_fact",
+    "design/content_entity",
+    "design/content_relation",
+    "design/decision",
+    "design/content_property",
+})
+
+_HOST_FIRST_RECORD_REQUIRED = frozenset({
+    "design/content_entity",
+})
+
+
 def _contains_blank_string(value, schema=None):
     schema = schema or {}
     if isinstance(value, str):
@@ -29,6 +46,122 @@ def _contains_blank_string(value, schema=None):
     if isinstance(value, list):
         return any(_contains_blank_string(item, schema.get("items")) for item in value)
     return False
+
+
+def _grounded_evidence_refs(context, allowed_refs):
+    grounded_refs: list[str] = []
+    for key in ("source_evidence_id", "evidence_ref", "shard_id"):
+        ref = context.get(key)
+        if isinstance(ref, str) and ref in allowed_refs and ref not in grounded_refs:
+            grounded_refs.append(ref)
+    evidence = context.get("evidence")
+    if isinstance(evidence, str) and evidence in allowed_refs and evidence not in grounded_refs:
+        grounded_refs.append(evidence)
+    elif isinstance(evidence, (list, tuple, set)):
+        for ref in evidence:
+            if isinstance(ref, str) and ref in allowed_refs and ref not in grounded_refs:
+                grounded_refs.append(ref)
+    return grounded_refs
+
+
+def _accepted_record_index(identifier, records):
+    """Return only the compact identity needed by the continuation decision."""
+    if identifier == "design/content_entity":
+        return [str(row.get("entity_id", "")) for row in records]
+    if identifier == "design/content_relation":
+        return [
+            ":".join(
+                str(row.get(key, ""))
+                for key in ("relation_type", "source_id", "target_id")
+            )
+            for row in records
+        ]
+    if identifier == "design/decision":
+        return [str(row.get("slot_id", "")) for row in records]
+    if identifier == "design/content_property":
+        return [str(row.get("property", "")) for row in records]
+    return [
+        json.dumps(row, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        for row in records
+    ]
+
+
+def _run_host_owned_records(
+    router,
+    identifier,
+    *,
+    context,
+    allowed_refs,
+    progress=None,
+    checkpoint=None,
+):
+    """Run exact/sequence design records without giving the model a `done` control field."""
+    from .single_record_template import run_single_record_template
+
+    template = load_record_template(identifier)
+    normalized_context = task_context(template, context)
+    refs = _grounded_evidence_refs(normalized_context, allowed_refs)
+
+    if identifier in _HOST_EXACT_SINGLE_TEMPLATES:
+        record = run_single_record_template(
+            router,
+            identifier,
+            context=normalized_context,
+            progress=progress,
+            checkpoint=checkpoint,
+        )
+        return {"records": [record], "reason": "", "evidence_refs": refs}
+
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    while True:
+        if identifier in _HOST_FIRST_RECORD_REQUIRED and not records:
+            required = True
+        else:
+            continuation = run_single_record_template(
+                router,
+                "design/continue_record",
+                context={
+                    "target_template": identifier,
+                    "target_task": template["task"],
+                    "target_rules": list(template.get("rules", ())),
+                    "active_context": normalized_context,
+                    "accepted_record_ids": _accepted_record_index(identifier, records),
+                },
+                progress=progress,
+                checkpoint=checkpoint,
+            )
+            required = bool(continuation["required"])
+        if not required:
+            return {"records": records, "reason": "", "evidence_refs": refs}
+
+        record_context = {
+            **normalized_context,
+            "accepted_records": deepcopy(records),
+        }
+        if identifier == "design/content_property":
+            allowed_properties = normalized_context.get("allowed_properties")
+            if isinstance(allowed_properties, list):
+                used = {str(row.get("property", "")) for row in records}
+                remaining = [name for name in allowed_properties if name not in used]
+                if not remaining:
+                    return {"records": records, "reason": "", "evidence_refs": refs}
+                record_context["allowed_properties"] = remaining
+
+        record = run_single_record_template(
+            router,
+            identifier,
+            context=record_context,
+            progress=progress,
+            checkpoint=checkpoint,
+        )
+        if _contains_blank_string(record, template["record_schema"]):
+            raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
+        key = json.dumps(record, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
+        seen.add(key)
+        records.append(record)
 
 
 def record_response_schema(template):
@@ -47,6 +180,16 @@ def record_response_schema(template):
 def run_record_template(
     router, identifier, *, context, allowed_refs, progress=None, checkpoint=None
 ):
+    if identifier in _HOST_EXACT_SINGLE_TEMPLATES or identifier in _HOST_SEQUENCE_TEMPLATES:
+        return _run_host_owned_records(
+            router,
+            identifier,
+            context=context,
+            allowed_refs=allowed_refs,
+            progress=progress,
+            checkpoint=checkpoint,
+        )
+
     template = load_record_template(identifier)
     context = task_context(template, context)
     schema = record_response_schema(template)
@@ -92,19 +235,7 @@ def run_record_template(
         if evidence_from_value is not None:
             value["evidence_refs"] = list(evidence_from_value)
         else:
-            grounded_refs: list[str] = []
-            for key in ("source_evidence_id", "evidence_ref", "shard_id"):
-                ref = context.get(key)
-                if isinstance(ref, str) and ref in allowed_refs and ref not in grounded_refs:
-                    grounded_refs.append(ref)
-            ev = context.get("evidence")
-            if isinstance(ev, str) and ev in allowed_refs and ev not in grounded_refs:
-                grounded_refs.append(ev)
-            elif isinstance(ev, (list, tuple, set)):
-                for r in ev:
-                    if isinstance(r, str) and r in allowed_refs and r not in grounded_refs:
-                        grounded_refs.append(r)
-            value["evidence_refs"] = grounded_refs
+            value["evidence_refs"] = _grounded_evidence_refs(context, allowed_refs)
         if any(ref not in allowed_refs for ref in value["evidence_refs"]):
             raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
         status = value["status"]
@@ -162,8 +293,8 @@ def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any)
         raise ValueError(
             "TEMPLATE_PORT_REGISTRY_REQUIRED: job declares dependencies but no port registry was supplied"
         )
-    required_types = {p["name"]:p for p in _job_value(job, "required_ports", ())}
-    aliases = [str(d).rsplit(".",1)[-1] for d in dependencies if isinstance(d,str)]
+    required_types = {p["name"]: p for p in _job_value(job, "required_ports", ())}
+    aliases = [str(d).rsplit(".", 1)[-1] for d in dependencies if isinstance(d, str)]
     for dependency in dependencies:
         if isinstance(dependency, Mapping) or hasattr(dependency, "port_kind"):
             name = getattr(dependency, "name", None) or dependency.get("name")
@@ -284,6 +415,7 @@ def execute_artifact_template(
     values: dict[str, Any] = {**context_map, **det_inputs}
 
     from .artifact_target_contract import validate_artifact_target
+
     validate_artifact_target(template, values.get("minecraft_version", ""))
     _bind_job_dependencies(job, values, port_registry)
     for required in tuple(template.get("requires", ()) or ()):
@@ -331,9 +463,7 @@ def execute_artifact_template(
         )
     for validator_name in declared_validators:
         if validator_name == "java_parse":
-            validation_receipts.append(
-                validate_java_fragment(rendered_output, anchor=anchor)
-            )
+            validation_receipts.append(validate_java_fragment(rendered_output, anchor=anchor))
         elif validator_name in {"registry_identifier_unique", "registry_identifier"}:
             validation_receipts.append(
                 validate_registry_identifier(
@@ -342,7 +472,10 @@ def execute_artifact_template(
             )
         elif validator_name == "resource_references":
             from .artifact_validators.resource_links import validate_resource_links
-            validation_receipts.append(validate_resource_links(rendered_output, values, port_registry))
+
+            validation_receipts.append(
+                validate_resource_links(rendered_output, values, port_registry)
+            )
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
 
@@ -371,19 +504,32 @@ def execute_artifact_template(
                 raise ValueError(f"TEMPLATE_PORT_CONFLICT: {published_name}")
         ports_published[published_name] = port_obj
 
-    effective_base_dir = (
-        base_dir or context_map.get("project_root") or context_map.get("base_dir")
-    )
+    effective_base_dir = base_dir or context_map.get("project_root") or context_map.get("base_dir")
     materialization_data = None
     if effective_base_dir:
         from dataclasses import replace
 
         from .artifact_job import ArtifactJob
         from .artifact_materializer import materialize_job_output
-        materialize_job = replace(job, target_path=target_file, anchor=anchor,
-            operation=target_spec.get("operation", _job_value(job,"operation",""))) if isinstance(job, ArtifactJob) else job
-        if isinstance(job, ArtifactJob) and job.operation and (job.target_path != target_file or job.anchor != anchor):
-            raise ValueError("TEMPLATE_JOB_TARGET_DRIFT: re-expand the job against the current template")
+
+        materialize_job = (
+            replace(
+                job,
+                target_path=target_file,
+                anchor=anchor,
+                operation=target_spec.get("operation", _job_value(job, "operation", "")),
+            )
+            if isinstance(job, ArtifactJob)
+            else job
+        )
+        if (
+            isinstance(job, ArtifactJob)
+            and job.operation
+            and (job.target_path != target_file or job.anchor != anchor)
+        ):
+            raise ValueError(
+                "TEMPLATE_JOB_TARGET_DRIFT: re-expand the job against the current template"
+            )
         mat_receipt = materialize_job_output(
             materialize_job, rendered_output, base_dir=effective_base_dir
         )
@@ -397,12 +543,12 @@ def execute_artifact_template(
             "details": mat_receipt.details,
         }
 
-        # Post-write validation: verify the materialized target file exists
         target_p = Path(mat_receipt.target_path)
         if not target_p.exists():
-            raise ValueError(f"TEMPLATE_POST_WRITE_FAILED: Target file {target_p} was not written")
+            raise ValueError(
+                f"TEMPLATE_POST_WRITE_FAILED: Target file {target_p} was not written"
+            )
 
-    # Transactional commit: publish ports only after successful materialization and validations
     if port_registry is not None:
         for port_obj in ports_published.values():
             port_registry.publish(port_obj)
@@ -416,7 +562,9 @@ def execute_artifact_template(
         "rendered_output": rendered_output,
         "validations": validation_receipts,
         "materialization": materialization_data,
-        "ports_published": {name: port.to_dict() for name, port in ports_published.items()},
+        "ports_published": {
+            name: port.to_dict() for name, port in ports_published.items()
+        },
     }
     if hasattr(job, "status"):
         job.status = "SUCCESS"
