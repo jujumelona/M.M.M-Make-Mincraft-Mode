@@ -48,7 +48,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm tools/apply_generator_admission_repair.py .github/workflows/apply-generator-admission-repair.yml
-          git add minecraft_mod_ai/generator.py
+          git add minecraft_mod_ai/generator.py minecraft_mod_ai/platform_generation_contract.py
           git diff --cached --check
           git commit -m 'fix: enforce reviewed generator admission boundary'
           git pull --rebase origin main
