@@ -1,11 +1,16 @@
 id: translation/persistence_mapping
 input:
-  atomic_feature:
-  state:
-  persistence_requirement:
+  atomic_feature: {}
+  state: {}
+  persistence_requirement: {}
+
+input_schema:
+  atomic_feature: object
+  state: object
+  persistence_requirement: object
 
 task:
-  map_persistent_state_owner:
+  map_persistent_state_owner: true
 
 rules:
   - Emit persistence work only for state explicitly required to survive its declared lifetime boundary.
@@ -13,10 +18,16 @@ rules:
   - Do not invent saved state for transient behavior.
 
 output:
-  persistence_artifacts:
-  state_owner:
-  lifecycle_requirements:
-  unresolved_inputs:
+  persistence_artifacts: []
+  state_owner: {}
+  lifecycle_requirements: []
+  unresolved_inputs: []
+
+output_schema:
+  persistence_artifacts: list[string]
+  state_owner: object
+  lifecycle_requirements: list[string]
+  unresolved_inputs: list[string]
 
 proof:
   predicate: every persistence artifact traces to one explicit persistent state requirement
