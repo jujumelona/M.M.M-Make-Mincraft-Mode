@@ -16,7 +16,8 @@ def test_graph_closure_is_host_owned_for_entity_property_relation():
     prop = source[prop_start:entity_start]
     entity = source[entity_start:relation_start]
     relation = source[relation_start:generic_start]
-    assert "target_count = 1" in entity
+    assert '"design/content_entity_count"' in entity
+    assert 'target_count = int(cardinality["count"])' in entity
     assert '"design/continue_record"' not in entity + prop + relation
     assert '"design/relation_set"' in relation
     assert "requested_property" in prop
