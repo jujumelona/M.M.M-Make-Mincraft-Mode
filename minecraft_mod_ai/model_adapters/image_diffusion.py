@@ -11,6 +11,7 @@ from .base import ModelBackendError, ModelConfigurationError, _release_cuda, pre
 _IMAGE_LOCK = threading.RLock()
 _IMAGE_PIPELINE: Any | None = None
 _IMAGE_PIPELINE_KEY: tuple[Any, ...] | None = None
+_IMAGE_PIPELINE_ON_GPU = False
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,33 @@ class ImageGenerationConfig:
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     return default if raw is None else raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _full_gpu_threshold_mb(config: Any) -> int:
+    raw = os.environ.get("MMM_IMAGE_FULL_GPU_MIN_FREE_MB", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return value
+    return max(14_000, int(config.min_free_vram_mb) + 1_000)
+
+
+def _is_cuda_memory_pressure(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "out of memory",
+            "cuda oom",
+            "cudnn_status_alloc_failed",
+            "cublas_status_alloc_failed",
+            "allocation failed",
+            "not enough memory",
+        )
+    )
 
 
 def _accelerate_memory_budget(torch_module: Any) -> dict[Any, str]:
@@ -134,15 +162,21 @@ def _profile_key(p: ImageGenerationConfig) -> tuple[Any, ...]:
 
 
 def _clear_cached_pipeline() -> None:
-    global _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY
+    global _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY, _IMAGE_PIPELINE_ON_GPU
     _IMAGE_PIPELINE = None
     _IMAGE_PIPELINE_KEY = None
+    _IMAGE_PIPELINE_ON_GPU = False
 
 
 def finish_image_shard() -> None:
+    global _IMAGE_PIPELINE_ON_GPU
     with _IMAGE_LOCK:
+        pipeline = _IMAGE_PIPELINE
         if not _env_bool("MMM_IMAGE_CACHE_ACROSS_SHARDS", False):
             _clear_cached_pipeline()
+        elif pipeline is not None and _IMAGE_PIPELINE_ON_GPU:
+            pipeline.to("cpu")
+            _IMAGE_PIPELINE_ON_GPU = False
     _release_cuda()
 
 
@@ -154,7 +188,7 @@ class ImageDiffusionAdapter:
         self.profile = ImageGenerationConfig.from_adapter_config(config)
 
     def generate_image(self, *, prompt: str, output_path: Path, width: int = 512, height: int = 512, seed: int = 0) -> Path:
-        global _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY
+        global _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY, _IMAGE_PIPELINE_ON_GPU
         try:
             if not str(prompt).strip():
                 raise ModelConfigurationError("Image prompt is empty.")
@@ -170,6 +204,7 @@ class ImageDiffusionAdapter:
                     _clear_cached_pipeline()
                     _release_cuda()
                     pipeline = _load_pipeline(self.config, self.profile)
+                    _IMAGE_PIPELINE_ON_GPU = not bool(self.config.cpu_offload)
                     if cache_enabled:
                         _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY = pipeline, key
                 generator = torch.Generator(device="cpu").manual_seed(int(seed))
