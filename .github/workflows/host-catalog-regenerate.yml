@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   regenerate:
-    if: github.event.head_commit.message == 'ci: regenerate HOST catalog'
+    if: "${{ github.event.head_commit.message == 'ci: regenerate HOST catalog' }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
