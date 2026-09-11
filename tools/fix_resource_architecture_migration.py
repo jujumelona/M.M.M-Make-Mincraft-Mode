@@ -102,12 +102,24 @@ def _patch_recursive_template_package_data() -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def _normalize_generated_text() -> None:
+    for relative in (
+        "minecraft_mod_ai/template_contract_validation.py",
+        "tests/test_resource_architecture.py",
+    ):
+        path = ROOT / relative
+        lines = path.read_text(encoding="utf-8").splitlines()
+        normalized = "\n".join(line.rstrip() for line in lines).rstrip() + "\n"
+        path.write_text(normalized, encoding="utf-8")
+
+
 def main() -> None:
     _patch_proposal_deserialization_installer()
     _patch_resource_architecture_test()
     _patch_feature_semantic_convergence()
     _patch_template_runtime_contract_tests()
     _patch_recursive_template_package_data()
+    _normalize_generated_text()
 
 
 if __name__ == "__main__":
