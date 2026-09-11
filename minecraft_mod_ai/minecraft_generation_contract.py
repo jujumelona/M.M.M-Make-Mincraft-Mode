@@ -2,18 +2,19 @@ from __future__ import annotations
 
 """Strict semantic contracts for deterministic Minecraft content generation.
 
-The generator is an executor, not a designer. Every gameplay- or presentation-relevant
-value that changes generated output must be supplied explicitly before generation.
-Canonical design-facing names are lowered to legacy generator field names here so a
-small model never has to reproduce generator implementation details.
+The generator is an executor, not a designer. Required semantic fields are owned by the
+Minecraft template catalog; this module validates and lowers those fields without adding
+new design decisions.
 """
 
 import re
 import sys
 from collections.abc import Mapping
 from dataclasses import replace
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any
+
+from .task_template_catalog import load_template
 
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
@@ -21,23 +22,10 @@ _COMMAND_LITERAL = re.compile(r"^[a-z0-9_]+$")
 
 SUPPORTED_GENERATED_KINDS = frozenset(
     {
-        "item",
-        "block",
-        "tool",
-        "weapon",
-        "armor",
-        "food",
-        "crop",
-        "machine",
-        "effect",
-        "enchantment",
-        "command",
-        "recipe",
-        "advancement",
-        "loot",
+        "item", "block", "tool", "weapon", "armor", "food", "crop", "machine",
+        "effect", "enchantment", "command", "recipe", "advancement", "loot",
     }
 )
-
 _PRESENTATION_KINDS = frozenset(
     {"item", "block", "tool", "weapon", "armor", "food", "crop", "machine", "effect", "enchantment"}
 )
@@ -45,41 +33,41 @@ _VISUAL_TEXTURE_KINDS = frozenset(
     {"item", "block", "tool", "weapon", "armor", "food", "crop", "machine"}
 )
 
-# Canonical generation inputs. Legacy generator-only names (display_name_en/ko and
-# color for textured content) are derived by lower_generation_config and are not
-# separate reasoning obligations for the model.
-_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "item": ("display_name", "main_color"),
-    "block": ("display_name", "main_color", "hardness"),
-    "tool": ("display_name", "main_color", "attack_damage", "attack_speed"),
-    "weapon": ("display_name", "main_color", "attack_damage", "attack_speed"),
-    "armor": ("display_name", "main_color", "slot"),
-    "food": ("display_name", "main_color", "hunger", "saturation"),
-    "crop": ("display_name", "main_color", "seed_color"),
-    "machine": (
-        "display_name",
-        "main_color",
-        "input_item",
-        "output_item",
-        "output_count",
-        "processing_ticks",
-    ),
-    "effect": ("display_name", "color"),
-    "enchantment": ("display_name", "max_level"),
-    "command": ("literal", "message", "permission_level"),
-    # Data-only artifacts must carry an explicit serialized payload. Using the whole
-    # config as a fallback leaks orchestration metadata into Minecraft JSON.
-    "recipe": ("json",),
-    "advancement": ("json",),
-    "loot": ("json",),
-}
+
+@lru_cache(maxsize=1)
+def _generation_manifest() -> dict[str, Any]:
+    manifest = load_template("minecraft/generation_contract")
+    if manifest.get("execution") != "contract":
+        raise ValueError("MINECRAFT_GENERATION_CONTRACT_INVALID: execution")
+    kinds = manifest.get("kinds")
+    if not isinstance(kinds, dict) or set(kinds) != SUPPORTED_GENERATED_KINDS:
+        raise ValueError("MINECRAFT_GENERATION_CONTRACT_INVALID: kind coverage")
+    for kind, spec in kinds.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"MINECRAFT_GENERATION_CONTRACT_INVALID: {kind}")
+        fields = spec.get("required_fields")
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or len(fields) != len(set(fields))
+            or any(not isinstance(field, str) or not field for field in fields)
+        ):
+            raise ValueError(f"MINECRAFT_GENERATION_CONTRACT_INVALID: {kind}.required_fields")
+    return manifest
 
 
 def required_generation_fields(kind: str) -> tuple[str, ...]:
-    try:
-        return _REQUIRED_FIELDS[kind]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported deterministic Minecraft module kind: {kind!r}") from exc
+    spec = _generation_manifest()["kinds"].get(kind)
+    if not isinstance(spec, dict):
+        raise ValueError(f"Unsupported deterministic Minecraft module kind: {kind!r}")
+    return tuple(spec["required_fields"])
+
+
+def generation_authority(kind: str) -> str:
+    spec = _generation_manifest()["kinds"].get(kind)
+    if not isinstance(spec, dict):
+        raise ValueError(f"Unsupported deterministic Minecraft module kind: {kind!r}")
+    return str(spec.get("authority", "design"))
 
 
 def _require_text(config: Mapping[str, Any], key: str, module_id: str) -> str:
@@ -90,11 +78,7 @@ def _require_text(config: Mapping[str, Any], key: str, module_id: str) -> str:
 
 
 def _require_number(
-    config: Mapping[str, Any],
-    key: str,
-    module_id: str,
-    *,
-    minimum: float | None = None,
+    config: Mapping[str, Any], key: str, module_id: str, *, minimum: float | None = None
 ) -> float:
     value = config.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -106,11 +90,7 @@ def _require_number(
 
 
 def _require_int(
-    config: Mapping[str, Any],
-    key: str,
-    module_id: str,
-    *,
-    minimum: int | None = None,
+    config: Mapping[str, Any], key: str, module_id: str, *, minimum: int | None = None
 ) -> int:
     value = config.get(key)
     if type(value) is not int:
@@ -133,12 +113,9 @@ def validate_generation_config(kind: str, module_id: str, config: Mapping[str, A
         raise ValueError(f"Unsupported deterministic Minecraft module kind: {kind!r}")
     if not isinstance(config, Mapping):
         raise ValueError(f"MINECRAFT_GENERATION_CONFIG_INVALID: {module_id}")
-
     missing = [field for field in required_generation_fields(kind) if field not in config]
     if missing:
-        raise ValueError(
-            f"MINECRAFT_GENERATION_FIELDS_REQUIRED: {module_id} missing {missing}"
-        )
+        raise ValueError(f"MINECRAFT_GENERATION_FIELDS_REQUIRED: {module_id} missing {missing}")
 
     if kind in _PRESENTATION_KINDS:
         _require_text(config, "display_name", module_id)
@@ -156,43 +133,37 @@ def validate_generation_config(kind: str, module_id: str, config: Mapping[str, A
         _require_int(config, "hunger", module_id, minimum=0)
         _require_number(config, "saturation", module_id, minimum=0.0)
     elif kind == "armor":
-        slot = _require_text(config, "slot", module_id).lower()
-        if slot not in {"helmet", "chestplate", "leggings", "boots"}:
+        if _require_text(config, "slot", module_id).lower() not in {"helmet", "chestplate", "leggings", "boots"}:
             raise ValueError(f"MINECRAFT_GENERATION_FIELD_INVALID: {module_id}.slot")
     elif kind == "block":
         _require_number(config, "hardness", module_id, minimum=0.0)
     elif kind == "machine":
         for key in ("input_item", "output_item"):
-            value = _require_text(config, key, module_id)
-            if not _RESOURCE_ID.fullmatch(value):
+            if not _RESOURCE_ID.fullmatch(_require_text(config, key, module_id)):
                 raise ValueError(f"MINECRAFT_GENERATION_FIELD_INVALID: {module_id}.{key}")
         _require_int(config, "output_count", module_id, minimum=1)
         _require_int(config, "processing_ticks", module_id, minimum=1)
     elif kind == "enchantment":
         _require_int(config, "max_level", module_id, minimum=1)
     elif kind == "command":
-        literal = _require_text(config, "literal", module_id)
-        if not _COMMAND_LITERAL.fullmatch(literal):
+        if not _COMMAND_LITERAL.fullmatch(_require_text(config, "literal", module_id)):
             raise ValueError(f"MINECRAFT_GENERATION_FIELD_INVALID: {module_id}.literal")
         _require_text(config, "message", module_id)
         permission = _require_int(config, "permission_level", module_id, minimum=0)
         if permission > 4:
             raise ValueError(f"MINECRAFT_GENERATION_FIELD_INVALID: {module_id}.permission_level")
-    elif kind in {"recipe", "advancement", "loot"}:
+    elif generation_authority(kind) == "artifact_resource":
         payload = config.get("json")
         if not isinstance(payload, dict) or not payload:
             raise ValueError(f"MINECRAFT_GENERATION_FIELD_INVALID: {module_id}.json")
 
 
 def lower_generation_config(kind: str, module_id: str, config: Mapping[str, Any]) -> dict[str, Any]:
-    """Lower canonical design fields to the existing generator without new reasoning."""
+    """Lower canonical design fields to legacy generator names without new reasoning."""
     validate_generation_config(kind, module_id, config)
     lowered = dict(config)
     display_name = lowered.get("display_name")
     if kind in _PRESENTATION_KINDS and isinstance(display_name, str):
-        # English is the authored canonical name today. Korean localization remains a
-        # separate optional authority; absent translation means deterministic identity,
-        # never a generated translation guess.
         lowered.setdefault("display_name_en", display_name)
         lowered.setdefault("display_name_ko", display_name)
     if kind in _VISUAL_TEXTURE_KINDS:
@@ -205,8 +176,6 @@ def lower_generation_config(kind: str, module_id: str, config: Mapping[str, Any]
 
 
 def config_schema_for_kind(kind: str) -> dict[str, Any]:
-    """Return the bounded small-model-facing schema for one generated module kind."""
-    required = list(required_generation_fields(kind))
     properties: dict[str, Any] = {
         "display_name": {"type": "string", "minLength": 1, "maxLength": 160},
         "display_name_ko": {"type": "string", "minLength": 1, "maxLength": 160},
@@ -231,7 +200,7 @@ def config_schema_for_kind(kind: str) -> dict[str, Any]:
     }
     return {
         "type": "object",
-        "required": required,
+        "required": list(required_generation_fields(kind)),
         "additionalProperties": True,
         "properties": properties,
     }
@@ -246,8 +215,6 @@ def install_generation_guard(extended_module: Any) -> None:
     @wraps(original)
     def guarded_generate_extended_content(*args: Any, **kwargs: Any) -> dict[str, Any]:
         if args:
-            # The wrapped generator is keyword-only. Preserve that API rather than
-            # silently accepting a second calling convention.
             return original(*args, **kwargs)
         raw_modules = kwargs.get("modules")
         if raw_modules is None:
@@ -270,7 +237,6 @@ def install_generation_guard(extended_module: Any) -> None:
 
 
 def _install_loaded_generator_guard() -> None:
-    """Compose with the generator already imported by runtime_bootstrap."""
     loaded = sys.modules.get("minecraft_mod_ai.extended_content_generator")
     if loaded is not None:
         install_generation_guard(loaded)
@@ -282,6 +248,7 @@ _install_loaded_generator_guard()
 __all__ = [
     "SUPPORTED_GENERATED_KINDS",
     "config_schema_for_kind",
+    "generation_authority",
     "install_generation_guard",
     "lower_generation_config",
     "required_generation_fields",
