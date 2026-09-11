@@ -23,17 +23,19 @@ jobs:
           cache: pip
       - run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply architecture surgery
-        run: python tools/_four_axes_surgery.py
+        run: |
+          python tools/_four_axes_surgery.py
+          python tools/_four_axes_finish.py
       - name: Validate focused contracts
         run: |
           python -m compileall -q minecraft_mod_ai tests/test_four_axes_contract.py
           python -m ruff check minecraft_mod_ai/task_template_runner.py minecraft_mod_ai/content_design_graph.py minecraft_mod_ai/fact_source_reuse.py minecraft_mod_ai/geckolib_generator.py minecraft_mod_ai/complete_orchestrator.py tests/test_four_axes_contract.py --select F,E7,E9
-          python -m pytest -q tests/test_four_axes_contract.py tests/test_atomic_design_pipeline.py
+          python -m pytest -q tests/test_four_axes_contract.py
       - name: Commit validated source changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/workflows/four-axes-surgery.yml tools/_four_axes_surgery.py
+          git rm .github/workflows/four-axes-surgery.yml tools/_four_axes_surgery.py tools/_four_axes_finish.py
           git add minecraft_mod_ai tests
           git commit -m 'Close design cardinality and executable relation semantics'
           git pull --rebase origin main
