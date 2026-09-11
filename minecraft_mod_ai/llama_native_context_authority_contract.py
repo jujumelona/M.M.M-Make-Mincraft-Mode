@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Keep llama.cpp native context sizing authoritative when no override exists."""
+"""Keep llama.cpp native sizing authoritative when no valid override exists."""
 
 import os
 from functools import wraps
@@ -10,14 +10,41 @@ from typing import Any
 _MARKER = "_mmm_native_context_authority_final"
 
 
-def _drop_context(args: list[str]) -> list[str]:
+def _drop_option(args: list[str], names: tuple[str, ...]) -> list[str]:
     result = list(args)
-    for name in ("--ctx-size", "-c"):
+    for name in names:
         while name in result:
             index = result.index(name)
             del result[index]
             if index < len(result):
                 del result[index]
+    return result
+
+
+def _drop_context(args: list[str]) -> list[str]:
+    return _drop_option(args, ("--ctx-size", "-c"))
+
+
+def _positive_manual_override(name: str) -> tuple[bool, int | None]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return False, None
+    try:
+        value = int(raw)
+    except ValueError:
+        return True, None
+    return True, value if value > 0 else None
+
+
+def _drop_invalid_manual_sizing(args: list[str]) -> list[str]:
+    result = list(args)
+    for env_name, flags in (
+        ("MMM_LLAMA_BATCH", ("--batch-size", "-b")),
+        ("MMM_LLAMA_UBATCH", ("--ubatch-size", "-ub")),
+    ):
+        present, value = _positive_manual_override(env_name)
+        if present and value is None:
+            result = _drop_option(result, flags)
     return result
 
 
@@ -67,6 +94,14 @@ def _set_context(args: list[str], value: int) -> list[str]:
     return result
 
 
+def _apply_native_authority(args: list[str], config: Any) -> list[str]:
+    result = _drop_invalid_manual_sizing(args)
+    context = _explicit_context(config)
+    if context is None:
+        return _drop_context(result)
+    return _set_context(result, context)
+
+
 def install(autotune_module: ModuleType, tuning_pipeline_module: ModuleType) -> None:
     """Finalize both active launch args and future pipeline instances."""
 
@@ -78,10 +113,7 @@ def install(autotune_module: ModuleType, tuning_pipeline_module: ModuleType) -> 
             binary: str, model_path: str, config: Any, port: int
         ) -> list[str]:
             args = list(current(binary, model_path, config, port))
-            context = _explicit_context(config)
-            if context is None:
-                return _drop_context(args)
-            return _set_context(args, context)
+            return _apply_native_authority(args, config)
 
         setattr(native_context_args, _MARKER, True)
         native_context_args.__wrapped__ = current
@@ -102,10 +134,7 @@ def install(autotune_module: ModuleType, tuning_pipeline_module: ModuleType) -> 
             binary: str, model_path: str, config: Any, port: int
         ) -> list[str]:
             args = list(current_base(binary, model_path, config, port))
-            context = _explicit_context(config)
-            if context is None:
-                return _drop_context(args)
-            return _set_context(args, context)
+            return _apply_native_authority(args, config)
 
         setattr(authoritative, _MARKER, True)
         authoritative.__wrapped__ = current_base
