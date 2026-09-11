@@ -77,11 +77,20 @@ jobs:
             --select F,E7,E9
       - name: Run resource and integration tests
         run: |
-          python -m pytest -q \
+          set -o pipefail
+          python -m pytest -vv \
             tests/test_resource_architecture.py \
             tests/test_template_runtime_ssot.py \
             tests/test_model_registry.py \
-            tests/test_work_graph.py
+            tests/test_work_graph.py 2>&1 | tee /tmp/resource-migration-pytest.txt
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-migration-pytest-${{ github.sha }}
+          path: /tmp/resource-migration-pytest.txt
+          retention-days: 2
+          if-no-files-found: ignore
       - name: Validate package bootstrap and template catalog
         run: |
           python -c "import minecraft_mod_ai"
