@@ -116,15 +116,18 @@ def generate_fixed_template_value(
     # ``mock`` is a deterministic fixture engine, not a model. Preserve its existing
     # schema-aware fixture transport without providing this escape hatch to real adapters.
     if _adapter_name(router, role) == "mock" or not hasattr(router, "generate_tool_decision"):
-        raw = router.generate_text(
-            role,
-            messages,
-            media_paths=media_paths,
-            response_format=_JSON_FIXTURE_FORMAT,
-            response_schema=response_schema,
-            tool_stage=tool_stage,
-            enable_tools=enable_tools,
-        )
+        fixture_kwargs: dict[str, Any] = {
+            "media_paths": media_paths,
+            "response_format": _JSON_FIXTURE_FORMAT,
+            "response_schema": response_schema,
+            "enable_tools": enable_tools,
+        }
+        # A missing stage means there is no tool-capability route to describe. Omitting the
+        # key keeps read-only fixed-template transports inert instead of publishing a
+        # misleading ``tool_stage=None`` pseudo-capability to adapters and test routers.
+        if tool_stage is not None:
+            fixture_kwargs["tool_stage"] = tool_stage
+        raw = router.generate_text(role, messages, **fixture_kwargs)
         extra_evidence_refs = None
         try:
             val = json.loads(raw)
