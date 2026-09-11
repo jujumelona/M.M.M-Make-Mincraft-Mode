@@ -12,7 +12,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .project_write_lock import project_write_lock
+from .project_write_lock import project_path_write_locks, project_write_lock
 
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _SNAPSHOT_WAVE_LOCK = threading.RLock()
@@ -118,8 +118,20 @@ def _install_staged_custom_generator(custom_module_generator_module: Any, source
             if not isinstance(result, dict):
                 raise StagedCommitConflict('Custom generator returned a non-object staged result.')
             captured = _select_custom_patch_capture(records, result)
-            with project_write_lock(live_root):
-                commit_receipt = _commit_staged_operations(live_root=live_root, staging_root=staging_root, capture=captured, source_patch_module=source_patch_module)
+            commit_paths = tuple(
+                str(item.get('path', '')).strip()
+                for item in captured.get('operations', [])
+                if isinstance(item, dict) and str(item.get('path', '')).strip()
+            )
+            if not commit_paths:
+                raise StagedCommitConflict('Staged custom patch contains no target paths.')
+            with project_path_write_locks(live_root, commit_paths):
+                commit_receipt = _commit_staged_operations(
+                    live_root=live_root,
+                    staging_root=staging_root,
+                    capture=captured,
+                    source_patch_module=source_patch_module,
+                )
             rewritten = _rewrite_root_paths(result, staging_root, live_root)
             rewritten['patch_receipt'] = commit_receipt
             rewritten['staging_receipt'] = {'schema_version': 'mmm/custom-staging-v1', 'status': 'COMMITTED', 'isolated_generation': True, 'operation_count': len(captured['operations']), 'live_project_root': str(live_root)}
