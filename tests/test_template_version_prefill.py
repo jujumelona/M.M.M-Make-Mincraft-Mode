@@ -38,32 +38,18 @@ class _ResolvedFixture:
             },
             "host_facts": {
                 "dependency_coordinates": {
-                    "minecraft": {
-                        "group": "com.mojang",
-                        "artifact": "minecraft",
-                        "version": "26.2",
-                    },
-                    "loader": {
-                        "group": "net.fabricmc",
-                        "artifact": "fabric-loader",
-                        "version": "fixture-loader",
-                    },
-                    "api": {
-                        "group": "net.fabricmc.fabric-api",
-                        "artifact": "fabric-api",
-                        "version": "fixture-api",
-                    },
-                    "loom": {
-                        "group": "net.fabricmc",
-                        "artifact": "fabric-loom",
-                        "version": "fixture-loom",
-                    },
+                    "minecraft": "com.mojang:minecraft:26.2",
+                    "loader": "net.fabricmc:fabric-loader:fixture-loader",
+                    "api": "net.fabricmc.fabric-api:fabric-api:fixture-api",
+                    "loom": "net.fabricmc:fabric-loom:fixture-loom",
                 },
-                "repositories": {
-                    "fabric": {"maven": "https://maven.fabricmc.net/"},
-                    "gradle_plugin_portal": {"plugins": "https://plugins.gradle.org/m2/"},
+                "repositories": [
+                    "https://maven.fabricmc.net/",
+                    "https://plugins.gradle.org/m2/",
+                ],
+                "replacements": {
+                    "legacy-loader-coordinate": "net.fabricmc:fabric-loader:fixture-loader"
                 },
-                "replacements": {"legacy-loader-coordinate": "loader"},
             },
         }
 
@@ -169,7 +155,11 @@ def test_renderer_prefills_immutable_ecosystem_facts(resolved_context):
         "id": "fixture/ecosystem-prefill",
         "inputs": {
             "dependency_coordinates": {"type": "object", "required": True},
-            "repositories": {"type": "object", "required": True},
+            "repositories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "required": True,
+            },
             "replacements": {"type": "object", "required": True},
         },
         "render": {
@@ -186,15 +176,26 @@ def test_renderer_prefills_immutable_ecosystem_facts(resolved_context):
         render_template(template, {"resolved_version_context": {"synthetic": True}})
     )
 
-    assert rendered["dependencies"]["loader"]["version"] == "fixture-loader"
-    assert rendered["repositories"]["fabric"]["maven"] == "https://maven.fabricmc.net/"
-    assert rendered["replacements"] == {"legacy-loader-coordinate": "loader"}
+    assert rendered["dependencies"]["loader"] == "net.fabricmc:fabric-loader:fixture-loader"
+    assert rendered["repositories"] == [
+        "https://maven.fabricmc.net/",
+        "https://plugins.gradle.org/m2/",
+    ]
+    assert rendered["replacements"] == {
+        "legacy-loader-coordinate": "net.fabricmc:fabric-loader:fixture-loader"
+    }
 
 
 def test_renderer_rejects_ecosystem_fact_override(resolved_context):
     template = {
         "id": "fixture/ecosystem-conflict",
-        "inputs": {"repositories": {"type": "object", "required": True}},
+        "inputs": {
+            "repositories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "required": True,
+            }
+        },
         "render": {"language": "json", "body": "{{repositories}}"},
     }
 
@@ -203,7 +204,7 @@ def test_renderer_rejects_ecosystem_fact_override(resolved_context):
             template,
             {
                 "resolved_version_context": {"synthetic": True},
-                "repositories": {"fabric": {"maven": "https://caller.invalid/"}},
+                "repositories": ["https://caller.invalid/"],
             },
         )
 
@@ -246,7 +247,11 @@ def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_con
         "inputs": {
             "gradle_sha256": {"type": "string", "required": True},
             "dependency_coordinates": {"type": "object", "required": True},
-            "repositories": {"type": "object", "required": True},
+            "repositories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "required": True,
+            },
         },
         "render": {"language": "text", "body": "{{gradle_sha256}}"},
     }
