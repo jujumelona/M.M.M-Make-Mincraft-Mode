@@ -112,14 +112,26 @@ def _run_entities(router, identifier, context, progress, checkpoint):
 
 
 def _relation_vocabulary() -> tuple[str, ...]:
-    template = load_record_template("design/relation_set")
+    template = load_record_template("design/content_relation")
     try:
-        values = template["record_schema"]["properties"]["relations"]["items"]["enum"]
+        values = template["record_schema"]["properties"]["relation_type"]["enum"]
     except (KeyError, TypeError) as exc:
         raise TemplateBlocked("TEMPLATE_RELATION_SCHEMA_INVALID") from exc
-    if not isinstance(values, list) or not values or any(not isinstance(value, str) for value in values):
+    if not isinstance(values, list) or not values or any(
+        not isinstance(value, str) for value in values
+    ):
         raise TemplateBlocked("TEMPLATE_RELATION_SCHEMA_INVALID")
+    if len(values) != len(set(values)):
+        raise TemplateBlocked("TEMPLATE_RELATION_SCHEMA_DUPLICATE")
     return tuple(values)
+
+
+def _max_pair_relation_count(relation_types: tuple[str, ...]) -> int:
+    ordinary = [value for value in relation_types if not value.startswith("key_")]
+    key_values = [value for value in relation_types if value.startswith("key_")]
+    if not ordinary or not key_values:
+        raise TemplateBlocked("TEMPLATE_RELATION_SCHEMA_INVALID")
+    return len(ordinary) + 1
 
 
 def _run_relations(router, identifier, context, progress, checkpoint):
@@ -128,7 +140,12 @@ def _run_relations(router, identifier, context, progress, checkpoint):
     entity_ids = normalized.get("entity_ids")
     if not isinstance(entity_ids, list):
         raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_REQUIRED")
+    if len(entity_ids) != len(set(entity_ids)):
+        raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_DUPLICATE")
+
     relation_types = _relation_vocabulary()
+    max_pair_relations = _max_pair_relation_count(relation_types)
+    allowed_relation_types = list(relation_types)
 
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -136,48 +153,67 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         for target_id in entity_ids:
             if source_id == target_id:
                 continue
-            decision = run_single_record_template(
+
+            pair_context = {
+                **normalized,
+                "source_id": source_id,
+                "target_id": target_id,
+                "allowed_relation_types": allowed_relation_types,
+            }
+            cardinality = run_single_record_template(
                 router,
-                "design/relation_set",
-                context={
-                    **normalized,
-                    "source_id": source_id,
-                    "target_id": target_id,
-                    "allowed_relation_types": list(relation_types),
-                },
+                "design/content_relation_count",
+                context={**pair_context, "accepted_records": []},
                 progress=progress,
                 checkpoint=checkpoint,
             )
-            selected = decision.get("relations", [])
-            if not isinstance(selected, list) or any(item not in relation_types for item in selected):
+            target_count = int(cardinality["count"])
+            if target_count < 0 or target_count > max_pair_relations:
                 raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: {selected}"
+                    "TEMPLATE_RELATION_CARDINALITY_INVALID: "
+                    f"{source_id}->{target_id}: {target_count} exceeds semantic maximum "
+                    f"{max_pair_relations}"
                 )
-            if len(selected) != len(set(selected)):
-                raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: {selected}"
+
+            pair_records: list[dict[str, Any]] = []
+            pair_relation_types: set[str] = set()
+            key_relation_seen = False
+            for index in range(target_count):
+                decision = run_single_record_template(
+                    router,
+                    identifier,
+                    context={
+                        **pair_context,
+                        "record_index": index,
+                        "record_count": target_count,
+                        "accepted_records": deepcopy(pair_records),
+                    },
+                    progress=progress,
+                    checkpoint=checkpoint,
                 )
-            for relation_type in selected:
+                relation_type = decision.get("relation_type")
+                if relation_type not in relation_types:
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: "
+                        f"{relation_type}"
+                    )
+                if relation_type in pair_relation_types:
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: "
+                        f"{relation_type}"
+                    )
+                if relation_type.startswith("key_"):
+                    if key_relation_seen:
+                        raise TemplateBlocked(
+                            f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
+                        )
+                    key_relation_seen = True
+
+                pair_relation_types.add(relation_type)
+                pair_record = {"relation_type": relation_type}
+                pair_records.append(pair_record)
                 record = {
                     "relation_type": relation_type,
-                    "source_id": str(source_id),
-                    "target_id": str(target_id),
-                }
-                key = _record_key(record)
-                if key in seen:
-                    raise TemplateBlocked(f"TEMPLATE_RELATION_DUPLICATE: {key}")
-                seen.add(key)
-                records.append(record)
-
-            key_code = int(decision.get("key_code", 0))
-            if key_code:
-                alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                if not 1 <= key_code <= len(alphabet):
-                    raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_KEY_INVALID: {source_id}->{target_id}: {key_code}"
-                    )
-                record = {
-                    "relation_type": "key_" + alphabet[key_code - 1],
                     "source_id": str(source_id),
                     "target_id": str(target_id),
                 }
