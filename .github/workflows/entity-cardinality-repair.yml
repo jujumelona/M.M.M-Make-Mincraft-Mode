@@ -1,0 +1,40 @@
+name: Entity Cardinality Repair
+on:
+  push:
+    paths:
+      - '.github/workflows/entity-cardinality-repair.yml'
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch runner
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('minecraft_mod_ai/task_template_runner.py')
+          s=p.read_text()
+          old='''    if identifier == "design/content_entity":\n        target_count = 1\n        for index in range(target_count):\n'''
+          new='''    if identifier == "design/content_entity":\n        cardinality = run_single_record_template(\n            router,\n            "design/content_entity_count",\n            context={\n                **normalized_context,\n                "accepted_records": [],\n            },\n            progress=progress,\n            checkpoint=checkpoint,\n        )\n        target_count = int(cardinality["count"])\n        if not 1 <= target_count <= 64:\n            raise TemplateBlocked(\n                f"TEMPLATE_ENTITY_CARDINALITY_INVALID: {target_count}"\n            )\n        for index in range(target_count):\n'''
+          if old not in s:
+              raise SystemExit('expected entity cardinality block not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Run focused tests
+        run: |
+          python -m pip install -e '.[dev]' >/dev/null
+          pytest -q tests/test_task_template_atomicity_contract.py tests/test_atomic_design_pipeline.py
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/task_template_runner.py
+          git commit -m 'fix: make entity cardinality host owned'
+          git push origin HEAD:main
