@@ -1,8 +1,8 @@
-"""Bounded record-template execution for small models.
+"""Host-owned cardinality for record templates.
 
-One model call owns one narrow extraction decision. The host owns completion,
-empty-result applicability, evidence admission and validation. The model never
-drives record/done/applicable/retry loop control.
+The model never returns an arbitrarily capped record array and never controls
+continuation.  It first determines the authored cardinality as one integer; the
+host then performs exactly that many single-record calls in stable ordinal order.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import MAX_MODEL_STRING_CHARS
+from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 from .template_errors import TemplateBlocked
@@ -21,88 +22,97 @@ from .template_errors import TemplateBlocked
 _EMPTY_REASON = "No applicable records in the supplied context."
 
 
-def _contains_blank_string(value: Any, schema: dict[str, Any] | None = None) -> bool:
-    schema = schema or {}
-    if isinstance(value, str):
-        return not value.strip() and schema.get("minLength", 1) > 0
-    if isinstance(value, dict):
-        properties = schema.get("properties", {})
-        return any(
-            _contains_blank_string(item, properties.get(key))
-            for key, item in value.items()
-        )
-    if isinstance(value, list):
-        return any(_contains_blank_string(item, schema.get("items")) for item in value)
-    return False
-
-
-def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
-    """Schema for one complete concern result; no arbitrary record-count ceiling."""
+def record_cardinality_response_schema(_template: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Small-model-safe schema with no arbitrary semantic cardinality ceiling."""
     return {
         "type": "object",
         "properties": {
-            "records": {
-                "type": "array",
-                "items": deepcopy(template["record_schema"]),
-            },
+            "count": {"type": "integer", "minimum": 0},
             "blocked_reason": {
                 "type": "string",
                 "maxLength": MAX_MODEL_STRING_CHARS,
             },
-            "evidence_refs": {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": MAX_MODEL_STRING_CHARS,
-                },
-                "uniqueItems": True,
-            },
         },
-        "required": ["records", "blocked_reason", "evidence_refs"],
+        "required": ["count", "blocked_reason"],
         "additionalProperties": False,
     }
 
 
-def normalize_bounded_record_response(identifier, template, value, allowed_refs):
-    schema = record_batch_response_schema(template)
-    Draft202012Validator(schema).validate(value)
-    records = list(value["records"])
-    blocked_reason = value["blocked_reason"].strip()
-    evidence_refs = list(value["evidence_refs"])
+# Compatibility name for callers that inspect the active record-control schema.
+record_batch_response_schema = record_cardinality_response_schema
 
-    unknown_refs = [ref for ref in evidence_refs if ref not in allowed_refs]
-    if unknown_refs:
-        raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}: {unknown_refs}")
-    if blocked_reason:
-        if records:
-            raise ValueError(
-                f"TEMPLATE_BLOCKED: {identifier} cannot carry records and a blocker"
-            )
-        raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {blocked_reason}")
 
-    seen: set[str] = set()
-    accepted: list[dict[str, Any]] = []
-    for record in records:
-        if _contains_blank_string(record, template["record_schema"]):
-            raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
-        key = json.dumps(
-            record,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
+def _host_evidence_refs(context: dict[str, Any], allowed_refs: set[str]) -> list[str]:
+    """Admit only evidence identifiers already present in host-supplied context."""
+    refs: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value in allowed_refs and value not in refs:
+            refs.append(value)
+
+    for key in ("source_evidence_id", "evidence_ref", "shard_id"):
+        add(context.get(key))
+    evidence = context.get("evidence")
+    if isinstance(evidence, str):
+        add(evidence)
+    elif isinstance(evidence, (list, tuple, set)):
+        for item in evidence:
+            if isinstance(item, str):
+                add(item)
+            elif isinstance(item, dict):
+                for key in ("evidence_id", "source_evidence_id", "ref", "id", "shard_id"):
+                    add(item.get(key))
+    return refs
+
+
+def _load_cardinality(
+    router: Any,
+    identifier: str,
+    template: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    allowed_refs: set[str],
+    progress: dict[str, Any] | None,
+    checkpoint: Any,
+) -> int:
+    schema = record_cardinality_response_schema(template)
+    binding = "record-cardinality-v1:" + task_binding(template, context, allowed_refs)
+    saved = (progress or {}).get(binding)
+    if saved is None:
+        rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+        system_prompt = (
+            str(template.get("task") or "Produce the requested records.")
+            + ("\n" + rules if rules else "")
+            + "\nDetermine only the exact number of distinct authored/applicable records "
+            "supported by this narrowed context. Return count 0 when none apply. Do not "
+            "clamp the count to an implementation limit and do not make a continuation, "
+            "done, retry, or loop-control decision. Set blocked_reason only when a missing "
+            "fact makes the cardinality impossible to determine correctly."
         )
-        if key in seen:
-            raise TemplateBlocked(
-                f"TEMPLATE_NO_PROGRESS: duplicate record in {identifier}"
-            )
-        seen.add(key)
-        accepted.append(record)
-    return {
-        "records": accepted,
-        "reason": "" if accepted else _EMPTY_REASON,
-        "evidence_refs": evidence_refs,
-    }
+        value = generate_fixed_template_value(
+            router,
+            "planner",
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+            ],
+            response_schema=schema,
+            enable_tools=False,
+            tool_name="submit_" + identifier.replace("/", "_") + "_count",
+        )
+        Draft202012Validator(schema).validate(value)
+        if checkpoint is not None:
+            checkpoint(binding, deepcopy(value))
+    else:
+        if not isinstance(saved, dict):
+            raise ValueError(f"TEMPLATE_PROGRESS: expected cardinality object for {identifier}")
+        value = deepcopy(saved)
+        Draft202012Validator(schema).validate(value)
+
+    blocked_reason = value["blocked_reason"].strip()
+    if blocked_reason:
+        raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {blocked_reason}")
+    return int(value["count"])
 
 
 def run_bounded_record_template(
@@ -114,68 +124,61 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Return the complete record set for one narrowed concern in one model call."""
+    """Resolve one concern with host-owned exact cardinality and ordinal calls."""
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
-    allowed_refs = {str(ref) for ref in allowed_refs}
-    schema = record_batch_response_schema(template)
-    binding = "bounded-record-v3:" + task_binding(
-        template,
-        normalized_context,
-        allowed_refs,
-    )
-    saved = (progress or {}).get(binding)
-
-    if saved is None:
-        rules = "\n".join(str(rule) for rule in template.get("rules", ()))
-        system_prompt = (
-            str(template.get("task") or "Produce the requested records.")
-            + ("\n" + rules if rules else "")
-            + "\nReturn the complete record set supported by this narrowed context in this single call. "
-            "Return an empty records array when the concern has no authored/applicable record. "
-            "Do not emit continuation, done, applicability, retry, or loop-control decisions. "
-            "Set blocked_reason only when a missing fact makes a correct result impossible."
-        )
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            **normalized_context,
-                            "allowed_evidence_refs": sorted(allowed_refs),
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            response_schema=schema,
-            enable_tools=False,
-            tool_name="submit_" + identifier.replace("/", "_") + "_records",
-        )
-        if checkpoint is not None:
-            checkpoint(binding, deepcopy(value))
-    else:
-        if not isinstance(saved, dict):
-            raise ValueError(f"TEMPLATE_PROGRESS: expected object for {identifier}")
-        value = deepcopy(saved)
-
-    return normalize_bounded_record_response(
+    admitted_refs = {str(ref) for ref in allowed_refs}
+    count = _load_cardinality(
+        router,
         identifier,
         template,
-        value,
-        allowed_refs,
+        normalized_context,
+        allowed_refs=admitted_refs,
+        progress=progress,
+        checkpoint=checkpoint,
     )
+
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index in range(count):
+        record = run_single_record_template(
+            router,
+            identifier,
+            context={
+                **normalized_context,
+                "record_index": index,
+                "record_ordinal": index + 1,
+                "record_count": count,
+            },
+            progress=progress,
+            checkpoint=checkpoint,
+            generator=generate_fixed_template_value,
+        )
+        key = json.dumps(
+            record,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if key in seen:
+            raise TemplateBlocked(
+                f"TEMPLATE_NO_PROGRESS: duplicate record in {identifier} at ordinal {index + 1}"
+            )
+        seen.add(key)
+        records.append(record)
+
+    return {
+        "records": records,
+        "reason": "" if records else _EMPTY_REASON,
+        "evidence_refs": _host_evidence_refs(normalized_context, admitted_refs),
+    }
 
 
 run_record_template = run_bounded_record_template
 
 __all__ = [
-    "normalize_bounded_record_response",
     "record_batch_response_schema",
+    "record_cardinality_response_schema",
     "run_bounded_record_template",
     "run_record_template",
 ]
