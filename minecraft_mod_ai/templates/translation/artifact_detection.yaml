@@ -1,4 +1,3 @@
-id: translation/artifact_detection
 input:
   artifact_obligations:
   implementation_surfaces:
@@ -6,10 +5,12 @@ input:
 
 task:
   normalize_declared_artifact_kinds:
+  reject_unknown_gameplay_routing_keys:
+  expand_technical_aliases:
 
 rules:
   - Do not inspect feature names, capability names, prompt wording, or domain labels.
-  - Select only canonical Minecraft artifacts backed by explicit structural obligations.
+  - Select artifacts only from explicit structural obligations.
   - Keep unsupported artifact kinds unresolved; never guess a replacement.
 
 output:
@@ -17,4 +18,4 @@ output:
   unresolved_inputs:
 
 proof:
-  predicate: every emitted artifact kind is canonical and every unsupported input is reported
+  predicate: every artifact_kind is canonical and every unsupported input is reported
