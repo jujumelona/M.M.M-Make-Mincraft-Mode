@@ -15,6 +15,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .minecraft_generation_contract import (
+    config_schema_for_kind,
+    validate_generation_config,
+)
+
 _TOOL_NAME = "apply_minecraft_content_spec"
 _PARTIAL_EDIT_TOOL = "apply_source_edit"
 _MAX_MODULES = 64
@@ -24,6 +29,22 @@ _DYNAMIC_SKILLS = {
     _TOOL_NAME: "generate-datagen",
     _PARTIAL_EDIT_TOOL: "patch-existing-project",
 }
+
+
+def _module_config_conditions(supported: Sequence[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "if": {
+                "required": ["kind"],
+                "properties": {"kind": {"const": kind}},
+            },
+            "then": {
+                "required": ["config"],
+                "properties": {"config": config_schema_for_kind(kind)},
+            },
+        }
+        for kind in supported
+    ]
 
 
 def _tool_schema(extended_module: Any) -> dict[str, Any]:
@@ -39,7 +60,9 @@ def _tool_schema(extended_module: Any) -> dict[str, Any]:
                 "food, crop, machine, effect, enchantment, command, recipe, advancement "
                 "and loot modules. The host discovers the bound project, mod id and Java "
                 "package, applies the pinned platform generator, and writes canonical "
-                "artifacts. Do not provide paths, versions, package names or file contents."
+                "artifacts. Every semantic generation field exposed by the per-kind config "
+                "schema is authoritative; do not omit it and rely on generator defaults. "
+                "Do not provide paths, versions, package names or file contents."
             ),
             "parameters": {
                 "type": "object",
@@ -75,6 +98,7 @@ def _tool_schema(extended_module: Any) -> dict[str, Any]:
                                     },
                                 },
                             },
+                            "allOf": _module_config_conditions(supported),
                         },
                     }
                 },
@@ -121,6 +145,7 @@ def _compile_modules(extended_module: Any, payload: Mapping[str, Any]) -> tuple[
         config = raw.get("config", {})
         if not isinstance(config, dict):
             raise ValueError(f"Module config must be an object: {module_id}")
+        validate_generation_config(kind, module_id, config)
         depends_on = raw.get("depends_on", [])
         if not isinstance(depends_on, list):
             raise ValueError(f"depends_on must be a list: {module_id}")
