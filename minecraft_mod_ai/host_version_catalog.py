@@ -52,12 +52,17 @@ def host_target(version):
 
 
 def coverage_audit():
-    """Completeness audit: verify complete leaf coverage and template admission across all bundles."""
+    """Completeness audit: verify product scope, leaf coverage, and template admission across all bundles."""
     from .task_template_catalog import load_template
     from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
     from .minecraft_template_steps import responsibility_ids_for_artifact
+    from .product_support_matrix import validate_support_matrix
 
     resolver, bundles = load_host_catalog()
+    # Product support is an explicit HOST contract. Never let a declared supported
+    # target bypass this audit merely because its bundle exists.
+    validate_support_matrix(list(bundles))
+
     all_leaves = set()
     for kind in CANONICAL_ARTIFACT_KINDS:
         all_leaves.update(responsibility_ids_for_artifact(kind))
