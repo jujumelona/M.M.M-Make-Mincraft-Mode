@@ -220,8 +220,7 @@ def runtime_consumer_roots():
         "minecraft/generation_contract", "feature/discover", "feature/decompose",
         "feature/atomic_check", "design/content_capability", "design/content_entity",
         "design/content_entity_count", "design/content_relation", "design/content_property",
-        "design/decision", "design/research_fact", "design/continue_record",
-        "design/relation_set", "asset/block_tile", "asset/entity_texture",
-        "asset/gui_panel", "asset/item_sprite",
+        "design/decision", "design/research_fact", "design/relation_set",
+        "asset/block_tile", "asset/entity_texture", "asset/gui_panel", "asset/item_sprite",
     })
     return frozenset(roots)
