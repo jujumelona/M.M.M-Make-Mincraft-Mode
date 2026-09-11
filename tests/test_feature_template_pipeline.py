@@ -65,19 +65,27 @@ class MockFeatureRouter:
 
         context = json.loads(messages[1]["content"])
         self.calls.append((tool_name, context))
-        target = tool_name.removeprefix("submit_feature_").removesuffix("_records")
+
+        if tool_name.startswith("submit_feature_") and tool_name.endswith("_count"):
+            target = tool_name.removeprefix("submit_feature_").removesuffix("_count")
+            if target == "discover":
+                count = 1
+            elif target == "decompose":
+                fid = context["feature"]["feature_id"]
+                count = len(self.splits.get(fid, ()))
+            else:
+                count = 1
+            return {"count": count, "blocked_reason": ""}
+
+        if not tool_name.startswith("submit_one_feature_"):
+            raise AssertionError(tool_name)
+        target = tool_name.removeprefix("submit_one_feature_")
 
         if target == "discover":
             return {
-                "records": [
-                    {
-                        "feature_id": "multi_part_machine",
-                        "feature_description": "A machine that stores energy and opens a menu",
-                        "evidence_basis": "prompt",
-                    }
-                ],
-                "blocked_reason": "",
-                "evidence_refs": [],
+                "feature_id": "multi_part_machine",
+                "feature_description": "A machine that stores energy and opens a menu",
+                "evidence_basis": "prompt",
             }
         if target == "atomic_check":
             check = context["target_check"]
@@ -87,23 +95,15 @@ class MockFeatureRouter:
                 and check in ("single_primary_behavior", "explicit_trigger")
             )
             return {
-                "records": [
-                    {
-                        "check": check,
-                        "passed": passed,
-                        "reason": "verified" if passed else "multi responsibility",
-                    }
-                ],
-                "blocked_reason": "",
-                "evidence_refs": [],
+                "check": check,
+                "passed": passed,
+                "reason": "verified" if passed else "multi responsibility",
             }
         if target == "decompose":
             fid = context["feature"]["feature_id"]
-            return {
-                "records": self.splits.get(fid, []),
-                "blocked_reason": "",
-                "evidence_refs": [],
-            }
+            rows = self.splits.get(fid, [])
+            index = int(context["record_index"])
+            return dict(rows[index])
 
         fid = context["feature"]["feature_id"]
         record_fact = {
@@ -126,11 +126,7 @@ class MockFeatureRouter:
         }.get(target)
         if record_fact is None:
             raise AssertionError(tool_name)
-        return {
-            "records": [record_fact],
-            "blocked_reason": "",
-            "evidence_refs": [],
-        }
+        return record_fact
 
 
 def test_discover_features_and_decompose_pipeline_integration():
@@ -169,7 +165,7 @@ def test_discover_features_and_decompose_pipeline_integration():
     assert all(not leaf["children"] for leaf in leaves)
 
 
-def test_feature_decomposition_cycle_and_recursion_protection():
+def test_feature_decomposition_cycle_and_semantic_progress_protection():
     import pytest
     from minecraft_mod_ai.task_template_runner import TemplateBlocked
     from minecraft_mod_ai.feature_template_pipeline import complete_feature
@@ -193,18 +189,15 @@ def test_feature_decomposition_cycle_and_recursion_protection():
             allowed_refs=set(),
         )
 
-    infinite_router = MockFeatureRouter(
-        non_atomic_ids={"d0", "d1", "d2", "d3"},
+    no_progress_router = MockFeatureRouter(
+        non_atomic_ids={"d0", "d1"},
         splits={
             "d0": [{"feature_id": "d1", "behavior": "b1", "reason_for_split": "r"}],
-            "d1": [{"feature_id": "d2", "behavior": "b2", "reason_for_split": "r"}],
-            "d2": [{"feature_id": "d3", "behavior": "b3", "reason_for_split": "r"}],
         },
     )
-    with pytest.raises(TemplateBlocked, match="maximum decomposition depth exceeded"):
+    with pytest.raises(TemplateBlocked, match="unresolved atomic checks did not strictly decrease"):
         complete_feature(
-            infinite_router,
-            {"feature_id": "d0", "feature_description": "Depth test"},
+            no_progress_router,
+            {"feature_id": "d0", "feature_description": "Progress test"},
             allowed_refs=set(),
-            max_depth=2,
         )
