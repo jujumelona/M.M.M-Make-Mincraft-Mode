@@ -1,0 +1,44 @@
+name: Regenerate HOST Catalog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/host-catalog-regenerate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    if: github.event.head_commit.message == 'ci: regenerate HOST catalog'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Regenerate canonical HOST catalog
+        run: python -m minecraft_mod_ai.populate_version_artifact_rules
+      - name: Validate generated diff
+        run: |
+          git diff --check
+          git diff --exit-code -- minecraft_mod_ai/data/host_version_catalog.json minecraft_mod_ai/data/official_version_evidence.json || true
+      - name: Commit generated catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add minecraft_mod_ai/data/host_version_catalog.json minecraft_mod_ai/data/official_version_evidence.json
+          if git diff --cached --quiet; then
+            echo 'Catalog already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: regenerate HOST catalog'
+          git push origin HEAD:main
