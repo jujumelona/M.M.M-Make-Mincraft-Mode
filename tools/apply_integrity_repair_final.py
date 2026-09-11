@@ -16,17 +16,15 @@ def write(path: str, value: str) -> None:
 
 def replace_once(path: str, old: str, new: str) -> None:
     value = read(path)
-    if value.count(old) != 1:
-        raise RuntimeError(f"{path}: expected exactly one patch target, found {value.count(old)}")
+    old_count = value.count(old)
+    if old_count == 0 and value.count(new) == 1:
+        return
+    if old_count != 1:
+        raise RuntimeError(f"{path}: expected exactly one patch target, found {old_count}")
     write(path, value.replace(old, new, 1))
 
 
-# ---------------------------------------------------------------------------
-# Production fixes
-# ---------------------------------------------------------------------------
-# The content-property runner intentionally asks only host-declared required fields.
-# Any visual field needed to create an asset therefore must itself be required; leaving
-# main_color merely "allowed" made item/block/gui/armor asset creation unreachable.
+# Production: visual fields required by generated assets must be host-requested.
 path = "minecraft_mod_ai/content_design_graph.py"
 value = read(path)
 replacements = {
@@ -40,23 +38,21 @@ replacements = {
         '            FactType.EQUIPMENT_ARMOR: {"display_name", "slot", "defense", "toughness", "main_color"},\n',
 }
 for old, new in replacements.items():
+    if value.count(old) == 0 and value.count(new) == 1:
+        continue
     if value.count(old) != 1:
         raise RuntimeError(f"{path}: visual-authority patch target missing: {old.strip()}")
     value = value.replace(old, new, 1)
 write(path, value)
 
-# Respect the executor selected by the implementation profile. The old expression
-# silently rewrote explicitly supplied executor types based only on template presence.
+# Respect the executor selected by the implementation profile. An earlier wave may
+# already have applied this exact repair, so replace_once is deliberately idempotent.
 replace_once(
     "minecraft_mod_ai/populate_version_artifact_rules.py",
     '            "executor_type": "deterministic_renderer" if template_id else "python_generator",\n',
     '            "executor_type": executor_type,\n',
 )
 
-# ---------------------------------------------------------------------------
-# Test protocol fakes: mirror the current one-property host protocol without relaxing
-# any production schema/semantic validation.
-# ---------------------------------------------------------------------------
 DEFAULT_PROPERTY_BLOCK = '''                defaults = {
                     "main_color": "#808080",
                     "hardness": "1.5",
@@ -95,7 +91,6 @@ DEFAULT_PROPERTY_BLOCK = '''                defaults = {
                     "color": "#808080",
                     "beneficial": "true",
                     "sound_id": f"test:{eid}",
-                    "category": "creature",
                     "particle_name": eid,
                     "override_limiter": "false",
                     "loot_table_id": f"test:entities/{eid}",
@@ -124,8 +119,6 @@ DEFAULT_PROPERTY_BLOCK = '''                defaults = {
 
 for path in ("tests/test_atomic_design_pipeline.py", "tests/test_content_design_graph_expansion.py"):
     value = read(path)
-    # Generation-completion calls carry module_id/module_kind rather than a content
-    # entity object. Content-design calls still carry entity. Accept both exact forms.
     eid_line = '            eid = context["entity"]["entity_id"]\n'
     fallback = '''            entity = context.get("entity")
             eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
@@ -148,8 +141,6 @@ for path in ("tests/test_atomic_design_pipeline.py", "tests/test_content_design_
     value = value.replace(old_missing, new_missing, 1)
     write(path, value)
 
-# Invalid enum strings are transport-schema failures by design. The semantic
-# unsupported-capability test must use the schema-supported UNSUPPORTED sentinel.
 path = "tests/test_atomic_design_pipeline.py"
 value = read(path)
 old = '        "capability", ["MAGIC_SPELL", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]\n'
@@ -158,8 +149,6 @@ if value.count(old) != 1:
     raise RuntimeError("unsupported capability parametrization target missing")
 write(path, value.replace(old, new, 1))
 
-# Entity visual color is now a deterministic hexadecimal semantic field; use an
-# explicit authored value rather than the old free-form color phrase.
 path = "tests/test_content_design_graph_expansion.py"
 value = read(path)
 if value.count('{"property": "main_color", "value": "void purple"}') != 1:
@@ -172,8 +161,6 @@ value = value.replace(
 value = value.replace('assert "void purple" in asset.prompt', 'assert "#5B2A86" in asset.prompt', 1)
 write(path, value)
 
-# The strict semantic-field guard should not mask the dependency-graph invariant in
-# the self-dependency fixture. Give that one fixture an otherwise complete item config.
 path = "tests/test_deterministic_minecraft_content_contract.py"
 value = read(path)
 pattern = re.compile(
@@ -183,15 +170,21 @@ pattern = re.compile(
 )
 match = pattern.search(value)
 if match is None:
-    raise RuntimeError("self-dependency fixture target missing")
-indent = match.group("indent")
-replacement = (
-    f'{indent}"id": "copper_hammer",\n'
-    f'{indent}"kind": "item",\n'
-    f'{indent}"config": {{"display_name": "Copper Hammer", "main_color": "#B87333"}},\n'
-    f'{indent}"depends_on": ["copper_hammer"],'
-)
-value = value[:match.start()] + replacement + value[match.end():]
-write(path, value)
+    already = re.search(
+        r'"id": "copper_hammer",\n\s+"kind": "item",\n\s+"config": \{"display_name": "Copper Hammer", "main_color": "#B87333"\},\n\s+"depends_on": \["copper_hammer"\],',
+        value,
+    )
+    if already is None:
+        raise RuntimeError("self-dependency fixture target missing")
+else:
+    indent = match.group("indent")
+    replacement = (
+        f'{indent}"id": "copper_hammer",\n'
+        f'{indent}"kind": "item",\n'
+        f'{indent}"config": {{"display_name": "Copper Hammer", "main_color": "#B87333"}},\n'
+        f'{indent}"depends_on": ["copper_hammer"],'
+    )
+    value = value[:match.start()] + replacement + value[match.end():]
+    write(path, value)
 
 print("final repair applied")
