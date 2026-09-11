@@ -37,6 +37,11 @@ class _ResolvedFixture:
                 "deterministic_module_kinds": ["REGISTER_ITEM"],
             },
             "host_facts": {
+                "host_revision": "fixture-host-revision",
+                "capabilities": {},
+                "api_symbols": {},
+                "schemas": {},
+                "artifact_rules": {},
                 "dependency_coordinates": {
                     "minecraft": "com.mojang:minecraft:26.2",
                     "loader": "net.fabricmc:fabric-loader:fixture-loader",
@@ -50,6 +55,7 @@ class _ResolvedFixture:
                 "replacements": {
                     "legacy-loader-coordinate": "net.fabricmc:fabric-loader:fixture-loader"
                 },
+                "leaf_bindings": {},
             },
         }
 
