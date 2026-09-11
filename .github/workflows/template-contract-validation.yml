@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q tests/test_template_contracts.py tests/test_template_contract_integrity.py tests/test_template_mirror_integrity.py tests/test_template_authority_contract.py tests/test_template_fail_closed.py tests/test_task_template_runner_deterministic.py tests/test_atomic_slot_executor.py tests/test_resolved_version_context.py tests/test_platform_target_resolution.py tests/test_packaged_version_catalog.py 2>&1 | tee template-contract-pytest.log
+          python -m pytest -q tests/test_template_contracts.py tests/test_template_contract_integrity.py tests/test_template_mirror_integrity.py tests/test_template_authority_contract.py tests/test_template_fail_closed.py tests/test_template_version_prefill.py tests/test_task_template_runner_deterministic.py tests/test_atomic_slot_executor.py tests/test_resolved_version_context.py tests/test_platform_target_resolution.py tests/test_packaged_version_catalog.py 2>&1 | tee template-contract-pytest.log
       - name: Capture template consumers
         if: always()
         shell: bash
