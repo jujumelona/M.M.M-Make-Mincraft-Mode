@@ -1,11 +1,16 @@
 id: translation/ui_mapping
 input:
-  atomic_feature:
-  ui_requirement:
-  authoritative_state_projection:
+  atomic_feature: {}
+  ui_requirement: {}
+  authoritative_state_projection: {}
+
+input_schema:
+  atomic_feature: object
+  ui_requirement: object
+  authoritative_state_projection: object
 
 task:
-  map_ui_artifacts:
+  map_ui_artifacts: true
 
 rules:
   - Emit UI artifacts only for explicitly required presentation or interaction surfaces.
@@ -13,10 +18,16 @@ rules:
   - Keep menu, screen, HUD, keybind, and language concerns separate.
 
 output:
-  ui_artifacts:
-  state_projection:
-  interaction_boundary:
-  unresolved_inputs:
+  ui_artifacts: []
+  state_projection: {}
+  interaction_boundary: {}
+  unresolved_inputs: []
+
+output_schema:
+  ui_artifacts: list[string]
+  state_projection: object
+  interaction_boundary: object
+  unresolved_inputs: list[string]
 
 proof:
   predicate: every UI artifact traces to one explicit presentation or interaction requirement
