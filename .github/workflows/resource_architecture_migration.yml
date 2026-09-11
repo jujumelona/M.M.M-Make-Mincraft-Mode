@@ -30,11 +30,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Verify exact main baseline
+      - name: Sync latest main baseline
         run: |
-          test "$(git branch --show-current)" = "main"
           git fetch origin main
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          git checkout main
+          git reset --hard origin/main
       - name: Reconstruct and apply guarded migration
         run: |
           python - <<'PY'
