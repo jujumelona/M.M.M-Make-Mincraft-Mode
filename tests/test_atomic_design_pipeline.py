@@ -38,32 +38,54 @@ class GraphRouter:
         context = json.loads(messages[-1]["content"])
         if tool_name == "submit_one_design_content_entity_count":
             return {"count": len(self.nodes)}
+        if tool_name == "submit_one_design_content_relation_count":
+            selected = [
+                edge
+                for edge in self.edges
+                if edge["source_id"] == context["source_id"]
+                and edge["target_id"] == context["target_id"]
+            ]
+            return {"count": len(selected)}
         if tool_name == "submit_one_design_continue_record":
             target = str(context.get("target_template") or "")
-            return {"required": target == "design/research_fact" and not context.get("accepted_record_ids")}
-        if tool_name == "submit_one_design_relation_set":
-            selected = [
-                edge["relation_type"]
-                for edge in self.edges
-                if edge["source_id"] == context["source_id"] and edge["target_id"] == context["target_id"]
-            ]
-            return {"relations": selected[:4], "key_code": 0, "overflow": len(selected) > 4}
+            return {
+                "required": target == "design/research_fact"
+                and not context.get("accepted_record_ids")
+            }
         single_record = tool_name.startswith("submit_one_")
-        normalized_tool = tool_name.replace("submit_one_", "submit_", 1) if single_record else tool_name
+        normalized_tool = (
+            tool_name.replace("submit_one_", "submit_", 1)
+            if single_record
+            else tool_name
+        )
         accepted = context.get("accepted_records", [])
         if normalized_tool == "submit_design_content_entity":
             rows = self.nodes
         elif normalized_tool == "submit_design_content_relation":
-            rows = self.edges
+            rows = [
+                {"relation_type": edge["relation_type"]}
+                for edge in self.edges
+                if edge["source_id"] == context["source_id"]
+                and edge["target_id"] == context["target_id"]
+            ]
         elif normalized_tool == "submit_design_content_capability":
             rows = [{"fact_type": self.capability}]
         elif normalized_tool == "submit_design_content_property":
             entity = context.get("entity")
-            eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
+            eid = (
+                entity["entity_id"]
+                if isinstance(entity, dict)
+                else str(context.get("module_id") or "")
+            )
             if not eid:
-                raise AssertionError("content-property fake requires entity_id or module_id")
+                raise AssertionError(
+                    "content-property fake requires entity_id or module_id"
+                )
             rows = [
-                {"property": "display_name", "value": eid.replace("_", " ").title()},
+                {
+                    "property": "display_name",
+                    "value": eid.replace("_", " ").title(),
+                },
                 {"property": "shape", "value": "faceted chunk"},
             ]
         elif normalized_tool == "submit_design_decision":
@@ -73,7 +95,12 @@ class GraphRouter:
         if single_record:
             if normalized_tool == "submit_design_content_entity":
                 index = int(context.get("entity_ordinal", len(accepted) + 1)) - 1
-            elif normalized_tool == "submit_design_content_property" and context.get("requested_property"):
+            elif normalized_tool == "submit_design_content_relation":
+                index = int(context.get("record_index", len(accepted)))
+            elif (
+                normalized_tool == "submit_design_content_property"
+                and context.get("requested_property")
+            ):
                 requested = context["requested_property"]
                 matching = [row for row in rows if row.get("property") == requested]
                 if len(matching) == 1:
@@ -144,7 +171,9 @@ class GraphRouter:
             else:
                 index = len(accepted)
             if not 0 <= index < len(rows):
-                raise AssertionError(f"single record index out of range for {normalized_tool}: {index}")
+                raise AssertionError(
+                    f"single record index out of range for {normalized_tool}: {index}"
+                )
             return deepcopy(rows[index])
         if len(accepted) < len(rows):
             return {
@@ -164,6 +193,7 @@ def test_design_templates_obey_atomicity():
         *DESIGN_SLOTS,
         "design/content_entity",
         "design/content_relation",
+        "design/content_relation_count",
         "design/content_capability",
         "design/content_property",
         "design/decision",
@@ -239,9 +269,7 @@ def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
         )
 
 
-@pytest.mark.parametrize(
-    "capability", ["UNSUPPORTED"]
-)
+@pytest.mark.parametrize("capability", ["UNSUPPORTED"])
 def test_unsupported_capability_never_becomes_item(capability):
     with pytest.raises(SlotFillError, match="CAPABILITY_UNSUPPORTED"):
         compile_atomic_design("requested feature", GraphRouter(capability=capability))
@@ -290,7 +318,10 @@ def test_research_facts_are_bound_to_their_actual_source():
         def generate_tool_decision(
             self, role, messages, *, tool_name, parameters, **kwargs
         ):
-            if tool_name in {"submit_design_research_fact", "submit_one_design_research_fact"}:
+            if tool_name in {
+                "submit_design_research_fact",
+                "submit_one_design_research_fact",
+            }:
                 context = json.loads(messages[-1]["content"])
                 assert context["source_ref"] == "source_b"
                 if tool_name == "submit_one_design_research_fact":
