@@ -65,9 +65,14 @@ def test_reference_query_rows_overlap_but_providers_do_not_fan_out(monkeypatch) 
         assert row["provider_receipts"]["github_reference"]["status"] == (
             "skipped_wikipedia_has_evidence"
         )
+        assert row["provider_receipts"]["wikidata"]["status"] == (
+            "skipped_wikipedia_has_evidence"
+        )
         assert row["content_record_count"] == 1
         assert row["retrieval_errors"] == []
-        assert row["provider_policy"] == "wikipedia_then_github_fallback"
+        assert row["provider_policy"] == (
+            "sequential_identity_first_then_github_empty_fallback"
+        )
 
 
 def test_reference_provider_failure_uses_sequential_github_fallback(monkeypatch) -> None:
@@ -111,4 +116,6 @@ def test_reference_provider_failure_uses_sequential_github_fallback(monkeypatch)
     assert row["retrieval_errors"] == [
         {"provider": "wikipedia", "error": "RuntimeError: wiki failed for alpha"}
     ]
-    assert row["provider_policy"] == "wikipedia_then_github_fallback"
+    assert row["provider_policy"] == (
+        "sequential_identity_first_then_github_empty_fallback"
+    )
