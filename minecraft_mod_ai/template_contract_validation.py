@@ -205,6 +205,7 @@ def runtime_consumer_roots():
     from .atomic_design_pipeline import ALL_DESIGN_SLOTS
     from .feature_template_pipeline import FEATURE_DETAIL_STEPS
     from .minecraft_template_catalog import CANONICAL_ARTIFACT_KINDS
+    from .populate_version_artifact_rules import HOST_TEMPLATE_CANDIDATES
     from .stage_template_pipeline import KNOWN_STAGES
     from .task_template_catalog import CRITERION_SECTIONS
     from .translation_runtime import TRANSLATION_SEQUENCE
@@ -215,6 +216,7 @@ def runtime_consumer_roots():
     roots.update(f"minecraft/{kind}" for kind in CANONICAL_ARTIFACT_KINDS)
     roots.update(f"criterion/{section}" for section in CRITERION_SECTIONS)
     roots.update(f"{stage}/workflow" for stage in KNOWN_STAGES)
+    roots.update(HOST_TEMPLATE_CANDIDATES)
     roots.update({
         "prompt/workflow", "research/workflow", "reuse/workflow",
         "minecraft/resource/workflow",
