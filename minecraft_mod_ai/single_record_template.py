@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
 from jsonschema import Draft202012Validator
 
@@ -32,6 +32,26 @@ def _contains_blank_string(value: Any, schema: dict[str, Any] | None = None) -> 
     return False
 
 
+def _ordinal_instruction(context: dict[str, Any]) -> str:
+    count = context.get("record_count")
+    index = context.get("record_index")
+    if type(count) is int and type(index) is int:
+        return (
+            f"\nThe host has established exactly {count} records. Return only record "
+            f"{index + 1} of {count}, using stable source/authored order. Do not return a "
+            "different ordinal and do not make any continuation or completion decision."
+        )
+    entity_count = context.get("entity_count")
+    entity_ordinal = context.get("entity_ordinal")
+    if type(entity_count) is int and type(entity_ordinal) is int:
+        return (
+            f"\nThe host has established exactly {entity_count} entities. Return only entity "
+            f"{entity_ordinal} of {entity_count}, using stable source/authored order. Do not "
+            "make any continuation or completion decision."
+        )
+    return ""
+
+
 def run_single_record_template(
     router: Any,
     identifier: str,
@@ -39,6 +59,7 @@ def run_single_record_template(
     context: dict[str, Any],
     progress: dict[str, Any] | None = None,
     checkpoint: Any = None,
+    generator: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Generate exactly one record; the model never owns iteration or completion."""
 
@@ -56,13 +77,19 @@ def run_single_record_template(
             )
         value = deepcopy(saved)
     else:
-        value = generate_fixed_template_value(
+        generate = generator or generate_fixed_template_value
+        value = generate(
             router,
             "planner",
             [
                 {
                     "role": "system",
-                    "content": template["task"] + "\n" + "\n".join(template["rules"]),
+                    "content": (
+                        template["task"]
+                        + "\n"
+                        + "\n".join(template["rules"])
+                        + _ordinal_instruction(normalized_context)
+                    ),
                 },
                 {
                     "role": "user",
