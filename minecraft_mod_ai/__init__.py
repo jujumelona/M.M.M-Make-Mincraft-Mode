@@ -35,7 +35,10 @@ def _configure_default_llama_parallelism() -> None:
 _configure_default_llama_parallelism()
 initialize_runtime()
 from . import java_lsp as _java_lsp
+from . import reference_source_research as _reference_source_research
+from .reference_query_parallelism_contract import install as _install_reference_query_parallelism
 
+_install_reference_query_parallelism(_reference_source_research)
 install_source_set_boundary(_java_lsp)
 finalize_runtime()
 install_versioned_reference_context()
