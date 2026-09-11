@@ -38,3 +38,4 @@ jobs:
           git add minecraft_mod_ai/task_template_runner.py
           git commit -m 'fix: make entity cardinality host owned'
           git push origin HEAD:main
+# trigger
