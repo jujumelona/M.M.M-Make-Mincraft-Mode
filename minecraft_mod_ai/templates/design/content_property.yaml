@@ -8,7 +8,7 @@ record_schema:
       minLength: 1
       maxLength: 32
       pattern: >-
-        ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|category|health|attack_damage|speed|tracking_range|width|height|archetype|behavior|screen_type|slot_count|packet_name|channel|direction|sync_type|container_size|component_name|value_type|codec|feature_type|step|biomes|dimension_type|ambient_light|coordinate_scale|temperature|downfall|precipitation|color|beneficial|sound_id|subtitle|particle_name|override_limiter|loot_table_id|type|parent|frame_type|slot|defense|toughness|action|cooldown|trigger|interaction|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind)$
+        ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|category|health|attack_damage|attack_speed|speed|tracking_range|width|height|archetype|behavior|screen_type|slot_count|packet_name|channel|direction|sync_type|container_size|component_name|value_type|codec|feature_type|step|biomes|dimension_type|ambient_light|coordinate_scale|temperature|downfall|precipitation|color|beneficial|sound_id|subtitle|particle_name|override_limiter|loot_table_id|type|parent|frame_type|slot|defense|toughness|action|cooldown|trigger|interaction|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind|hardness|hunger|saturation|seed_color|input_item|output_item|output_count|processing_ticks|max_level|literal|message|permission_level)$
     value:
       type: string
       minLength: 1
@@ -21,8 +21,10 @@ rules:
   - Emit exactly one property record; the host controls repetition, ordering, and termination.
   - When requested_property is present in context, property must equal requested_property exactly.
   - property must be one of allowed_properties supplied by the host.
-  - Do not invent host-owned identifiers, paths, registry keys, or serialized Minecraft resources in value.
+  - Do not invent host-owned paths, registry keys, or serialized Minecraft resources in value.
+  - For input_item or output_item, choose only an identifier supplied in allowed_resource_ids or grounded evidence; never synthesize an unverified identifier.
   - Do not substitute generic defaults merely because a property is missing; resolve only a property justified by the active requirement, accepted design state, relations, or grounded evidence.
-  - Use display_name for the authored English display name and stack_limit only when the active requirement or design state requires a non-default stack limit.
+  - Use display_name for the authored display name and stack_limit only when the active requirement or design state requires a non-default stack limit.
+  - Numeric generation properties must be emitted as their canonical decimal string with no unit or prose.
   - Recipe pattern rows use pattern_1 through pattern_3; emit each property as a separate record.
   - When requested_property is supplied by the host, return exactly that property and no other property.
