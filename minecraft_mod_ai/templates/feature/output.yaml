@@ -3,6 +3,6 @@ task: Identify one output produced by the primary behavior. Return one record pe
 rules: [Use only supplied behavior context, Include externally observable effects as outputs, Do not invent effects]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, output_name: {type: string, minLength: 1}, output_contract: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, output_name: {type: string, minLength: 1, maxLength: 256}, output_contract: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, output_name, output_contract]
   additionalProperties: false
