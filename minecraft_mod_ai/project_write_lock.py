@@ -70,6 +70,7 @@ def project_write_lock(project_root: str | Path) -> Iterator[None]:
                     "project lock; acquire the coarse lock first."
                 )
             state.waiting_writers += 1
+            state.condition.notify_all()
             try:
                 while state.writer_owner is not None or state.scoped_total:
                     state.condition.wait()
