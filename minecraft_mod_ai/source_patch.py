@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import threading
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -19,6 +20,29 @@ from .residual_generation_contract import (
 )
 
 _WORKSPACE_IMPACTS = frozenset({"unchanged", "rolled_back", "drift", "uncertain"})
+_COMMIT_POOL_LOCK = threading.RLock()
+_COMMIT_POOL: ThreadPoolExecutor | None = None
+
+
+def _global_commit_worker_count() -> int:
+    raw = os.environ.get("MMM_SOURCE_PATCH_GLOBAL_WORKERS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise SourcePatchError("MMM_SOURCE_PATCH_GLOBAL_WORKERS must be a positive integer") from exc
+        if value < 1:
+            raise SourcePatchError("MMM_SOURCE_PATCH_GLOBAL_WORKERS must be a positive integer")
+        return min(32, value)
+    return min(16, max(2, (os.cpu_count() or 1) * 2))
+
+
+def _shared_commit_pool() -> ThreadPoolExecutor:
+    global _COMMIT_POOL
+    with _COMMIT_POOL_LOCK:
+        if _COMMIT_POOL is None:
+            _COMMIT_POOL = ThreadPoolExecutor(max_workers=_global_commit_worker_count(), thread_name_prefix="mmm_source_patch_commit")
+        return _COMMIT_POOL
 
 
 class SourcePatchError(RuntimeError):
@@ -250,22 +274,20 @@ class TransactionalSourcePatcher:
                     break
                 committed.add(path)
         else:
-            with ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="mmm_source_patch_commit",
-            ) as pool:
-                futures = {
-                    pool.submit(_commit_staged_path, path, after): path
-                    for path, after in ordered_staged
-                }
-                for future in as_completed(futures):
-                    path = futures[future]
-                    try:
-                        future.result()
-                    except BaseException as exc:
-                        errors[path] = exc
-                    else:
-                        committed.add(path)
+            pool = _shared_commit_pool()
+            permits = threading.BoundedSemaphore(workers)
+            def commit_with_permit(path: Path, after: bytes | None) -> None:
+                with permits:
+                    _commit_staged_path(path, after)
+            futures = {pool.submit(commit_with_permit, path, after): path for path, after in ordered_staged}
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    future.result()
+                except BaseException as exc:
+                    errors[path] = exc
+                else:
+                    committed.add(path)
 
         if errors:
             committed_order = [

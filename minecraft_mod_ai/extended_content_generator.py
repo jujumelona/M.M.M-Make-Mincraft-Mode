@@ -45,6 +45,52 @@ _CATALOG_SCHEMA = "mmm/extended-module-catalog-v1"
 _DIRECTORY_CATALOG_SCHEMA = "mmm/extended-module-directory-v1"
 _CATALOG_NODE_SCHEMA = "mmm/extended-module-catalog-node-v1"
 _CATALOG_SHARD_SCHEMA = "mmm/extended-module-shard-v1"
+_DIRECTORY_RECORD_DIR = ".minecraft_ai/extended-module-records"
+
+
+def _module_record(module: ProductionModule) -> dict[str, Any]:
+    return {
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "config": module.config,
+        "depends_on": list(module.depends_on),
+        "required_gates": list(module.required_gates),
+    }
+
+
+def _directory_catalog_count(project_root: str | Path) -> int | None:
+    root = Path(project_root).expanduser().resolve()
+    catalog = root / ".minecraft_ai/extended-modules.json"
+    if not catalog.is_file() or catalog.is_symlink():
+        return None
+    try:
+        raw = json.loads(catalog.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict) or raw.get("schema_version") != _DIRECTORY_CATALOG_SCHEMA:
+        return None
+    if raw.get("directory") != _DIRECTORY_RECORD_DIR:
+        return None
+    count = raw.get("module_count")
+    if type(count) is not int or count < 0:
+        raise ExtendedContentError("Extended module directory catalog count is invalid.")
+    directory = root / _DIRECTORY_RECORD_DIR
+    if count and (not directory.is_dir() or directory.is_symlink()):
+        raise ExtendedContentError("Extended module directory is missing or unsafe.")
+    return count
+
+
+def _selected_missing_record_count(project_root: str | Path, records: Iterable[dict[str, Any]]) -> int:
+    root = Path(project_root).expanduser().resolve()
+    missing = 0
+    for item in records:
+        target = root / _DIRECTORY_RECORD_DIR / f"{item['module_id']}.json"
+        if target.exists():
+            if not target.is_file() or target.is_symlink():
+                raise ExtendedContentError("Extended module record is unsafe.")
+        else:
+            missing += 1
+    return missing
 
 
 def generate_extended_content(
@@ -66,39 +112,23 @@ def generate_extended_content(
     for module in selected:
         module.validate(policy=policy)
 
+    selected_records = [_module_record(module) for module in selected]
     with project_write_lock(info.root):
-        existing = {
-            str(item["module_id"]): item
-            for item in iter_extended_module_records(info.root)
-        }
-        for module in selected:
-            existing[module.module_id] = {
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "config": module.config,
-                "depends_on": list(module.depends_on),
-                "required_gates": list(module.required_gates),
-            }
-        ordered = [existing[key] for key in sorted(existing)]
-        catalog_path = info.root / ".minecraft_ai/extended-modules.json"
-        already_directory = False
-        if catalog_path.is_file() and not catalog_path.is_symlink():
-            try:
-                already_directory = (
-                    json.loads(catalog_path.read_text(encoding="utf-8")).get(
-                        "schema_version"
-                    )
-                    == _DIRECTORY_CATALOG_SCHEMA
-                )
-            except (json.JSONDecodeError, OSError, AttributeError):
-                already_directory = False
-    selected_records = [existing[module.module_id] for module in selected]
-    generation_records = (
-        selected_records if already_directory else ordered
-    )
+        directory_count = _directory_catalog_count(info.root)
+        if directory_count is None:
+            existing = {str(item["module_id"]): item for item in iter_extended_module_records(info.root)}
+            for item in selected_records:
+                existing[str(item["module_id"])] = item
+            generation_records = [existing[key] for key in sorted(existing)]
+            initial_count = len(generation_records)
+            already_directory = False
+        else:
+            generation_records = selected_records
+            initial_count = directory_count + _selected_missing_record_count(info.root, selected_records)
+            already_directory = True
     files = _extended_directory_catalog_files(
-        selected_records if already_directory else ordered,
-        module_count=len(ordered),
+        selected_records if already_directory else generation_records,
+        module_count=initial_count,
     )
     lang_en: dict[str, str] = {}
     lang_ko: dict[str, str] = {}
@@ -170,32 +200,23 @@ def generate_extended_content(
     )
 
     with project_write_lock(info.root):
-        # Refresh the shared catalog after concurrent preparation so module_count
-        # and directory records converge to the exact committed project state.
-        committed = {
-            str(item["module_id"]): item
-            for item in iter_extended_module_records(info.root)
-        }
-        for module in selected:
-            committed[module.module_id] = {
-                "module_id": module.module_id,
-                "kind": module.kind,
-                "config": module.config,
-                "depends_on": list(module.depends_on),
-                "required_gates": list(module.required_gates),
-            }
-        directory = ".minecraft_ai/extended-module-records"
-        files[".minecraft_ai/extended-modules.json"] = _json_text(
-            {
-                "schema_version": _DIRECTORY_CATALOG_SCHEMA,
-                "module_count": len(committed),
-                "directory": directory,
-            }
-        )
-        for module in selected:
-            files[f"{directory}/{module.module_id}.json"] = _json_text(
-                committed[module.module_id]
-            )
+        current_count = _directory_catalog_count(info.root)
+        if current_count is None:
+            committed = {str(item["module_id"]): item for item in iter_extended_module_records(info.root)}
+            for item in selected_records:
+                committed[str(item["module_id"])] = item
+            committed_count = len(committed)
+            for item in committed.values():
+                files[f"{_DIRECTORY_RECORD_DIR}/{item['module_id']}.json"] = _json_text(item)
+        else:
+            committed_count = current_count + _selected_missing_record_count(info.root, selected_records)
+            for item in selected_records:
+                files[f"{_DIRECTORY_RECORD_DIR}/{item['module_id']}.json"] = _json_text(item)
+        files[".minecraft_ai/extended-modules.json"] = _json_text({
+            "schema_version": _DIRECTORY_CATALOG_SCHEMA,
+            "module_count": committed_count,
+            "directory": _DIRECTORY_RECORD_DIR,
+        })
         _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/en_us.json", lang_en)
         _merge_lang(info.root / f"src/main/resources/assets/{mod_id}/lang/ko_kr.json", lang_ko)
         receipt = write_text_files(info, files, replace_existing=True)
@@ -210,7 +231,7 @@ def generate_extended_content(
         "schema_version": "mmm/extended-content-v2",
         "status": "GENERATED",
         "modules": [item["module_id"] for item in generation_records],
-        "catalog_module_count": len(ordered),
+        "catalog_module_count": committed_count,
         "shard_count": len(java_items),
         "shard_size": policy.java_shard_size,
         "registrar_dispatch_count": 0,
@@ -346,7 +367,7 @@ def _extended_directory_catalog_files(
     *,
     module_count: int,
 ) -> dict[str, str]:
-    directory = ".minecraft_ai/extended-module-records"
+    directory = _DIRECTORY_RECORD_DIR
     files = {
         f"{directory}/{item['module_id']}.json": _json_text(item)
         for item in modules
