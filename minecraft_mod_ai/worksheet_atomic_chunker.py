@@ -114,12 +114,7 @@ def worksheet_chunk_schema(
     *,
     include_evidence: bool = False,
 ) -> dict[str, Any]:
-    """Return a loose partial-record schema with a minimum authored-content signal.
-
-    Individual record fields remain optional so mostly-correct small-model output is not
-    discarded. A chunk must nevertheless contain at least one non-empty concern record
-    or one explicit inapplicable record; evidence refs alone cannot satisfy the chunk.
-    """
+    """Return a bounded partial-record schema with a minimum authored-content signal."""
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
     active = tuple(concerns)
@@ -134,10 +129,11 @@ def worksheet_chunk_schema(
         fields = records[concern].split()
         properties[concern] = {
             "type": "array",
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
-                    field: {"type": "string", "minLength": 1}
+                    field: {"type": "string", "minLength": 1, "maxLength": 256}
                     for field in fields
                 },
                 "required": [],
@@ -154,11 +150,12 @@ def worksheet_chunk_schema(
 
     properties["inapplicable_concerns"] = {
         "type": "array",
+        "maxItems": 4,
         "items": {
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(active)},
-                "reason": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["concern", "reason"],
             "additionalProperties": False,
@@ -174,12 +171,13 @@ def worksheet_chunk_schema(
     if include_evidence:
         properties["constraint_evidence_refs"] = {
             "type": "array",
+            "maxItems": 4,
             "uniqueItems": True,
             "description": (
                 "Evidence references supplied by the host that constrain this authored design section. "
                 "Use an empty array when the section is a design decision rather than an external fact."
             ),
-            "items": {"type": "string"},
+            "items": {"type": "string", "minLength": 1, "maxLength": 256},
         }
 
     return {
