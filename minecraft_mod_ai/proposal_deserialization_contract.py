@@ -337,4 +337,29 @@ def install_proposal_deserialization_contracts(
     )
 
 
-__all__ = ['install_proposal_deserialization_contracts']
+def install(spec_module: Any, complete_spec_module: Any) -> None:
+    """Bind the centralized deserialization contract into runtime modules."""
+    from .capabilities import capability_manifest_hash
+    from .knowledge import evidence_snapshot_hash
+
+    install_proposal_deserialization_contracts(
+        proposal_cls=spec_module.Proposal,
+        proposal_status_cls=spec_module.ProposalStatus,
+        spec_validation_error=spec_module.SpecValidationError,
+        content_spec_cls=spec_module.ContentSpec,
+        content_kind_cls=spec_module.ContentKind,
+        boss_spec_cls=spec_module.BossSpec,
+        mod_spec_cls=spec_module.ModSpec,
+        deferred_request_cls=spec_module.DeferredRequest,
+        evidence_source_cls=spec_module.EvidenceSource,
+        capability_manifest_hash=capability_manifest_hash,
+        evidence_snapshot_hash=evidence_snapshot_hash,
+        json_bool=spec_module._json_bool,
+        complete_proposal_cls=complete_spec_module.CompleteProposal,
+        complete_proposal_status_cls=complete_spec_module.CompleteProposalStatus,
+        production_module_cls=complete_spec_module.ProductionModule,
+        asset_request_cls=complete_spec_module.AssetRequest,
+    )
+
+
+__all__ = ['install', 'install_proposal_deserialization_contracts']
