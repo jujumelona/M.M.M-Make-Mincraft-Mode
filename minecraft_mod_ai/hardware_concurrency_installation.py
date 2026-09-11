@@ -25,10 +25,13 @@ def recommended_central_ai_workers() -> int:
 
 
 def install() -> dict[str, int]:
-    """Publish host-adaptive widths without replacing scheduler internals at runtime."""
+    """Publish effective widths without freezing future validated runtime capacity."""
 
     central_workers = recommended_central_ai_workers()
-    os.environ.setdefault("MMM_CENTRAL_AI_WORKERS", str(central_workers))
+    # MMM_CENTRAL_AI_WORKERS is an operator override.  Do not populate it with the
+    # pre-launch fallback (usually 1), otherwise later validated llama parallelism
+    # can never become visible to the central-AI scheduler.
+    os.environ["MMM_CENTRAL_AI_WORKERS_EFFECTIVE"] = str(central_workers)
 
     cpu_workers = recommended_cpu_io_workers()
     os.environ["MMM_CPU_IO_WORKERS_EFFECTIVE"] = str(cpu_workers)
