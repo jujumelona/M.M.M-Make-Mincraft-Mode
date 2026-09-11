@@ -13,6 +13,16 @@ def test_item_registration_epoch_before_1_21_2_is_direct_resource_location():
     assert epoch["requires_set_id"] is False
 
 
+def test_resource_location_factory_changes_at_1_21():
+    old = _epoch("1.20.6")
+    assert old["resource_identifier_factory"] == "<init>"
+    assert old["resource_identifier_factory_static"] is False
+
+    modern = _epoch("1.21")
+    assert modern["resource_identifier_factory"] == "fromNamespaceAndPath"
+    assert modern["resource_identifier_factory_static"] is True
+
+
 def test_item_registration_epoch_1_21_2_through_1_21_10_is_keyed_resource_location():
     for version in ("1.21.2", "1.21.4", "1.21.5", "1.21.10"):
         epoch = _epoch(version)
