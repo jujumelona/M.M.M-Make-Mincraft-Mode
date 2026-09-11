@@ -3,6 +3,6 @@ task: Identify one client/server synchronization or authority responsibility. Re
 rules: [Use only supplied behavior and state context, Separate authority from presentation, Use not_applicable with a reason when networking is unnecessary]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, network_responsibility: {type: string, minLength: 1}, authority: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, network_responsibility: {type: string, minLength: 1, maxLength: 256}, authority: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, network_responsibility, authority]
   additionalProperties: false

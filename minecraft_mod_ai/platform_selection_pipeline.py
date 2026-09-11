@@ -124,7 +124,11 @@ def _provider_only_adapter(
                 if adapter.minecraft_version != version:
                     from .resolved_version_context import VersionContextError
 
-                    raise VersionContextError("PINNED_VERSION_SUBSTITUTION", requested=version, actual=adapter.minecraft_version)
+                    raise VersionContextError(
+                        "PINNED_VERSION_SUBSTITUTION",
+                        requested=version,
+                        actual=adapter.minecraft_version,
+                    )
                 return adapter
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{loader}/{version}: {type(exc).__name__}: {exc}")
@@ -167,10 +171,19 @@ def resolve_platform_fail_closed(
         existing_version and (resolver._MIGRATION_RE.search(text) or host_retarget)
     )
     kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
-    if existing_version and explicit_version and existing_version != explicit_version and not migration_requested:
+    if (
+        existing_version
+        and explicit_version
+        and existing_version != explicit_version
+        and not migration_requested
+    ):
         from .resolved_version_context import VersionContextError
 
-        raise VersionContextError("VERSION_MIGRATION_REQUIRED", existing=existing_version, requested=explicit_version)
+        raise VersionContextError(
+            "VERSION_MIGRATION_REQUIRED",
+            existing=existing_version,
+            requested=explicit_version,
+        )
 
     if explicit_loader:
         try:
@@ -178,21 +191,68 @@ def resolve_platform_fail_closed(
         except ValueError as exc:
             raise SpecValidationError(str(exc)) from exc
 
-    # The default Fabric provider selects a single host-admitted snapshot before
-    # semantic research or ecosystem scoring. Those stages cannot choose versions.
     selected_loader = explicit_loader or existing_loader or "fabric"
     provider = provider_for_loader(selected_loader)
+
+    discovery_mode = str(os.getenv("MMM_ECOSYSTEM_DISCOVERY", "auto")).strip().casefold()
+    if discovery_mode not in {"auto", "on", "off"}:
+        raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
+
+    # Isolation is stronger than provider implementation identity. When discovery is
+    # explicitly off, the installed provider is the only candidate/version authority.
+    # This must run before the production host-snapshot shortcut so test/offline or
+    # operator-supplied providers cannot be silently replaced by a live host target.
+    if discovery_mode == "off":
+        loaders = (
+            (provider_for_loader(explicit_loader).loader,)
+            if explicit_loader
+            else resolver.executable_loaders()
+        )
+        adapter = _provider_only_adapter(
+            tuple(loaders),
+            version_constraint=explicit_version,
+        )
+        resolver._require_supported_kinds(
+            adapter,
+            kinds,
+            explicit=bool(explicit_version),
+        )
+        return PlatformSelection(
+            adapter=adapter,
+            source="provider_receipt_only",
+            reason=(
+                f"Ecosystem discovery is disabled; executable provider receipt "
+                f"{adapter.adapter_id} selected {adapter.minecraft_version}/{adapter.loader}."
+            ),
+            explicit_version=bool(explicit_version),
+            explicit_loader=bool(explicit_loader),
+            migration_requested=migration_requested,
+        )
+
+    # The default Fabric provider selects a single host-admitted snapshot before
+    # semantic research or ecosystem scoring. Those stages cannot choose versions.
     if provider.provider_id == "host-coherent-version-catalog-v1":
         from .host_version_catalog import host_target
 
-        requested = existing_version if existing_version and not migration_requested else explicit_version
+        requested = (
+            existing_version
+            if existing_version and not migration_requested
+            else explicit_version
+        )
         adapter = host_target(requested)
         resolver._require_supported_kinds(adapter, kinds, explicit=bool(requested))
         return PlatformSelection(
-            adapter=adapter, source="host_coherent_bundle",
-            reason=f"Host snapshot {adapter.version_context.context_id} selected {adapter.minecraft_version}.",
-            explicit_version=bool(requested), explicit_loader=bool(explicit_loader),
-            preserved_existing_target=bool(existing_version and not migration_requested),
+            adapter=adapter,
+            source="host_coherent_bundle",
+            reason=(
+                f"Host snapshot {adapter.version_context.context_id} selected "
+                f"{adapter.minecraft_version}."
+            ),
+            explicit_version=bool(requested),
+            explicit_loader=bool(explicit_loader),
+            preserved_existing_target=bool(
+                existing_version and not migration_requested
+            ),
             migration_requested=migration_requested,
         )
 
@@ -209,33 +269,6 @@ def resolve_platform_fail_closed(
             explicit_version=False,
             explicit_loader=False,
             preserved_existing_target=True,
-        )
-
-    discovery_mode = str(os.getenv("MMM_ECOSYSTEM_DISCOVERY", "auto")).strip().casefold()
-    if discovery_mode not in {"auto", "on", "off"}:
-        raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
-
-    if discovery_mode == "off":
-        loaders = (
-            (provider_for_loader(explicit_loader).loader,)
-            if explicit_loader
-            else resolver.executable_loaders()
-        )
-        adapter = _provider_only_adapter(
-            tuple(loaders),
-            version_constraint=explicit_version,
-        )
-        resolver._require_supported_kinds(adapter, kinds, explicit=bool(explicit_version))
-        return PlatformSelection(
-            adapter=adapter,
-            source="provider_receipt_only",
-            reason=(
-                f"Ecosystem discovery is disabled; executable provider receipt "
-                f"{adapter.adapter_id} selected {adapter.minecraft_version}/{adapter.loader}."
-            ),
-            explicit_version=bool(explicit_version),
-            explicit_loader=bool(explicit_loader),
-            migration_requested=migration_requested,
         )
 
     optimization = optimize_platform_evidence(

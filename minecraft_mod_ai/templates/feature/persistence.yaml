@@ -3,6 +3,6 @@ task: Identify one persistence responsibility or state that must survive reload.
 rules: [Use only supplied state context, Separate persistent values or responsibilities, Use not_applicable with a concrete reason when persistence is unnecessary]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, persistent_value: {type: string, minLength: 1}, lifetime: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, persistent_value: {type: string, minLength: 1, maxLength: 256}, lifetime: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, persistent_value, lifetime]
   additionalProperties: false

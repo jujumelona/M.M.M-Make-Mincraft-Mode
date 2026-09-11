@@ -132,10 +132,15 @@ def complete_feature(
     allowed_refs,
     progress=None,
     checkpoint=None,
+    depth=0,
+    max_depth=32,
     ancestry=(),
     ancestry_signatures=(),
 ):
     """Recursively split until every leaf is atomic or semantic progress stops."""
+    if depth > max_depth:
+        raise TemplateBlocked("FEATURE_DECOMPOSE: maximum decomposition depth exceeded")
+
     feature_id = feature.get("feature_id")
     description = feature.get("feature_description") or feature.get("normalized_description")
     if not isinstance(feature_id, str) or not feature_id.strip():
@@ -245,6 +250,8 @@ def complete_feature(
                 allowed_refs=allowed_refs,
                 progress=progress,
                 checkpoint=checkpoint,
+                depth=depth + 1,
+                max_depth=max_depth,
                 ancestry=next_ancestry,
                 ancestry_signatures=next_signatures,
             )

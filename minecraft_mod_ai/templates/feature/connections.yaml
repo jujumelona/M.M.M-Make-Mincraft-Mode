@@ -3,6 +3,6 @@ task: Identify one connection from this feature to another feature or system. Re
 rules: [Use only supplied dependency context, Emit one connection per record, Do not invent neighboring features]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, target: {type: string, minLength: 1}, connection: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, target: {type: string, minLength: 1, maxLength: 256}, connection: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, target, connection]
   additionalProperties: false
