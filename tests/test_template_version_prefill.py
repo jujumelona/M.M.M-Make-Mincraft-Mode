@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from minecraft_mod_ai.atomic_slot_executor import _bounded_context
 from minecraft_mod_ai.implementation_template_renderer import render_template
 from minecraft_mod_ai.resolved_version_context import ResolvedVersionContext, VersionContextError
 
@@ -124,3 +127,28 @@ def test_renderer_prefills_derived_version_facts(resolved_context):
     assert '"data": "88.0"' in rendered
     assert '"resource": "69.0"' in rendered
     assert '"resource_major": 69' in rendered
+
+
+def test_atomic_slot_context_gets_prefill_without_full_host_snapshot(resolved_context):
+    payload = json.loads(
+        _bounded_context(
+            {
+                "resolved_version_context": {"synthetic": True},
+                "mod_id": "demo",
+            }
+        )
+    )
+
+    assert "resolved_version_context" not in payload
+    assert payload["mod_id"] == "demo"
+    assert payload["minecraft_version"] == "26.2"
+    assert payload["loader"] == "fabric"
+    assert payload["java_version"] == "25"
+    assert payload["gradle_sha256"] == "a" * 64
+    assert payload["release_metadata_url"] == "https://www.minecraft.net/fixture"
+    assert payload["mappings_applicable"] is False
+    assert payload["pack_versions"] == {
+        "data": "88.0",
+        "resource": "69.0",
+        "resource_major": 69,
+    }
