@@ -222,6 +222,6 @@ def runtime_consumer_roots():
         "feature/atomic_check", "design/content_capability", "design/content_entity",
         "design/content_entity_count", "design/content_relation", "design/content_property",
         "design/decision", "design/research_fact", "design/relation_set",
-
+        "asset/item_sprite",
     })
     return frozenset(roots)
