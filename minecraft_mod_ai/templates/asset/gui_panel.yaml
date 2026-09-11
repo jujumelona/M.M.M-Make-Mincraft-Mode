@@ -1,5 +1,14 @@
 id: asset/gui_panel
-task: Render prompt mold for Minecraft GUI texture
+task: Render one Minecraft GUI panel texture prompt from the supplied visual description.
+inputs:
+  visual_description:
+    type: string
+    minLength: 1
+    maxLength: 512
+    required: true
+rules:
+  - Use visual_description exactly as supplied; do not invent controls, slots, or states.
+  - Preserve container-interface panel framing and Minecraft GUI readability.
 render:
   language: text
   body: "Pixel Art, PixArFK, container interface panel, minecraft style gui, {{visual_description}}"
