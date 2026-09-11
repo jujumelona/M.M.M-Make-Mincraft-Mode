@@ -1,5 +1,14 @@
 id: asset/block_tile
-task: Render prompt mold for Minecraft block texture
+task: Render one Minecraft block texture prompt from the supplied visual description.
+inputs:
+  visual_description:
+    type: string
+    minLength: 1
+    maxLength: 512
+    required: true
+rules:
+  - Use visual_description exactly as supplied; do not invent missing visual requirements.
+  - Preserve seamless tileability and block-surface framing.
 render:
   language: text
   body: "Pixel Art, PixArFK, seamless block surface tile, {{visual_description}}"
