@@ -1,11 +1,16 @@
 id: translation/client_server_split
 input:
-  atomic_feature:
-  artifact_kinds:
-  state_ownership:
+  atomic_feature: {}
+  artifact_kinds: []
+  state_ownership: {}
+
+input_schema:
+  atomic_feature: object
+  artifact_kinds: list[string]
+  state_ownership: object
 
 task:
-  assign_logical_side_responsibility:
+  assign_logical_side_responsibility: true
 
 rules:
   - Gameplay authority stays on the logical server unless the supplied contract proves a client-only concern.
@@ -13,10 +18,16 @@ rules:
   - Do not infer networking merely from a feature name.
 
 output:
-  server_artifacts:
-  client_artifacts:
-  shared_artifacts:
-  unresolved_boundaries:
+  server_artifacts: []
+  client_artifacts: []
+  shared_artifacts: []
+  unresolved_boundaries: []
+
+output_schema:
+  server_artifacts: list[string]
+  client_artifacts: list[string]
+  shared_artifacts: list[string]
+  unresolved_boundaries: list[string]
 
 proof:
   predicate: every artifact has exactly one justified side classification or an unresolved boundary
