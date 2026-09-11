@@ -10,12 +10,12 @@ from .versioned_reference_context_installation import install as install_version
 
 
 def _configure_default_llama_parallelism() -> None:
-    """Use a conservative application-side width until server capacity is explicit.
+    """Use the reviewed scheduler maximum unless server capacity is explicit.
 
-    Colab and other single-slot runtimes must not fabricate eight concurrent llama
-    requests before the managed server has advertised physical parallel capacity.
-    Explicit ``MMM_LLAMA_PARALLEL`` remains authoritative and is bounded to the
-    reviewed application maximum.
+    The application scheduler is already bounded to eight concurrent llama requests.
+    A positive ``MMM_LLAMA_PARALLEL`` value remains authoritative and is clamped to
+    that reviewed maximum. Missing, invalid, and server-auto values keep the full
+    application-side width so independent small-model tasks are not serialized.
     """
 
     if os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
@@ -28,7 +28,7 @@ def _configure_default_llama_parallelism() -> None:
     if explicit_server_parallel > 0:
         active = max(1, min(8, explicit_server_parallel))
     else:
-        active = 1
+        active = 8
     os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(active)
 
 
