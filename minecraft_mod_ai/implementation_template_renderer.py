@@ -20,6 +20,59 @@ class TemplateRenderError(ValueError):
 _PLACEHOLDER_PATTERN = PLACEHOLDER
 
 
+def _resolved_render_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Inject immutable HOST target facts without allowing caller overrides.
+
+    Templates receive the complete resolved target automatically whenever execution carries
+    ``resolved_version_context``.  This keeps version-coupled constants out of model inputs
+    and prevents individual templates from rebuilding compatibility rules independently.
+    """
+    merged = dict(values)
+    raw = merged.get("resolved_version_context")
+    if raw is None:
+        return merged
+
+    from .resolved_version_context import ResolvedVersionContext, VersionContextError
+    from .target_contract import mappings_applicable
+
+    resolved = raw if isinstance(raw, ResolvedVersionContext) else ResolvedVersionContext.from_dict(raw)
+    snapshot = resolved.to_dict()
+    target = dict(snapshot["target"])
+
+    # Derived target facts are deterministic too.  Expose them from the same authority so
+    # templates never need to infer naming/pack semantics from a Minecraft version string.
+    mapping_is_applicable = mappings_applicable(target["minecraft_version"])
+    canonical = {
+        **target,
+        "version_context_id": resolved.context_id,
+        "mappings_applicable": mapping_is_applicable,
+        "naming_regime": "mapped_obfuscated" if mapping_is_applicable else "native_unobfuscated",
+        "pack_versions": {
+            "data": target["data_pack_version"],
+            "resource": target["resource_pack_version"],
+            "resource_major": target["resource_pack_format"],
+        },
+    }
+    if mapping_is_applicable:
+        canonical["mappings"] = {
+            "kind": target["mappings_kind"],
+            "version": target["mappings_version"],
+        }
+
+    for key, expected in canonical.items():
+        if key in merged and merged[key] != expected:
+            raise VersionContextError(
+                "HOST_FACT_OVERRIDE",
+                field=key,
+                expected=expected,
+                actual=merged[key],
+                context_id=resolved.context_id,
+            )
+        if key not in merged:
+            merged[key] = deepcopy(expected)
+    return merged
+
+
 def _substitute_string(template_str: str, values: Mapping[str, Any]) -> str:
     def replacer(match: re.Match) -> str:
         key = match.group(1)
@@ -50,6 +103,7 @@ def _substitute_json_data(data: Any, values: Mapping[str, Any]) -> Any:
 
 def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> str:
     validate_template_contract(template)
+    render_values = _resolved_render_values(values)
     if "inputs" in template:
         contracts = template["inputs"]
         schema = {
@@ -61,8 +115,16 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
             "required": [name for name, spec in contracts.items() if spec.get("required") is True],
             "additionalProperties": False,
         }
+        # The execution context may carry unrelated deterministic facts.  Validate only the
+        # inputs this template declares; required version inputs can be satisfied by HOST
+        # injection above, while undeclared execution metadata never becomes model input.
+        contract_values = {
+            name: render_values[name]
+            for name in contracts
+            if name in render_values
+        }
         try:
-            Draft202012Validator(schema).validate(dict(values))
+            Draft202012Validator(schema).validate(contract_values)
         except Exception as exc:
             raise TemplateRenderError(f"RENDER_INPUT_CONTRACT: {exc}") from exc
     render_spec = template.get("render")
@@ -71,7 +133,7 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
             f"RENDER_NO_SPEC: Template {template.get('id', '<unknown>')} declares no 'render' section"
         )
     if isinstance(render_spec, str):
-        return _substitute_string(render_spec, values)
+        return _substitute_string(render_spec, render_values)
     if not isinstance(render_spec, Mapping):
         raise TemplateRenderError(
             "RENDER_INVALID_SPEC: 'render' section must be a string or mapping"
@@ -84,12 +146,12 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
 
     if language == "json":
         if isinstance(body, (Mapping, list)):
-            substituted = _substitute_json_data(body, values)
+            substituted = _substitute_json_data(body, render_values)
             return json.dumps(
                 substituted, indent=2, sort_keys=True, ensure_ascii=False
             ) + "\n"
         if isinstance(body, str):
-            rendered_str = _substitute_string(body, values)
+            rendered_str = _substitute_string(body, render_values)
             try:
                 parsed = json.loads(rendered_str)
             except Exception as exc:
@@ -102,7 +164,7 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
         )
 
     if isinstance(body, str):
-        return _substitute_string(body, values)
+        return _substitute_string(body, render_values)
     raise TemplateRenderError(
         f"RENDER_UNSUPPORTED_LANGUAGE: Language {language!r} is not supported"
     )
