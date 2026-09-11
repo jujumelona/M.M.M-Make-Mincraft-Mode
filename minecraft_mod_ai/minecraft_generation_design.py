@@ -14,6 +14,7 @@ from typing import Any
 from .complete_spec import ProductionModule
 from .minecraft_generation_contract import (
     SUPPORTED_GENERATED_KINDS,
+    lower_generation_config,
     required_generation_fields,
     validate_generation_config,
 )
@@ -192,6 +193,10 @@ def complete_generation_fields(
                 checkpoint=checkpoint,
             )
         validate_generation_config(module.kind, module.module_id, config)
+        # Artifact-graph execution and the legacy extended generator both still consume
+        # the implementation-facing aliases. Lower them once here from canonical design
+        # authority so neither execution path can re-infer or invent presentation values.
+        config = lower_generation_config(module.kind, module.module_id, config)
         completed.append(replace(module, config=config))
 
     result = dict(graph)
