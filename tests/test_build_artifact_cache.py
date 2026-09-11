@@ -215,9 +215,13 @@ def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
     monkeypatch.setattr(runner, "_run", MethodType(fake_run, runner))
     result = runner._build_locked(root, run_gametest=True)
 
-    assert calls[0][0] == "clean_build"
-    assert calls[0][1][:3] == ("--no-daemon", "clean", "build")
-    assert "--build-cache" in calls[0][1]
+    assert calls[0][0] == "incremental_build"
+    build_args = calls[0][1]
+    assert "--daemon" in build_args
+    assert "--parallel" in build_args
+    assert "build" in build_args
+    assert "clean" not in build_args
+    assert "--build-cache" in build_args
     assert result.status == "FAIL"
     assert "GameTest report" in str(result.error)
 
