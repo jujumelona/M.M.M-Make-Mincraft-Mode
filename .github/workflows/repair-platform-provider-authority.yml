@@ -3,6 +3,7 @@ name: Repair platform provider authority
 on:
   push:
     paths:
+      - tests/test_platform_provider_authority.py
       - tools/apply_platform_provider_authority_fix.py
       - .github/workflows/repair-platform-provider-authority.yml
   workflow_dispatch:
