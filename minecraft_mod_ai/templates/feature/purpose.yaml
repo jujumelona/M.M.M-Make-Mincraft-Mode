@@ -3,6 +3,6 @@ task: State the single purpose served by this feature. Do not describe implement
 rules: [Use only the supplied feature context, Do not invent missing facts, Emit one purpose record then done]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, purpose: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, purpose: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, purpose]
   additionalProperties: false

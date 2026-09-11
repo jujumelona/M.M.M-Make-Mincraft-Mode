@@ -3,6 +3,6 @@ task: Identify one external or implementation constraint that must be preserved.
 rules: [Use only supplied feature and evidence, Keep authored behavior rules separate from external constraints, Do not invent platform facts]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, constraint: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, constraint: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, constraint]
   additionalProperties: false

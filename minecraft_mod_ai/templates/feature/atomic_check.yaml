@@ -10,6 +10,6 @@ record_schema:
   properties:
     check: {enum: [single_primary_behavior, explicit_trigger, explicit_inputs, explicit_outputs, state_known, dependencies_known, external_effects_known, minecraft_mapping_possible, required_artifacts_known, test_case_writable]}
     passed: {type: boolean}
-    reason: {type: string, minLength: 1}
+    reason: {type: string, minLength: 1, maxLength: 256}
   required: [check, passed, reason]
   additionalProperties: false

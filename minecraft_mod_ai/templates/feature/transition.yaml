@@ -1,8 +1,8 @@
 id: feature/transition
-task: Identify one state transition caused by the feature. Return one record per transition.
-rules: [Use only supplied state and trigger context, Do not merge independent transitions, Use not_applicable when no state transition occurs]
+task: Identify one state transition caused by the host-supplied feature. Return one record per transition.
+rules: [Use only supplied state and trigger context, Do not merge independent transitions, Use not_applicable when no state transition occurs, The feature identity is host-owned and must not be repeated in model output]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, from_state: {type: string, minLength: 1}, event: {type: string, minLength: 1}, to_state: {type: string, minLength: 1}}
-  required: [feature_id, from_state, event, to_state]
+  properties: {from_state: {type: string, minLength: 1, maxLength: 256}, event: {type: string, minLength: 1, maxLength: 256}, to_state: {type: string, minLength: 1, maxLength: 256}}
+  required: [from_state, event, to_state]
   additionalProperties: false

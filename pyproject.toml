@@ -86,7 +86,25 @@ include = ["minecraft_mod_ai*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-minecraft_mod_ai = ["config/*.yaml", "templates/**/*.yaml", "templates/**/*.json", "templates/**/*.java.fmt", "packaged_skills.json", "integrations/mineflayer/*", "data/host_version_catalog.json", "data/official_version_evidence.json"]
+minecraft_mod_ai = [
+  "config/*.yaml",
+  "templates/*.yaml",
+  "templates/*/*.yaml",
+  "templates/*/*/*.yaml",
+  "templates/*/*/*/*.yaml",
+  "templates/*.json",
+  "templates/*/*.json",
+  "templates/*/*/*.json",
+  "templates/*/*/*/*.json",
+  "templates/*.java.fmt",
+  "templates/*/*.java.fmt",
+  "templates/*/*/*.java.fmt",
+  "templates/*/*/*/*.java.fmt",
+  "packaged_skills.json",
+  "integrations/mineflayer/*",
+  "data/host_version_catalog.json",
+  "data/official_version_evidence.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

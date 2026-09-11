@@ -3,6 +3,6 @@ task: Identify one user-interface responsibility required by the feature. Return
 rules: [Use only supplied behavior input and output context, Do not invent UI when behavior has none, Separate independent UI responsibilities]
 record_schema:
   type: object
-  properties: {feature_id: {type: string, minLength: 1}, ui_responsibility: {type: string, minLength: 1}, interaction: {type: string, minLength: 1}}
+  properties: {feature_id: {type: string, minLength: 1, maxLength: 256}, ui_responsibility: {type: string, minLength: 1, maxLength: 256}, interaction: {type: string, minLength: 1, maxLength: 256}}
   required: [feature_id, ui_responsibility, interaction]
   additionalProperties: false

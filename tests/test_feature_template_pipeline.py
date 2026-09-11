@@ -62,100 +62,73 @@ class MockFeatureRouter:
 
     def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
         import json
+
         context = json.loads(messages[1]["content"])
         self.calls.append((tool_name, context))
-        target = tool_name.removeprefix("submit_feature_")
+        target = tool_name.removeprefix("submit_feature_").removesuffix("_records")
 
         if target == "discover":
-            index = len(context.get("accepted_records", []))
-            if index == 0:
-                return {
-                    "status": "record",
-                    "record": {
+            return {
+                "records": [
+                    {
                         "feature_id": "multi_part_machine",
                         "feature_description": "A machine that stores energy and opens a menu",
                         "evidence_basis": "prompt",
-                    },
-                    "reason": "",
-                    "evidence_refs": [],
-                }
-            return {
-                "status": "done",
-                "record": None,
-                "reason": "",
+                    }
+                ],
+                "blocked_reason": "",
                 "evidence_refs": [],
             }
         if target == "atomic_check":
-            index = len(context.get("accepted_records", []))
-            if index == 0:
-                check = context["target_check"]
-                fid = context["feature_id"]
-                passed = not (fid in self.non_atomic_ids and check in ("single_primary_behavior", "explicit_trigger"))
-                return {
-                    "status": "record",
-                    "record": {
+            check = context["target_check"]
+            fid = context["feature_id"]
+            passed = not (
+                fid in self.non_atomic_ids
+                and check in ("single_primary_behavior", "explicit_trigger")
+            )
+            return {
+                "records": [
+                    {
                         "check": check,
                         "passed": passed,
                         "reason": "verified" if passed else "multi responsibility",
-                    },
-                    "reason": "",
-                    "evidence_refs": [],
-                }
-            return {
-                "status": "done",
-                "record": None,
-                "reason": "",
+                    }
+                ],
+                "blocked_reason": "",
                 "evidence_refs": [],
             }
         if target == "decompose":
             fid = context["feature"]["feature_id"]
-            children = self.splits.get(fid, [])
-            index = len(context.get("accepted_records", []))
-            if index < len(children):
-                return {
-                    "status": "record",
-                    "record": children[index],
-                    "reason": "",
-                    "evidence_refs": [],
-                }
             return {
-                "status": "done",
-                "record": None,
-                "reason": "",
+                "records": self.splits.get(fid, []),
+                "blocked_reason": "",
                 "evidence_refs": [],
             }
-        # Detail steps: return one valid schema record
-        index = len(context.get("accepted_records", []))
-        if index == 0:
-            fid = context["feature"]["feature_id"]
-            record_fact = {
-                "purpose": {"feature_id": fid, "purpose": f"{fid} purpose"},
-                "behavior": {"feature_id": fid, "behavior": f"{fid} behavior"},
-                "trigger": {"feature_id": fid, "trigger": f"{fid} trigger"},
-                "input": {"feature_id": fid, "input_name": "data", "input_contract": "non-empty"},
-                "output": {"feature_id": fid, "output_name": "result", "output_contract": "emits result"},
-                "state": {"feature_id": fid, "state_name": "active", "state_contract": "boolean"},
-                "transition": {"feature_id": fid, "from_state": "idle", "event": "start", "to_state": "active"},
-                "rules": {"feature_id": fid, "rule": "deterministic rule"},
-                "constraints": {"feature_id": fid, "constraint": "positive bounds"},
-                "dependencies": {"feature_id": fid, "dependency": "core", "reason": "required"},
-                "connections": {"feature_id": fid, "target": "network", "connection": "sync"},
-                "persistence": {"feature_id": fid, "persistent_value": "energy", "lifetime": "world"},
-                "networking": {"feature_id": fid, "network_responsibility": "state_sync", "authority": "server"},
-                "ui": {"feature_id": fid, "ui_responsibility": "gauge", "interaction": "read_only"},
-                "resources": {"feature_id": fid, "resource_kind": "model", "resource_requirement": "block_model"},
-                "assets": {"feature_id": fid, "asset_kind": "texture", "asset_requirement": "machine_png"},
-            }.get(target, {"feature_id": fid, target: "value"})
-            return {
-                "status": "record",
-                "record": record_fact,
-                "reason": "",
-                "evidence_refs": [],
-            }
+
+        fid = context["feature"]["feature_id"]
+        record_fact = {
+            "purpose": {"feature_id": fid, "purpose": f"{fid} purpose"},
+            "behavior": {"feature_id": fid, "behavior": f"{fid} behavior"},
+            "trigger": {"feature_id": fid, "trigger": f"{fid} trigger"},
+            "input": {"feature_id": fid, "input_name": "data", "input_contract": "non-empty"},
+            "output": {"feature_id": fid, "output_name": "result", "output_contract": "emits result"},
+            "state": {"feature_id": fid, "state_name": "active", "state_contract": "boolean"},
+            "transition": {"from_state": "idle", "event": "start", "to_state": "active"},
+            "rules": {"feature_id": fid, "rule": "deterministic rule"},
+            "constraints": {"feature_id": fid, "constraint": "positive bounds"},
+            "dependencies": {"feature_id": fid, "dependency": "core", "reason": "required"},
+            "connections": {"feature_id": fid, "target": "network", "connection": "sync"},
+            "persistence": {"feature_id": fid, "persistent_value": "energy", "lifetime": "world"},
+            "networking": {"feature_id": fid, "network_responsibility": "state_sync", "authority": "server"},
+            "ui": {"feature_id": fid, "ui_responsibility": "gauge", "interaction": "read_only"},
+            "resources": {"feature_id": fid, "resource_kind": "model", "resource_requirement": "block_model"},
+            "assets": {"feature_id": fid, "asset_kind": "texture", "asset_requirement": "machine_png"},
+        }.get(target)
+        if record_fact is None:
+            raise AssertionError(tool_name)
         return {
-            "status": "done",
-            "record": None,
-            "reason": "",
+            "records": [record_fact],
+            "blocked_reason": "",
             "evidence_refs": [],
         }
 
@@ -169,16 +142,12 @@ def test_discover_features_and_decompose_pipeline_integration():
     splits = {
         "multi_part_machine": [
             {
-                "parent_feature_id": "multi_part_machine",
                 "feature_id": "energy_storage",
-                "purpose": "Store energy",
                 "behavior": "Accumulate and retain energy units",
                 "reason_for_split": "separable responsibility",
             },
             {
-                "parent_feature_id": "multi_part_machine",
                 "feature_id": "machine_ui",
-                "purpose": "Display energy state",
                 "behavior": "Render gauge and handle interactions",
                 "reason_for_split": "separable responsibility",
             },
@@ -205,15 +174,12 @@ def test_feature_decomposition_cycle_and_recursion_protection():
     from minecraft_mod_ai.task_template_runner import TemplateBlocked
     from minecraft_mod_ai.feature_template_pipeline import complete_feature
 
-    # Repeated child id equals parent
     router_cycle = MockFeatureRouter(
         non_atomic_ids={"loop_feature"},
         splits={
             "loop_feature": [
                 {
-                    "parent_feature_id": "loop_feature",
                     "feature_id": "loop_feature",
-                    "purpose": "Same",
                     "behavior": "Same",
                     "reason_for_split": "Same",
                 }
@@ -227,13 +193,12 @@ def test_feature_decomposition_cycle_and_recursion_protection():
             allowed_refs=set(),
         )
 
-    # Max depth exceeded
     infinite_router = MockFeatureRouter(
         non_atomic_ids={"d0", "d1", "d2", "d3"},
         splits={
-            "d0": [{"parent_feature_id": "d0", "feature_id": "d1", "purpose": "p", "behavior": "b", "reason_for_split": "r"}],
-            "d1": [{"parent_feature_id": "d1", "feature_id": "d2", "purpose": "p", "behavior": "b", "reason_for_split": "r"}],
-            "d2": [{"parent_feature_id": "d2", "feature_id": "d3", "purpose": "p", "behavior": "b", "reason_for_split": "r"}],
+            "d0": [{"feature_id": "d1", "behavior": "b1", "reason_for_split": "r"}],
+            "d1": [{"feature_id": "d2", "behavior": "b2", "reason_for_split": "r"}],
+            "d2": [{"feature_id": "d3", "behavior": "b3", "reason_for_split": "r"}],
         },
     )
     with pytest.raises(TemplateBlocked, match="maximum decomposition depth exceeded"):
@@ -243,5 +208,3 @@ def test_feature_decomposition_cycle_and_recursion_protection():
             allowed_refs=set(),
             max_depth=2,
         )
-
-

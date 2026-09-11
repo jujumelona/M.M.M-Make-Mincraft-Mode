@@ -7,8 +7,8 @@ rules: &rules
 record_schema:
   type: object
   properties:
-    feature_id: {type: string, minLength: 1}
-    feature_description: {type: string, minLength: 1}
-    evidence_basis: {type: string, minLength: 1}
+    feature_id: {type: string, minLength: 1, maxLength: 256}
+    feature_description: {type: string, minLength: 1, maxLength: 256}
+    evidence_basis: {type: string, minLength: 1, maxLength: 256}
   required: [feature_id, feature_description, evidence_basis]
   additionalProperties: false

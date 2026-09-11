@@ -50,6 +50,12 @@ def test_catalog_rejects_broken_manifest_graph(tmp_path, steps, code):
 
 
 def test_catalog_requires_explicit_consumer_or_standalone(tmp_path):
+    response_dir = tmp_path / "response"
+    response_dir.mkdir()
+    (response_dir / "contracts.json").write_text(
+        json.dumps({"fixture": {"type": "object"}}),
+        encoding="utf-8",
+    )
     path = tmp_path / "leaf.yaml"
     path.write_text(yaml.safe_dump({"id": "leaf", "task": "fixture"}))
     with pytest.raises(ValueError, match="TEMPLATE_UNCONSUMED"):
