@@ -65,11 +65,12 @@ def _trace_state_snapshot(
     result: str = "SNAPSHOT",
     reason: str = "",
 ) -> None:
-    """Persist the complete state in an unabridged trace artifact.
+    """Persist the complete state synchronously without first cloning the whole graph.
 
-    ``emit_root_cause`` keeps the console/journal representation bounded but writes its
-    original ``details`` object through ``save_trace_artifact`` before bounding it. That
-    gives every transition a durable full-state artifact without flooding stderr.
+    ``emit_root_cause`` serializes both the bounded event and its unabridged artifact
+    before returning, so the caller cannot mutate ``state`` before the snapshot is
+    captured. Avoiding a defensive deepcopy here removes a full-state allocation from
+    every transition while preserving the exact durable trace semantics.
     """
     emit_root_cause(
         event,
@@ -79,7 +80,7 @@ def _trace_state_snapshot(
         reason=reason,
         details={
             **_state_summary(state),
-            "state": deepcopy(dict(state)),
+            "state": state,
         },
     )
 
