@@ -9,7 +9,7 @@ creation is authorized only for host-reserved destinations.
 
 Creation conflicts remain enforced by the canonical progress-aware mutation authority,
 and file deletion remains rejected by the staged custom-module operation validator before
-anything is committed to the live project. This module only repairs the two stale semantic
+anything is committed to the live project. This module only repairs the stale semantic
 assumptions that cannot be expressed by those existing owners.
 """
 
@@ -21,6 +21,7 @@ from typing import Any
 
 _MARKER = "_mmm_coder_mutation_authority_v1"
 _LOOP_MARKER = "_mmm_coder_target_existence_v1"
+_MUTATION_MARKER = "_mmm_coder_creation_conflict_v1"
 _EXISTING_STATUSES = frozenset({"existing", "reuse", "modify", "host_existing"})
 
 
@@ -44,6 +45,23 @@ def _parsed_anchors(target_module: Any, task: Mapping[str, Any]) -> tuple[Any, .
         if anchor is not None and anchor not in result:
             result.append(anchor)
     return tuple(result)
+
+
+def _primary_status(target_module: Any, module: Any) -> str:
+    config = getattr(module, "config", None)
+    if not isinstance(config, Mapping):
+        return ""
+    task = config.get("evidence_task")
+    if not isinstance(task, Mapping):
+        return ""
+    task_id = str(task.get("task_id") or "").strip()
+    candidate = _primary_candidate(target_module, task, task_id)
+    if candidate is None:
+        return ""
+    primary_path, _ = candidate
+    anchors = _parsed_anchors(target_module, task)
+    primary = next((anchor for anchor in anchors if anchor.path == primary_path), None)
+    return str(getattr(primary, "status", "") or "").strip().casefold()
 
 
 def _module_with_reserved_primary(
@@ -194,6 +212,37 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
     return None
 
 
+def _install_creation_conflict_classification(loop_module: Any) -> None:
+    if getattr(loop_module, _MUTATION_MARKER, False):
+        return
+    original = loop_module._mutation_target_error
+
+    def mutation_target_error(
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        context: Any,
+    ) -> str | None:
+        if tool_name == "apply_source_edit" and context is not None:
+            pinned = loop_module._canonical_mutation_path(
+                getattr(context, "target_path", None)
+            )
+            operation = str(arguments.get("operation") or "").strip().casefold()
+            if (
+                pinned
+                and not bool(getattr(context, "is_new_file", False))
+                and operation in loop_module._SOURCE_CREATE_OPERATIONS
+            ):
+                return (
+                    "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+                    f"{pinned!r} cannot be recreated by {operation!r}."
+                )
+        return original(tool_name, arguments, context)
+
+    mutation_target_error.__name__ = original.__name__
+    loop_module._mutation_target_error = mutation_target_error
+    setattr(loop_module, _MUTATION_MARKER, True)
+
+
 def install(target_module: Any | None = None, loop_module: Any | None = None) -> None:
     if target_module is None:
         from . import small_model_task_capsule_contract as target_module
@@ -207,16 +256,22 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
             try:
                 return original_compile(module)
             except target_module.TaskCapsuleContractError as exc:
-                if "TASK_CAPSULE_PRIMARY_NOT_RESERVED" not in str(exc):
-                    raise
-                reconciled = _module_with_reserved_primary(target_module, module)
-                if reconciled is None:
-                    raise
-                proxy, anchors = reconciled
-                capsule = original_compile(proxy)
-                if capsule is None:
-                    return None
-                return _restore_capsule_authority(target_module, capsule, anchors)
+                status = _primary_status(target_module, module)
+                if status in _EXISTING_STATUSES:
+                    reconciled = _module_with_reserved_primary(target_module, module)
+                    if reconciled is None:
+                        raise
+                    proxy, anchors = reconciled
+                    capsule = original_compile(proxy)
+                    if capsule is None:
+                        return None
+                    return _restore_capsule_authority(target_module, capsule, anchors)
+                if status and "PRIMARY_NOT_RESERVED" not in str(exc):
+                    raise target_module.TaskCapsuleContractError(
+                        "TASK_CAPSULE_PRIMARY_NOT_RESERVED: approved custom-Java primary "
+                        f"uses unsupported status {status!r}."
+                    ) from exc
+                raise
 
         compile_task_capsule.__name__ = original_compile.__name__
         target_module.compile_task_capsule = compile_task_capsule
@@ -228,6 +283,8 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
         )
         setattr(loop_module, _LOOP_MARKER, True)
 
+    _install_creation_conflict_classification(loop_module)
+
 
 def assert_installed(target_module: Any | None = None, loop_module: Any | None = None) -> None:
     if target_module is None:
@@ -238,6 +295,8 @@ def assert_installed(target_module: Any | None = None, loop_module: Any | None =
         raise RuntimeError("coder mutation authority reconciliation is not installed")
     if not getattr(loop_module, _LOOP_MARKER, False):
         raise RuntimeError("coder target-existence localization reconciliation is not installed")
+    if not getattr(loop_module, _MUTATION_MARKER, False):
+        raise RuntimeError("coder creation-conflict classification is not installed")
 
 
 __all__ = ["assert_installed", "install"]
