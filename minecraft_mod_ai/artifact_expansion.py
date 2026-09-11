@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Fail-closed lowering of atomic PromptFacts into concrete ArtifactJobs."""
+"""Fail-closed lowering of atomic PromptFacts into concrete ArtifactJobs.
+
+P0-2: All fact types now use unified ArtifactJob path with executor_type.
+Generator handoff removed - Entity, GUI, etc. are now regular jobs.
+"""
 
 import re
 from collections.abc import Iterable
@@ -9,6 +13,7 @@ from typing import Any
 from .artifact_job import ArtifactJob
 from .artifact_ports import PortKind
 from .implementation_fact import ImplementationFact
+from .implementation_identity import ExecutorType
 from .implementation_template_renderer import render_template
 from .prompt_fact_types import FactType, PromptFact
 from .task_template_catalog import load_template
@@ -41,46 +46,41 @@ _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
     FactType.SMELTING_RECIPE: ("fabric/recipe/smelting",),
     FactType.REGISTRY_TAG: ("fabric/tag/registry",),
     FactType.BLOCK_DROP: ("fabric/loot/block_drop",),
+    # P0-2: Former generator handoffs now integrated as PYTHON_GENERATOR jobs
+    FactType.ENTITY_EXISTS: ("fabric/entity/generator",),
+    FactType.GUI_EXISTS: ("fabric/gui/generator",),
+    FactType.NETWORK_PACKET: ("fabric/network/packet_generator",),
+    FactType.BLOCK_ENTITY_EXISTS: ("fabric/block_entity/generator",),
+    FactType.DATA_COMPONENT: ("fabric/component/generator",),
+    FactType.WORLDGEN_FEATURE: ("fabric/worldgen/feature_generator",),
+    FactType.DIMENSION: ("fabric/dimension/generator",),
+    FactType.BIOME: ("fabric/biome/generator",),
+    FactType.STATUS_EFFECT: ("fabric/effect/generator",),
+    FactType.SOUND_EVENT: ("fabric/sound/generator",),
+    FactType.PARTICLE_TYPE: ("fabric/particle/generator",),
+    FactType.ENTITY_LOOT: ("fabric/loot/entity_generator",),
+    FactType.ADVANCEMENT: ("fabric/advancement/generator",),
+    FactType.EQUIPMENT_ARMOR: ("fabric/equipment/armor_generator",),
+    FactType.CUSTOM_ITEM_BEHAVIOR: ("fabric/item/behavior_generator",),
+    FactType.CUSTOM_BLOCK_BEHAVIOR: ("fabric/block/behavior_generator",),
+    FactType.CONTENT_RELATION: ("fabric/relation/generator",),
 }
 
 # Kept public for callers/tests, but every entry is verified before use.
 FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
 
-# These fact types are intentionally implemented by an existing module generator until
-# their executable leaf catalog is complete.  Keeping this declaration explicit prevents
-# a supported higher-level capability from being mistaken for an ArtifactJob leaf while
-# still failing closed for every undeclared fact type.
-DECLARED_GENERATOR_HANDOFFS = frozenset(
-    {
-        FactType.ENTITY_EXISTS,
-        FactType.GUI_EXISTS,
-        FactType.NETWORK_PACKET,
-        FactType.BLOCK_ENTITY_EXISTS,
-        FactType.DATA_COMPONENT,
-        FactType.WORLDGEN_FEATURE,
-        FactType.DIMENSION,
-        FactType.BIOME,
-        FactType.STATUS_EFFECT,
-        FactType.SOUND_EVENT,
-        FactType.PARTICLE_TYPE,
-        FactType.ENTITY_LOOT,
-        FactType.ADVANCEMENT,
-        FactType.EQUIPMENT_ARMOR,
-        FactType.CUSTOM_ITEM_BEHAVIOR,
-        FactType.CUSTOM_BLOCK_BEHAVIOR,
-        FactType.CONTENT_RELATION,
-    }
-)
+# P0-2: REMOVED - No more separate generator handoff path
+# All facts use unified ArtifactJob with different executor_type
 
 
-def implementation_route(fact_type: FactType) -> str:
-    if fact_type in FACT_EXPANSIONS:
-        return "artifact"
-    if fact_type in DECLARED_GENERATOR_HANDOFFS:
-        return "generator"
-    raise ArtifactExpansionError(
-        f"ARTIFACT_FACT_UNSUPPORTED: no implementation route exists for {fact_type.value}"
-    )
+def get_executor_type_for_template(template_id: str) -> ExecutorType:
+    """Determine executor type from template ID.
+    
+    P0-2: Maps template to executor type (TEMPLATE or PYTHON_GENERATOR).
+    """
+    if template_id.endswith("/generator"):
+        return ExecutorType.PYTHON_GENERATOR
+    return ExecutorType.TEMPLATE
 
 
 def _constant_name(value: str) -> str:
@@ -191,7 +191,11 @@ def expand_facts_to_jobs(
     minecraft_version: str = "",
     version_context=None,
 ) -> list[ArtifactJob]:
-    """Lower only explicitly supported facts; never invent a fallback implementation."""
+    """Lower only explicitly supported facts; never invent a fallback implementation.
+    
+    P0-2: All facts now expand to ArtifactJob with appropriate executor_type.
+    No more generator handoff special case.
+    """
     validate_expansion_catalog()
     if version_context is not None:
         from .resolved_version_context import VersionContextError
@@ -213,12 +217,12 @@ def expand_facts_to_jobs(
     )
 
     for fact in facts:
-        route = implementation_route(fact.fact_type)
-        if route == "generator":
-            # The ImplementationFact remains in the proposal and is consumed by the
-            # module generator selected from its content capability.  It is deliberately
-            # not represented as a fake/empty ArtifactJob.
-            continue
+        # P0-2: No more generator handoff check - all facts expand to jobs
+        if fact.fact_type not in FACT_EXPANSIONS:
+            raise ArtifactExpansionError(
+                f"ARTIFACT_FACT_UNSUPPORTED: {fact.fact_type.value} not in expansion catalog"
+            )
+        
         template_ids = FACT_EXPANSIONS[fact.fact_type]
 
         resource_values = {}
@@ -310,6 +314,7 @@ def expand_facts_to_jobs(
                 job_id=job_id,
                 template_id=template_id,
                 owner_module=subject,
+                executor_type=get_executor_type_for_template(template_id),  # P0-2: Add executor type
                 target_path=target_path,
                 anchor=anchor,
                 operation=template["target"]["operation"],

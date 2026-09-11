@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .implementation_identity import ExecutorType
+
 
 @dataclass
 class ArtifactJob:
     job_id: str
     template_id: str
     owner_module: str
+    executor_type: ExecutorType = ExecutorType.TEMPLATE
     target_path: str = ""
     anchor: str = ""
     operation: str = ""
@@ -30,6 +33,7 @@ class ArtifactJob:
             "job_id": self.job_id,
             "template_id": self.template_id,
             "owner_module": self.owner_module,
+            "executor_type": self.executor_type.value,
             "target_path": self.target_path,
             "anchor": self.anchor,
             "operation": self.operation,
@@ -51,6 +55,7 @@ class ArtifactJob:
             job_id=str(data["job_id"]),
             template_id=str(data["template_id"]),
             owner_module=str(data["owner_module"]),
+            executor_type=ExecutorType(data.get("executor_type", "template")),
             target_path=str(data.get("target_path", "")),
             anchor=str(data.get("anchor", "")),
             operation=str(data.get("operation", "")),
