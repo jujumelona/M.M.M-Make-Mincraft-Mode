@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
+from minecraft_mod_ai import llama_vram_parallel_policy as vram_policy
 from minecraft_mod_ai.llama_server_autotune import (
     ProbeResult,
     ServerVariant,
@@ -65,6 +66,7 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     assert getattr(autotune._fingerprint, "_mmm_runtime_tuning_fingerprint", False)
     assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(autotune.ensure_tuned_server, "_mmm_managed_server_fast_path", False)
+    assert getattr(autotune.ensure_tuned_server, "_mmm_llama_no_reload_fast_start_v6", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
         "_mmm_releases_managed_llama",
@@ -72,26 +74,24 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     )
 
 
-def test_default_variants_use_sparse_joint_mtp_seeds(monkeypatch) -> None:
+def test_default_fast_search_uses_only_safe_baseline_variant(monkeypatch) -> None:
     for name in (
-        "MMM_LLAMA_MTP_WIDTHS", "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS",
-        "MMM_LLAMA_MTP_SEED_P_MIN", "MMM_LLAMA_NGRAM_SPEC_TYPES",
+        "MMM_LLAMA_AUTOTUNE_SEARCH",
+        "MMM_LLAMA_MTP_WIDTHS",
+        "MMM_LLAMA_MTP_CONFIDENCE_WIDTHS",
+        "MMM_LLAMA_MTP_SEED_P_MIN",
+        "MMM_LLAMA_NGRAM_SPEC_TYPES",
     ):
         monkeypatch.delenv(name, raising=False)
     values = _candidate_variants()
-    mtp = [value for value in values if value.spec_type == "draft-mtp"]
-    assert [(value.draft_n_max, value.draft_p_min) for value in mtp] == [
-        (1, 0.0), (2, 0.0), (3, 0.0), (2, 0.8), (4, 0.8), (8, 0.8), (16, 0.8),
-    ]
-    assert [value.spec_type for value in values if value.spec_type.startswith("ngram-")] == [
-        "ngram-simple", "ngram-mod", "ngram-map-k",
-    ]
-    assert getattr(autotune._benchmark, "_mmm_adaptive_joint_mtp_search", False)
-    assert getattr(autotune._benchmark, "_mmm_exhaustive_ubatch_search", False)
+    assert len(values) == 1
+    assert values[0].spec_type == "none"
+    assert values[0].draft_n_max == 0
 
 
-def test_default_runtime_candidates_are_bounded(monkeypatch) -> None:
+def test_default_fast_search_removes_reload_heavy_candidates(monkeypatch) -> None:
     for name in (
+        "MMM_LLAMA_AUTOTUNE_SEARCH",
         "MMM_LLAMA_BATCH",
         "MMM_LLAMA_UBATCH",
         "MMM_LLAMA_UBATCH_CANDIDATES",
@@ -102,9 +102,30 @@ def test_default_runtime_candidates_are_bounded(monkeypatch) -> None:
         "MMM_LLAMA_TUNING_OBJECTIVE",
     ):
         monkeypatch.delenv(name, raising=False)
-    assert _ubatch_candidates(autotune) == (512, 1024, 2048)
-    assert _cache_reuse_candidates() == (0, 64, 256)
+    assert _ubatch_candidates(autotune) == (512,)
+    assert _cache_reuse_candidates() == ()
     assert _parallel_candidates() == (1,)
+
+
+def test_fast_start_disables_hidden_kernel_and_kv_sweeps_by_default() -> None:
+    assert os.environ.get("MMM_LLAMA_KERNEL_AUTOTUNE") == "0"
+    assert os.environ.get("MMM_LLAMA_KV_AUTOTUNE") == "0"
+
+
+def test_vram_fast_start_chooses_highest_safe_width(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_LLAMA_PARALLEL", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_CONCURRENT_REQUESTS", raising=False)
+    monkeypatch.delenv("MMM_PERFORMANCE_MODE", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)
+    fake = SimpleNamespace(
+        _explicit_parallel=lambda: None,
+        _performance_mode=lambda: "auto",
+        _runtime_resources=lambda: object(),
+        _MAX_PARALLEL=8,
+        _parallel_target=lambda: 8,
+        _parallel_resource_feasible=lambda slots, _config, _path, _resources: slots <= 4,
+    )
+    assert vram_policy._recommended_parallel(fake, object(), "/tmp/model.gguf") == 4
 
 
 def test_compact_benchmark_never_reuses_real_workflow_prompt() -> None:
@@ -216,13 +237,24 @@ def test_autotune_keeps_baseline_when_gain_is_below_threshold() -> None:
 def test_native_server_sizing_requires_explicit_overrides(monkeypatch) -> None:
     from inspect import unwrap
 
-    for key in ("MMM_LLAMA_SERVER_CTX", "MMM_LLAMA_BATCH", "MMM_LLAMA_UBATCH",
-                "MMM_KV_CACHE_QUANT", "MMM_LLAMA_PARALLEL"):
+    for key in (
+        "MMM_LLAMA_SERVER_CTX",
+        "MMM_LLAMA_BATCH",
+        "MMM_LLAMA_UBATCH",
+        "MMM_KV_CACHE_QUANT",
+        "MMM_LLAMA_PARALLEL",
+    ):
         monkeypatch.delenv(key, raising=False)
     native_args = unwrap(_base_args)
     config = SimpleNamespace(max_context=32768)
     args = native_args("llama-server", "/tmp/model.gguf", config, 8910)
-    for flag in ("--ctx-size", "--batch-size", "--ubatch-size", "--cache-type-k", "--cache-type-v"):
+    for flag in (
+        "--ctx-size",
+        "--batch-size",
+        "--ubatch-size",
+        "--cache-type-k",
+        "--cache-type-v",
+    ):
         assert flag not in args
     assert args[args.index("--parallel") + 1] == "-1"
     assert args[args.index("--gpu-layers") + 1] == "all"
@@ -243,5 +275,10 @@ def test_speculative_server_flags_are_native() -> None:
     native_args = unwrap(_variant_args)
     assert native_args(ServerVariant("baseline", "none")) == ["--spec-type", "none"]
     assert native_args(ServerVariant("mtp-2", "draft-mtp", 2)) == [
-        "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--spec-draft-ngl", "all",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-ngl",
+        "all",
     ]
