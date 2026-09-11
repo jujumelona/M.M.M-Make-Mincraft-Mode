@@ -2,7 +2,8 @@ from pathlib import Path
 
 p = Path("minecraft_mod_ai/task_template_runner.py")
 text = p.read_text(encoding="utf-8")
-start = text.index('    if identifier == "design/content_entity":\n')
+loop_anchor = text.index("    records: list[dict[str, Any]] = []\n    seen: set[str] = set()\n")
+start = text.index('    if identifier == "design/content_entity":\n', loop_anchor)
 end = text.index('\n    if identifier == "design/content_relation":', start)
 entity_block = '''    if identifier == "design/content_entity":
         target_count = 1
@@ -63,9 +64,14 @@ from minecraft_mod_ai.task_template_catalog import load_template
 
 def test_graph_closure_is_host_owned_for_entity_property_relation():
     source = Path("minecraft_mod_ai/task_template_runner.py").read_text(encoding="utf-8")
-    entity = source[source.index('if identifier == "design/content_entity"'):source.index('if identifier == "design/content_relation"')]
-    prop = source[source.index('if identifier == "design/content_property"'):source.index('if identifier == "design/content_entity"')]
-    relation = source[source.index('if identifier == "design/content_relation"'):source.index('# Research facts and design decisions')]
+    loop_anchor = source.index("    records: list[dict[str, Any]] = []\\n    seen: set[str] = set()\\n")
+    prop_start = source.index('if identifier == "design/content_property"', loop_anchor)
+    entity_start = source.index('if identifier == "design/content_entity"', prop_start)
+    relation_start = source.index('if identifier == "design/content_relation"', entity_start)
+    generic_start = source.index('# Research facts and design decisions', relation_start)
+    prop = source[prop_start:entity_start]
+    entity = source[entity_start:relation_start]
+    relation = source[relation_start:generic_start]
     assert "target_count = 1" in entity
     assert '"design/continue_record"' not in entity + prop + relation
     assert '"design/relation_set"' in relation
