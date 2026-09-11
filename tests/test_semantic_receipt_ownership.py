@@ -104,3 +104,20 @@ def test_tracked_module_without_any_owned_receipt_fails_closed():
             [{"module_id": "alpha", "patch_receipt": "alpha-only"}],
             downstream_ids=lambda _module_id: (),
         )
+
+
+def test_single_module_receipt_without_owner_uses_unambiguous_member():
+    observations = _semantic_execution_observations(
+        [_module("alpha")],
+        [
+            {
+                "operation_count": 1,
+                "touched_paths": ["src/alpha.java"],
+                "patch_receipt": "single",
+            }
+        ],
+        downstream_ids=lambda _module_id: (),
+    )
+    assert _by_task(observations) == {
+        "alpha": ("single", ("src/alpha.java",)),
+    }
