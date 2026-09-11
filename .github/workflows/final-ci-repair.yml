@@ -1,4 +1,5 @@
 name: Final CI Repair
+# trigger after workflow registration
 on:
   push:
     branches: [main]
