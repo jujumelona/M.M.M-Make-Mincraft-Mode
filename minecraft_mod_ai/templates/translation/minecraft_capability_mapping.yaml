@@ -1,13 +1,14 @@
+id: translation/minecraft_capability_mapping
 input:
-  atomic_feature:
-  explicit_structure:
+  atomic_feature: {}
+  explicit_structure: {}
 
 input_schema:
   atomic_feature: object
   explicit_structure: object
 
 task:
-  collect_minecraft_implementation_surfaces:
+  collect_minecraft_implementation_surfaces: true
 
 rules:
   - Read structural trigger, state, persistence, networking, UI, resource, asset, and external-interaction requirements only.
@@ -16,8 +17,8 @@ rules:
   - Emit duplicate-free implementation_surfaces in deterministic order.
 
 output:
-  implementation_surfaces:
-  evidence_links:
+  implementation_surfaces: []
+  evidence_links: []
 
 output_schema:
   implementation_surfaces: list[string]
