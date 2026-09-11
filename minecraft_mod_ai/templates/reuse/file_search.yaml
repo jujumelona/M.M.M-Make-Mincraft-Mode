@@ -1,12 +1,8 @@
 id: reuse/file_search
+execution: host
 input:
   repository_hit:
   file_need:
-task:
-  find_candidate_files:
-rules:
-  - Match files to the supplied responsibility only.
-  - Do not treat filename similarity as proof of behavior.
 output:
   file_hits:
 proof:

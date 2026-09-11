@@ -1,12 +1,8 @@
 id: reuse/official_docs
+execution: host
 input:
   queries:
   target_cell:
-task:
-  collect_official_documentation_candidates:
-rules:
-  - Prefer official platform, loader, mapping, and library documentation.
-  - Preserve source locator and target compatibility metadata.
 output:
   candidates:
   unresolved_queries:

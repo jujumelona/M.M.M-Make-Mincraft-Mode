@@ -1,12 +1,8 @@
 id: reuse/method_search
+execution: host
 input:
   class_hit:
   method_need:
-task:
-  find_candidate_methods:
-rules:
-  - Match method signatures and observed responsibility separately.
-  - Do not infer behavior from names alone.
 output:
   method_hits:
 proof:

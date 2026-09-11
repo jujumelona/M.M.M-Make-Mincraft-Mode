@@ -1,12 +1,8 @@
 id: reuse/dependency_search
+execution: host
 input:
   candidate:
   target_cell:
-task:
-  identify_candidate_dependencies:
-rules:
-  - Record direct and transitive requirements only when evidenced.
-  - Keep unresolved dependency coordinates explicit.
 output:
   dependencies:
   unresolved_dependencies:

@@ -1,13 +1,9 @@
 id: reuse/integration
+execution: host
 input:
   selected_reuse:
   target_ownership:
   dependency_receipts:
-task:
-  define_reuse_integration_boundary:
-rules:
-  - Preserve target ownership and dependency direction.
-  - Do not overwrite unrelated project anchors.
 output:
   integration_points:
   collision_risks:

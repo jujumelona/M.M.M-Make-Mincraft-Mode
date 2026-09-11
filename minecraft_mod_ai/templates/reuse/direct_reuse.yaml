@@ -1,14 +1,10 @@
 id: reuse/direct_reuse
+execution: host
 input:
   candidate:
   license_receipt:
   compatibility_receipt:
   behavior_match:
-task:
-  decide_direct_reuse:
-rules:
-  - Require verified behavior match, permission, and compatibility.
-  - Any unresolved prerequisite rejects direct reuse.
 output:
   reusable_directly:
   blocking_reasons:

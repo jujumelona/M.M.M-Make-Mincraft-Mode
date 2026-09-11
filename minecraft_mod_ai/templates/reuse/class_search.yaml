@@ -1,11 +1,8 @@
 id: reuse/class_search
+execution: host
 input:
   file_hit:
   class_need:
-task:
-  find_candidate_classes:
-rules:
-  - Identify declarations and ownership boundaries without claiming unobserved behavior.
 output:
   class_hits:
 proof:

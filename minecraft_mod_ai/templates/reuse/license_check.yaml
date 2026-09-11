@@ -1,12 +1,8 @@
 id: reuse/license_check
+execution: host
 input:
   candidate:
   license_evidence:
-task:
-  determine_reuse_permission_state:
-rules:
-  - Never infer a license from repository visibility or convention.
-  - Unknown or conflicting license evidence blocks direct code reuse.
 output:
   permission_state:
   evidence_refs:
