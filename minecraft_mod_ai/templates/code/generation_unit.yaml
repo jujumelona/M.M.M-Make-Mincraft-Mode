@@ -1,4 +1,5 @@
 id: code/generation_unit
+execution: host
 input:
   file_target:
   class_contract:
@@ -8,11 +9,6 @@ input:
   call_edges:
   dependencies:
   imports:
-task:
-  assemble_one_generation_unit:
-rules:
-  - Generate only the owned anchor for this responsibility.
-  - Block when a required contract remains unresolved.
 output:
   generation_unit:
   blocked_reasons:

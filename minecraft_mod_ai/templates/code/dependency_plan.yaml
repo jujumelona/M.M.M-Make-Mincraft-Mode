@@ -1,13 +1,9 @@
 id: code/dependency_plan
+execution: host
 input:
   code_unit:
   required_capability:
   verified_bindings:
-task:
-  select_one_dependency:
-rules:
-  - Use an existing project or verified target dependency when sufficient.
-  - Never invent coordinates or symbols.
 output:
   dependency:
   unresolved_dependency:

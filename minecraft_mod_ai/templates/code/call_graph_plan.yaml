@@ -1,13 +1,9 @@
 id: code/call_graph_plan
+execution: host
 input:
   producer:
   consumer:
   behavior_contract:
-task:
-  define_one_call_edge:
-rules:
-  - Add only a call edge required by the supplied behavior.
-  - Preserve dependency direction and logical-side boundary.
 output:
   call_edge:
 proof:

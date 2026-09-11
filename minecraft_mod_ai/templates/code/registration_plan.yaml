@@ -1,13 +1,9 @@
 id: code/registration_plan
+execution: host
 input:
   artifact:
   registry_requirement:
   target_bindings:
-task:
-  define_registration_operation:
-rules:
-  - Use only verified target registry bindings.
-  - Keep identifier ownership explicit and collision-checked.
 output:
   registration_operation:
   blocked_reason:

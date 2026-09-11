@@ -1,12 +1,8 @@
 id: code/method_plan
+execution: host
 input:
   class_contract:
   behavior_step:
-task:
-  define_one_method_contract:
-rules:
-  - Specify trigger, inputs, output, state effect, and failure result for one behavior step.
-  - Do not bundle independent behavior steps.
 output:
   method_contract:
 proof:
