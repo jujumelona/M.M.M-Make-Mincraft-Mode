@@ -7,6 +7,7 @@ on:
       - tools/apply_integrity_repair_wave.py
       - tools/apply_integrity_repair_followup.py
       - tools/apply_integrity_repair_final.py
+      - tools/apply_integrity_repair_cleanup.py
       - .github/workflows/apply-integrity-repair.yml
 
 permissions:
@@ -32,6 +33,7 @@ jobs:
           python tools/apply_integrity_repair_wave.py
           python tools/apply_integrity_repair_followup.py
           python tools/apply_integrity_repair_final.py
+          python tools/apply_integrity_repair_cleanup.py
       - name: Install test dependencies
         run: python -m pip install -q -e '.[dev]'
       - name: Verify repaired contracts
@@ -57,7 +59,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/apply_integrity_repair_wave.py tools/apply_integrity_repair_followup.py tools/apply_integrity_repair_final.py .github/workflows/apply-integrity-repair.yml
+          git rm tools/apply_integrity_repair_wave.py tools/apply_integrity_repair_followup.py tools/apply_integrity_repair_final.py tools/apply_integrity_repair_cleanup.py .github/workflows/apply-integrity-repair.yml
           git add -A
           git diff --cached --check
           git commit -m 'fix: reconcile integrity authority with runtime contracts'
