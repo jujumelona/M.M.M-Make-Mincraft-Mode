@@ -1,5 +1,14 @@
 id: asset/entity_texture
-task: Render prompt mold for Minecraft entity texture
+task: Render one Minecraft entity texture prompt from the supplied visual description.
+inputs:
+  visual_description:
+    type: string
+    minLength: 1
+    maxLength: 512
+    required: true
+rules:
+  - Use visual_description exactly as supplied; do not invent missing visual requirements.
+  - Preserve texture-map and clean unwrapped-texture framing.
 render:
   language: text
   body: "Pixel Art, PixArFK, mob texture map, clean unwrapped texture, {{visual_description}}"
