@@ -207,12 +207,12 @@ def _install_platform_contracts() -> None:
 
 
 def _install_planner_contracts() -> None:
-    from . import agentic_optimization_contract, complete_orchestrator_services
+    from . import agentic_optimization_contract, resource_asset_production
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
 
     install_agentic_search_efficiency(agentic_optimization_contract)
-    install_asset_resume_efficiency(complete_orchestrator_services)
+    install_asset_resume_efficiency(resource_asset_production)
 
 
 def _install_architecture_contracts() -> None:

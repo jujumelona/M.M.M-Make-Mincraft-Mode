@@ -125,7 +125,17 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
                 exclusive_anchor_node[anchor] = node_id
     for index, assets in enumerate(_chunks(proposal.assets, max(1, policy.java_shard_size))):
         node_id = f'generate-assets-{index:08d}'
-        nodes.append(_node(node_id, 'generate:assets', ('prepare-project',), {'kind': 'asset-shard', 'members': [asdict(asset) for asset in assets]}))
+        dependencies = {'prepare-project'}
+        for asset in assets:
+            owner = str(getattr(asset, 'owner_module_id', '') or '')
+            if owner:
+                if owner not in module_node:
+                    raise WorkGraphError(
+                        f'Asset {asset.asset_id} references module {owner!r} without a generation node.'
+                    )
+                dependencies.add(module_node[owner])
+        nodes.append(_node(node_id, 'generate:assets', tuple(sorted(dependencies)),
+                           {'kind': 'asset-shard', 'members': [asdict(asset) for asset in assets]}))
         generated_nodes.append(node_id)
 
     validation_dependencies = tuple(generated_nodes or ['prepare-project'])

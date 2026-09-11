@@ -1,0 +1,7 @@
+id: minecraft/resource/block/model_orientable
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:block/orientable", textures: {side: "{{mod_id}}:block/{{registry_path}}_side", front: "{{mod_id}}:block/{{registry_path}}_front", top: "{{mod_id}}:block/{{registry_path}}_top"}}}
+validators: [json_parse]

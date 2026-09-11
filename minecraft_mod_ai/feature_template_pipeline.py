@@ -132,14 +132,11 @@ def complete_feature(
     allowed_refs,
     progress=None,
     checkpoint=None,
-    depth=0,
-    max_depth=32,
     ancestry=(),
     ancestry_signatures=(),
+    parent_failed_checks=None,
 ):
-    """Recursively split until every leaf is atomic or semantic progress stops."""
-    if depth > max_depth:
-        raise TemplateBlocked("FEATURE_DECOMPOSE: maximum decomposition depth exceeded")
+    """Recursively split while the finite unresolved atomicity set strictly decreases."""
 
     feature_id = feature.get("feature_id")
     description = feature.get("feature_description") or feature.get("normalized_description")
@@ -187,6 +184,13 @@ def complete_feature(
         progress=progress,
         checkpoint=checkpoint,
     )
+    current_failed = frozenset(atomicity["failed_checks"])
+    if parent_failed_checks is not None:
+        previous_failed = frozenset(parent_failed_checks)
+        if current_failed and not current_failed < previous_failed:
+            raise TemplateBlocked(
+                "FEATURE_DECOMPOSE: unresolved atomic checks did not strictly decrease"
+            )
     node = {
         **completed,
         "atomicity": atomicity,
@@ -250,10 +254,9 @@ def complete_feature(
                 allowed_refs=allowed_refs,
                 progress=progress,
                 checkpoint=checkpoint,
-                depth=depth + 1,
-                max_depth=max_depth,
                 ancestry=next_ancestry,
                 ancestry_signatures=next_signatures,
+                parent_failed_checks=atomicity["failed_checks"],
             )
         )
     return node

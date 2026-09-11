@@ -8,7 +8,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
-from .generator import make_texture_png
 from .project_edit import (
     ensure_main_initializer_call,
     inspect_fabric_project,
@@ -144,26 +143,9 @@ def generate_extended_content(
             lang_en[f"block.{mod_id}.{module_id}"] = display_en
             lang_ko[f"block.{mod_id}.{module_id}"] = display_ko
             files.update(_block_resources(mod_id, module_id, kind, config))
-            texture_path = info.root / f"src/main/resources/assets/{mod_id}/textures/block/{module_id}.png"
-            texture_path.parent.mkdir(parents=True, exist_ok=True)
-            texture_path.write_bytes(
-                make_texture_png(str(config.get("color", "#748cab")), module_id, kind="block", size=16)
-            )
-            generated_binary.append(str(texture_path))
             if kind == "crop":
                 lang_en[f"item.{mod_id}.{module_id}_seeds"] = display_en + " Seeds"
                 lang_ko[f"item.{mod_id}.{module_id}_seeds"] = display_ko + " 씨앗"
-                seed_texture = info.root / f"src/main/resources/assets/{mod_id}/textures/item/{module_id}_seeds.png"
-                seed_texture.parent.mkdir(parents=True, exist_ok=True)
-                seed_texture.write_bytes(
-                    make_texture_png(
-                        str(config.get("seed_color", config.get("color", "#8fbf5f"))),
-                        module_id + "_seeds",
-                        kind="item",
-                        size=16,
-                    )
-                )
-                generated_binary.append(str(seed_texture))
         elif kind in {"effect", "enchantment"}:
             prefix = "effect" if kind == "effect" else "enchantment"
             lang_en[f"{prefix}.{mod_id}.{module_id}"] = display_en
@@ -176,12 +158,6 @@ def generate_extended_content(
             lang_en[f"item.{mod_id}.{module_id}"] = display_en
             lang_ko[f"item.{mod_id}.{module_id}"] = display_ko
             files.update(_item_resources(mod_id, module_id, kind, config))
-            texture_path = info.root / f"src/main/resources/assets/{mod_id}/textures/item/{module_id}.png"
-            texture_path.parent.mkdir(parents=True, exist_ok=True)
-            texture_path.write_bytes(
-                make_texture_png(str(config.get("color", "#74c7ec")), module_id, kind="item", size=16)
-            )
-            generated_binary.append(str(texture_path))
 
     java_items = [
         item for item in generation_records if item["kind"] in _JAVA_KINDS

@@ -1,0 +1,7 @@
+id: minecraft/resource/block/model_cube_column
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:block/cube_column", textures: {side: "{{mod_id}}:block/{{registry_path}}_side", end: "{{mod_id}}:block/{{registry_path}}_end"}}}
+validators: [json_parse]

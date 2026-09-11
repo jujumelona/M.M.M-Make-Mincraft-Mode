@@ -20,7 +20,7 @@ host_requirements:
   - REGISTER_ITEM
   symbols: []
   schemas:
-  - fabric/item/model_basic
+  - minecraft/resource/item/model_generated
 implementation_key: fabric/model/animation
 validators:
 - java_parse

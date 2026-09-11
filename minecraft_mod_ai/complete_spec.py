@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Any
 
 from .json_stream import (
@@ -191,38 +192,77 @@ class ProductionModule(Mapping[str, Any]):
                 raise SpecValidationError(f"Invalid gate in module {self.module_id}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class AssetRequest:
+    """Semantic resource request; old prompt/path fields are accepted only as input aliases."""
     asset_id: str
     kind: str
-    prompt: str
-    target_path: str
-    width: int = 16
-    height: int = 16
+    visual_description: str
+    render_kind: str
+    subject_id: str
+    owner_module_id: str
+    container: str
+    requested_width: int | None
+    requested_height: int | None
+    variant_count: int
+
+    def __init__(self, asset_id: str, kind: str, prompt: str = "", target_path: str = "",
+                 width: int | None = None, height: int | None = None, *,
+                 visual_description: str | None = None, render_kind: str = "", subject_id: str = "",
+                 owner_module_id: str = "", container: str = "mod",
+                 requested_width: int | None = None, requested_height: int | None = None,
+                 variant_count: int = 1) -> None:
+        from .resource_contracts import infer_render_kind
+        description = str(visual_description if visual_description is not None else prompt).strip()
+        legacy_target = str(target_path or "").replace("\\", "/")
+        inferred_subject = str(subject_id or "").strip() or (PurePosixPath(legacy_target).stem if legacy_target else str(asset_id))
+        inferred_container = "resource_pack" if legacy_target.startswith("assets/") else container
+        inferred_kind = str(render_kind or infer_render_kind(kind, target_path=legacy_target)).strip()
+        object.__setattr__(self, "asset_id", str(asset_id))
+        object.__setattr__(self, "kind", str(kind))
+        object.__setattr__(self, "visual_description", description)
+        object.__setattr__(self, "render_kind", inferred_kind)
+        object.__setattr__(self, "subject_id", inferred_subject)
+        object.__setattr__(self, "owner_module_id", str(owner_module_id or ""))
+        object.__setattr__(self, "container", str(inferred_container or "mod"))
+        object.__setattr__(self, "requested_width", requested_width if requested_width is not None else width)
+        object.__setattr__(self, "requested_height", requested_height if requested_height is not None else height)
+        object.__setattr__(self, "variant_count", variant_count)
+
+    @property
+    def prompt(self) -> str:
+        return self.visual_description
+
+    @property
+    def width(self) -> int:
+        return self.requested_width or 16
+
+    @property
+    def height(self) -> int:
+        return self.requested_height or 16
 
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
+        from .resource_contracts import SUPPORTED_RENDER_KINDS
         policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.asset_id):
             raise SpecValidationError(f"Invalid asset id: {self.asset_id!r}")
         if self.kind not in ASSET_KINDS:
             raise SpecValidationError(f"Unsupported asset kind: {self.kind!r}")
-        if not isinstance(self.prompt, str) or not self.prompt.strip():
-            raise SpecValidationError(f"Asset prompt is empty: {self.asset_id}")
-        normalized = self.target_path.replace("\\", "/")
-        if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
-            raise SpecValidationError(f"Unsafe asset target path: {self.target_path!r}")
-        if type(self.width) is not int or type(self.height) is not int:
-            raise SpecValidationError(
-                f"Asset dimensions must be integers: {self.asset_id}"
-            )
-        if not 1 <= self.width <= policy.max_texture_dimension:
-            raise SpecValidationError(
-                f"Asset width exceeds configured resource policy: {self.asset_id}"
-            )
-        if not 1 <= self.height <= policy.max_texture_dimension:
-            raise SpecValidationError(
-                f"Asset height exceeds configured resource policy: {self.asset_id}"
-            )
+        if not self.visual_description:
+            raise SpecValidationError(f"Asset visual description is empty: {self.asset_id}")
+        if self.render_kind not in SUPPORTED_RENDER_KINDS:
+            raise SpecValidationError(f"Unsupported asset render kind {self.render_kind!r}: {self.asset_id}")
+        if self.container not in {"mod", "resource_pack"}:
+            raise SpecValidationError(f"Unsupported asset container: {self.container!r}")
+        if self.owner_module_id and not _ID.fullmatch(self.owner_module_id):
+            raise SpecValidationError(f"Invalid asset owner module: {self.owner_module_id!r}")
+        if type(self.variant_count) is not int or self.variant_count < 1:
+            raise SpecValidationError(f"Asset variant_count must be positive: {self.asset_id}")
+        if (self.requested_width is None) != (self.requested_height is None):
+            raise SpecValidationError(f"Asset requested dimensions must be both supplied or both omitted: {self.asset_id}")
+        for value, label in ((self.requested_width, "width"), (self.requested_height, "height")):
+            if value is not None and (type(value) is not int or not 1 <= value <= policy.max_texture_dimension):
+                raise SpecValidationError(f"Asset {label} exceeds configured resource policy: {self.asset_id}")
 
 
 @dataclass(frozen=True)
@@ -329,18 +369,15 @@ class CompleteProposal:
         self._validate_acyclic()
 
         asset_ids: set[str] = set()
-        asset_paths: set[str] = set()
         for asset in self.assets:
             asset.validate(policy=policy)
-            normalized_path = asset.target_path.replace("\\", "/")
             if asset.asset_id in asset_ids:
                 raise SpecValidationError(f"Duplicate asset id: {asset.asset_id}")
-            if normalized_path in asset_paths:
+            if asset.owner_module_id and asset.owner_module_id not in module_ids:
                 raise SpecValidationError(
-                    f"Duplicate asset target path: {normalized_path}"
+                    f"Asset {asset.asset_id} references unknown owner module {asset.owner_module_id!r}"
                 )
             asset_ids.add(asset.asset_id)
-            asset_paths.add(normalized_path)
 
         if not self.acceptance_tests:
             raise SpecValidationError(
@@ -562,18 +599,24 @@ def _module_from_dict(value: Any) -> ProductionModule:
 def _asset_from_dict(value: Any) -> AssetRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every asset must be an object.")
-    required = {"asset_id", "kind", "prompt", "target_path"}
-    optional = {"width", "height"}
-    if not required <= set(value) or set(value) - required - optional:
-        raise SpecValidationError(f"Invalid asset fields: {sorted(set(value))}")
-    return AssetRequest(
-        asset_id=str(value["asset_id"]),
-        kind=str(value["kind"]),
-        prompt=str(value["prompt"]),
-        target_path=str(value["target_path"]),
-        width=_strict_int(value.get("width", 16), "asset.width"),
-        height=_strict_int(value.get("height", 16), "asset.height"),
-    )
+    semantic_required = {"asset_id", "kind", "visual_description"}
+    semantic_optional = {"render_kind", "subject_id", "owner_module_id", "container", "requested_width", "requested_height", "variant_count"}
+    legacy_required = {"asset_id", "kind", "prompt", "target_path"}
+    legacy_optional = {"width", "height"}
+    keys = set(value)
+    if semantic_required <= keys and not (keys - semantic_required - semantic_optional):
+        return AssetRequest(
+            asset_id=str(value["asset_id"]), kind=str(value["kind"]), visual_description=str(value["visual_description"]),
+            render_kind=str(value.get("render_kind", "")), subject_id=str(value.get("subject_id", "")),
+            owner_module_id=str(value.get("owner_module_id", "")), container=str(value.get("container", "mod")),
+            requested_width=None if value.get("requested_width") is None else _strict_int(value["requested_width"], "asset.requested_width"),
+            requested_height=None if value.get("requested_height") is None else _strict_int(value["requested_height"], "asset.requested_height"),
+            variant_count=_strict_int(value.get("variant_count", 1), "asset.variant_count"),
+        )
+    if legacy_required <= keys and not (keys - legacy_required - legacy_optional):
+        return AssetRequest(asset_id=str(value["asset_id"]), kind=str(value["kind"]), prompt=str(value["prompt"]),
+                            target_path=str(value["target_path"]), width=value.get("width"), height=value.get("height"))
+    raise SpecValidationError(f"Invalid asset fields: {sorted(keys)}")
 
 
 def _strict_bool(value: Any, field_name: str) -> bool:
@@ -635,41 +678,29 @@ def complete_proposal_from_parts(
             )
     modules = tuple(sanitized_modules)
 
-    seen_asset_ids: set[str] = set()
-    seen_asset_paths: set[str] = set()
-    sanitized_assets: list[AssetRequest] = []
-    for asset in assets:
-        asset_id = asset.asset_id
-        if asset_id in seen_asset_ids:
-            counter = 2
-            while f"{asset_id}_{counter}" in seen_asset_ids:
-                counter += 1
-            asset_id = f"{asset_id}_{counter}"
-        seen_asset_ids.add(asset_id)
+    from .resource_contracts import derive_module_asset_specs
 
-        target_path = asset.target_path.replace("\\", "/")
-        if target_path in seen_asset_paths:
-            base_path, extension = (
-                target_path.rsplit(".", 1)
-                if "." in target_path
-                else (target_path, "png")
-            )
-            counter = 2
-            while f"{base_path}_{counter}.{extension}" in seen_asset_paths:
-                counter += 1
-            target_path = f"{base_path}_{counter}.{extension}"
-        seen_asset_paths.add(target_path)
-
-        sanitized = AssetRequest(
-            asset_id=asset_id,
-            kind=asset.kind,
-            prompt=asset.prompt,
-            target_path=target_path,
-            width=asset.width,
-            height=asset.height,
+    supplied_assets = list(assets)
+    supplied_assets.extend(
+        AssetRequest(**row)
+        for row in derive_module_asset_specs(
+            modules,
+            existing_asset_ids=[asset.asset_id for asset in supplied_assets],
         )
-        sanitized.validate()
-        sanitized_assets.append(sanitized)
+    )
+    seen_asset_ids: set[str] = set()
+    sanitized_assets: list[AssetRequest] = []
+    valid_module_ids = {module.module_id for module in modules}
+    for asset in supplied_assets:
+        if asset.asset_id in seen_asset_ids:
+            raise SpecValidationError(f"Duplicate semantic asset id: {asset.asset_id}")
+        seen_asset_ids.add(asset.asset_id)
+        if asset.owner_module_id and asset.owner_module_id not in valid_module_ids:
+            raise SpecValidationError(
+                f"Asset {asset.asset_id} references unknown owner module {asset.owner_module_id!r}"
+            )
+        asset.validate()
+        sanitized_assets.append(asset)
 
     if base_proposal.spec.platform.host_facts_json:
         from .resolved_version_context import ResolvedVersionContext

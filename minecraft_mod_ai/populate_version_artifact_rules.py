@@ -13,15 +13,15 @@ DEFAULT_DATA_DIR = Path(__file__).with_name("data")
 LEAF_TEMPLATES = (
     "fabric/item/key",
     "fabric/item/register_basic",
-    "fabric/item/client_item",
-    "fabric/item/model_basic",
+    "minecraft/resource/item/client_item",
+    "minecraft/resource/item/model_generated",
     "fabric/item/lang_en",
     "fabric/item/initializer",
     "fabric/item/settings_max_stack",
     "fabric/block/key",
     "fabric/block/register_basic",
-    "fabric/block/blockstate_basic",
-    "fabric/block/model_cube_all",
+    "minecraft/resource/block/blockstate_simple",
+    "minecraft/resource/block/model_cube_all",
     "fabric/block/lang_en",
     "fabric/block/initializer",
     "fabric/recipe/shaped",
@@ -29,10 +29,19 @@ LEAF_TEMPLATES = (
     "fabric/recipe/smelting",
     "fabric/tag/registry",
     "fabric/loot/block_drop",
+    "minecraft/resource/block/blockstate_crop",
+    "minecraft/resource/block/model_cube_column",
+    "minecraft/resource/block/model_cube_bottom_top",
+    "minecraft/resource/block/model_orientable",
+    "minecraft/resource/block/model_cross",
+    "minecraft/resource/block/model_crop_stage",
+    "minecraft/resource/item/model_handheld",
+    "minecraft/resource/item/model_block_reuse",
+    "minecraft/resource/item/client_block_item",
 )
 
 ARTIFACT_SCHEMAS = {
-    "fabric/item/client_item": {
+    "minecraft/resource/item/client_item": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["model"],
@@ -47,7 +56,7 @@ ARTIFACT_SCHEMAS = {
             }
         },
     },
-    "fabric/item/model_basic": {
+    "minecraft/resource/item/model_generated": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["parent", "textures"],
@@ -66,7 +75,7 @@ ARTIFACT_SCHEMAS = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
     },
-    "fabric/block/blockstate_basic": {
+    "minecraft/resource/block/blockstate_simple": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["variants"],
@@ -76,7 +85,7 @@ ARTIFACT_SCHEMAS = {
             },
         },
     },
-    "fabric/block/model_cube_all": {
+    "minecraft/resource/block/model_cube_all": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["parent", "textures"],
@@ -172,11 +181,11 @@ TEMPLATE_REQUIREMENTS = {
         "requires_capabilities": ["ITEM_SETTINGS"],
         "required_symbols": ["item_stacks_to"],
     },
-    "fabric/item/client_item": {
+    "minecraft/resource/item/client_item": {
         "requires_capabilities": ["REGISTER_ITEM"],
         "required_symbols": [],
     },
-    "fabric/item/model_basic": {
+    "minecraft/resource/item/model_generated": {
         "requires_capabilities": ["REGISTER_ITEM"],
         "required_symbols": [],
     },
@@ -196,11 +205,11 @@ TEMPLATE_REQUIREMENTS = {
         "requires_capabilities": ["REGISTER_BLOCK"],
         "required_symbols": ["resource_key_create"],
     },
-    "fabric/block/blockstate_basic": {
+    "minecraft/resource/block/blockstate_simple": {
         "requires_capabilities": ["REGISTER_BLOCK"],
         "required_symbols": [],
     },
-    "fabric/block/model_cube_all": {
+    "minecraft/resource/block/model_cube_all": {
         "requires_capabilities": ["REGISTER_BLOCK"],
         "required_symbols": [],
     },
@@ -313,6 +322,7 @@ def build_version_facts(
     is_modern_recipes = v >= Version("1.21.2")
     is_modern_registry = v >= Version("1.19.3")
     is_modern_id = v >= Version("1.21.0")
+    is_modern_item_model = v >= Version("1.21.4")
 
     admitted_templates = (
         list(LEAF_TEMPLATES)
@@ -323,6 +333,15 @@ def build_version_facts(
             if not t.startswith("fabric/recipe/") and t != "fabric/tag/registry"
         ]
     )
+
+    if not is_modern_item_model:
+        admitted_templates = [
+            t for t in admitted_templates
+            if t not in {
+                "minecraft/resource/item/client_item",
+                "minecraft/resource/item/client_block_item",
+            }
+        ]
 
     rules = {}
     for tid in admitted_templates:
@@ -362,7 +381,7 @@ def build_version_facts(
             leaf_bindings[leaf] = {
                 "state": "admitted",
                 "implementation": make_implementation(
-                    leaf, minecraft_version, template_id="fabric/item/model_basic", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes, extra={"extra_templates": ["fabric/item/client_item"] if is_modern_recipes else []}
+                    leaf, minecraft_version, template_id="minecraft/resource/item/model_generated", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes, extra={"extra_templates": ["minecraft/resource/item/client_item"] if is_modern_item_model else []}
                 ),
             }
         elif leaf == "minecraft/item/language":
@@ -424,14 +443,14 @@ def build_version_facts(
             leaf_bindings[leaf] = {
                 "state": "admitted",
                 "implementation": make_implementation(
-                    leaf, minecraft_version, template_id="fabric/block/blockstate_basic", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                    leaf, minecraft_version, template_id="minecraft/resource/block/blockstate_simple", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
                 ),
             }
         elif leaf == "minecraft/block/model":
             leaf_bindings[leaf] = {
                 "state": "admitted",
                 "implementation": make_implementation(
-                    leaf, minecraft_version, template_id="fabric/block/model_cube_all", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                    leaf, minecraft_version, template_id="minecraft/resource/block/model_cube_all", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
                 ),
             }
         elif leaf == "minecraft/language/key":

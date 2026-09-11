@@ -1391,11 +1391,11 @@
   },
   "versions": [
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:83fce8c652396c21163cec1a45cd5f8b8b8d14249cead1a64383a70dbfc8ff37",
+      "context_id": "sha256:67c41c062d937fd0436de7303438089ae0907d09c00fb84f9d5eaffffa25a928",
       "example_commit": "64fe93a188fc1b1f76a47b14f8b17dda42b324f0",
       "example_properties": {
         "fabric_api_version": "0.159.0+26.2",
@@ -1439,11 +1439,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:d89c14db53e3243add5b83133f2bc8e0fbe5033e98753e609e3a404eb8d67d12",
+      "context_id": "sha256:05bda990277872c68cc8919ee76ec20831cdafc278b2b08b0a18efc8fc00d304",
       "example_commit": "9cc62c76791b782f4e6706c1a66beaa8ec163c05",
       "example_properties": {
         "fabric_api_version": "0.155.2+26.1.2",
@@ -1487,11 +1487,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:229e4538f034327426ed87fd44d090e44ef4b57d7099948d9d46164a7b715f31",
+      "context_id": "sha256:35c9e61625786480afdef3d11c562a53dc1b9f1553e5b8360a2205c4cf4e2f8a",
       "example_commit": "dfc832402f3ef35c2f7752fea28b1a52ce2b184c",
       "example_properties": {
         "fabric_api_version": "0.145.4+26.1.1",
@@ -1535,11 +1535,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:604619cc567322f2052e78036e33e2e678fd93f2201c2a295f1b4753296a7ec5",
+      "context_id": "sha256:ff9a2afbbda44ba90f567033dfb7c70d1cb91f9c071c4837f6c5447554969145",
       "example_commit": "3b1223799ac568329419664e95e281e3566f1657",
       "example_properties": {
         "fabric_api_version": "0.145.1+26.1",
@@ -1583,11 +1583,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:dd5adb9cd94ead5765b01514fdb70ae5650e3aebe90cdee713886fe6564a71f3",
+      "context_id": "sha256:36b7de117a3bcb703b87b85c7f88a7be5bc61ef748260db662d3b7fe06638a54",
       "example_commit": "0fe7f6e4605aabdfefd69e1b5f2be8a283026272",
       "example_properties": {
         "fabric_api_version": "0.141.6+1.21.11",
@@ -1631,11 +1631,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:515295c2c3e823f39dc01657b7eac8723801643b6f86a7eaf4826406003e2503",
+      "context_id": "sha256:9c62d78097b57059640cecc66931d07ac63ccf197023ba4ccd1759994fe68e7a",
       "example_commit": "40d278b93501e8019e2eab169465d34efc61865a",
       "example_properties": {
         "fabric_api_version": "0.138.4+1.21.10",
@@ -1679,11 +1679,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:e875780e2cb0f29b60ca0b8972ee5083ae3ebae6c516e01b8cdb68fed5a4467c",
+      "context_id": "sha256:8f0668f3e3ca0b85bc73a49bd8cc5ff77c9a7069fd7e53e5b7c34e17c7a73a30",
       "example_commit": "486251db04735a087548964b801c1d36ebc8b05a",
       "example_properties": {
         "fabric_api_version": "0.134.1+1.21.9",
@@ -1727,11 +1727,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a0c21d43d8862dc0d842c7c50ebcaef887e7997542183b09ea587b8057804a18",
+      "context_id": "sha256:b25f44772c2982246f3c37178940a530e579ac362d723c5c0de7efbe28bb10fb",
       "example_commit": "6542cd583d07f84359b65d5e498e25f8afafc30a",
       "example_properties": {
         "fabric_api_version": "0.136.1+1.21.8",
@@ -1773,11 +1773,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:b8c40a934e9c0a3a22975fbc82dec3d706789b3b5c0b74c9192c62cc858e2864",
+      "context_id": "sha256:21430169040090a79286df20d976ac74a37015ad69af809d39eeb16e39e26fdf",
       "example_commit": "2d16058ef73718f5f402fdf3b0bb85fe09604d80",
       "example_properties": {
         "fabric_api_version": "0.129.0+1.21.7",
@@ -1819,11 +1819,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:f5b75313c3a3528e17c00468eaae2cf5d6ef8d6f1bbd63aa51b0bbf95cbb3ffd",
+      "context_id": "sha256:bf0674f5b8d21e458013d386fec8c53eb86f63a1b59d8afca656dafb4d5a3761",
       "example_commit": "d658cbf138777c0875b7c8cddbc73dbed9e86ee8",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.6",
@@ -1865,11 +1865,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:35b6892bd3291d71d23a12d518c2edde4851cd2b1ab7db7d57e1687733503708",
+      "context_id": "sha256:9cde60533212bca9656afc16e49c01697a84f3b577d689451f1d7a592b88ca35",
       "example_commit": "5196db45f1c733447bb3ca789db7b6bf3e7e614f",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.5",
@@ -1911,11 +1911,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 27,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:301e304cfe04dc95154ace59b3427268d4873122bb66fda5c037daba9f2b6c2f",
+      "context_id": "sha256:6a30cd37657b6b3ab06639fdc7c73a24e90e06d0ec7a983d8b5d52ed2b8ee51b",
       "example_commit": "da15fc152af63ab29c81f6d3d3067486d83f72a2",
       "example_properties": {
         "fabric_api_version": "0.119.4+1.21.4",
@@ -1957,11 +1957,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 25,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a1c846e3436ea4ed3999a5268b73b935c7f8f8c11f1cd3571c9767666073c25a",
+      "context_id": "sha256:8d936358cabda9c9acb34fddb314938155fde645519eaea8a0bc85e7453527f3",
       "example_commit": "6e80a5c1a463a62239d849d7d04b689f2a2a6d88",
       "example_properties": {
         "fabric_api_version": "0.114.1+1.21.3",
@@ -2003,11 +2003,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 18,
+      "artifact_rules_count": 25,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:39a8f1d764d1937395521dd4e541cd69be927a49b0659902a585a2da52b66b54",
+      "context_id": "sha256:258b1f3e3a860ca98f759cfad4ff35b58dd7f70292e210348f436ccb54ed4fac",
       "example_commit": "73b8cb38578391af67cd0e5c9e075f281af62a91",
       "example_properties": {
         "fabric_api_version": "0.106.1+1.21.2",
@@ -2049,11 +2049,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:72c746366918779e5dd85fdc631a9cc66d02247b376ce99444ddd4d7ba3045e5",
+      "context_id": "sha256:a811dda5427c94a8ac0902be3d47fd582cdd57734c6744ae3cd57337cd8528ba",
       "example_commit": "04c3eecff217befb170d80acac7c592f938867e7",
       "example_properties": {
         "fabric_api_version": "0.116.17+1.21.1",
@@ -2095,11 +2095,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:e6ca664bcd022146ce903695c2db2bef3e138ccc015d3580f9545cb3598fa9aa",
+      "context_id": "sha256:28a5fb904ea27d550e77a3bbdf35e69f063dc59b88260efd2e8ef16dd34f10ca",
       "example_commit": "81417e41ad77eb13df85f1a76b53d40476f62c1c",
       "example_properties": {
         "fabric_api_version": "0.102.0+1.21",
@@ -2141,11 +2141,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:85ac48afb6fa9519fb642af4ee7f67b7d24bfcc4c428d91445b04d7a43a0dab7",
+      "context_id": "sha256:d597714f35b8b50127c40147eee098080378146b11fcb90dc87c785e6f9fa150",
       "example_commit": "fed5e607cfc5bcf679446558751f63c762f2a719",
       "example_properties": {
         "fabric_api_version": "0.100.8+1.20.6",
@@ -2187,11 +2187,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:2e1c83d1739e06dc8a201a35ccca90505728ce5b4417a62b2a1bdd0a72904fcf",
+      "context_id": "sha256:555b6776770669b42a73a65e23d32103a901186c7f28a40551a5d01b0b40862a",
       "example_commit": "00cafbf94624c61147c409f111f16184590fbbdf",
       "example_properties": {
         "fabric_api_version": "0.97.8+1.20.5",
@@ -2233,11 +2233,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:99981343a842794afc12ec760cc4586fc4b5d560463995eeca7fb38511f9f562",
+      "context_id": "sha256:7f61e0695ac6d14c73bf89e17698612c78ea41a5596cd8d46d4c0a41e8a56aa8",
       "example_commit": "eaa3e4552d4cb9b803391581ac65230dda78bc97",
       "example_properties": {
         "fabric_api_version": "0.97.3+1.20.4",
@@ -2279,11 +2279,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:29ecdf51a2d7f020fb4dd6d16668c255d410605dbb0b9f85689784d3ee01630e",
+      "context_id": "sha256:8475992a72e97ce59a6463a0558ab3062eaf9371b409290ef74e72db8fdcd046",
       "example_commit": "e603aeb8ab279bcd8ef89a8f176c0a2be6134742",
       "example_properties": {
         "fabric_api_version": "0.91.1+1.20.3",
@@ -2325,11 +2325,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:1a5ba48aa15b483e543cca0a3412f0bd818a1c87e9ef0c2c3a9f70547577889f",
+      "context_id": "sha256:8440fa71af11a62a8aea461825ce4570395eb25a13845fff610f1f98690e4334",
       "example_commit": "aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6",
       "example_properties": {
         "fabric_api_version": "0.91.6+1.20.2",
@@ -2371,11 +2371,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:983faa8889f09b2d4a613f9c4c436ebe95a69a20e5ed2339f8ed0688ffb3a2a1",
+      "context_id": "sha256:49441cf071ee6ae839f8ef7818d35cd6690b4db644952c104c9970a26039eaa0",
       "example_commit": "e1cc17e1468cb85a3369a3da29d7abf8c0703312",
       "example_properties": {
         "fabric_api_version": "0.92.12+1.20.1",
@@ -2416,11 +2416,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:c9c526cff4859b90486c7279116e3935390e6d6e774e0448b9fa02137cbccae1",
+      "context_id": "sha256:e96ad03c9289eada782c90f797a0b5bd26a716ff8367fde7823de6983baf29bd",
       "example_commit": "547c9d4902bfb12f39dc4336684ad0c8b0455709",
       "example_properties": {
         "fabric_api_version": "0.83.0+1.20",
@@ -2461,11 +2461,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:4a7275ba35543b415c1b1ae8b438ffe25ecfe5080fb1ab3b8a757c4535bbe3b0",
+      "context_id": "sha256:81290d02e65f8cef4c1492d09698bdcea986e282644420e5ce8eaa13d7db7b80",
       "example_commit": "40109cfdef662b9cda4f38794fc71202e197c49e",
       "example_properties": {
         "fabric_api_version": "0.87.2+1.19.4",
@@ -2506,11 +2506,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:9ee8bce7ea9791e5e694d6267d3116599ae0baea4de39e6b76867eacbc6f8a06",
+      "context_id": "sha256:e1753df0e216fea364f3338dbce1e0ca26ec6145f51548afb722e5977cd9bef4",
       "example_commit": "78f7a962f4e679ce3c1b4134d6ce051b07870bf8",
       "example_properties": {
         "fabric_api_version": "0.76.1+1.19.3",
@@ -2551,11 +2551,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:9dc025339604133e8bb7721cc375d52760661e18ef3e6194d48fb0a61c83938a",
+      "context_id": "sha256:e76cf12d30b2c548adae34a34350af6e43904e1f19a9749ddee60dcfb3e42235",
       "example_commit": "96f78c9e11c58b69f68b93c9f385b6869fcf21c6",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.19.2",
@@ -2597,11 +2597,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:c252f109f698307778e23f28dd55ba3f9d1a3ba834a2e44e92ed9e60bb350213",
+      "context_id": "sha256:ba873008aaa64efa8fa7313f11625dee47a710ffcdc326c4400a0c8df1e17af4",
       "example_commit": "610664bfb97aceace820f0dedf4feec273bac8fb",
       "example_properties": {
         "fabric_api_version": "0.58.5+1.19.1",
@@ -2643,11 +2643,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:deb9d5b41bca52381da653c7d33ea4fcdd15a54cd8862545899ed18d69efebce",
+      "context_id": "sha256:524804d10ff0a134a750eff4d10f32c3ad7fbf9a4f9feb9f08094a2b9d622357",
       "example_commit": "3f6e0d36efa63ed6b672c1828c007109bb273b56",
       "example_properties": {
         "fabric_api_version": "0.58.0+1.19",
@@ -2689,11 +2689,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:afc30dc5342c920d4b75573bff5b27f882bc5115f345f88e7aed0b044af0daea",
+      "context_id": "sha256:25a7ebad9f089efb9d2b45537d889ec4ef9fb9b4ebe755345968eba3296b474d",
       "example_commit": "32bca4c06923a1b22801448eb3b446bcec0ffdc1",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.18.2",
@@ -2735,11 +2735,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:ce01f8a3ade147b8048cf15bfb496037ba69740e4f949e3d2686968e1df30e19",
+      "context_id": "sha256:b3a5ea6600ef481ebf667ea4de9e59695cd216bfd60c258c2354153a6bc173ff",
       "example_commit": "573e851ce6818d7de8e346a511ef466a53fe5506",
       "example_properties": {
         "fabric_api_version": "0.46.6+1.18",
@@ -2781,11 +2781,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a842bfb9b7ec0fdf31f052eef0afb6dd37ae564beed102d5e8f474de24ed5762",
+      "context_id": "sha256:ba0621c8e9c9814a7ab97da2316e3fe3ae961561d280d8d6ac85c6eb5a0f3400",
       "example_commit": "347909aa7fffe661b451472b41aa7b190a070cc4",
       "example_properties": {
         "fabric_api_version": "0.44.0+1.18",
@@ -2827,11 +2827,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:308ec13d8af51a7acb83534ade5a6c22fa86c9cedeb428ec06f5ad22041342f8",
+      "context_id": "sha256:91cdb0f108202408a6058c8c77a876b729db7be32d181a5ab458b085a6caea0a",
       "example_commit": "a6b78364647fadc74d7c96860b404bc9cdbcf22e",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2872,11 +2872,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:f32c9486d155d7dc026b71460626f72dae60992ff47131b6a83bc4d0ee45a3f3",
+      "context_id": "sha256:ad39050abce565873d2bbeb48ed4ace0767111fb8fc1d3df2ad5b343c87b0aa4",
       "example_commit": "8f273dde9160e1be954d3a135cc88fe9251ec5fa",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2917,11 +2917,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:955a3501e3063ba61a70b24cc34e6e5dabd97d9b7019be4f9a178a142f0167b8",
+      "context_id": "sha256:ed2729955a5b5335486e0642e686f8c63144440344f0015c1911633b3621634e",
       "example_commit": "3196fdc4f43d00350892e70d66ce0ef5b3f55609",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -2957,11 +2957,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:5221d5088de8d9c6601d9e3e92d2e26c06feb2b21bebeebbe8189c19b071baaf",
+      "context_id": "sha256:1e9dabb7483e040e69638a5f28dff6ccc8aeaf52d4c5e5e9d00e4243b307f319",
       "example_commit": "c014b008a8448e1776e67280b61a8fc43af04963",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -2997,11 +2997,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:08f374599eb5c6379f1df67f698a742b088adcd847429e073dfb7e25a6ce63ec",
+      "context_id": "sha256:a49d314ed46ed4e5f4fe93d1b32e24729249a9b878ef8d912df87bb089fcaa1e",
       "example_commit": "7249145564cdfff2758b38867854faef93845cf5",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3037,11 +3037,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:be4018025830ce9257cca407cba0e286c95763fc3f7b7b9c3806a3dc4dffe220",
+      "context_id": "sha256:ea3d363617fdd53d6df6f5c4eb6ba1fdb0f8a58319a3bb6fb3844c809bee9327",
       "example_commit": "22478178627e7450de46154b42cf3a66881acb66",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3077,11 +3077,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:e4db58d3a5a4ec03e30cfc208100d98f2245fcc7dce0fbb66939e20f579ecba7",
+      "context_id": "sha256:49a1f4953d93475a92d605ee3be11bad30f2eb5c5db32b30989bb1b5f995ae20",
       "example_commit": "49fe784d23dfd0dd063a2b8bb75156d57e95d7cd",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3117,11 +3117,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:525bb2bff5c0f144863728607b1ce8511d5dcde7e45a7dce43011ffb7ac4b672",
+      "context_id": "sha256:95a3b708739ab6babe34461bf5d057d4b9479e24c90caa72245a2b77790cf8f3",
       "example_commit": "8123b32980f6f49db06a27ec0da3d60a769c8a38",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3157,11 +3157,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:974a4ad268a29196184a0d23c35d8fd68058f0f06dd24d9f58bf1fb863fde52a",
+      "context_id": "sha256:17775d0381a521cb707b7a2b66c9cdbccd378fc581915618d76b7a6ab9bd1313",
       "example_commit": "66c890f00b0f1ba2cca58714c87e77b47139cc5b",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3197,11 +3197,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:9a09a95039f8e3849cce0693dc5eef03acb0d7bb0df5f885b617ceadb16d0f20",
+      "context_id": "sha256:8ba33955c3e92d3d80ff158e3d42a2f307e9db7ef58b3ebe9ffdfa8e2824f9c3",
       "example_commit": "e7cedae058196ce5107bbd224ba9f7d69f3d82f7",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3237,11 +3237,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:e54dd339141544b9faf89040f9906bd09be99d9476abadf87b66389a8299d7d6",
+      "context_id": "sha256:2eb4bfbe4a604371dfc874c3f8b373fb7f6489a6c3f6cf2c811bfdc2f09cf904",
       "example_commit": "49f55d9da5a530fe6340cd3aced12d84594d1844",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3277,11 +3277,11 @@
       "validation_level": "official_metadata"
     },
     {
-      "artifact_rules_count": 14,
+      "artifact_rules_count": 21,
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:90076f4ff3e2a03107e349afd8d22039664745bc5486988084e83e825e120f3b",
+      "context_id": "sha256:422ad3a29aefd1d1d578a876aea8201676ecbc883b77e666e1803e7ebfa5425e",
       "example_commit": "e99aab8e833dc20ca13038591327dc0f898ea570",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.14",

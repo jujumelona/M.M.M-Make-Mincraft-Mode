@@ -80,8 +80,11 @@ def test_python_system_template_modules_contain_no_java_source_bodies() -> None:
 def test_record_execution_has_no_model_owned_status_loop() -> None:
     bounded = (PKG / "bounded_record_template.py").read_text(encoding="utf-8")
     batch = (PKG / "task_template_batch_runner.py").read_text(encoding="utf-8")
-    assert "record/done" in bounded
-    assert "applicability" in bounded
+    assert "record_cardinality_response_schema" in bounded
+    assert '"count"' in bounded
+    assert "record/done" not in bounded
+    assert "authored/applicable records" in bounded
+    assert "count 0 when none apply" in bounded
     assert not any(isinstance(node, ast.While) for node in ast.walk(ast.parse(bounded)))
     assert not any(isinstance(node, ast.While) for node in ast.walk(ast.parse(batch)))
     assert '"status"' not in batch
@@ -92,6 +95,7 @@ def test_feature_convergence_is_semantic_not_depth_limited() -> None:
     assert "max_depth" not in text
     assert "semantic ancestry cycle/no-progress" in text
     assert "semantically duplicate children" in text
+    assert "unresolved atomic checks did not strictly decrease" in text
 
 
 def test_workflow_sequences_have_one_authority() -> None:
@@ -135,7 +139,7 @@ def test_prompt_policy_is_shared_and_capture_is_removed() -> None:
 def test_response_contracts_are_not_python_hardcoded() -> None:
     text = (PKG / "model_response_templates.py").read_text(encoding="utf-8")
     assert "_TEMPLATES" not in text
-    assert "response/contracts.json" in text
+    assert 'RUNTIME_TEMPLATE_ROOT / "response" / "contracts.json"' in text
     assert (TEMPLATES / "response" / "contracts.json").is_file()
 
 

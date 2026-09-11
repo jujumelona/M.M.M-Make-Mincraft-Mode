@@ -762,28 +762,6 @@ class CompleteProductionOrchestrator:
                         and r.get("materialization")
                         and r["materialization"].get("path")
                     ]
-                    from .generator import make_texture_png
-
-                    for module in artifact_handled_members:
-                        if module.kind not in {"item", "block"}:
-                            continue
-                        if any(a.asset_id == f"texture_{module.kind}_{module.module_id}" for a in approved.assets):
-                            continue
-                        subfolder = "block" if module.kind == "block" else "item"
-                        tex_path = (
-                            project_root
-                            / f"src/main/resources/assets/{spec.mod_id}/textures/{subfolder}/{module.module_id}.png"
-                        )
-                        if not tex_path.is_file():
-                            tex_path.parent.mkdir(parents=True, exist_ok=True)
-                            color = module.config.get("color") if isinstance(module.config, dict) else None
-                            if not color:
-                                raise CompleteProductionError(f"ARTIFACT_TEXTURE_UNRESOLVED: {module.module_id}")
-                            color = str(color)
-                            tex_path.write_bytes(
-                                make_texture_png(color, module.module_id, kind=subfolder, size=16)
-                            )
-                            touched_paths.append(str(tex_path))
 
                     receipts.append(
                         {

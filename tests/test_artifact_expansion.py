@@ -37,8 +37,8 @@ def test_expand_item_and_explicit_stack_limit_without_defaults():
     template_ids = [j.template_id for j in jobs]
     assert "fabric/item/key" in template_ids
     assert "fabric/item/register_basic" in template_ids
-    assert "fabric/item/client_item" in template_ids
-    assert "fabric/item/model_basic" in template_ids
+    assert "minecraft/resource/item/client_item" in template_ids
+    assert "minecraft/resource/item/model_generated" in template_ids
     assert "fabric/item/lang_en" in template_ids
     assert "fabric/item/initializer" in template_ids
     assert "fabric/item/settings_max_stack" in template_ids
@@ -53,7 +53,7 @@ def test_expand_item_and_explicit_stack_limit_without_defaults():
         "raw_lunite.java_symbol",
     )
 
-    model_job = next(j for j in jobs if j.template_id == "fabric/item/model_basic")
+    model_job = next(j for j in jobs if j.template_id == "minecraft/resource/item/model_generated")
     assert model_job.requires == ("raw_lunite.registry_id",)
 
     stack_job = next(j for j in jobs if j.template_id == "fabric/item/settings_max_stack")
@@ -83,8 +83,8 @@ def test_expand_facts_for_block_and_drop():
     template_ids = [j.template_id for j in jobs]
     assert "fabric/block/key" in template_ids
     assert "fabric/block/register_basic" in template_ids
-    assert "fabric/block/blockstate_basic" in template_ids
-    assert "fabric/block/model_cube_all" in template_ids
+    assert "minecraft/resource/block/blockstate_simple" in template_ids
+    assert "minecraft/resource/block/model_cube_all" in template_ids
     assert "fabric/block/lang_en" in template_ids
     assert "fabric/block/initializer" in template_ids
     assert "fabric/loot/block_drop" in template_ids
@@ -145,7 +145,7 @@ def test_catalog_drives_targets_dependencies_and_scoped_ports(monkeypatch):
 
     def load(identifier):
         template = original(identifier)
-        if identifier == "fabric/item/model_basic":
+        if identifier == "minecraft/resource/item/model_generated":
             template["target"]["file"] = "src/main/resources/assets/{{mod_id}}/models/item/custom_{{subject}}.json"
             template["dependencies"] = ["{{subject}}.java_symbol"]
             template["produces"][0]["binding"] = "{{subject}}.custom_model"
@@ -156,7 +156,7 @@ def test_catalog_drives_targets_dependencies_and_scoped_ports(monkeypatch):
         [PromptFact(fact_id="one", fact_type=FactType.ITEM_EXISTS, subject="widget")],
         mod_id="sample", package_name="org.sample",
     )
-    model = next(job for job in jobs if job.template_id == "fabric/item/model_basic")
+    model = next(job for job in jobs if job.template_id == "minecraft/resource/item/model_generated")
     assert model.target_path.endswith("models/item/custom_widget.json")
     assert model.requires == ("widget.java_symbol",)
     assert model.produces == ("widget.custom_model",)

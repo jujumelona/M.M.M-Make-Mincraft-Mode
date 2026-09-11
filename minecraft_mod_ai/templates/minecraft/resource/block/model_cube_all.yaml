@@ -1,0 +1,7 @@
+id: minecraft/resource/block/model_cube_all
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:block/cube_all", textures: {all: "{{mod_id}}:block/{{registry_path}}"}}}
+validators: [json_parse]

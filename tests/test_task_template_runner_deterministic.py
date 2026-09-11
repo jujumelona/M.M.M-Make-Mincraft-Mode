@@ -40,7 +40,7 @@ def test_leaf_publishes_job_scoped_ports_not_global_names():
 def test_declared_job_dependency_is_actually_required():
     model = ArtifactJob(
         job_id="raw_lunite.model_basic",
-        template_id="fabric/item/model_basic",
+        template_id="minecraft/resource/item/model_generated",
         owner_module="raw_lunite",
         requires=("raw_lunite.registry_id",),
         produces=("raw_lunite.model_ref",),
@@ -58,7 +58,7 @@ def test_scoped_dependency_chain_executes_without_fuzzy_selection():
     execute_artifact_template(_register_job(), port_registry=registry)
     model = ArtifactJob(
         job_id="raw_lunite.model_basic",
-        template_id="fabric/item/model_basic",
+        template_id="minecraft/resource/item/model_generated",
         owner_module="raw_lunite",
         requires=("raw_lunite.registry_id",),
         produces=("raw_lunite.model_ref",),
@@ -84,7 +84,7 @@ def test_declared_leaf_fixtures_render():
     for template_id in (
         "fabric/item/register_basic",
         "fabric/item/settings_max_stack",
-        "fabric/item/model_basic",
+        "minecraft/resource/item/model_generated",
         "fabric/item/lang_en",
     ):
         template = load_template(template_id)

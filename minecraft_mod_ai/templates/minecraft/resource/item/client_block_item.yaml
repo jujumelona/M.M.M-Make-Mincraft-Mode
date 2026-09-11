@@ -1,0 +1,7 @@
+id: minecraft/resource/item/client_block_item
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/items/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {model: {type: "minecraft:model", model: "{{mod_id}}:block/{{registry_path}}"}}}
+validators: [json_parse]

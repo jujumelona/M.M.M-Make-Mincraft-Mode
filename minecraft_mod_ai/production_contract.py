@@ -819,7 +819,18 @@ def _normalize_module(value: Any) -> dict[str, Any]:
 def _normalize_asset(value: Any) -> dict[str, Any]:
     data = _object_mapping(value, 'asset')
     asset_id = _nonempty_string(data.get('asset_id'), 'asset_id')
-    return {'asset_id': asset_id, 'kind': _nonempty_string(data.get('kind'), f'asset kind for {asset_id}'), 'prompt': str(data.get('prompt', '')), 'target_path': str(data.get('target_path', '')), 'width': data.get('width'), 'height': data.get('height')}
+    return {
+        'asset_id': asset_id,
+        'kind': _nonempty_string(data.get('kind'), f'asset kind for {asset_id}'),
+        'visual_description': _nonempty_string(data.get('visual_description', data.get('prompt')), f'asset visual description for {asset_id}'),
+        'render_kind': _nonempty_string(data.get('render_kind'), f'asset render kind for {asset_id}'),
+        'subject_id': _nonempty_string(data.get('subject_id', asset_id), f'asset subject for {asset_id}'),
+        'owner_module_id': str(data.get('owner_module_id', '')),
+        'container': str(data.get('container', 'mod')),
+        'requested_width': data.get('requested_width'),
+        'requested_height': data.get('requested_height'),
+        'variant_count': data.get('variant_count', 1),
+    }
 
 def _object_mapping(value: Any, label: str) -> dict[str, Any]:
     if isinstance(value, Mapping):

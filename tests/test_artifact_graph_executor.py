@@ -50,7 +50,7 @@ def test_expanded_item_jobs_execute_through_scoped_port_graph():
 def test_graph_rejects_missing_producer_before_running_any_job():
     job = ArtifactJob(
         job_id="raw_lunite.model_basic",
-        template_id="fabric/item/model_basic",
+        template_id="minecraft/resource/item/model_generated",
         owner_module="raw_lunite",
         requires=("raw_lunite.registry_id",),
         produces=("raw_lunite.model_ref",),
@@ -62,7 +62,7 @@ def test_graph_rejects_missing_producer_before_running_any_job():
 
 def test_graph_rejects_duplicate_producers():
     common = {
-        "template_id": "fabric/item/model_basic",
+        "template_id": "minecraft/resource/item/model_generated",
         "owner_module": "raw_lunite",
         "produces": ("raw_lunite.model_ref",),
         "deterministic_inputs": {
@@ -105,7 +105,7 @@ def test_typed_input_rejects_wrong_registry_kind():
         mod_id="demo",
         package_name="org.demo",
     )
-    model = next(j for j in jobs if j.template_id == "fabric/item/model_basic")
+    model = next(j for j in jobs if j.template_id == "minecraft/resource/item/model_generated")
     registry = PortRegistry()
     registry.register(
         "sample.registry_id",
