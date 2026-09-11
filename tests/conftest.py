@@ -16,14 +16,18 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
     The Minecraft coordinate itself remains canonical so mapping/API consistency checks
     exercise the same invariants as production. Test isolation lives in the adapter id,
     dependency coordinates, provider registry and deterministic capability set instead
-    of by inventing a non-canonical Minecraft version string.
+    of by inventing a non-canonical Minecraft version string. Executable HOST facts are
+    copied from the reviewed bundle for the same Minecraft coordinate so tests exercise
+    the production leaf/API/artifact admission boundary rather than an empty receipt.
     """
 
     from minecraft_mod_ai.complete_spec import MODULE_KINDS
+    from minecraft_mod_ai.host_version_catalog import host_target
     from minecraft_mod_ai.platform_catalog import PlatformAdapter
 
     normalized = str(version).strip() or _TEST_MINECRAFT_VERSION
     mappings_version = f"{normalized}+test-mappings"
+    canonical_target = host_target(normalized)
     return PlatformAdapter(
         adapter_id="fabric_unit_test_" + "_".join(
             part
@@ -56,6 +60,7 @@ def _synthetic_test_adapter(version: str = _TEST_MINECRAFT_VERSION):
             "geckolib:entity",
             "geckolib:version:4.8.2",
         )),
+        host_facts_json=canonical_target.host_facts_json,
     )
 
 
