@@ -19,7 +19,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
           p = Path('minecraft_mod_ai/qwen35_mtp_hotpath_contract.py')
           s = p.read_text()
@@ -57,25 +56,13 @@ jobs:
               '                return (_int(explicit, 512),)\n', 1)
           p.write_text(s)
 
-          p = Path('tests/test_llama_context_policy.py')
+          p = Path('minecraft_mod_ai/llama_tuning_pipeline.py')
           s = p.read_text()
-          replacements = {
-              'test_base_args_default_to_model_native_context': '    assert "--ctx-size" not in args',
-              'test_profile_authority_defaults_generic_server_to_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
-              'test_qwen_hotpath_alone_defaults_to_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
-              'test_qwen_hotpath_cannot_shrink_model_native_context': '    assert args[args.index("--ctx-size") + 1] == "4096"',
-              'test_qwen_registry_capacity_is_not_forced_into_server_ctx': '    assert args[args.index("--ctx-size") + 1] == "8192"',
-          }
-          for name, assertion in replacements.items():
-              pattern = rf'(def {name}\(.*?\n)(.*?)(?=\n\ndef |\Z)'
-              match = re.search(pattern, s, flags=re.S)
-              if not match:
-                  raise SystemExit(f'test function {name} not found')
-              body = match.group(2)
-              body = re.sub(r'    assert (?:"--ctx-size" not in args|args\[args\.index\("--ctx-size"\) \+ 1\] == "[^"]+")\n', assertion + '\n', body, count=1)
-              s = s[:match.start(2)] + body + s[match.end(2):]
-          s = s.replace('    assert _context_size(_qwen_config()) == 0\n', '    assert _context_size(_qwen_config()) is None\n', 1)
-          p.write_text(s)
+          old = '''            context = self._context_value(config)\n            if context is None:\n                return args\n            for name in ("--ctx-size", "-c"):\n'''
+          new = '''            context = self._context_value(config)\n            if context is None:\n                for name in ("--ctx-size", "-c"):\n                    while name in args:\n                        index = args.index(name)\n                        del args[index]\n                        if index < len(args):\n                            del args[index]\n                return args\n            for name in ("--ctx-size", "-c"):\n'''
+          if old not in s:
+              raise SystemExit('profile context authority block not found')
+          p.write_text(s.replace(old, new, 1))
           PY
       - name: Test native llama policies
         run: |
@@ -85,6 +72,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_server_kernel_autotune.py tests/test_llama_context_policy.py
+          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py minecraft_mod_ai/llama_server_hardware_policy.py minecraft_mod_ai/llama_server_kernel_autotune.py minecraft_mod_ai/llama_tuning_pipeline.py
           git commit -m 'fix: preserve native llama resource authority'
           git push origin HEAD:main
