@@ -40,6 +40,11 @@ class FabricProjectGenerator:
 
     def generate(self, spec: ModSpec, root: Path) -> GeneratedProject:
         spec.validate()
+        reviewed_kinds = tuple(getattr(spec.platform, "deterministic_module_kinds", ()) or ())
+        if not reviewed_kinds:
+            raise GenerationError(
+                f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
+            )
         adapter = adapter_for_lock_values(spec.platform)
         root = root.resolve()
         if root.exists() and any(root.iterdir()):
@@ -934,6 +939,11 @@ public final class {renderer_class}
         )
 
     def _write_contract(self, root: Path, spec: ModSpec) -> None:
+        reviewed_kinds = tuple(getattr(spec.platform, "deterministic_module_kinds", ()) or ())
+        if not reviewed_kinds:
+            raise GenerationError(
+                f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
+            )
         package_path = Path(*spec.package_name.split("."))
         contract_ids = [content.content_id for content in spec.contents]
         if spec.boss is not None:

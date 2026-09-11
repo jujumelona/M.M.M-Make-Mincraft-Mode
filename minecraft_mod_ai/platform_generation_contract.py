@@ -19,6 +19,11 @@ def install(generator_module: Any) -> None:
 
     @wraps(original_generate)
     def generate(self: Any, spec: Any, root: Path):
+        reviewed_kinds = tuple(getattr(spec.platform, "deterministic_module_kinds", ()) or ())
+        if not reviewed_kinds:
+            raise generator_module.GenerationError(
+                f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
+            )
         adapter = adapter_for_lock_values(spec.platform)
         result = original_generate(self, spec, root)
         project_root = Path(result.root).resolve()
