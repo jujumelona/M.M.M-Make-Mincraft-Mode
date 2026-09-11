@@ -1,6 +1,5 @@
 name: Four Axis Architecture Surgery
 
-# One-shot validation; removed by the successful job.
 on:
   push:
     branches: [main]
