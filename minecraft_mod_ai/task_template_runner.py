@@ -514,6 +514,13 @@ def execute_artifact_template(
     from .implementation_template_renderer import render_template
     from .task_template_catalog import load_template
 
+    from .implementation_identity import ExecutorType
+    executor = _job_value(job, "executor_type", "")
+    if executor == ExecutorType.PYTHON_GENERATOR or executor == "python_generator":
+        from .integrity_dispatcher import execute_generator_job
+        return execute_generator_job(job, context=dict(context or {}), router=router,
+                                     port_registry=port_registry, base_dir=base_dir)
+
     template_id = str(_job_value(job, "template_id", ""))
     if not template_id:
         raise ValueError("TEMPLATE_JOB_ID: artifact job has no template_id")
@@ -524,8 +531,34 @@ def execute_artifact_template(
         )
 
     context_map = dict(context or {})
+    from .resolved_version_context import execution_context
+    from .version_template_context import (
+        resolved_template_values,
+        validate_resolved_template_overrides,
+    )
+
+    resolved = execution_context(context_map, job)
+    if resolved is not None:
+        from .integrity_dispatcher import verify_job_binding
+        resolved.admit_template(template)
+    if resolved is not None and port_registry is not None:
+        port_registry.bind_context(resolved.context_id)
     det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
-    values: dict[str, Any] = {**context_map, **det_inputs}
+    if resolved is not None:
+        validate_resolved_template_overrides(resolved, context_map, det_inputs)
+        values: dict[str, Any] = resolved_template_values(
+            {
+                **context_map,
+                **det_inputs,
+                "resolved_version_context": resolved,
+            }
+        )
+    else:
+        values = {**context_map, **det_inputs}
+    if resolved is not None:
+        authority = verify_job_binding(job, resolved, context_map)
+        from .integrity_dispatcher import canonical_contract
+        canonical_contract(job, resolved, context_map, authority)
 
     from .artifact_target_contract import validate_artifact_target
 
@@ -561,12 +594,21 @@ def execute_artifact_template(
             anchor = render_template({"render": target_spec["anchor"]}, values)
 
     validation_receipts = []
+    if resolved is not None:
+        from .integrity_dispatcher import validate_canonical_output
+        validation_receipts.extend(validate_canonical_output(job, rendered_output, resolved=resolved,
+            context=context_map, authority=authority, target_path=target_file, anchor=anchor))
+        validation_receipts.append(resolved.validate_artifact(template, rendered_output))
     supported_validators = {
         "java_parse",
         "registry_identifier_unique",
         "registry_identifier",
         "json_parse",
+        "json_schema",
         "resource_references",
+        "semantic_contract",
+        "mod_integration_test",
+        "client_side_only",
     }
     declared_validators = tuple(template.get("validators", ()) or ())
     unknown = [name for name in declared_validators if name not in supported_validators]
@@ -591,6 +633,43 @@ def execute_artifact_template(
             )
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
+        elif validator_name == "json_schema":
+            from .integrity_validators import validate_json_schema
+            schema = template.get("output_schema") or values.get("output_schema")
+            if schema is None and resolved is not None:
+                schema = resolved.require_fact("schemas", template_id)
+            if schema is None:
+                raise ValueError("JSON_SCHEMA_REQUIRED")
+            validation_receipts.append(validate_json_schema(json.loads(rendered_output), schema))
+        elif validator_name == "semantic_contract":
+            from .integrity_validators import validate_semantic_contract
+            validation_receipts.append(validate_semantic_contract(rendered_output,
+                contract=values["semantic_contract"], context_id=resolved.context_id if resolved else values["context_id"],
+                leaf_id=_job_value(job, "canonical_leaf", "")))
+        elif validator_name == "client_side_only":
+            from .integrity_validators import validate_side
+            validation_receipts.append(validate_side(rendered_output,
+                leaf_id=_job_value(job, "canonical_leaf", ""), side=values["side"],
+                classpath=values["java_classpath"], java_version=str(values["java_version"])))
+        elif validator_name == "mod_integration_test":
+            from .integrity_validators import validate_mod_integration
+            from .evidence_store import EvidenceStore
+            validation_receipts.append(validate_mod_integration(
+                store=EvidenceStore(Path(values["evidence_store"])), evidence_id=values["evidence_id"],
+                expected=values["evidence_expected"]))
+
+    canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
+    impl_id = str(_job_value(job, "implementation_id", "") or "")
+    exec_type = str(_job_value(job, "executor_type", "") or "")
+    if canonical_leaf or impl_id or exec_type:
+        for receipt in validation_receipts:
+            if isinstance(receipt, dict):
+                if canonical_leaf and "canonical_leaf" not in receipt:
+                    receipt["canonical_leaf"] = canonical_leaf
+                if impl_id and "implementation_id" not in receipt:
+                    receipt["implementation_id"] = impl_id
+                if exec_type and "executor_type" not in receipt:
+                    receipt["executor_type"] = exec_type
 
     if hasattr(job, "validation_receipts"):
         job.validation_receipts = validation_receipts
@@ -609,6 +688,10 @@ def execute_artifact_template(
     ports_published: dict[str, Any] = {}
     for logical_name, published_name in zip(logical_outputs, published_names, strict=True):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
+        if resolved is not None:
+            from dataclasses import replace
+
+            port_obj = replace(port_obj, context_id=resolved.context_id)
         if published_name in ports_published:
             raise ValueError(f"TEMPLATE_PORT_DUPLICATE: {published_name}")
         if port_registry is not None:
@@ -671,6 +754,7 @@ def execute_artifact_template(
         "job_id": str(_job_value(job, "job_id", "")),
         "template_id": template_id,
         "target_file": target_file,
+        "context_id": resolved.context_id if resolved is not None else "",
         "anchor": anchor,
         "rendered_output": rendered_output,
         "validations": validation_receipts,
