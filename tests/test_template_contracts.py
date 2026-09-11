@@ -5,7 +5,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ROOT / "templates"
+TEMPLATES = ROOT / "minecraft_mod_ai" / "templates"
 FORBIDDEN_DESIGN_RULE_FRAGMENTS = (
     "Must cite concrete Minecraft interaction mechanics.",
     "Must stay strictly under 256 characters.",
