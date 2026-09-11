@@ -157,27 +157,31 @@ class LeafImplementation:
 
 
 def compute_content_hash(content: bytes) -> str:
-    """Compute SHA-256 hash of content bytes.
+    """Compute SHA-256 hash of content bytes with sha256: prefix.
     
     This is the canonical way to hash implementation content.
     Always use this function to ensure consistency.
+    Returns: "sha256:..." format for compatibility with ResolvedVersionContext.
     """
-    return hashlib.sha256(content).hexdigest()
+    hex_hash = hashlib.sha256(content).hexdigest()
+    return f"sha256:{hex_hash}"
 
 
 def compute_source_hash(source_code: str) -> str:
-    """Compute SHA-256 hash of Python source code.
+    """Compute SHA-256 hash of Python source code with sha256: prefix.
     
     Normalizes line endings before hashing for consistency.
+    Returns: "sha256:..." format.
     """
     normalized = source_code.replace("\r\n", "\n").replace("\r", "\n")
     return compute_content_hash(normalized.encode("utf-8"))
 
 
 def compute_json_schema_hash(schema: dict[str, Any]) -> str:
-    """Compute SHA-256 hash of JSON schema.
+    """Compute SHA-256 hash of JSON schema with sha256: prefix.
     
     Uses canonical JSON encoding (sorted keys, no whitespace).
+    Returns: "sha256:..." format.
     """
     canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"))
     return compute_content_hash(canonical.encode("utf-8"))

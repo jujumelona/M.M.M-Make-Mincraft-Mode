@@ -23,35 +23,30 @@ SUPPORTED_MINECRAFT_VERSIONS = [
 
 # Core canonical leaves required for all supported versions
 REQUIRED_CANONICAL_LEAVES = [
-    "fabric/item/key",
-    "fabric/item/register_basic",
-    "fabric/item/client_item",
-    "fabric/item/model_basic",
-    "fabric/item/lang_en",
-    "fabric/item/initializer",
-    "fabric/item/settings_max_stack",
-    "fabric/block/key",
-    "fabric/block/register_basic",
-    "fabric/block/blockstate_basic",
-    "fabric/block/model_cube_all",
-    "fabric/block/lang_en",
-    "fabric/block/initializer",
-    "fabric/recipe/shaped",
-    "fabric/recipe/shapeless",
-    "fabric/recipe/smelting",
-    "fabric/tag/registry",
-    "fabric/loot/block_drop",
+    "minecraft/item/registry",
+    "minecraft/item/model",
+    "minecraft/item/language",
+    "minecraft/item/integration",
+    "minecraft/item/properties",
+    "minecraft/block/registry",
+    "minecraft/block/state",
+    "minecraft/block/model",
+    "minecraft/language/key",
+    "minecraft/block/integration",
+    "minecraft/recipe/serializer",
+    "minecraft/tag/entries",
+    "minecraft/block/drops",
 ]
 
 # Version-specific requirements (additions to core set)
 VERSION_SPECIFIC_REQUIREMENTS: dict[str, list[str]] = {
     "1.21.5": [
-        "fabric/modern_registry/item",
-        "fabric/modern_registry/block",
+        "minecraft/modern_registry/item",
+        "minecraft/modern_registry/block",
     ],
     "1.21.4": [
-        "fabric/modern_registry/item",
-        "fabric/modern_registry/block",
+        "minecraft/modern_registry/item",
+        "minecraft/modern_registry/block",
     ],
     # Older versions don't have modern registry
 }
@@ -59,8 +54,8 @@ VERSION_SPECIFIC_REQUIREMENTS: dict[str, list[str]] = {
 # Versions that explicitly don't support certain leaves
 VERSION_SPECIFIC_UNSUPPORTED: dict[str, list[str]] = {
     "1.20.1": [
-        "fabric/modern_registry/item",
-        "fabric/modern_registry/block",
+        "minecraft/modern_registry/item",
+        "minecraft/modern_registry/block",
     ],
 }
 
@@ -132,16 +127,17 @@ def validate_support_matrix(bundles: list) -> None:
         required_leaves = get_required_leaves_for_version(version)
         
         for leaf_id in required_leaves:
-            # Get leaf binding status
-            binding = context.facts.get("artifact_rules", {}).get(leaf_id, {})
-            status = binding.get("status", "not_reviewed")
+            # Get leaf binding state from leaf_bindings, not artifact_rules
+            leaf_bindings = context.facts.get("leaf_bindings", {})
+            binding = leaf_bindings.get(leaf_id, {})
+            state = binding.get("state", "not_reviewed")
             
-            # P0-3: Both unsupported and not_reviewed fail production readiness
-            if status in ["unsupported", "not_reviewed", "unsupported_by_target"]:
+            # P0-3: Only "admitted" passes. unsupported and not_reviewed both fail.
+            if state != "admitted":
                 failures.append({
                     "version": version,
                     "leaf": leaf_id,
-                    "status": status,
+                    "status": state,
                     "reason": binding.get("reason", "no reason provided"),
                 })
     

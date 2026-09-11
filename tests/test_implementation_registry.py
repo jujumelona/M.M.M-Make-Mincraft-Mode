@@ -55,9 +55,11 @@ class TestImplementationRegistry:
         """Template hash should be computed from actual file bytes."""
         impl = registry.register_template("test/template", temp_template)
         
-        # Verify it's a real SHA-256 hash
-        assert len(impl.content_sha256) == 64
-        assert all(c in "0123456789abcdef" for c in impl.content_sha256)
+        # Verify it's a real SHA-256 hash with sha256: prefix
+        assert impl.content_sha256.startswith("sha256:")
+        hex_part = impl.content_sha256[7:]
+        assert len(hex_part) == 64
+        assert all(c in "0123456789abcdef" for c in hex_part)
         
         # Verify it matches manual computation from same bytes
         actual_bytes = temp_template.read_bytes()
@@ -77,8 +79,9 @@ class TestImplementationRegistry:
         
         impl = registry.register_python_executor("example_gen", example_generator)
         
-        # Verify real hash
-        assert len(impl.content_sha256) == 64
+        # Verify real hash with sha256: prefix
+        assert impl.content_sha256.startswith("sha256:")
+        assert len(impl.content_sha256) == 71  # "sha256:" + 64 hex chars
         
         # Verify it matches source extraction
         import inspect
@@ -103,8 +106,9 @@ class TestImplementationRegistry:
             ValidatorType.JAVA_SYNTAX,
         )
         
-        # Verify real hash
-        assert len(registration.source_hash) == 64
+        # Verify real hash with sha256: prefix
+        assert registration.source_hash.startswith("sha256:")
+        assert len(registration.source_hash) == 71
         
         # Verify it matches source
         import inspect
@@ -133,8 +137,9 @@ class TestImplementationRegistry:
             "test_module.TestType",
         )
         
-        # Verify real hash
-        assert len(registration.schema_hash) == 64
+        # Verify real hash with sha256: prefix
+        assert registration.schema_hash.startswith("sha256:")
+        assert len(registration.schema_hash) == 71
         
         # Verify canonical
         expected_hash = compute_json_schema_hash(schema)

@@ -20,6 +20,9 @@ class ArtifactExpansionError(ValueError):
 
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
 
+# P0-2: All facts now have ArtifactJob representations - no separate generator handoff
+# Entity, GUI, networking등은 canonical leaf를 통해 처리됨
+
 FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.ITEM_EXISTS: (
         "minecraft/item/registry",
@@ -39,6 +42,24 @@ FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.SMELTING_RECIPE: ("minecraft/recipe/serializer",),
     FactType.REGISTRY_TAG: ("minecraft/tag/entries",),
     FactType.BLOCK_DROP: ("minecraft/block/drops",),
+    # P0-2: Former generator handoffs now use canonical leaves
+    FactType.ENTITY_EXISTS: ("minecraft/entity/registry",),
+    FactType.GUI_EXISTS: ("minecraft/screen/registration",),
+    FactType.NETWORK_PACKET: ("minecraft/network_payload/registration",),
+    FactType.BLOCK_ENTITY_EXISTS: ("minecraft/block_entity/registry",),
+    FactType.DATA_COMPONENT: ("minecraft/component/type",),
+    FactType.WORLDGEN_FEATURE: ("minecraft/worldgen/configured_feature",),
+    FactType.DIMENSION: ("minecraft/dimension/registry",),
+    FactType.BIOME: ("minecraft/biome/registry",),
+    FactType.STATUS_EFFECT: ("minecraft/effect/registry",),
+    FactType.SOUND_EVENT: ("minecraft/sound/registration",),
+    FactType.PARTICLE_TYPE: ("minecraft/particle/registry",),
+    FactType.ENTITY_LOOT: ("minecraft/loot/entry",),
+    FactType.ADVANCEMENT: ("minecraft/advancement/requirement",),
+    FactType.EQUIPMENT_ARMOR: ("minecraft/item/properties",),
+    FactType.CUSTOM_ITEM_BEHAVIOR: ("minecraft/item/interaction",),
+    FactType.CUSTOM_BLOCK_BEHAVIOR: ("minecraft/block/interaction",),
+    FactType.CONTENT_RELATION: ("minecraft/item/integration",),
 }
 
 CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
@@ -75,6 +96,9 @@ def _templates_for_canonical_leaf(leaf_id: str, version_context=None) -> tuple[s
     return CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
 
 
+# P0-2: REMOVED - No more separate generator handoff
+# All facts expand to canonical leaves which then have implementations
+
 _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
     fact_type: (
         ("fabric/recipe/smelting",)
@@ -90,109 +114,12 @@ _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
 
 # Kept public for callers/tests, but every entry is verified before use.
 FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
-
-# These fact types are intentionally implemented by an existing module generator until
-# their executable leaf catalog is complete.  Keeping this declaration explicit prevents
-# a supported higher-level capability from being mistaken for an ArtifactJob leaf while
-# still failing closed for every undeclared fact type.
-from dataclasses import dataclass
-from hashlib import sha256
-
-DECLARED_GENERATOR_HANDOFFS = frozenset(
-    {
-        FactType.ENTITY_EXISTS,
-        FactType.GUI_EXISTS,
-        FactType.NETWORK_PACKET,
-        FactType.BLOCK_ENTITY_EXISTS,
-        FactType.DATA_COMPONENT,
-        FactType.WORLDGEN_FEATURE,
-        FactType.DIMENSION,
-        FactType.BIOME,
-        FactType.STATUS_EFFECT,
-        FactType.SOUND_EVENT,
-        FactType.PARTICLE_TYPE,
-        FactType.ENTITY_LOOT,
-        FactType.ADVANCEMENT,
-        FactType.EQUIPMENT_ARMOR,
-        FactType.CUSTOM_ITEM_BEHAVIOR,
-        FactType.CUSTOM_BLOCK_BEHAVIOR,
-        FactType.CONTENT_RELATION,
-    }
-)
-
-GENERATOR_CANONICAL_LEAF_MAP: dict[FactType, str] = {
-    FactType.ENTITY_EXISTS: "minecraft/entity/registry",
-    FactType.GUI_EXISTS: "minecraft/screen/registration",
-    FactType.NETWORK_PACKET: "minecraft/network_payload/registration",
-    FactType.BLOCK_ENTITY_EXISTS: "minecraft/block_entity/registry",
-    FactType.DATA_COMPONENT: "minecraft/component/type",
-    FactType.WORLDGEN_FEATURE: "minecraft/worldgen/configured_feature",
-    FactType.DIMENSION: "minecraft/dimension/registry",
-    FactType.BIOME: "minecraft/biome/registry",
-    FactType.STATUS_EFFECT: "minecraft/effect/registry",
-    FactType.SOUND_EVENT: "minecraft/sound/registration",
-    FactType.PARTICLE_TYPE: "minecraft/particle/registry",
-    FactType.ENTITY_LOOT: "minecraft/loot/entry",
-    FactType.ADVANCEMENT: "minecraft/advancement/requirement",
-    FactType.EQUIPMENT_ARMOR: "minecraft/item/properties",
-    FactType.CUSTOM_ITEM_BEHAVIOR: "minecraft/item/interaction",
-    FactType.CUSTOM_BLOCK_BEHAVIOR: "minecraft/block/interaction",
-    FactType.CONTENT_RELATION: "minecraft/item/integration",
-}
-
-
-@dataclass(frozen=True)
-class GeneratorImplementationProfile:
-    fact_type: FactType
-    canonical_leaf: str
-    executor: str
-    implementation_hash: str
-    context_id: str
     required_symbols: tuple[str, ...]
     validators: tuple[str, ...]
 
 
-def generator_implementation_profile(
-    fact_type: FactType,
-    *,
-    version_context=None,
-) -> GeneratorImplementationProfile:
-    if fact_type not in GENERATOR_CANONICAL_LEAF_MAP:
-        raise ArtifactExpansionError(
-            f"GENERATOR_HANDOFF_UNMAPPED: no canonical leaf binding for generator {fact_type.value}"
-        )
-    canonical_leaf = GENERATOR_CANONICAL_LEAF_MAP[fact_type]
-    context_id = ""
-    if version_context is not None:
-        version_context.require_leaf_binding(canonical_leaf)
-        context_id = version_context.context_id
-    from .task_template_catalog import load_template
-
-    leaf_doc = load_template(canonical_leaf)
-    required_symbols = tuple(leaf_doc.get("host_requirements", {}).get("symbols", ()))
-    validators = tuple(leaf_doc.get("validators", ()))
-    impl_hash = "sha256:" + sha256(
-        f"{fact_type.value}:{canonical_leaf}:{context_id}".encode()
-    ).hexdigest()
-    return GeneratorImplementationProfile(
-        fact_type=fact_type,
-        canonical_leaf=canonical_leaf,
-        executor=f"generator_handoff_{fact_type.value.lower()}",
-        implementation_hash=impl_hash,
-        context_id=context_id,
-        required_symbols=required_symbols,
-        validators=validators,
-    )
-
-
-def implementation_route(fact_type: FactType) -> str:
-    if fact_type in FACT_EXPANSIONS:
-        return "artifact"
-    if fact_type in DECLARED_GENERATOR_HANDOFFS:
-        return "generator"
-    raise ArtifactExpansionError(
-        f"ARTIFACT_FACT_UNSUPPORTED: no implementation route exists for {fact_type.value}"
-    )
+# P0-2: REMOVED generator_implementation_profile() - no separate generator path
+# All facts expand through canonical leaves with unified implementation registry
 
 
 def _constant_name(value: str) -> str:
@@ -325,15 +252,13 @@ def expand_facts_to_jobs(
     )
 
     for fact in facts:
-        route = implementation_route(fact.fact_type)
-        if route == "generator":
-            # The ImplementationFact remains in the proposal and is consumed by the
-            # module generator selected from its content capability. It is admitted
-            # through the version context leaf binding.
-            if version_context is not None:
-                generator_implementation_profile(fact.fact_type, version_context=version_context)
-            continue
-        canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES[fact.fact_type]
+        # P0-2: No more generator handoff - all facts expand through canonical leaves
+        canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
+        if not canonical_leaf_ids:
+            raise ArtifactExpansionError(
+                f"ARTIFACT_FACT_UNSUPPORTED: {fact.fact_type.value} not in FACT_TO_CANONICAL_LEAVES"
+            )
+        
         if version_context is not None:
             for leaf_id in canonical_leaf_ids:
                 version_context.require_leaf_binding(leaf_id)
@@ -344,7 +269,7 @@ def expand_facts_to_jobs(
                 leaf_template_pairs.append((leaf_id, tid))
         if not leaf_template_pairs:
             default_leaf = canonical_leaf_ids[0]
-            leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS[fact.fact_type]]
+            leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS.get(fact.fact_type, ())]
 
         resource_values = {}
         if fact.fact_type in {
