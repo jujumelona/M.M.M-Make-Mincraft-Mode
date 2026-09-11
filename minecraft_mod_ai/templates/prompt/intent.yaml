@@ -5,19 +5,23 @@ task: State only the primary user goal. Preserve requested behavior and do not p
 output_schema:
   type: object
   properties:
-    statement: &id001
+    statement:
       type: string
       minLength: 1
+      maxLength: 256
     source_quote:
       type: string
       minLength: 0
+      maxLength: 256
   required:
   - statement
   additionalProperties: false
 input_schema:
   type: object
   properties:
-    original_prompt: *id001
+    original_prompt:
+      type: string
+      minLength: 1
   required:
   - original_prompt
   additionalProperties: false
