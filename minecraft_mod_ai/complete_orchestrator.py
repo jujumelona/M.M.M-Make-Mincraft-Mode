@@ -317,6 +317,27 @@ class CompletePipelineResult:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+
+def _refresh_validation_after_build(
+    *,
+    prebuild_manifest: str,
+    final_manifest: str,
+    source_report: dict[str, Any],
+    jdt_receipt: dict[str, Any] | None,
+    validate_source: Callable[[], dict[str, Any]],
+    validate_jdt: Callable[[], dict[str, Any]] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+    """Bind validation evidence to the exact tree that produced the final build."""
+    if final_manifest == prebuild_manifest:
+        return source_report, jdt_receipt, False
+    refreshed_source = validate_source()
+    if refreshed_source.get("status") != "PASS":
+        raise CompleteProductionError(
+            "Final repaired project failed deterministic validation."
+        )
+    refreshed_jdt = validate_jdt() if validate_jdt is not None else None
+    return refreshed_source, refreshed_jdt, True
+
 class CompleteProductionOrchestrator:
     """Approved request -> sharded source -> repair -> runtime -> release."""
 
@@ -436,6 +457,66 @@ class CompleteProductionOrchestrator:
             module_receipts.append({'schema_version': 'mmm/repair-receipt-v2', **repair})
         if build.get('status') != 'PASS':
             raise CompleteProductionError('Gradle/GameTest failed after the repair loop.')
+
+        final_manifest = self._project_manifest_hash(project_root)
+
+        def validate_final_source() -> dict[str, Any]:
+            return run_named_checkpoint(
+                ledger,
+                'validate-source-final',
+                stage='validate:source-final',
+                input_value=validation_checkpoint_input(
+                    'validate-source-final',
+                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
+                ),
+                action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: cached_validation_is_reusable('validate-source-final', cached),
+            )
+
+        def validate_final_jdt() -> dict[str, Any]:
+            return run_named_checkpoint(
+                ledger,
+                'validate-jdt-final',
+                stage='validate:jdt-final',
+                input_value=validation_checkpoint_input(
+                    'validate-jdt-final',
+                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
+                ),
+                action=lambda: run_jdt_diagnostics(
+                    JavaLanguageService, project_root, timeout_seconds=90
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
+            )
+
+        source_report, final_jdt_receipt, validation_refreshed = _refresh_validation_after_build(
+            prebuild_manifest=validation_manifest,
+            final_manifest=final_manifest,
+            source_report=source_report,
+            jdt_receipt=jdt_receipt,
+            validate_source=validate_final_source,
+            validate_jdt=(validate_final_jdt if options.run_jdt else None),
+        )
+        if validation_refreshed:
+            jdt_receipt = final_jdt_receipt
+            if jdt_receipt is not None:
+                module_receipts.append(
+                    {'schema_version': 'mmm/jdt-gate-v1', 'phase': 'final', **jdt_receipt}
+                )
+        self._succeed_work_node(
+            ledger,
+            'validate-source-final',
+            {
+                'schema_version': 'mmm/work-node-receipt-v1',
+                'status': 'PASS',
+                'checks_run': source_report.get('checks_run', 0),
+                'project_manifest': final_manifest,
+                'refreshed_after_build': validation_refreshed,
+            },
+        )
         reported_jar = _jar_path(build)
         try:
             artifact_receipt = verify_final_mod_artifact(

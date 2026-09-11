@@ -139,7 +139,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         generated_nodes.append(node_id)
 
     validation_dependencies = tuple(generated_nodes or ['prepare-project'])
-    nodes.extend([_node('validate-source', 'validate:source', validation_dependencies, {'kind': 'validation', 'acceptance_tests': list(proposal.acceptance_tests)}), _node('build-project', 'build', ('validate-source',), {'kind': 'gradle-build'}), _node('validate-jar', 'validate:jar', ('build-project',), {'kind': 'jar-validation'}), _node('runtime-playtest', 'validate:runtime', ('validate-jar',), {'kind': 'runtime-playtest', 'external_runtime_required': proposal.external_runtime_required})])
+    nodes.extend([_node('validate-source', 'validate:source', validation_dependencies, {'kind': 'validation', 'acceptance_tests': list(proposal.acceptance_tests)}), _node('build-project', 'build', ('validate-source',), {'kind': 'gradle-build'}), _node('validate-source-final', 'validate:source-final', ('build-project',), {'kind': 'final-source-validation'}), _node('validate-jar', 'validate:jar', ('validate-source-final',), {'kind': 'jar-validation'}), _node('runtime-playtest', 'validate:runtime', ('validate-jar',), {'kind': 'runtime-playtest', 'external_runtime_required': proposal.external_runtime_required})])
     quality_nodes: list[str] = []
     contract = proposal.game_design.get('_production_contract')
     if proposal.schema_version == 'mmm/complete-proposal-v2' and isinstance(contract, dict):
