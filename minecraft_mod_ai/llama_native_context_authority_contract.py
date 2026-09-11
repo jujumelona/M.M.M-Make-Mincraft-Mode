@@ -40,7 +40,7 @@ def _explicit_context(config: Any) -> int | None:
             value = int(raw)
         except ValueError:
             value = -1
-        if value >= 0:
+        if value > 0:
             return value
     extra = getattr(config, "extra", {})
     configured = extra.get("runtime_context_default") if isinstance(extra, dict) else None
@@ -72,14 +72,15 @@ def install(autotune_module: ModuleType, tuning_pipeline_module: ModuleType) -> 
 
     current = autotune_module._base_args
     if not bool(getattr(current, _MARKER, False)):
+
         @wraps(current)
-        def native_context_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+        def native_context_args(
+            binary: str, model_path: str, config: Any, port: int
+        ) -> list[str]:
             args = list(current(binary, model_path, config, port))
             context = _explicit_context(config)
             if context is None:
-                # Qwen's measured hotpath deliberately uses llama.cpp's explicit 0
-                # sentinel for native sizing; generic launch uses omission.
-                return args if _is_qwen_hotpath(config) else _drop_context(args)
+                return _drop_context(args)
             return _set_context(args, context)
 
         setattr(native_context_args, _MARKER, True)
@@ -97,11 +98,13 @@ def install(autotune_module: ModuleType, tuning_pipeline_module: ModuleType) -> 
             return
 
         @wraps(current_base)
-        def authoritative(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+        def authoritative(
+            binary: str, model_path: str, config: Any, port: int
+        ) -> list[str]:
             args = list(current_base(binary, model_path, config, port))
             context = _explicit_context(config)
             if context is None:
-                return args if _is_qwen_hotpath(config) else _drop_context(args)
+                return _drop_context(args)
             return _set_context(args, context)
 
         setattr(authoritative, _MARKER, True)
