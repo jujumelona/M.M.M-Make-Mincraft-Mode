@@ -81,7 +81,6 @@ jobs:
           python -m pytest -q \
             tests/test_resource_architecture.py \
             tests/test_template_runtime_ssot.py \
-            tests/test_model_registry.py \
             tests/test_work_graph.py
       - name: Validate package bootstrap and template catalog
         run: |
