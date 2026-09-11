@@ -1,6 +1,14 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
+from .generation_accuracy_contract import (
+    assert_inner_installed as assert_generation_accuracy_inner,
+)
+from .generation_accuracy_contract import (
+    assert_outer_installed as assert_generation_accuracy_outer,
+)
+from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
+from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
@@ -26,10 +34,19 @@ initialize_runtime()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import java_lsp as _java_lsp
+from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
 install_source_set_boundary(_java_lsp)
+# Install the accuracy verifier before runtime finalization. The atomic coder slicer is
+# finalized later and therefore calls through this boundary once for every obligation.
+install_generation_accuracy_inner(_model_router)
+assert_generation_accuracy_inner(_model_router)
 finalize_runtime()
+# The outer normalizer runs after atomic aggregation so multi-obligation text summaries
+# retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
+install_generation_accuracy_outer(_model_router)
+assert_generation_accuracy_outer(_model_router)
 install_versioned_reference_context()
 
 from .api import (
