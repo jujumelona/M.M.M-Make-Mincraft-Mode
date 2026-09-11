@@ -1,9 +1,35 @@
 id: minecraft/resource/block/blockstate_simple
 artifact: json_resource
-target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/blockstates/{{registry_path}}.json"}
-requires: [mod_id, registry_path]
+target:
+  operation: CREATE_FILE
+  file: src/main/resources/assets/{{mod_id}}/blockstates/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+dependencies:
+  - "{{subject}}.block_registry_id"
+produces:
+  - name: blockstate_ref
+    binding: "{{subject}}.blockstate_ref"
+    kind: MODEL_REF
+    target_type: "Block"
+    value: "{{mod_id}}:block/{{registry_path}}"
 ai_slots: []
 render:
   language: json
-  body: {variants: {"": {model: "{{mod_id}}:block/{{registry_path}}"}}}
-validators: [json_parse]
+  body:
+    variants:
+      "":
+        model: "{{mod_id}}:block/{{registry_path}}"
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunite_ore
+  expected_contains:
+    - "space:block/lunite_ore"
+dependency_types:
+  '{{subject}}.block_registry_id':
+    kind: REGISTRY_ID
+    target_type: Block
