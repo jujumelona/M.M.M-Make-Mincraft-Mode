@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Evaluates ImplementationFacts against existing project source code and assets
 to determine whether an element should be REUSED (existing symbol matches exactly),
-ADAPTED (partial/related symbol or base structure exists), or created as NEW.
+ADAPTED (strong structurally-compatible identity overlap), or created as NEW.
 """
 
 from collections.abc import Iterable, Mapping
@@ -33,6 +33,95 @@ class FactReuseDecision:
 
 
 _IDENTIFIER_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b|\b[a-z][a-z0-9_]{2,}\b")
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_GENERIC_TOKENS = frozenset(
+    {
+        "mod",
+        "mods",
+        "registry",
+        "registries",
+        "register",
+        "registered",
+        "entry",
+        "entries",
+        "impl",
+        "implementation",
+        "handler",
+        "manager",
+    }
+)
+
+
+def _identity_tokens(value: str) -> tuple[str, ...]:
+    """Normalize snake/kebab/camel-ish identifiers without substring matching."""
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value).lower()
+    return tuple(
+        token
+        for token in _TOKEN_PATTERN.findall(normalized.replace("-", "_"))
+        if token and token not in _GENERIC_TOKENS
+    )
+
+
+def _expected_path_markers(fact: ImplementationFact) -> tuple[str, ...]:
+    name = str(getattr(fact.fact_type, "value", fact.fact_type)).upper()
+    if name.startswith("ITEM_") or name == "ITEM_EXISTS":
+        return ("item", "items")
+    if name.startswith("BLOCK_") or name == "BLOCK_EXISTS":
+        return ("block", "blocks")
+    if name.startswith("ENTITY_") or name == "ENTITY_EXISTS":
+        return ("entity", "entities")
+    if name == "GUI_EXISTS":
+        return ("gui", "screen", "menu")
+    if name == "NETWORK_PACKET":
+        return ("network", "packet")
+    if name == "BLOCK_ENTITY_EXISTS":
+        return ("blockentity", "block_entity", "machine")
+    if name == "DATA_COMPONENT":
+        return ("component",)
+    if name == "WORLDGEN_FEATURE":
+        return ("worldgen", "feature")
+    if name == "DIMENSION":
+        return ("dimension",)
+    if name == "BIOME":
+        return ("biome",)
+    if name == "STATUS_EFFECT":
+        return ("effect",)
+    if name == "SOUND_EVENT":
+        return ("sound",)
+    if name == "PARTICLE_TYPE":
+        return ("particle",)
+    if name == "ADVANCEMENT":
+        return ("advancement",)
+    if name in {"CRAFTING_RECIPE", "SMELTING_RECIPE"}:
+        return ("recipe", "recipes")
+    if name == "REGISTRY_TAG":
+        return ("tag", "tags")
+    return ()
+
+
+def _path_compatible(fact: ImplementationFact, file_path: str) -> bool:
+    markers = _expected_path_markers(fact)
+    if not markers or not file_path:
+        return True
+    normalized = file_path.lower().replace("-", "_")
+    return any(marker in normalized for marker in markers)
+
+
+def _strong_adapt_match(subject: str, candidate: str) -> bool:
+    """Require token identity overlap; a bare substring is never sufficient."""
+    subject_tokens = set(_identity_tokens(subject))
+    candidate_tokens = set(_identity_tokens(candidate))
+    if not subject_tokens or not candidate_tokens:
+        return False
+    overlap = subject_tokens & candidate_tokens
+    if not overlap:
+        return False
+    union = subject_tokens | candidate_tokens
+    # One-token identifiers must match exactly; multi-token identifiers need both
+    # substantial overlap and at most one differing semantic token.
+    if len(subject_tokens) == 1 or len(candidate_tokens) == 1:
+        return subject_tokens == candidate_tokens
+    return len(overlap) >= 2 and len(union - overlap) <= 1 and len(overlap) / len(union) >= 2 / 3
 
 
 class FactReuseClassifier:
@@ -99,45 +188,44 @@ class FactReuseClassifier:
                 rationale="Empty subject requires new implementation",
             )
 
-        # 1. Exact match
-        if subject in cache:
-            sym, file_path = cache[subject]
-            return FactReuseDecision(
-                fact_id=fact.fact_id,
-                mode=ReuseMode.REUSE,
-                matching_symbol=sym,
-                target_file=file_path,
-                rationale=f"Exact matching symbol {sym!r} found in {file_path or 'project index'}",
-            )
+        # Exact normalized identity is the only REUSE condition.
+        exact_keys = {subject, subject.replace("-", "_")}
+        for exact_key in exact_keys:
+            if exact_key in cache:
+                sym, file_path = cache[exact_key]
+                if _path_compatible(fact, file_path):
+                    return FactReuseDecision(
+                        fact_id=fact.fact_id,
+                        mode=ReuseMode.REUSE,
+                        matching_symbol=sym,
+                        target_file=file_path,
+                        rationale=f"Exact compatible symbol {sym!r} found in {file_path or 'project index'}",
+                    )
 
-        # Also check constant form (e.g. RAW_MATERIAL -> raw_material)
-        const_form = subject.replace("-", "_").upper().lower()
-        if const_form in cache:
-            sym, file_path = cache[const_form]
-            return FactReuseDecision(
-                fact_id=fact.fact_id,
-                mode=ReuseMode.REUSE,
-                matching_symbol=sym,
-                target_file=file_path,
-                rationale=f"Exact matching symbol {sym!r} found in {file_path or 'project index'}",
-            )
-
-        # 2. Adapt match: partial or prefix/suffix substring
+        # ADAPT is deliberately conservative: compatible path plus strong token overlap.
+        candidates: list[tuple[float, str, str]] = []
+        subject_tokens = set(_identity_tokens(subject))
         for key, (sym, file_path) in cache.items():
-            if (subject in key or key in subject) and len(key) >= 3:
-                return FactReuseDecision(
-                    fact_id=fact.fact_id,
-                    mode=ReuseMode.ADAPT,
-                    matching_symbol=sym,
-                    target_file=file_path,
-                    rationale=f"Related symbol {sym!r} found in {file_path or 'project index'}; adapt existing logic",
-                )
+            if not _path_compatible(fact, file_path) or not _strong_adapt_match(subject, key):
+                continue
+            candidate_tokens = set(_identity_tokens(key))
+            union = subject_tokens | candidate_tokens
+            score = len(subject_tokens & candidate_tokens) / len(union) if union else 0.0
+            candidates.append((score, sym, file_path))
+        if candidates:
+            _, sym, file_path = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+            return FactReuseDecision(
+                fact_id=fact.fact_id,
+                mode=ReuseMode.ADAPT,
+                matching_symbol=sym,
+                target_file=file_path,
+                rationale=f"Strong compatible identity overlap with {sym!r} in {file_path or 'project index'}",
+            )
 
-        # 3. New
         return FactReuseDecision(
             fact_id=fact.fact_id,
             mode=ReuseMode.NEW,
-            rationale=f"No existing code or asset symbol found for {subject!r}; generate new artifact",
+            rationale=f"No exact or strongly compatible identity found for {subject!r}; generate new artifact",
         )
 
     def classify_all(
