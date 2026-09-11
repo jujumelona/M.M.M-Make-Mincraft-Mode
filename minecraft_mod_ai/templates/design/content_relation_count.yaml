@@ -1,0 +1,17 @@
+id: design/content_relation_count
+task: Determine how many explicit relationships the current requirement requires for the fixed host-supplied ordered entity pair.
+record_schema:
+  type: object
+  properties:
+    count:
+      type: integer
+      minimum: 0
+  required:
+    - count
+  additionalProperties: false
+rules:
+  - Count only relationships explicitly required by the active requirement for this exact source_id and target_id pair.
+  - The source_id and target_id are fixed by the host and must not be reinterpreted or swapped.
+  - Return 0 when the requirement contains no explicit relationship for this ordered pair.
+  - Preserve authored cardinality exactly; do not clamp it to a model array limit.
+  - This task determines cardinality only. The host owns relation generation, ordering, repetition, endpoint injection, validation, and termination.
