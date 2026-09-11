@@ -58,6 +58,7 @@ def _string_list(
 def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception]) -> None:
     typed_fields = {'resource_pack_format', 'deterministic_module_kinds'}
     mapping_fields = {'mappings_kind', 'mappings_version', 'yarn_mappings'}
+    optional_string_fields = {'host_facts_json'}
     canonical_fields = {item.name for item in fields(PlatformLock)}
     string_fields = canonical_fields - typed_fields
     unknown = sorted(set(platform) - canonical_fields)
@@ -78,7 +79,10 @@ def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception
                 platform[key],
                 f'spec.platform.{key}',
                 error_type,
-                empty=native_names and key in mapping_fields,
+                empty=(
+                    key in optional_string_fields
+                    or (native_names and key in mapping_fields)
+                ),
             )
     if 'resource_pack_format' in platform:
         value = platform['resource_pack_format']
@@ -153,315 +157,184 @@ def _install_approval_authority(
     proposal_cls.approve = approve
 
 
-def _require_persisted_proposal_authority(
-    raw: dict[str, Any],
+def install_proposal_deserialization_contracts(
     *,
-    error_type: type[Exception],
+    proposal_cls: Any,
+    proposal_status_cls: Any,
+    spec_validation_error: type[Exception],
+    content_spec_cls: Any,
+    content_kind_cls: Any,
+    boss_spec_cls: Any,
+    mod_spec_cls: Any,
+    deferred_request_cls: Any,
+    evidence_source_cls: Any,
+    capability_manifest_hash: Any,
+    evidence_snapshot_hash: Any,
+    json_bool: Any,
+    complete_proposal_cls: Any,
+    complete_proposal_status_cls: Any,
+    production_module_cls: Any,
+    asset_request_cls: Any,
 ) -> None:
-    missing = [
-        field
-        for field in ('evidence_snapshot_hash', 'capability_manifest_hash')
-        if field not in raw
-    ]
-    if missing:
-        raise error_type(
-            'Persisted proposal is missing authoritative provenance receipts: '
-            + ', '.join(missing)
-            + '. Re-plan instead of rebinding saved state to the current runtime.'
-        )
-    for field in ('evidence_snapshot_hash', 'capability_manifest_hash'):
-        _require_string(raw[field], field, error_type)
+    """Install strict JSON deserializers and approval-state receipt guards.
 
-    status = _status_value(raw.get('status', ''))
-    if status == 'approved' and not str(raw.get('approval_hash') or '').strip():
-        raise error_type(
-            'Persisted approved proposal is missing its approval_hash integrity receipt.'
-        )
-
-
-def install(spec_module: Any, complete_spec_module: Any) -> None:
-    """Harden proposal state, provenance, and JSON integrity boundaries.
-
-    Persisted proposal receipts are authoritative: resume must never synthesize a
-    capability/evidence binding from the current runtime. Approval state is likewise
-    inseparable from the exact integrity hash that was approved. Hash equality proves
-    payload identity only; semantic validation remains a separate contract.
+    This stays centralized so Proposal and CompleteProposal share one untrusted JSON
+    boundary instead of maintaining subtly different handwritten parsers.
     """
-    proposal_cls = spec_module.Proposal
-    complete_cls = complete_spec_module.CompleteProposal
 
+    def proposal_from_dict(cls: Any, data: dict[str, Any]) -> Any:
+        error = spec_validation_error
+        raw = _require_dict(data, 'proposal', error)
+        unknown = sorted(set(raw) - cls._TOP_LEVEL_KEYS)
+        missing = sorted(cls._TOP_LEVEL_KEYS - cls._BACKWARD_COMPATIBLE_KEYS - set(raw))
+        if unknown:
+            raise error(f'Unknown proposal fields: {unknown}')
+        if missing:
+            raise error(f'Missing proposal fields: {missing}')
+        schema_version = _require_string(raw['schema_version'], 'schema_version', error)
+        proposal_version = raw['proposal_version']
+        if type(proposal_version) is not int:
+            raise error('proposal_version must be a JSON integer.')
+        requested_prompt = _require_string(raw['requested_prompt'], 'requested_prompt', error)
+        status_raw = _require_string(raw['status'], 'status', error)
+        try:
+            status = proposal_status_cls(status_raw)
+        except ValueError as exc:
+            raise error(f'Unsupported proposal status: {status_raw!r}') from exc
+
+        spec_data = dict(_require_dict(raw['spec'], 'spec', error))
+        if 'platform' not in spec_data:
+            raise error('spec.platform is required.')
+        platform_data = dict(_require_dict(spec_data.pop('platform'), 'spec.platform', error))
+        _validate_platform_json(platform_data, error)
+        try:
+            platform = PlatformLock(**platform_data)
+        except TypeError as exc:
+            raise error('spec.platform is malformed.') from exc
+
+        content_data = _require_list(spec_data.pop('contents', []), 'spec.contents', error)
+        boss_data = spec_data.pop('boss', None)
+        arena_data = spec_data.pop('arena', None)
+        if arena_data is not None:
+            raise error('spec.arena is not supported.')
+        try:
+            contents = tuple(
+                content_spec_cls(
+                    content_id=_require_string(item['content_id'], f'contents[{index}].content_id', error),
+                    kind=content_kind_cls(item['kind']),
+                    display_name_en=_require_string(item['display_name_en'], f'contents[{index}].display_name_en', error),
+                    display_name_ko=_require_string(item['display_name_ko'], f'contents[{index}].display_name_ko', error),
+                    color=item.get('color', '#74c7ec'),
+                    recipe=json_bool(item.get('recipe', True), 'contents[].recipe'),
+                )
+                for index, item in enumerate(content_data)
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, error):
+                raise
+            raise error(f'Invalid content specification: {exc}') from exc
+        try:
+            spec = mod_spec_cls(
+                contents=contents,
+                boss=boss_spec_cls(**boss_data) if boss_data else None,
+                platform=platform,
+                **spec_data,
+            )
+        except TypeError as exc:
+            raise error(f'Invalid mod specification: {exc}') from exc
+
+        evidence_values = _require_list(raw['evidence_sources'], 'evidence_sources', error)
+        try:
+            evidence_sources = tuple(evidence_source_cls(**item) for item in evidence_values)
+        except TypeError as exc:
+            raise error(f'Invalid evidence source: {exc}') from exc
+        proposal = cls(
+            schema_version=schema_version,
+            proposal_version=proposal_version,
+            status=status,
+            requested_prompt=requested_prompt,
+            spec=spec,
+            assumptions=tuple(_string_list(raw['assumptions'], 'assumptions', error)),
+            exclusions=tuple(_string_list(raw['exclusions'], 'exclusions', error)),
+            deferred_requests=tuple(
+                deferred_request_cls(**item)
+                for item in _require_list(raw['deferred_requests'], 'deferred_requests', error)
+            ),
+            acceptance_tests=tuple(_string_list(raw['acceptance_tests'], 'acceptance_tests', error)),
+            evidence_sources=evidence_sources,
+            evidence_snapshot_hash=raw.get(
+                'evidence_snapshot_hash', evidence_snapshot_hash(evidence_sources)
+            ),
+            capability_manifest_hash=raw.get(
+                'capability_manifest_hash', capability_manifest_hash()
+            ),
+            imported_source_snapshot_hash=raw.get('imported_source_snapshot_hash', ''),
+            risk_approvals=tuple(_string_list(raw.get('risk_approvals', []), 'risk_approvals', error)),
+            approval_hash=raw.get('approval_hash', ''),
+        )
+        proposal.validate()
+        return proposal
+
+    def complete_from_dict(cls: Any, data: dict[str, Any]) -> Any:
+        error = spec_validation_error
+        raw = _require_dict(data, 'complete_proposal', error)
+        base_proposal = proposal_cls.from_dict(
+            dict(_require_dict(raw['base_proposal'], 'base_proposal', error))
+        )
+        try:
+            modules = tuple(
+                production_module_cls(
+                    module_id=item['module_id'],
+                    kind=item['kind'],
+                    config=dict(item.get('config', {})),
+                    depends_on=tuple(item.get('depends_on', ())),
+                    required_gates=tuple(item.get('required_gates', ())),
+                )
+                for item in _require_list(raw['modules'], 'modules', error)
+            )
+            assets = tuple(
+                asset_request_cls(**item)
+                for item in _require_list(raw.get('assets', []), 'assets', error)
+            )
+            complete = cls(
+                schema_version=_require_string(raw['schema_version'], 'schema_version', error),
+                proposal_version=raw['proposal_version'],
+                status=complete_proposal_status_cls(
+                    _require_string(raw['status'], 'status', error)
+                ),
+                requested_prompt=_require_string(raw['requested_prompt'], 'requested_prompt', error),
+                base_proposal=base_proposal,
+                game_design=dict(_require_dict(raw['game_design'], 'game_design', error)),
+                modules=modules,
+                assets=assets,
+                acceptance_tests=tuple(
+                    _string_list(raw['acceptance_tests'], 'acceptance_tests', error)
+                ),
+                external_runtime_required=raw.get('external_runtime_required', True),
+                existing_input_sha256=raw.get('existing_input_sha256', ''),
+                approval_hash=raw.get('approval_hash', ''),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, error):
+                raise
+            raise error(f'Invalid complete proposal: {exc}') from exc
+        complete.validate()
+        return complete
+
+    proposal_cls.from_dict = classmethod(proposal_from_dict)
+    complete_proposal_cls.from_dict = classmethod(complete_from_dict)
     _install_approval_authority(
         proposal_cls,
-        approved_status=spec_module.ProposalStatus.APPROVED.value,
-        error_type=spec_module.SpecValidationError,
+        approved_status=proposal_status_cls.APPROVED.value,
+        error_type=spec_validation_error,
         label='Proposal',
     )
     _install_approval_authority(
-        complete_cls,
-        approved_status=complete_spec_module.CompleteProposalStatus.APPROVED.value,
-        error_type=spec_module.SpecValidationError,
+        complete_proposal_cls,
+        approved_status=complete_proposal_status_cls.APPROVED.value,
+        error_type=spec_validation_error,
         label='Complete proposal',
     )
 
-    current_to_dict = proposal_cls.to_dict
-    if not getattr(current_to_dict, '_mmm_json_native_serialization', False):
 
-        @wraps(current_to_dict)
-        def proposal_to_dict(self: Any) -> dict[str, Any]:
-            value = _json_native(current_to_dict(self))
-            if not isinstance(value, dict):
-                raise spec_module.SpecValidationError(
-                    'Proposal serialization must produce a JSON object.'
-                )
-            return value
-
-        proposal_to_dict._mmm_json_native_serialization = True
-        proposal_to_dict.__wrapped__ = current_to_dict
-        proposal_cls.to_dict = proposal_to_dict
-
-    proposal_descriptor = proposal_cls.__dict__['from_dict']
-    proposal_function = proposal_descriptor.__func__
-    if not getattr(proposal_function, '_mmm_strict_deserialization', False):
-
-        @classmethod
-        @wraps(proposal_function)
-        def proposal_from_dict(cls: Any, data: Any):
-            error = spec_module.SpecValidationError
-            raw = _require_dict(data, 'proposal', error)
-            for field in (
-                'schema_version',
-                'status',
-                'requested_prompt',
-                'approval_hash',
-            ):
-                if field in raw:
-                    _require_string(
-                        raw[field],
-                        field,
-                        error,
-                        empty=field == 'approval_hash',
-                    )
-            if (
-                'proposal_version' in raw
-                and (
-                    type(raw['proposal_version']) is not int
-                    or raw['proposal_version'] < 1
-                )
-            ):
-                raise error('proposal_version must be a positive JSON integer.')
-
-            _require_persisted_proposal_authority(raw, error_type=error)
-            if 'imported_source_snapshot_hash' in raw:
-                _require_string(
-                    raw['imported_source_snapshot_hash'],
-                    'imported_source_snapshot_hash',
-                    error,
-                    empty=True,
-                )
-
-            spec = _require_dict(raw.get('spec'), 'spec', error)
-            for field in (
-                'mod_id',
-                'mod_name',
-                'package_name',
-                'version',
-                'summary',
-            ):
-                _require_string(spec.get(field), f'spec.{field}', error)
-            platform = _require_dict(spec.get('platform'), 'spec.platform', error)
-            _validate_platform_json(platform, error)
-            contents = _require_list(spec.get('contents'), 'spec.contents', error)
-            for index, item in enumerate(contents):
-                content = _require_dict(item, f'spec.contents[{index}]', error)
-                for field in (
-                    'content_id',
-                    'kind',
-                    'display_name_en',
-                    'display_name_ko',
-                ):
-                    _require_string(
-                        content.get(field),
-                        f'spec.contents[{index}].{field}',
-                        error,
-                    )
-                if 'color' in content:
-                    _require_string(
-                        content['color'],
-                        f'spec.contents[{index}].color',
-                        error,
-                    )
-                if 'recipe' in content and type(content['recipe']) is not bool:
-                    raise error(
-                        f'spec.contents[{index}].recipe must be a JSON boolean.'
-                    )
-            boss = spec.get('boss')
-            if boss is not None:
-                boss = _require_dict(boss, 'spec.boss', error)
-                for field in (
-                    'entity_id',
-                    'display_name_en',
-                    'display_name_ko',
-                    'primary_color',
-                    'secondary_color',
-                    'model_kind',
-                ):
-                    if field in boss:
-                        _require_string(
-                            boss[field],
-                            f'spec.boss.{field}',
-                            error,
-                        )
-            for field in (
-                'assumptions',
-                'exclusions',
-                'acceptance_tests',
-                'risk_approvals',
-            ):
-                if field in raw:
-                    _string_list(raw[field], field, error)
-            deferred = _require_list(
-                raw.get('deferred_requests'),
-                'deferred_requests',
-                error,
-            )
-            for index, item in enumerate(deferred):
-                request = _require_dict(
-                    item,
-                    f'deferred_requests[{index}]',
-                    error,
-                )
-                for field in ('capability', 'reason', 'suggested_phase'):
-                    _require_string(
-                        request.get(field),
-                        f'deferred_requests[{index}].{field}',
-                        error,
-                    )
-            evidence = _require_list(
-                raw.get('evidence_sources'),
-                'evidence_sources',
-                error,
-            )
-            for index, item in enumerate(evidence):
-                source = _require_dict(
-                    item,
-                    f'evidence_sources[{index}]',
-                    error,
-                )
-                for field, value in source.items():
-                    _require_string(
-                        value,
-                        f'evidence_sources[{index}].{field}',
-                        error,
-                        empty=field == 'record_sha256',
-                    )
-            return proposal_function(cls, raw)
-
-        proposal_from_dict.__func__._mmm_strict_deserialization = True
-        proposal_cls.from_dict = proposal_from_dict
-
-    complete_descriptor = complete_cls.__dict__['from_dict']
-    complete_function = complete_descriptor.__func__
-    if getattr(complete_function, '_mmm_strict_deserialization', False):
-        return
-
-    @classmethod
-    @wraps(complete_function)
-    def complete_from_dict(cls: Any, data: Any):
-        error = spec_module.SpecValidationError
-        raw = _require_dict(data, 'complete proposal', error)
-        for field in (
-            'schema_version',
-            'status',
-            'requested_prompt',
-            'existing_input_sha256',
-            'approval_hash',
-        ):
-            if field in raw:
-                _require_string(
-                    raw[field],
-                    field,
-                    error,
-                    empty=field in {'existing_input_sha256', 'approval_hash'},
-                )
-        if (
-            _status_value(raw.get('status', '')) == 'approved'
-            and not str(raw.get('approval_hash') or '').strip()
-        ):
-            raise error(
-                'Persisted approved complete proposal is missing its '
-                'approval_hash integrity receipt.'
-            )
-        if 'base_proposal' in raw:
-            _require_dict(raw['base_proposal'], 'base_proposal', error)
-        if 'game_design' in raw:
-            _require_dict(raw['game_design'], 'game_design', error)
-        if (
-            'external_runtime_required' in raw
-            and type(raw['external_runtime_required']) is not bool
-        ):
-            raise error('external_runtime_required must be a JSON boolean.')
-        if 'acceptance_tests' in raw:
-            _string_list(raw['acceptance_tests'], 'acceptance_tests', error)
-        modules = _require_list(raw.get('modules'), 'modules', error)
-        for index, item in enumerate(modules):
-            value = _require_dict(item, f'modules[{index}]', error)
-            module_id = _require_string(
-                value.get('module_id'),
-                f'modules[{index}].module_id',
-                error,
-            )
-            if not complete_spec_module._ID.fullmatch(module_id):
-                raise error(
-                    f'modules[{index}].module_id must already be lowercase snake_case.'
-                )
-            _require_string(
-                value.get('kind'),
-                f'modules[{index}].kind',
-                error,
-            )
-            if 'config' in value:
-                _require_dict(
-                    value['config'],
-                    f'modules[{index}].config',
-                    error,
-                )
-            dependencies = _string_list(
-                value.get('depends_on', []),
-                f'modules[{index}].depends_on',
-                error,
-            )
-            invalid = [
-                dep
-                for dep in dependencies
-                if not complete_spec_module._ID.fullmatch(dep)
-            ]
-            if invalid:
-                raise error(
-                    f'modules[{index}] has invalid dependency ids: {invalid[:4]}'
-                )
-            _string_list(
-                value.get('required_gates', []),
-                f'modules[{index}].required_gates',
-                error,
-            )
-        assets = _require_list(raw.get('assets'), 'assets', error)
-        for index, item in enumerate(assets):
-            value = _require_dict(item, f'assets[{index}]', error)
-            for field in ('asset_id', 'kind', 'prompt', 'target_path'):
-                _require_string(
-                    value.get(field),
-                    f'assets[{index}].{field}',
-                    error,
-                )
-            for field in ('width', 'height'):
-                if field in value and type(value[field]) is not int:
-                    raise error(
-                        f'assets[{index}].{field} must be a JSON integer.'
-                    )
-        return complete_function(cls, raw)
-
-    complete_from_dict.__func__._mmm_strict_deserialization = True
-    complete_cls.from_dict = complete_from_dict
-
-
-__all__ = ['install']
+__all__ = ['install_proposal_deserialization_contracts']
