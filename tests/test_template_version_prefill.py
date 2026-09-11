@@ -240,16 +240,7 @@ def test_atomic_slot_context_gets_prefill_without_full_host_snapshot(resolved_co
     }
 
 
-def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_context):
-    template = {
-        "id": "fixture/runner-requires-host-facts",
-        "requires": ["gradle_sha256", "dependency_coordinates", "repositories"],
-        "inputs": {
-            "gradle_sha256": {"type": "string", "required": True},
-        },
-        "render": {"language": "text", "body": "{{gradle_sha256}}"},
-    }
-
+def _patch_runner_contract(monkeypatch, resolved_context, template):
     import minecraft_mod_ai.integrity_dispatcher as integrity_dispatcher
     import minecraft_mod_ai.resolved_version_context as resolved_version_context
     import minecraft_mod_ai.task_template_catalog as task_template_catalog
@@ -276,6 +267,18 @@ def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_con
         lambda *args, **kwargs: [],
     )
 
+
+def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_context):
+    template = {
+        "id": "fixture/runner-requires-host-facts",
+        "requires": ["gradle_sha256", "dependency_coordinates", "repositories"],
+        "inputs": {
+            "gradle_sha256": {"type": "string", "required": True},
+        },
+        "render": {"language": "text", "body": "{{gradle_sha256}}"},
+    }
+    _patch_runner_contract(monkeypatch, resolved_context, template)
+
     receipt = execute_artifact_template(
         {"template_id": template["id"], "deterministic_inputs": {}},
         context={"resolved_version_context": {"synthetic": True}},
@@ -283,3 +286,32 @@ def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_con
 
     assert receipt["status"] == "PASS"
     assert receipt["rendered_output"] == "a" * 64
+
+
+def test_runner_rejects_deterministic_input_override_before_render(
+    monkeypatch,
+    resolved_context,
+):
+    template = {
+        "id": "fixture/runner-rejects-host-override",
+        "requires": ["repositories"],
+        "inputs": {
+            "gradle_sha256": {"type": "string", "required": True},
+        },
+        "render": {"language": "text", "body": "{{gradle_sha256}}"},
+    }
+    _patch_runner_contract(monkeypatch, resolved_context, template)
+
+    with pytest.raises(VersionContextError) as error:
+        execute_artifact_template(
+            {
+                "template_id": template["id"],
+                "deterministic_inputs": {
+                    "repositories": ["https://caller.invalid/"],
+                },
+            },
+            context={"resolved_version_context": {"synthetic": True}},
+        )
+
+    assert error.value.diagnostic["code"] == "HOST_FACT_OVERRIDE"
+    assert error.value.diagnostic["field"] == "repositories"
