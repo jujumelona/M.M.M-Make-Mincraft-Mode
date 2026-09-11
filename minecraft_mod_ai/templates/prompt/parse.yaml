@@ -1,6 +1,6 @@
 id: prompt/parse
 execution: records
-task: Extract one explicitly authored fact or requested behavior. Do not group independent statements or infer additional features. Explicit restrictions and delivery requirements have separate tasks.
+task: Extract every explicitly authored fact or requested behavior supported by the original prompt. Keep independent statements as independent records and do not infer additional features. Explicit restrictions and delivery requirements have separate tasks.
 record_schema:
   type: object
   properties:
@@ -13,7 +13,7 @@ record_schema:
       minLength: 0
       maxLength: 256
   required:
-    - statement
+  - statement
   additionalProperties: false
 input_schema:
   type: object
@@ -22,11 +22,7 @@ input_schema:
       type: string
       minLength: 1
   required:
-    - original_prompt
+  - original_prompt
   additionalProperties: false
 rules:
-  - Use only the original user prompt as evidence. Do not invent behavior, parameters, APIs, versions, files, defaults or implementation details.
-  - Game and feature names are input data, never template categories. Preserve the authored meaning and exclusions.
-  - Return one record at a time for this concern only; the host controls repetition and termination.
-  - If the prompt contains no record for this concern, emit no content record and let the host terminate the record loop.
-  - Missing implementation choices are not prompt ambiguity; only explicitly authored prompt facts belong here.
+- Missing implementation choices are not prompt ambiguity; only explicitly authored prompt facts belong here.

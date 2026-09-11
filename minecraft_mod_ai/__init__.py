@@ -8,18 +8,13 @@ from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
+from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
+from .template_contract_validation import runtime_consumer_roots, validate_catalog
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
 def _configure_default_llama_parallelism() -> None:
-    """Use the reviewed scheduler maximum unless server capacity is explicit.
-
-    The application scheduler is already bounded to eight concurrent llama requests.
-    A positive ``MMM_LLAMA_PARALLEL`` value remains authoritative and is clamped to
-    that reviewed maximum. Missing, invalid, and server-auto values keep the full
-    application-side width so independent small-model tasks are not serialized.
-    """
-
+    """Use the reviewed scheduler maximum unless server capacity is explicit."""
     if os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
         return
     raw_server_parallel = os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
@@ -34,9 +29,18 @@ def _configure_default_llama_parallelism() -> None:
     os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(active)
 
 
+def _validate_runtime_template_authority() -> None:
+    """Fail before model decode when any runtime template is orphaned or structurally invalid."""
+    validate_catalog(
+        RUNTIME_TEMPLATE_ROOT,
+        consumer_roots=runtime_consumer_roots(),
+    )
+
+
 _configure_default_llama_parallelism()
 install_hardware_concurrency()
 initialize_runtime()
+_validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import java_lsp as _java_lsp
 
@@ -103,56 +107,20 @@ install_source_observation_budget()
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
-    "AssetRequest",
-    "BossSpec",
-    "ChatReply",
-    "CompleteChatReply",
-    "CompleteExecutionOptions",
-    "CompleteGameDesignPlanner",
-    "CompleteModAISession",
-    "CompletePipelineResult",
-    "CompleteProductionError",
-    "CompleteProductionOrchestrator",
-    "CompleteProposal",
-    "ContentSpec",
-    "EcosystemDiscoveryClient",
-    "ExistingProjectImportError",
-    "ExistingProjectReport",
-    "ExternalMCPRegistry",
-    "HeuristicPlanner",
-    "MinecraftModPipeline",
-    "ModAISession",
-    "ModDevelopmentMethod",
-    "ModSpec",
-    "ModelBackendError",
-    "ModelConfigurationError",
-    "ModelRegistry",
-    "ModelRouter",
-    "OpenAICompatiblePlanner",
-    "PipelineResult",
-    "PlatformLock",
-    "ProductionContractCompilation",
-    "ProductionModule",
-    "ProductionToolService",
-    "ProjectIndex",
-    "ProjectRAGIndex",
-    "Proposal",
-    "RoutedPlanner",
-    "ScalableFabricProjectGenerator",
-    "ScalableMinecraftModPipeline",
-    "ScalePolicy",
-    "ScalePolicyError",
-    "assess_technology_compatibility",
-    "build_technology_radar",
-    "compile_production_contract",
-    "evaluate_quality_contract",
-    "inspect_existing_project_archive",
-    "mod_development_method_catalog",
-    "quality_contract_summary",
-    "quality_unresolved",
-    "resolve_mod_development_methods",
-    "supported_minecraft_versions",
-    "technology_research_routes",
+    "AssetRequest", "BossSpec", "ChatReply", "CompleteChatReply",
+    "CompleteExecutionOptions", "CompleteGameDesignPlanner", "CompleteModAISession",
+    "CompletePipelineResult", "CompleteProductionError", "CompleteProductionOrchestrator",
+    "CompleteProposal", "ContentSpec", "EcosystemDiscoveryClient", "ExistingProjectImportError",
+    "ExistingProjectReport", "ExternalMCPRegistry", "HeuristicPlanner", "MinecraftModPipeline",
+    "ModAISession", "ModDevelopmentMethod", "ModSpec", "ModelBackendError",
+    "ModelConfigurationError", "ModelRegistry", "ModelRouter", "OpenAICompatiblePlanner",
+    "PipelineResult", "PlatformLock", "ProductionContractCompilation", "ProductionModule",
+    "ProductionToolService", "ProjectIndex", "ProjectRAGIndex", "Proposal", "RoutedPlanner",
+    "ScalableFabricProjectGenerator", "ScalableMinecraftModPipeline", "ScalePolicy",
+    "ScalePolicyError", "assess_technology_compatibility", "build_technology_radar",
+    "compile_production_contract", "evaluate_quality_contract", "inspect_existing_project_archive",
+    "mod_development_method_catalog", "quality_contract_summary", "quality_unresolved",
+    "resolve_mod_development_methods", "supported_minecraft_versions", "technology_research_routes",
 ]
 
 __version__ = "0.8.0"

@@ -1,14 +1,10 @@
 id: prompt/ambiguities
 execution: records
-task: Identify one genuine contradiction or user preference whose answer is necessary
-  to understand the authored request. Missing counts, prices, balance, mechanics,
-  algorithms, platform APIs, source files and design choices are not ambiguities here.
-  Ordinary explicit restrictions belong to parse. Do not choose blockers or research
-  routes.
+task: Identify every genuine contradiction or user preference whose answer is necessary to understand the authored request. Missing counts, prices, balance, mechanics, algorithms, platform APIs, source files and design choices are not ambiguities here. Ordinary explicit restrictions belong to parse. Do not choose blockers or research routes.
 record_schema:
   type: object
   properties:
-    question: &id001
+    question: &text
       type: string
       minLength: 1
     reason:
@@ -16,7 +12,7 @@ record_schema:
       enum:
       - contradiction
       - user_preference
-    information_needed: *id001
+    information_needed: *text
   required:
   - question
   - reason
@@ -25,20 +21,8 @@ record_schema:
 input_schema:
   type: object
   properties:
-    original_prompt: *id001
+    original_prompt: *text
   required:
   - original_prompt
   additionalProperties: false
-rules:
-- Use only the original user prompt as evidence. Do not invent behavior, parameters,
-  APIs, versions, files, defaults or implementation details.
-- Game and feature names are input data, never template categories. Preserve the authored
-  meaning and exclusions.
-- Return one record at a time for this concern only. Return done after all applicable
-  records have been supplied.
-- If the prompt contains no records for this concern, return not_applicable with a
-  concrete reason. Never emit empty or placeholder records.
-- Return blocked only for information necessary to resolve this concern. Missing implementation
-  choices are not prompt ambiguity.
-- External evidence IDs are unavailable at prompt capture; return evidence_refs as
-  an empty array.
+rules: []

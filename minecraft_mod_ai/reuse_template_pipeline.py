@@ -8,23 +8,15 @@ from typing import Any, Mapping
 from .planner_operation import planner_operation
 from .task_template_catalog import load_template
 
-REUSE_SEQUENCE: tuple[str, ...] = (
-    "reuse/query_build",
-    "reuse/official_docs",
-    "reuse/official_examples",
-    "reuse/existing_mods",
-    "reuse/repository_search",
-    "reuse/file_search",
-    "reuse/class_search",
-    "reuse/method_search",
-    "reuse/dependency_search",
-    "reuse/license_check",
-    "reuse/compatibility_check",
-    "reuse/direct_reuse",
-    "reuse/pattern_reuse",
-    "reuse/adaptation",
-    "reuse/integration",
-)
+
+def _reuse_sequence() -> tuple[str, ...]:
+    workflow = load_template("reuse/workflow")
+    if workflow.get("execution") != "sequence":
+        raise ValueError("REUSE_TEMPLATE: reuse/workflow must be a sequence")
+    steps = tuple(workflow.get("steps") or ())
+    if not steps or len(steps) != len(set(steps)):
+        raise ValueError("REUSE_TEMPLATE: workflow steps must be non-empty and unique")
+    return steps
 
 
 def _reuse_binding(identifier: str, context: Mapping[str, Any]) -> str:
@@ -34,7 +26,7 @@ def _reuse_binding(identifier: str, context: Mapping[str, Any]) -> str:
 
 
 def validate_reuse_template_sequence() -> None:
-    for identifier in REUSE_SEQUENCE:
+    for identifier in _reuse_sequence():
         template = load_template(identifier)
         if template.get("id") != identifier:
             raise ValueError(f"REUSE_TEMPLATE: invalid template identity {identifier}")
@@ -45,104 +37,79 @@ def validate_reuse_template_sequence() -> None:
             raise ValueError(f"REUSE_TEMPLATE: {identifier} must declare a proof predicate")
 
 
-def _evaluate_reuse_step(
-    identifier: str,
-    context: Mapping[str, Any],
-    output: dict[str, Any],
-) -> tuple[dict[str, Any], bool, str, str]:
+def _evaluate_reuse_step(identifier, context, output):
     if identifier == "reuse/license_check":
-        unres = list(output.get("unresolved_terms") or context.get("unresolved_terms") or [])
-        perm = output.get("permission_state") or context.get("permission_state")
-        output["unresolved_terms"] = unres
-        if unres or perm in ("forbidden", "blocked", "unknown"):
-            return output, False, f"License terms unresolved or not permitted: {unres or perm}", "BLOCKED"
+        unresolved = list(output.get("unresolved_terms") or context.get("unresolved_terms") or [])
+        permission = output.get("permission_state") or context.get("permission_state")
+        output["unresolved_terms"] = unresolved
+        if unresolved or permission in ("forbidden", "blocked", "unknown"):
+            return output, False, f"License terms unresolved or not permitted: {unresolved or permission}", "BLOCKED"
         return output, True, "", "PASS"
-
     if identifier == "reuse/compatibility_check":
         failed = list(output.get("failed_checks") or context.get("failed_checks") or [])
-        unres = list(output.get("unresolved_checks") or context.get("unresolved_checks") or [])
-        explicit_compat = output.get("compatible") if "compatible" in output else context.get("compatible")
-        if failed or unres or explicit_compat is False:
+        unresolved = list(output.get("unresolved_checks") or context.get("unresolved_checks") or [])
+        explicit = output.get("compatible") if "compatible" in output else context.get("compatible")
+        if failed or unresolved or explicit is False:
             output["compatible"] = False
             output["failed_checks"] = failed or ["Compatibility check failure"]
-            output["unresolved_checks"] = unres
-            return output, False, f"Compatibility failed: failed={output['failed_checks']}, unresolved={unres}", "BLOCKED"
+            output["unresolved_checks"] = unresolved
+            return output, False, f"Compatibility failed: failed={output['failed_checks']}, unresolved={unresolved}", "BLOCKED"
         output["compatible"] = True
         output["failed_checks"] = []
         output["unresolved_checks"] = []
         return output, True, "", "PASS"
-
     if identifier == "reuse/direct_reuse":
         blocked = list(output.get("blocking_reasons") or context.get("blocking_reasons") or [])
-        explicit_direct = output.get("reusable_directly") if "reusable_directly" in output else context.get("reusable_directly")
-        if blocked or explicit_direct is False:
+        explicit = output.get("reusable_directly") if "reusable_directly" in output else context.get("reusable_directly")
+        if blocked or explicit is False:
             output["reusable_directly"] = False
             output["blocking_reasons"] = blocked or ["Direct reuse blocked"]
             return output, False, f"Direct reuse blocked: {output['blocking_reasons']}", "BLOCKED"
         output["reusable_directly"] = True
         output["blocking_reasons"] = []
         return output, True, "", "PASS"
-
-    # Generic check for blockers in reuse outputs
-    for key in ("blocking_reasons", "blocked_reasons", "blocked_points", "failed_checks", "unresolved_adaptations", "unresolved_dependencies"):
-        val = output.get(key) or context.get(key)
-        if val:
-            return output, False, f"Blocked by {key}: {val}", "BLOCKED"
+    for key in (
+        "blocking_reasons", "blocked_reasons", "blocked_points", "failed_checks",
+        "unresolved_adaptations", "unresolved_dependencies",
+    ):
+        value = output.get(key) or context.get(key)
+        if value:
+            return output, False, f"Blocked by {key}: {value}", "BLOCKED"
     return output, True, "", "PASS"
 
 
-def execute_reuse_template(
-    identifier: str,
-    *,
-    context: Mapping[str, Any],
-    progress: dict[str, Any] | None = None,
-    checkpoint=None,
-) -> dict[str, Any]:
+def execute_reuse_template(identifier, *, context, progress=None, checkpoint=None):
     template = load_template(identifier)
     binding = _reuse_binding(identifier, context)
     saved = (progress or {}).get(binding)
     if saved is not None:
         return deepcopy(saved)
-
-    proof = template["proof"]
-    predicate = str(proof.get("predicate") or "").strip()
-
-    output_keys = list(template.get("output", {}).keys())
-    output: dict[str, Any] = {}
-    for key in output_keys:
-        val = context.get(key)
-        output[key] = deepcopy(val) if val is not None else []
-
+    predicate = str(template["proof"].get("predicate") or "").strip()
+    output = {}
+    for key in template.get("output", {}):
+        value = context.get(key)
+        output[key] = deepcopy(value) if value is not None else []
     output, passed, reason, status = _evaluate_reuse_step(identifier, context, output)
-
-    proof_payload: dict[str, Any] = {"passed": passed, "predicate": predicate}
+    proof = {"passed": passed, "predicate": predicate}
     if not passed and reason:
-        proof_payload["reason"] = reason
-
-    receipt = {
-        "template_id": identifier,
-        "status": status,
-        "output": output,
-        "proof": proof_payload,
-    }
-
+        proof["reason"] = reason
+    receipt = {"template_id": identifier, "status": status, "output": output, "proof": proof}
     if checkpoint is not None:
         checkpoint(binding, deepcopy(receipt))
     return receipt
 
 
 def evaluate_feature_reuse(
-    atomic_feature: Mapping[str, Any],
+    atomic_feature,
     *,
-    platform_target: Mapping[str, Any] | None = None,
-    progress: dict[str, Any] | None = None,
+    platform_target=None,
+    progress=None,
     checkpoint=None,
-) -> dict[str, Any]:
+):
     validate_reuse_template_sequence()
     fid = str(atomic_feature.get("feature_id") or "feature")
-
     receipts = []
-    accumulated_context: dict[str, Any] = {
+    accumulated_context = {
         "atomic_feature": dict(atomic_feature),
         "feature_id": fid,
         "information_need": str(atomic_feature.get("feature_description") or fid),
@@ -150,8 +117,7 @@ def evaluate_feature_reuse(
         "queries": [],
         "query_constraints": [],
     }
-
-    for identifier in REUSE_SEQUENCE:
+    for identifier in _reuse_sequence():
         with planner_operation(identifier):
             receipt = execute_reuse_template(
                 identifier,
@@ -161,21 +127,16 @@ def evaluate_feature_reuse(
             )
             receipts.append(receipt)
             accumulated_context.update(receipt.get("output", {}))
-
-    return {
-        "feature_id": fid,
-        "receipts": receipts,
-        "reuse_plan": accumulated_context,
-    }
+    return {"feature_id": fid, "receipts": receipts, "reuse_plan": accumulated_context}
 
 
 def evaluate_reuse_pipeline(
-    atomic_features: list[Mapping[str, Any]],
+    atomic_features,
     *,
-    platform_target: Mapping[str, Any] | None = None,
-    progress: dict[str, Any] | None = None,
+    platform_target=None,
+    progress=None,
     checkpoint=None,
-) -> list[dict[str, Any]]:
+):
     return [
         evaluate_feature_reuse(
             feature,

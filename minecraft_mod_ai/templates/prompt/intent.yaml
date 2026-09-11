@@ -1,7 +1,6 @@
 id: prompt/intent
 execution: value
-task: State only the primary user goal. Preserve requested behavior and do not plan
-  how to implement it.
+task: State only the primary user goal. Preserve requested behavior and do not plan how to implement it.
 output_schema:
   type: object
   properties:
@@ -25,8 +24,4 @@ input_schema:
   required:
   - original_prompt
   additionalProperties: false
-rules:
-- Use only the original user prompt as evidence. Do not invent behavior, parameters,
-  APIs, versions, files, defaults or implementation details.
-- Game and feature names are input data, never template categories. Preserve the authored
-  meaning and exclusions.
+rules: []

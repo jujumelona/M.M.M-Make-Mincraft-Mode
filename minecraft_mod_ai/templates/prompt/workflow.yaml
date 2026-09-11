@@ -1,7 +1,6 @@
 id: prompt/workflow
 execution: sequence
 steps:
-- prompt/capture
 - prompt/intent
 - prompt/parse
 - prompt/entity_resolution

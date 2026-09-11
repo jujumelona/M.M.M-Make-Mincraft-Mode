@@ -6,10 +6,8 @@ from pathlib import Path, PurePosixPath
 import yaml
 from jsonschema import Draft202012Validator
 
-# Production templates live only in this package-owned tree. Development fixtures
-# must use an explicitly named fixture directory, never a second templates root.
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
-ROOT = RUNTIME_TEMPLATE_ROOT  # Compatibility for callers that inspect the catalog root.
+ROOT = RUNTIME_TEMPLATE_ROOT
 
 CRITERION_SECTIONS = (
     "behavior_contract", "state_model", "algorithm", "integration",
@@ -17,26 +15,19 @@ CRITERION_SECTIONS = (
     "failure_and_limits", "reuse_assessment", "verification",
 )
 _CRITERION_ALIASES = {f"feature/{section}": f"criterion/{section}" for section in CRITERION_SECTIONS}
+_PROMPT_POLICY = "prompt/policy"
 
 
 def _canonical_identifier(identifier: str) -> str:
-    """Return a catalog-relative POSIX identifier or reject ambiguous path syntax."""
     if not isinstance(identifier, str):
         raise ValueError("TEMPLATE_PATH: identifier must be a string")
     if not identifier or identifier != identifier.strip():
         raise ValueError("TEMPLATE_PATH: identifier must be non-empty and trimmed")
     if "\\" in identifier or identifier.endswith(".yaml"):
-        raise ValueError(
-            "TEMPLATE_PATH: use a canonical slash-separated semantic id without .yaml"
-        )
+        raise ValueError("TEMPLATE_PATH: use a canonical slash-separated semantic id without .yaml")
     parsed = PurePosixPath(identifier)
     parts = parsed.parts
-    if (
-        parsed.is_absolute()
-        or not parts
-        or any(part in {"", ".", ".."} for part in parts)
-        or "//" in identifier
-    ):
+    if parsed.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts) or "//" in identifier:
         raise ValueError(f"TEMPLATE_PATH: non-canonical identifier {identifier!r}")
     canonical = parsed.as_posix()
     if canonical != identifier:
@@ -62,7 +53,6 @@ def _load(identifier: str):
     if not isinstance(value, dict) or value.get("id") != identifier:
         raise ValueError(f"TEMPLATE_ID: invalid template {identifier}")
     from .template_contract_validation import validate_template_contract
-
     validate_template_contract(value)
     for key in ("record_schema", "input_schema", "output_schema"):
         if key in value:
@@ -70,16 +60,26 @@ def _load(identifier: str):
     return value
 
 
+def _apply_shared_policy(identifier: str, value: dict):
+    if identifier.startswith("prompt/") and identifier not in {_PROMPT_POLICY, "prompt/workflow"}:
+        policy = _load(_PROMPT_POLICY)
+        merged = []
+        for rule in tuple(policy.get("rules", ())) + tuple(value.get("rules", ())):
+            if rule not in merged:
+                merged.append(rule)
+        value["rules"] = merged
+    return value
+
+
 def load_template(identifier: str):
-    """Load a manifest/template, including isolated criterion compatibility aliases."""
     requested = _canonical_identifier(identifier)
-    return deepcopy(_load(_CRITERION_ALIASES.get(requested, requested)))
+    canonical = _CRITERION_ALIASES.get(requested, requested)
+    return _apply_shared_policy(canonical, deepcopy(_load(canonical)))
 
 
 def load_record_template(identifier: str):
-    """Load exactly the requested record template with no namespace aliasing."""
     requested = _canonical_identifier(identifier)
-    value = deepcopy(_load(requested))
+    value = load_template(requested)
     if "record_schema" not in value:
         raise ValueError(f"TEMPLATE_RECORD_SCHEMA: missing record schema for {requested}")
     return value

@@ -1,8 +1,7 @@
 """Bounded multi-template execution for real fixed-tool model transports.
 
-The host owns batching and checkpoint identity. Each child concern keeps the same template,
-context binding, validation rules, and response history as ``run_record_template``; only the
-transport combines up to the global small-model field limit into one model decision.
+Batching is transport-only. Every concern produces its complete record set exactly
+once; the host owns completion and validation. No synchronized record/done waves exist.
 """
 from __future__ import annotations
 
@@ -13,6 +12,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .bounded_record_template import (
+    normalize_bounded_record_response,
+    record_batch_response_schema,
+    run_bounded_record_template,
+)
 from .model_output_atomicity_contract import MAX_MODEL_FIELDS
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
@@ -20,17 +24,9 @@ from . import task_template_runner as runner
 
 
 def supports_record_batching(model_router: Any) -> bool:
-    """Batch only the package-owned runtime router, never lookalike test doubles.
-
-    Native-tool capability alone is not enough: fixture routers often implement the same
-    method to test one atomic template response. The canonical ``ModelRouter`` owns the
-    fixed-tool transport contract and is therefore the only supported batching boundary.
-    """
-
     if model_router is None:
         return False
     from .model_router import ModelRouter
-
     return isinstance(model_router, ModelRouter)
 
 
@@ -38,149 +34,6 @@ def record_template_batches(identifiers: Sequence[str]) -> tuple[tuple[str, ...]
     width = max(1, int(MAX_MODEL_FIELDS))
     values = tuple(str(identifier) for identifier in identifiers)
     return tuple(values[start : start + width] for start in range(0, len(values), width))
-
-
-def _state(
-    identifier: str,
-    index: int,
-    *,
-    context: Mapping[str, Any],
-    allowed_refs: set[str],
-    progress: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    template = load_record_template(identifier)
-    normalized = task_context(template, context)
-    binding = task_binding(template, normalized, allowed_refs)
-    saved = deepcopy((progress or {}).get(binding, []))
-    if not isinstance(saved, list):
-        raise ValueError("TEMPLATE_PROGRESS: expected response array")
-    return {
-        "slot": f"c{index}",
-        "template": template,
-        "context": normalized,
-        "binding": binding,
-        "saved": saved,
-        "accepted": [],
-        "records": [],
-        "refs": [],
-        "seen": set(),
-        "done": False,
-        "reason": "",
-    }
-
-
-def _generate_wave(
-    model_router: Any,
-    identifiers: Sequence[str],
-    states: Mapping[str, dict[str, Any]],
-    *,
-    allowed_refs: set[str],
-) -> dict[str, Any]:
-    properties: dict[str, Any] = {}
-    payload: dict[str, Any] = {}
-    required: list[str] = []
-    instructions = [
-        "Advance each independent Minecraft engineering concern by exactly one fixed-template transition.",
-        "For every slot emit exactly one of record/done/not_applicable/blocked and obey only that slot's task and rules.",
-        "Do not merge concerns, invent neighboring work, or repeat an already accepted record.",
-    ]
-    for identifier in identifiers:
-        state = states[identifier]
-        slot = state["slot"]
-        template = state["template"]
-        properties[slot] = runner.record_response_schema(template)
-        required.append(slot)
-        payload[slot] = {
-            "template_id": identifier,
-            **state["context"],
-            "accepted_records": deepcopy(state["records"]),
-            "allowed_evidence_refs": sorted(allowed_refs),
-        }
-        instructions.append(
-            f"[{slot}] {identifier}: {template['task']}\n"
-            + "\n".join(str(rule) for rule in template.get("rules", ()))
-        )
-
-    schema = {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-    value = runner.generate_fixed_template_value(
-        model_router,
-        "planner",
-        [
-            {"role": "system", "content": "\n\n".join(instructions)},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ],
-        response_schema=schema,
-        enable_tools=False,
-        tool_name="submit_detail_concern_batch",
-    )
-    Draft202012Validator(schema).validate(value)
-    return dict(value)
-
-
-def _accept_response(
-    identifier: str,
-    state: dict[str, Any],
-    raw_value: Mapping[str, Any],
-    *,
-    allowed_refs: set[str],
-) -> None:
-    value = deepcopy(dict(raw_value))
-    evidence_from_value = value.pop("evidence_refs", None)
-    Draft202012Validator(runner.record_response_schema(state["template"])).validate(value)
-
-    if evidence_from_value is not None:
-        value["evidence_refs"] = list(evidence_from_value)
-    else:
-        value["evidence_refs"] = runner._grounded_evidence_refs(
-            state["context"], allowed_refs
-        )
-    if any(ref not in allowed_refs for ref in value["evidence_refs"]):
-        raise ValueError(f"TEMPLATE_EVIDENCE: unknown evidence in {identifier}")
-
-    status = value["status"]
-    record = value["record"]
-    reason = value["reason"].strip()
-    if status == "record":
-        if record is None or runner._contains_blank_string(
-            record, state["template"]["record_schema"]
-        ):
-            raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
-        key = json.dumps(record, sort_keys=True, ensure_ascii=False)
-        if key in state["seen"]:
-            raise runner.TemplateBlocked(
-                f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}"
-            )
-        state["seen"].add(key)
-        state["records"].append(record)
-        state["refs"].extend(
-            ref for ref in value["evidence_refs"] if ref not in state["refs"]
-        )
-    elif record is not None:
-        raise ValueError(f"TEMPLATE_STATUS: {status} cannot carry a record")
-    elif status == "blocked":
-        raise runner.TemplateBlocked(
-            f"TEMPLATE_BLOCKED: {identifier}: {reason or 'missing blocking reason'}"
-        )
-    elif status == "done" and state["records"]:
-        state["refs"].extend(
-            ref for ref in value["evidence_refs"] if ref not in state["refs"]
-        )
-        state["done"] = True
-    elif status == "not_applicable" and not state["records"] and reason:
-        state["refs"] = list(value["evidence_refs"])
-        state["reason"] = reason
-        state["done"] = True
-    else:
-        raise ValueError(f"TEMPLATE_STATUS: invalid {status} transition in {identifier}")
-
-    state["accepted"].append(deepcopy(value))
-    if state["done"] and len(state["accepted"]) < len(state["saved"]):
-        raise ValueError("TEMPLATE_PROGRESS: responses after completion")
 
 
 def run_record_template_batch(
@@ -192,8 +45,7 @@ def run_record_template_batch(
     progress: Mapping[str, Any] | None = None,
     checkpoint=None,
 ) -> dict[str, dict[str, Any]]:
-    """Run 1..MAX_MODEL_FIELDS independent record templates as synchronized waves."""
-
+    """Resolve 1..MAX_MODEL_FIELDS independent concerns in one bounded transport call."""
     identifiers = tuple(str(identifier) for identifier in identifiers)
     if not identifiers or len(identifiers) > MAX_MODEL_FIELDS:
         raise ValueError(
@@ -203,10 +55,10 @@ def run_record_template_batch(
         raise ValueError("TEMPLATE_RECORD_BATCH: duplicate identifiers")
     if not supports_record_batching(model_router):
         return {
-            identifier: runner.run_record_template(
+            identifier: run_bounded_record_template(
                 model_router,
                 identifier,
-                context=context,
+                context=dict(context),
                 allowed_refs=allowed_refs,
                 progress=progress,
                 checkpoint=checkpoint,
@@ -214,67 +66,108 @@ def run_record_template_batch(
             for identifier in identifiers
         }
 
-    states = {
-        identifier: _state(
-            identifier,
-            index,
-            context=context,
-            allowed_refs=allowed_refs,
-            progress=progress,
-        )
-        for index, identifier in enumerate(identifiers)
-    }
+    allowed_refs = {str(ref) for ref in allowed_refs}
+    states: dict[str, dict[str, Any]] = {}
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    payload: dict[str, Any] = {}
+    instructions = [
+        "Resolve each independent Minecraft engineering concern completely in this one call.",
+        "For every slot return records, blocked_reason, and evidence_refs only.",
+        "Return an empty records array when that concern has no applicable record.",
+        "Do not emit continuation, done, applicability, retry, or loop-control decisions.",
+    ]
 
-    while not all(bool(state["done"]) for state in states.values()):
-        generated: dict[str, Any] = {}
-        missing: list[str] = []
-        replay_flags: dict[str, bool] = {}
-        for identifier, state in states.items():
-            if state["done"]:
-                continue
-            replaying = len(state["accepted"]) < len(state["saved"])
-            replay_flags[identifier] = replaying
-            if replaying:
-                generated[state["slot"]] = deepcopy(
-                    state["saved"][len(state["accepted"])]
-                )
-            else:
-                missing.append(identifier)
-
-        if missing:
-            generated.update(
-                _generate_wave(
-                    model_router,
-                    missing,
-                    states,
-                    allowed_refs=allowed_refs,
-                )
-            )
-
-        for identifier, state in states.items():
-            if state["done"]:
-                continue
-            slot = state["slot"]
-            if slot not in generated:
-                raise ValueError(f"TEMPLATE_RECORD_BATCH: missing response for {identifier}")
-            replaying = replay_flags.get(identifier, False)
-            _accept_response(
-                identifier,
-                state,
-                generated[slot],
-                allowed_refs=allowed_refs,
-            )
-            if not replaying and checkpoint is not None:
-                checkpoint(state["binding"], deepcopy(state["accepted"]))
-
-    return {
-        identifier: {
-            "records": deepcopy(state["records"]),
-            "reason": state["reason"],
-            "evidence_refs": list(state["refs"]),
+    for index, identifier in enumerate(identifiers):
+        template = load_record_template(identifier)
+        normalized = task_context(template, context)
+        slot = f"c{index}"
+        binding = "bounded-record-v2:" + task_binding(template, normalized, allowed_refs)
+        states[identifier] = {
+            "slot": slot,
+            "template": template,
+            "context": normalized,
+            "binding": binding,
         }
-        for identifier, state in states.items()
+        properties[slot] = record_batch_response_schema(template)
+        required.append(slot)
+        payload[slot] = {
+            "template_id": identifier,
+            **normalized,
+            "allowed_evidence_refs": sorted(allowed_refs),
+        }
+        local_rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+        instructions.append(
+            f"[{slot}] {identifier}: {template['task']}"
+            + ("\n" + local_rules if local_rules else "")
+        )
+
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
     }
+
+    saved_values: dict[str, Any] = {}
+    missing: list[str] = []
+    for identifier, state in states.items():
+        saved = (progress or {}).get(state["binding"])
+        if saved is None:
+            missing.append(identifier)
+        elif not isinstance(saved, Mapping):
+            raise ValueError(f"TEMPLATE_PROGRESS: expected object for {identifier}")
+        else:
+            saved_values[state["slot"]] = deepcopy(dict(saved))
+
+    generated: dict[str, Any] = {}
+    if missing:
+        missing_slots = {states[identifier]["slot"] for identifier in missing}
+        request_schema = {
+            "type": "object",
+            "properties": {slot: properties[slot] for slot in missing_slots},
+            "required": sorted(missing_slots),
+            "additionalProperties": False,
+        }
+        request_payload = {
+            slot: value for slot, value in payload.items() if slot in missing_slots
+        }
+        request_instructions = [instructions[0], instructions[1], instructions[2], instructions[3]]
+        for identifier in missing:
+            slot = states[identifier]["slot"]
+            template = states[identifier]["template"]
+            local_rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+            request_instructions.append(
+                f"[{slot}] {identifier}: {template['task']}"
+                + ("\n" + local_rules if local_rules else "")
+            )
+        generated = runner.generate_fixed_template_value(
+            model_router,
+            "planner",
+            [
+                {"role": "system", "content": "\n\n".join(request_instructions)},
+                {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
+            ],
+            response_schema=request_schema,
+            enable_tools=False,
+            tool_name="submit_detail_concern_batch",
+        )
+        Draft202012Validator(request_schema).validate(generated)
+
+    combined = {**saved_values, **generated}
+    results: dict[str, dict[str, Any]] = {}
+    for identifier, state in states.items():
+        slot = state["slot"]
+        if slot not in combined:
+            raise ValueError(f"TEMPLATE_RECORD_BATCH: missing response for {identifier}")
+        raw = deepcopy(combined[slot])
+        result = normalize_bounded_record_response(
+            identifier, state["template"], raw, allowed_refs
+        )
+        results[identifier] = result
+        if identifier in missing and checkpoint is not None:
+            checkpoint(state["binding"], deepcopy(raw))
+    return results
 
 
 __all__ = [
