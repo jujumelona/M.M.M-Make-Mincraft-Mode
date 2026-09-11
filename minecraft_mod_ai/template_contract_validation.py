@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from pathlib import Path
+from string import Formatter
 import json
 import re
 
@@ -9,6 +10,15 @@ from jsonschema import Draft202012Validator
 import yaml
 
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_SYSTEM_SOURCE_FIELDS = {
+    "persistent_store": {"package_name", "mod_id"},
+    "config_loader": {"package_name", "mod_id"},
+    "class_skill": {"package_name", "class_name", "resource"},
+    "economy": {"package_name", "class_name", "resource"},
+    "party_guild": {"package_name", "class_name", "resource"},
+    "quest": {"package_name", "class_name", "resource"},
+    "gui_networking": {"package_name", "mod_id", "class_name", "resource"},
+}
 
 
 def placeholders(value):
@@ -73,6 +83,28 @@ def _validate_response_contracts(root: Path) -> None:
         Draft202012Validator.check_schema(schema)
 
 
+def _validate_system_source_templates(root: Path) -> None:
+    source_root = root / "implementation" / "system_pack"
+    actual = {path.stem.removesuffix(".java") for path in source_root.glob("*.java.fmt")}
+    expected = set(_SYSTEM_SOURCE_FIELDS)
+    if actual != expected:
+        raise ValueError(
+            f"SYSTEM_SOURCE_TEMPLATE: expected {sorted(expected)}, found {sorted(actual)}"
+        )
+    for name, expected_fields in _SYSTEM_SOURCE_FIELDS.items():
+        raw = (source_root / f"{name}.java.fmt").read_text(encoding="utf-8")
+        fields = {
+            field_name
+            for _, field_name, _, _ in Formatter().parse(raw)
+            if field_name is not None
+        }
+        if fields != expected_fields:
+            raise ValueError(
+                f"SYSTEM_SOURCE_TEMPLATE: {name} expects fields {sorted(expected_fields)}, "
+                f"found {sorted(fields)}"
+            )
+
+
 def validate_catalog(root: Path, *, consumer_roots=None):
     templates = {}
     for path in sorted(root.rglob("*.yaml")):
@@ -124,6 +156,7 @@ def validate_catalog(root: Path, *, consumer_roots=None):
         if orphaned:
             raise ValueError(f"TEMPLATE_UNCONSUMED: {orphaned}")
     _validate_response_contracts(root)
+    _validate_system_source_templates(root)
     return templates
 
 
