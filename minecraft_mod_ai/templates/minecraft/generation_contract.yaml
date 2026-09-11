@@ -1,0 +1,40 @@
+id: minecraft/generation_contract
+execution: contract
+kinds:
+  item:
+    required_fields: [display_name, main_color]
+  block:
+    required_fields: [display_name, main_color, hardness]
+  tool:
+    required_fields: [display_name, main_color, attack_damage, attack_speed]
+  weapon:
+    required_fields: [display_name, main_color, attack_damage, attack_speed]
+  armor:
+    required_fields: [display_name, main_color, slot]
+  food:
+    required_fields: [display_name, main_color, hunger, saturation]
+  crop:
+    required_fields: [display_name, main_color, seed_color]
+  machine:
+    required_fields: [display_name, main_color, input_item, output_item, output_count, processing_ticks]
+  effect:
+    required_fields: [display_name, color]
+  enchantment:
+    required_fields: [display_name, max_level]
+  command:
+    required_fields: [literal, message, permission_level]
+  recipe:
+    required_fields: [json]
+    authority: artifact_resource
+  advancement:
+    required_fields: [json]
+    authority: artifact_resource
+  loot:
+    required_fields: [json]
+    authority: artifact_resource
+rules:
+  - These fields are semantic inputs owned before deterministic generation; the generator must never invent a missing required field.
+  - display_name is the canonical authored name. Locale-specific projections must not become duplicate model decisions.
+  - main_color is the canonical texture color for generated textured content; legacy generator color aliases are host-lowered only.
+  - recipe, advancement, and loot serialized payloads are artifact/resource-owned and must not be reconstructed from orchestration metadata.
+  - Missing, invalid, or conflicting required fields block generation with a machine-readable error.
