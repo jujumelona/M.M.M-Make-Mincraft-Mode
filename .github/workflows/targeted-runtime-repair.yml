@@ -32,6 +32,11 @@ jobs:
               p.write_text(text.replace(old, new, 1), encoding='utf-8')
 
           replace_once(
+              'minecraft_mod_ai/evidence_first_planning.py',
+              'from .acceptance_contracts import is_public_acceptance as _is_public_acceptance\n\n',
+              '',
+          )
+          replace_once(
               'minecraft_mod_ai/work_graph.py',
               """        if stage == 'content':\n            return _pipeline_shard_size(\n                'MMM_CONTENT_PIPELINE_SHARD_SIZE',\n                1,\n                max(1, int(policy.java_shard_size)),\n            )\n""",
               """        if stage == 'content':\n            # Deterministic content aggregation is owned by ScalePolicy. Runtime\n            # environment knobs must not silently explode one bounded aggregate into\n            # one work node per module.\n            return max(1, int(policy.java_shard_size))\n""",
@@ -41,13 +46,11 @@ jobs:
               """        if stage == 'entity':\n            return _pipeline_shard_size(\n                'MMM_ENTITY_PIPELINE_SHARD_SIZE',\n                1,\n                max(1, int(policy.entity_shard_size)),\n            )\n""",
               """        if stage == 'entity':\n            return _pipeline_shard_size(\n                'MMM_ENTITY_PIPELINE_SHARD_SIZE',\n                2,\n                max(1, int(policy.entity_shard_size)),\n            )\n""",
           )
-
           replace_once(
               'minecraft_mod_ai/custom_module_generator.py',
               """    hard_cap = max(1024, int(policy.model_context_bytes))\n    if fast_mode:\n        return min(hard_cap, 4 * 1024)\n    fallback = min(hard_cap, 12 * 1024)\n""",
               """    hard_cap = max(1024, int(policy.model_context_bytes))\n    # Fast mode changes search/retry policy, not the semantic source context needed\n    # by the coder. Starving grounding here turns speed mode into a quality mode.\n    fallback = min(hard_cap, 12 * 1024)\n""",
           )
-
           replace_once(
               'minecraft_mod_ai/llama_tuning_pipeline.py',
               """    def _context_value(config: Any) -> int:\n""",
