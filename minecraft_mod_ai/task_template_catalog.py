@@ -73,7 +73,12 @@ def _apply_shared_policy(identifier: str, value: dict):
 
 def load_template(identifier: str):
     requested = _canonical_identifier(identifier)
-    canonical = _CRITERION_ALIASES.get(requested, requested)
+    concrete = (RUNTIME_TEMPLATE_ROOT / f"{requested}.yaml").resolve()
+    canonical = (
+        requested
+        if concrete.is_relative_to(RUNTIME_TEMPLATE_ROOT) and concrete.is_file()
+        else _CRITERION_ALIASES.get(requested, requested)
+    )
     return _apply_shared_policy(canonical, deepcopy(_load(canonical)))
 
 
