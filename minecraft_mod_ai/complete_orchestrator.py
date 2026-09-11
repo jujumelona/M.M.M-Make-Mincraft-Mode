@@ -658,6 +658,8 @@ class CompleteProductionOrchestrator:
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
         asset_shards: list[dict[str, Any]] = []
+        review_futures: list[tuple[str, Future[dict[str, Any]]]] = []
+        review_futures_lock = threading.Lock()
         runtime_init_lock = threading.RLock()
 
         def get_router() -> ModelRouter:
@@ -896,7 +898,19 @@ class CompleteProductionOrchestrator:
                         if entity_receipt is None:
                             raise CompleteProductionError(f'Entity generation node omitted its receipt: {module.module_id}')
                         if options.run_blockbench and (not options.source_only):
-                            blockbench_receipts.append(run_named_checkpoint(ledger, f'blockbench-review-{module.module_id}', stage='validate:blockbench', input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': entity_receipt}, action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file()))
+                            review_future = review_pool.submit(
+                                run_named_checkpoint,
+                                ledger,
+                                f'blockbench-review-{module.module_id}',
+                                stage='validate:blockbench',
+                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': entity_receipt},
+                                action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root),
+                                encode=lambda value: value,
+                                decode=lambda cached: cached,
+                                validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
+                            )
+                            with review_futures_lock:
+                                review_futures.append((module.module_id, review_future))
                         elif options.run_blockbench:
                             unresolved.append(f'blockbench:{module.module_id}:not-run-in-source-only-mode')
             elif kind == 'asset-shard':
@@ -912,6 +926,12 @@ class CompleteProductionOrchestrator:
         llm_pool = ThreadPoolExecutor(max_workers=max(1, int(capacities['llm'])), thread_name_prefix='llm')
         image_pool = ThreadPoolExecutor(max_workers=max(1, int(capacities['image_gpu'])), thread_name_prefix='image_gpu')
         commit_pool = ThreadPoolExecutor(max_workers=max(1, int(capacities['commit'])), thread_name_prefix='commit')
+        review_workers_raw = os.environ.get('MMM_BLOCKBENCH_REVIEW_WORKERS', '').strip()
+        try:
+            review_workers = int(review_workers_raw) if review_workers_raw else max(1, min(4, int(capacities['cpu_io'])))
+        except ValueError:
+            review_workers = max(1, min(4, int(capacities['cpu_io'])))
+        review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
         node_futures: dict[str, Future[Any]] = {}
         idle_wait = threading.Event()
         lease_seconds = 900
@@ -976,11 +996,14 @@ class CompleteProductionOrchestrator:
                 if pending_ids:
                     raise CompleteProductionError(f'WorkGraph DAG deadlock: pending nodes remain but no ready nodes are available: {pending_ids}')
                 break
+            review_results = [(module_id, future.result()) for module_id, future in tuple(review_futures)]
+            blockbench_receipts.extend(receipt for _, receipt in sorted(review_results, key=lambda item: item[0]))
         finally:
             cpu_pool.shutdown(wait=True, cancel_futures=True)
             llm_pool.shutdown(wait=True, cancel_futures=True)
             image_pool.shutdown(wait=True, cancel_futures=True)
             commit_pool.shutdown(wait=True, cancel_futures=True)
+            review_pool.shutdown(wait=True, cancel_futures=True)
         asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
 

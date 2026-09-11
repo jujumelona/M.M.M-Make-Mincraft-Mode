@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 
+from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.extended_content_generator import generate_extended_content
 from minecraft_mod_ai.generation_concurrency_safety import _builtin_shared_anchors
@@ -49,3 +50,12 @@ def test_extended_content_no_long_function_wide_serialization_wrapper():
     source = inspect.getsource(generate_extended_content)
     assert '_serialized_extended_content' not in source
     assert 'with project_write_lock(info.root):' in source
+
+
+
+def test_blockbench_review_uses_dedicated_parallel_lane():
+    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
+    assert "thread_name_prefix='blockbench_review'" in source
+    assert 'review_pool.submit(' in source
+    assert 'blockbench_receipts.append(run_named_checkpoint' not in source
+    assert 'MMM_BLOCKBENCH_REVIEW_WORKERS' in source

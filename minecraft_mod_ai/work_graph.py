@@ -686,11 +686,11 @@ def _module_shards(
 
     def shard_size_for(stage: str) -> int:
         if stage == 'content':
-            # Deterministic extended-content aggregation is governed by the explicit
-            # ScalePolicy. Environment-tuned pipeline widths belong to model-owned
-            # stages; allowing them here can silently explode one bounded aggregate
-            # into one work node per deterministic content module.
-            return max(1, int(policy.java_shard_size))
+            return _pipeline_shard_size(
+                'MMM_CONTENT_PIPELINE_SHARD_SIZE',
+                1,
+                max(1, int(policy.java_shard_size)),
+            )
         if stage == 'system':
             return _pipeline_shard_size(
                 'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
@@ -700,7 +700,7 @@ def _module_shards(
         if stage == 'entity':
             return _pipeline_shard_size(
                 'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                2,
+                1,
                 max(1, int(policy.entity_shard_size)),
             )
         if stage == 'custom':
