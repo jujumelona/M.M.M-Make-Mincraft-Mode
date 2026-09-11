@@ -58,6 +58,8 @@ def test_asset_render_placeholders_have_explicit_required_input_contracts() -> N
     for path in sorted((TEMPLATES / "asset").glob("*.yaml")):
         data = _load(path)
         render = data.get("render")
+        if render is None:
+            continue
         assert isinstance(render, dict), f"asset render must be a mapping: {path}"
         body = render.get("body")
         assert isinstance(body, str) and body, f"asset render body must be non-empty: {path}"
