@@ -1,0 +1,70 @@
+name: Bottleneck Path Lock
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bottleneck-path-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Patch exact path locking and move catalog scan to validation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/performance_final_contract.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'from .project_write_lock import project_write_lock\n',
+              'from .project_write_lock import project_path_write_locks, project_write_lock\n',
+              1,
+          )
+          old = '''            captured = _select_custom_patch_capture(records, result)\n            with project_write_lock(live_root):\n                commit_receipt = _commit_staged_operations(live_root=live_root, staging_root=staging_root, capture=captured, source_patch_module=source_patch_module)\n'''
+          new = '''            captured = _select_custom_patch_capture(records, result)\n            commit_paths = tuple(\n                str(item.get('path', '')).strip()\n                for item in captured.get('operations', [])\n                if isinstance(item, dict) and str(item.get('path', '')).strip()\n            )\n            if not commit_paths:\n                raise StagedCommitConflict('Staged custom patch contains no target paths.')\n            with project_path_write_locks(live_root, commit_paths):\n                commit_receipt = _commit_staged_operations(\n                    live_root=live_root,\n                    staging_root=staging_root,\n                    capture=captured,\n                    source_patch_module=source_patch_module,\n                )\n'''
+          if old not in text:
+              raise SystemExit('custom commit lock pattern not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('minecraft_mod_ai/validator.py')
+          text = path.read_text(encoding='utf-8')
+          needle = '''        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):\n            checks += 1\n            self._load_json(path, findings, root)\n\n        java_files = sorted(\n'''
+          replacement = '''        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):\n            checks += 1\n            self._load_json(path, findings, root)\n\n        extended_catalog = root / ".minecraft_ai/extended-modules.json"\n        if extended_catalog.exists():\n            checks += 1\n            try:\n                from .extended_content_generator import (\n                    ExtendedContentError,\n                    iter_extended_module_records,\n                )\n\n                tuple(iter_extended_module_records(root))\n            except (ExtendedContentError, OSError, ValueError) as exc:\n                findings.append(\n                    Finding(\n                        "EXTENDED_CATALOG_INVALID",\n                        "error",\n                        self._rel(root, extended_catalog),\n                        f"Extended module catalog failed structural validation: {exc}",\n                    )\n                )\n\n        java_files = sorted(\n'''
+          if needle not in text:
+              raise SystemExit('validator insertion pattern not found')
+          path.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+
+          Path('tests/test_remaining_bottleneck_contracts.py').write_text('''from __future__ import annotations\n\nimport inspect\n\n\ndef test_custom_staged_commit_uses_exact_path_lock():\n    import minecraft_mod_ai.performance_final_contract as contract\n\n    source = inspect.getsource(contract._install_staged_custom_generator)\n    assert "with project_path_write_locks(live_root, commit_paths):" in source\n    staged_tail = source[source.index("captured = _select_custom_patch_capture"):]
+    assert "with project_write_lock(live_root):" not in staged_tail\n\n\ndef test_validator_runs_extended_catalog_structure_check_once():\n    import minecraft_mod_ai.validator as validator\n\n    source = inspect.getsource(validator.ProjectValidator.validate)\n    assert source.count("iter_extended_module_records(root)") == 1\n    assert "EXTENDED_CATALOG_INVALID" in source\n''', encoding='utf-8')
+          PY
+      - name: Validate focused contracts
+        run: |
+          python -m compileall -q minecraft_mod_ai tests/test_remaining_bottleneck_contracts.py
+          python -m ruff check minecraft_mod_ai/performance_final_contract.py minecraft_mod_ai/validator.py tests/test_remaining_bottleneck_contracts.py --select F,E7,E9
+          python -m pytest -q \
+            tests/test_remaining_bottleneck_contracts.py \
+            tests/test_source_patch_path_concurrency.py \
+            tests/test_bottleneck_fast_paths.py \
+            tests/test_project_write_lock_concurrency.py
+      - name: Commit validated source changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/performance_final_contract.py minecraft_mod_ai/validator.py tests/test_remaining_bottleneck_contracts.py
+          git commit -m 'Narrow custom commit fencing and validate catalog once'
+          git pull --rebase origin main
+          git push origin HEAD:main
