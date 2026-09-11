@@ -9,13 +9,14 @@ from minecraft_mod_ai.reuse_template_pipeline import (
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def _reuse_sequence() -> tuple[str, ...]:
-    return tuple(load_template("reuse/workflow").get("steps") or ())
+def _canonical_reuse_sequence() -> tuple[str, ...]:
+    workflow = load_template("reuse/workflow")
+    return tuple(workflow.get("steps") or ())
 
 
 def test_reuse_template_sequence_is_canonical():
     validate_reuse_template_sequence()
-    sequence = _reuse_sequence()
+    sequence = _canonical_reuse_sequence()
     assert len(sequence) == 15
     assert sequence[0] == "reuse/query_build"
     assert sequence[-1] == "reuse/integration"
@@ -32,7 +33,7 @@ def test_evaluate_feature_reuse_generates_all_receipts():
         saved_progress[binding] = receipt
 
     result = evaluate_feature_reuse(feature, checkpoint=checkpoint)
-    sequence = _reuse_sequence()
+    sequence = _canonical_reuse_sequence()
     assert result["feature_id"] == "energy_storage"
     assert len(result["receipts"]) == len(sequence)
     assert len(saved_progress) == len(sequence)
@@ -53,10 +54,10 @@ def test_evaluate_reuse_pipeline_runs_for_each_atomic_feature():
         {"feature_id": "feat_b", "feature_description": "Description B"},
     ]
     results = evaluate_reuse_pipeline(features)
-    expected_count = len(_reuse_sequence())
+    sequence = _canonical_reuse_sequence()
     assert len(results) == 2
     assert [r["feature_id"] for r in results] == ["feat_a", "feat_b"]
-    assert all(len(r["receipts"]) == expected_count for r in results)
+    assert all(len(r["receipts"]) == len(sequence) for r in results)
 
 
 def test_reuse_proof_blocking():

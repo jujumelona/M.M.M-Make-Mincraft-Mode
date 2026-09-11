@@ -8,13 +8,14 @@ from minecraft_mod_ai.research_template_pipeline import (
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def _research_sequence() -> tuple[str, ...]:
-    return tuple(load_template("research/workflow").get("steps") or ())
+def _canonical_research_sequence() -> tuple[str, ...]:
+    workflow = load_template("research/workflow")
+    return tuple(workflow.get("steps") or ())
 
 
 def test_research_template_sequence_is_canonical():
     validate_research_template_sequence()
-    sequence = _research_sequence()
+    sequence = _canonical_research_sequence()
     assert len(sequence) == 9
     assert sequence[0] == "research/reference_identity"
     assert sequence[-1] == "research/evidence_check"
@@ -34,7 +35,7 @@ def test_run_research_pipeline_generates_all_receipts():
         saved_progress[binding] = receipt
 
     result = run_research_pipeline(state, evidence_items=evidence, checkpoint=checkpoint)
-    sequence = _research_sequence()
+    sequence = _canonical_research_sequence()
     assert len(result["receipts"]) == len(sequence)
     assert len(saved_progress) == len(sequence)
 
