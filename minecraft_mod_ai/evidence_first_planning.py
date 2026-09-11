@@ -17,9 +17,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from .acceptance_contracts import is_public_acceptance
-
-_is_public_acceptance = is_public_acceptance
+from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
 
 from .structural_minecraft_runtime_contract import (
     RESEARCH_BASIS, TEMPLATE_CATALOG_SCHEMA, _compile_tasks,
