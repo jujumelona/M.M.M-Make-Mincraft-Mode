@@ -45,6 +45,7 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+_HARD_REPAIR_ATTEMPTS = 2
 
 
 _ACTIVE_REPAIR_PROJECT_INDEX: ContextVar[tuple[Path, ProjectIndex] | None] = ContextVar(
@@ -73,8 +74,8 @@ class RepairEngine:
 
     No file-count truncation is used. The whole project is indexed and relevant files
     are selected within an explicit byte budget. Repair remains progress-sensitive;
-    host control owns termination through ``max_attempts``. When omitted, one repair
-    call defaults to at most two candidate patches.
+    host control owns termination. ``max_attempts`` can lower the per-call budget but
+    can never raise the host hard cap.
     """
 
     def __init__(
@@ -108,7 +109,8 @@ class RepairEngine:
         ):
             raise RepairEngineError("max_attempts must be null or a positive integer.")
 
-        attempt_limit = max_attempts if max_attempts is not None else 2
+        requested_limit = max_attempts if max_attempts is not None else _HARD_REPAIR_ATTEMPTS
+        attempt_limit = min(requested_limit, _HARD_REPAIR_ATTEMPTS)
 
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
@@ -151,7 +153,7 @@ class RepairEngine:
                         "attempts": attempt,
                         "stop_reason": (
                             "explicit_max_attempts"
-                            if max_attempts is not None
+                            if max_attempts is not None and max_attempts < _HARD_REPAIR_ATTEMPTS
                             else "hard_max_attempts"
                         ),
                         "evidence": evidence,
