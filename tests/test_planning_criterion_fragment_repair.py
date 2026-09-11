@@ -48,9 +48,10 @@ def test_legacy_prose_response_is_rejected_without_rewriting_or_retry() -> None:
     assert len(router.calls) == 1
 
 
-def test_empty_concern_completion_is_terminal_without_a_record() -> None:
+def test_legacy_status_response_is_rejected_without_retry() -> None:
+    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
     router = _SequenceRouter([{"status": "done", "record": None, "reason": "", "evidence_refs": []}])
-    with pytest.raises(ValueError, match="TEMPLATE_STATUS"):
+    with pytest.raises(StructuredOutputValidationError):
         _generate(router)
     assert len(router.calls) == 1
 
