@@ -11,6 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .template_contract_validation import PLACEHOLDER, validate_template_contract
+from .version_template_context import resolved_template_values
 
 
 class TemplateRenderError(ValueError):
@@ -18,59 +19,6 @@ class TemplateRenderError(ValueError):
 
 
 _PLACEHOLDER_PATTERN = PLACEHOLDER
-
-
-def _resolved_render_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Inject immutable HOST target facts without allowing caller overrides.
-
-    Templates receive the complete resolved target automatically whenever execution carries
-    ``resolved_version_context``.  This keeps version-coupled constants out of model inputs
-    and prevents individual templates from rebuilding compatibility rules independently.
-    """
-    merged = dict(values)
-    raw = merged.get("resolved_version_context")
-    if raw is None:
-        return merged
-
-    from .resolved_version_context import ResolvedVersionContext, VersionContextError
-    from .target_contract import mappings_applicable
-
-    resolved = raw if isinstance(raw, ResolvedVersionContext) else ResolvedVersionContext.from_dict(raw)
-    snapshot = resolved.to_dict()
-    target = dict(snapshot["target"])
-
-    # Derived target facts are deterministic too.  Expose them from the same authority so
-    # templates never need to infer naming/pack semantics from a Minecraft version string.
-    mapping_is_applicable = mappings_applicable(target["minecraft_version"])
-    canonical = {
-        **target,
-        "version_context_id": resolved.context_id,
-        "mappings_applicable": mapping_is_applicable,
-        "naming_regime": "mapped_obfuscated" if mapping_is_applicable else "native_unobfuscated",
-        "pack_versions": {
-            "data": target["data_pack_version"],
-            "resource": target["resource_pack_version"],
-            "resource_major": target["resource_pack_format"],
-        },
-    }
-    if mapping_is_applicable:
-        canonical["mappings"] = {
-            "kind": target["mappings_kind"],
-            "version": target["mappings_version"],
-        }
-
-    for key, expected in canonical.items():
-        if key in merged and merged[key] != expected:
-            raise VersionContextError(
-                "HOST_FACT_OVERRIDE",
-                field=key,
-                expected=expected,
-                actual=merged[key],
-                context_id=resolved.context_id,
-            )
-        if key not in merged:
-            merged[key] = deepcopy(expected)
-    return merged
 
 
 def _substitute_string(template_str: str, values: Mapping[str, Any]) -> str:
@@ -103,7 +51,7 @@ def _substitute_json_data(data: Any, values: Mapping[str, Any]) -> Any:
 
 def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> str:
     validate_template_contract(template)
-    render_values = _resolved_render_values(values)
+    render_values = resolved_template_values(values)
     if "inputs" in template:
         contracts = template["inputs"]
         schema = {
@@ -115,7 +63,7 @@ def render_template(template: Mapping[str, Any], values: Mapping[str, Any]) -> s
             "required": [name for name, spec in contracts.items() if spec.get("required") is True],
             "additionalProperties": False,
         }
-        # The execution context may carry unrelated deterministic facts.  Validate only the
+        # The execution context may carry unrelated deterministic facts. Validate only the
         # inputs this template declares; required version inputs can be satisfied by HOST
         # injection above, while undeclared execution metadata never becomes model input.
         contract_values = {
