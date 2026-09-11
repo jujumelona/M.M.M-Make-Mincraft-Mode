@@ -3,6 +3,11 @@ input:
   implementation_surfaces:
   minecraft_structure:
 
+input_schema:
+  artifact_obligations: list[string]
+  implementation_surfaces: list[string]
+  minecraft_structure: object
+
 task:
   normalize_declared_artifact_kinds:
   reject_unknown_gameplay_routing_keys:
@@ -12,10 +17,15 @@ rules:
   - Do not inspect feature names, capability names, prompt wording, or domain labels.
   - Select artifacts only from explicit structural obligations.
   - Keep unsupported artifact kinds unresolved; never guess a replacement.
+  - Emit duplicate-free artifact_kinds in deterministic order.
 
 output:
   artifact_kinds:
   unresolved_inputs:
+
+output_schema:
+  artifact_kinds: list[string]
+  unresolved_inputs: list[string]
 
 proof:
   predicate: every artifact_kind is canonical and every unsupported input is reported
