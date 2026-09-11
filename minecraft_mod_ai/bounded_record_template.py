@@ -51,7 +51,11 @@ def record_batch_response_schema(template: dict[str, Any]) -> dict[str, Any]:
             },
             "evidence_refs": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1},
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_MODEL_STRING_CHARS,
+                },
                 "uniqueItems": True,
             },
         },
