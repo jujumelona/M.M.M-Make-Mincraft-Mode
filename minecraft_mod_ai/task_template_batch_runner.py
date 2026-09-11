@@ -20,15 +20,18 @@ from . import task_template_runner as runner
 
 
 def supports_record_batching(model_router: Any) -> bool:
-    """Batch only transports with native fixed-tool arguments.
+    """Batch only the package-owned runtime router, never lookalike test doubles.
 
-    Lightweight fixture routers intentionally keep the legacy one-concern path so tests and
-    deterministic mocks do not need to emulate the nested native-tool envelope.
+    Native-tool capability alone is not enough: fixture routers often implement the same
+    method to test one atomic template response. The canonical ``ModelRouter`` owns the
+    fixed-tool transport contract and is therefore the only supported batching boundary.
     """
 
-    return model_router is not None and callable(
-        getattr(model_router, "generate_tool_decision", None)
-    )
+    if model_router is None:
+        return False
+    from .model_router import ModelRouter
+
+    return isinstance(model_router, ModelRouter)
 
 
 def record_template_batches(identifiers: Sequence[str]) -> tuple[tuple[str, ...], ...]:
