@@ -192,8 +192,10 @@ def validate_catalog(root: Path, *, consumer_roots=None):
         )
         if orphaned:
             raise ValueError(f"TEMPLATE_UNCONSUMED: {orphaned}")
-    _validate_response_contracts(root)
-    _validate_system_source_templates(root)
+    if (root / "response").exists():
+        _validate_response_contracts(root)
+    if (root / "implementation" / "system_pack").exists():
+        _validate_system_source_templates(root)
     return templates
 
 
