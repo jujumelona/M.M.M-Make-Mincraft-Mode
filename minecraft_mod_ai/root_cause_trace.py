@@ -338,6 +338,7 @@ def emit_root_cause(
 
     trace_seq = next(_TRACE_SEQUENCE)
     trace_id = current_trace_id()
+    failure = _is_failure(result, exc)
     try:
         payload: dict[str, Any] = {
             "schema_version": "mmm/root-cause-trace-v3",
@@ -366,13 +367,13 @@ def emit_root_cause(
                 payload["details_artifact"] = save_trace_artifact(
                     details,
                     durable_trace_path().parent / "artifacts",
+                    sync=failure,
                 )
             except Exception as artifact_error:
                 payload["details_artifact_error"] = type(artifact_error).__name__
         if exc is not None:
             payload["exception_chain"] = exception_chain(exc)
 
-        failure = _is_failure(result, exc)
         if failure:
             first_failure_seq = _FIRST_FAILURE_SEQ.get()
             if first_failure_seq <= 0:
