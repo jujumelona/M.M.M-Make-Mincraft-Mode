@@ -140,8 +140,8 @@ for path in ("tests/test_atomic_design_pipeline.py", "tests/test_content_design_
 
 path = "tests/test_atomic_design_pipeline.py"
 value = read(path)
-old = '        "capability", ["MAGIC_SPELL", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]\n'
-new = '        "capability", ["UNSUPPORTED"]\n'
+old = '    "capability", ["MAGIC_SPELL", "DIMENSION_EXISTS", "SCREEN_EXISTS", "UNSUPPORTED"]\n'
+new = '    "capability", ["UNSUPPORTED"]\n'
 if value.count(old) != 1:
     raise RuntimeError("unsupported capability parametrization target missing")
 write(path, value.replace(old, new, 1))

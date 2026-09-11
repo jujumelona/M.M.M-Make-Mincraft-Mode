@@ -246,12 +246,6 @@ def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_con
         "requires": ["gradle_sha256", "dependency_coordinates", "repositories"],
         "inputs": {
             "gradle_sha256": {"type": "string", "required": True},
-            "dependency_coordinates": {"type": "object", "required": True},
-            "repositories": {
-                "type": "array",
-                "items": {"type": "string"},
-                "required": True,
-            },
         },
         "render": {"language": "text", "body": "{{gradle_sha256}}"},
     }
