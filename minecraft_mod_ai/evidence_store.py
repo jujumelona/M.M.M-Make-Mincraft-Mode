@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -201,12 +200,18 @@ class EvidenceStore:
         Raises:
             EvidenceStoreError: If not found
         """
+        import re
+        if not re.fullmatch(r"[0-9a-f]{64}", evidence_id):
+            raise EvidenceStoreError("Invalid evidence ID")
         evidence_file = self.storage_path / f"{evidence_id}.json"
-        
+
         if not evidence_file.exists():
             raise EvidenceStoreError(f"Evidence not found: {evidence_id[:8]}")
         
         data = json.loads(evidence_file.read_text(encoding="utf-8"))
+        payload = {k: v for k, v in data.items() if k != "evidence_id"}
+        if data.get("evidence_id") != evidence_id or EvidenceRecord.compute_evidence_id(payload) != evidence_id:
+            raise EvidenceStoreError("Evidence content hash mismatch")
         return EvidenceRecord.from_dict(data)
     
     def verify_evidence_matches_binding(

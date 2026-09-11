@@ -1,6 +1,7 @@
 """Read a host-published coherent bundle catalog; no component discovery fallback."""
 
 import json
+from functools import lru_cache
 import os
 from pathlib import Path
 
@@ -12,15 +13,22 @@ DEFAULT_CATALOG = Path(__file__).with_name("data") / "host_version_catalog.json"
 def load_host_catalog():
     location = os.environ.get("MMM_VERSION_BUNDLE_CATALOG", "").strip() or DEFAULT_CATALOG
     try:
-        value = json.loads(Path(location).read_text(encoding="utf-8"))
+        bundles, auto_context_id = _parse_catalog(Path(location).read_bytes())
     except (OSError, ValueError) as exc:
         raise VersionContextError("HOST_BUNDLE_CATALOG_INVALID", reason=str(exc)) from exc
+    return VersionResolver(bundles, auto_context_id=auto_context_id), bundles
+
+
+@lru_cache(maxsize=2)
+def _parse_catalog(content: bytes):
+    # Cache by complete bytes, never by timestamps: edits always revalidate.
+    value = json.loads(content)
     if not isinstance(value, dict) or set(value) != {"schema_version", "auto_context_id", "bundles"}:
         raise VersionContextError("HOST_BUNDLE_CATALOG_INVALID")
     if value["schema_version"] != "mmm/host-version-catalog-v1" or not isinstance(value["bundles"], list):
         raise VersionContextError("HOST_BUNDLE_CATALOG_INVALID")
     bundles = tuple(ResolvedVersionContext.from_dict(bundle) for bundle in value["bundles"])
-    return VersionResolver(bundles, auto_context_id=value["auto_context_id"]), bundles
+    return bundles, value["auto_context_id"]
 
 
 def host_versions(limit):
@@ -101,137 +109,36 @@ def audit_host_catalog():
 
 
 def production_readiness_audit(supported_scope=None):
-    """Production readiness audit: enforce support matrix, evidence requirements, and zero unreviewed.
-    
-    P0-3: Uses explicit product support matrix, not derived from first bundle.
-    P0-4: Enforces compile/gametest evidence requirements.
-    """
-    from .product_support_matrix import validate_support_matrix, SupportMatrixError
+    """Check every required and admitted leaf against actual execution records."""
+    from .product_support_matrix import REQUIRED_CANONICAL_LEAVES, SUPPORTED_MINECRAFT_VERSIONS
+    from .integrity_bootstrap import bootstrap_integrity
+    from .integrity_evidence import binding_expectations, verify_execution_evidence
     from .evidence_store import get_global_evidence_store
-    from .task_template_catalog import load_template
-
-    resolver, bundles = load_host_catalog()
-    evidence_store = get_global_evidence_store()
-    
-    # P0-3: Validate against explicit support matrix (not first-bundle-derived scope)
-    try:
-        validate_support_matrix(bundles)
-    except SupportMatrixError as exc:
-        return {
-            "schema_version": "mmm/host-production-readiness-audit-v1",
-            "status": "FAIL",
-            "reason": "support_matrix_validation_failed",
-            "failures": exc.failures,
-        }
-    
-    # P0-4: Check evidence requirements for all admitted leaves
-    evidence_failures = []
-    
-    for context in bundles:
-        bindings = context.facts.get("leaf_bindings", {})
-        
-        for leaf_id, binding in bindings.items():
-            state = binding.get("state")
-            
-            if state != "admitted":
-                continue
-            
-            impl = binding.get("implementation", {})
-            template_id = impl.get("template")
-            
-            if not template_id:
-                continue
-            
-            # Load template to check evidence requirements
+    authority = bootstrap_integrity()
+    authority.verify_live()
+    _, bundles = load_host_catalog()
+    store = get_global_evidence_store()
+    scope = set(REQUIRED_CANONICAL_LEAVES if supported_scope is None else supported_scope)
+    if not scope:
+        raise ValueError("PRODUCTION_SCOPE_EMPTY")
+    failures = []
+    available = {ctx.minecraft for ctx in bundles}
+    for version in set(SUPPORTED_MINECRAFT_VERSIONS) - available:
+        failures.append({"minecraft": version, "issue": "SUPPORTED_VERSION_MISSING"})
+    for ctx in bundles:
+        bindings = ctx.to_dict()["host_facts"]["leaf_bindings"]
+        required = scope if ctx.minecraft in SUPPORTED_MINECRAFT_VERSIONS or supported_scope is not None else set()
+        leaves = required | {leaf for leaf, row in bindings.items() if row["state"] == "admitted"}
+        for leaf in sorted(leaves):
             try:
-                template = load_template(template_id)
-                if template_id in context.facts.get("artifact_rules", {}):
-                    context.admit_template(template)
-            except Exception:
-                continue
-            
-            evidence_req = template.get("evidence_requirements", {})
-            evidence_id = binding.get("evidence_id")
-            
-            # P0-4: Code generation requires compile evidence
-            if evidence_req.get("compile") == "required":
-                if not evidence_id:
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": leaf_id,
-                        "issue": "COMPILE_EVIDENCE_MISSING",
-                        "actual": "no_evidence_id",
-                    })
-                    continue
-                
-                try:
-                    evidence = evidence_store.retrieve_evidence(evidence_id)
-                    if not evidence.compile_result or evidence.compile_result.status != "PASS":
-                        evidence_failures.append({
-                            "context": context.context_id,
-                            "leaf": leaf_id,
-                            "issue": "COMPILE_EVIDENCE_REQUIRED",
-                            "actual": evidence.compile_result.status if evidence.compile_result else "none",
-                        })
-                except Exception:
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": leaf_id,
-                        "issue": "COMPILE_EVIDENCE_MISSING",
-                        "actual": "evidence_not_found",
-                    })
-            
-            # P0-4: Runtime leaves require gametest evidence
-            if evidence_req.get("gametest") == "required":
-                if not evidence_id:
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": leaf_id,
-                        "issue": "GAMETEST_EVIDENCE_MISSING",
-                        "actual": "no_evidence_id",
-                    })
-                    continue
-                
-                try:
-                    evidence = evidence_store.retrieve_evidence(evidence_id)
-                    if not evidence.gametest_result or evidence.gametest_result.status != "PASS":
-                        evidence_failures.append({
-                            "context": context.context_id,
-                            "leaf": leaf_id,
-                            "issue": "GAMETEST_EVIDENCE_REQUIRED",
-                            "actual": evidence.gametest_result.status if evidence.gametest_result else "none",
-                        })
-                except Exception:
-                    evidence_failures.append({
-                        "context": context.context_id,
-                        "leaf": leaf_id,
-                        "issue": "GAMETEST_EVIDENCE_MISSING",
-                        "actual": "evidence_not_found",
-                    })
-    
-    if evidence_failures:
-        return {
-            "schema_version": "mmm/host-production-readiness-audit-v1",
-            "status": "FAIL",
-            "reason": "evidence_requirements_not_met",
-            "failures": evidence_failures,
-        }
-    
-    return {
-        "schema_version": "mmm/host-production-readiness-audit-v1",
-        "bundles_evaluated": len(bundles),
-        "status": "PASS",
-        "contexts": [
-            {
-                "context_id": item.context_id,
-                "minecraft": item.minecraft,
-                "host_revision": item.host_revision,
-            }
-            for item in bundles
-        ],
-    }
-
-
-if __name__ == "__main__":
-    print(json.dumps(audit_host_catalog(), indent=2, sort_keys=True))
-
+                row = bindings[leaf]
+                if row["state"] != "admitted":
+                    raise ValueError("NOT_ADMITTED")
+                impl = row["implementation"]
+                if impl["authority_sha256"] != authority.content_hash:
+                    raise ValueError("AUTHORITY_HASH_MISMATCH")
+                verify_execution_evidence(store, impl["evidence_id"], expected=binding_expectations(leaf, impl, ctx.to_dict()["target"]))
+            except (KeyError, ValueError, OSError) as exc:
+                failures.append({"minecraft": ctx.minecraft, "context": ctx.context_id, "leaf": leaf, "issue": str(exc)})
+    return {"schema_version": "mmm/host-production-readiness-audit-v1", "bundles_evaluated": len(bundles),
+            "scope_size": len(scope), "status": "FAIL" if failures else "PASS", "failures": failures}

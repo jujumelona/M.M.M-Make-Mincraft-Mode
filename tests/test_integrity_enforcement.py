@@ -4,12 +4,10 @@ P1-5: Tests that prevent all P0/P1 issues from regressing.
 """
 
 import pytest
-from pathlib import Path
 
-from minecraft_mod_ai.implementation_identity import compute_content_hash, ExecutorType
+from minecraft_mod_ai.implementation_identity import compute_content_hash
 from minecraft_mod_ai.implementation_registry import (
     ImplementationRegistry,
-    ImplementationRegistryError,
     reset_global_registry,
 )
 from minecraft_mod_ai.product_support_matrix import (
@@ -21,13 +19,11 @@ from minecraft_mod_ai.evidence_store import (
     EvidenceStore,
     EvidenceRecord,
     CompileResult,
-    GameTestResult,
     reset_global_evidence_store,
 )
 from minecraft_mod_ai.side_enforcement import (
     validate_side_constraints,
     check_side_compatibility,
-    SideViolation,
 )
 
 
@@ -38,7 +34,7 @@ class TestProductionReadinessNegative:
         """Code leaf without compile evidence must fail production audit."""
         # This is tested via integration tests with actual catalog
         # Just verify the evidence store mechanisms work
-        from minecraft_mod_ai.evidence_store import EvidenceStore, reset_global_evidence_store
+        from minecraft_mod_ai.evidence_store import EvidenceStore
         
         evidence_store = EvidenceStore(tmp_path / "evidence")
         reset_global_evidence_store()
@@ -366,7 +362,6 @@ class TestEpochValidation:
         """Template from wrong epoch must be rejected."""
         from minecraft_mod_ai.api_epoch_catalog import (
             validate_template_compatibility,
-            determine_api_epoch,
         )
         
         # Template for registry_v3 epoch
@@ -382,16 +377,16 @@ class TestEpochValidation:
         # Should fail - wrong epoch
         # (Would fail if we had the mapping set up)
         # For now, just check the function exists
-        assert callable(validate_template_compatibility)
+        assert not is_valid
+        assert reason == "COMPILE_EVIDENCE_REQUIRED"
     
     def test_epoch_determination(self):
         """Epoch should be determined from version."""
         from minecraft_mod_ai.api_epoch_catalog import determine_api_epoch
         
-        # These should work
-        assert determine_api_epoch("1.21.5") == "registry_v3"
-        assert determine_api_epoch("1.21.1") == "registry_v2"
-        assert determine_api_epoch("1.20.1") == "registry_v1"
+        for version in ("1.21.5", "1.21.1", "1.20.1"):
+            with pytest.raises(ValueError, match="INSPECTED_API_EPOCH_REQUIRED"):
+                determine_api_epoch(version)
 
 
 if __name__ == "__main__":

@@ -84,5 +84,6 @@ def test_audit_host_catalog_admissions_match(monkeypatch):
     prod_report = production_readiness_audit()
     assert prod_report["schema_version"] == "mmm/host-production-readiness-audit-v1"
     assert prod_report["bundles_evaluated"] == 43
-    assert prod_report["status"] == "PASS"
+    assert prod_report["status"] == "FAIL"
+    assert prod_report["failures"]
 

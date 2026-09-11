@@ -1,17 +1,15 @@
 from pathlib import Path
 
 from minecraft_mod_ai.artifact_expansion import (
-    DECLARED_GENERATOR_HANDOFFS,
-    implementation_route,
+    FACT_TO_CANONICAL_LEAVES,
 )
 from minecraft_mod_ai.prompt_fact_types import FactType
 
 
 def test_artifact_and_generator_routes_are_explicit():
-    assert implementation_route(FactType.ITEM_EXISTS) == "artifact"
-    assert implementation_route(FactType.CRAFTING_RECIPE) == "artifact"
-    assert implementation_route(FactType.ENTITY_EXISTS) == "generator"
-    assert FactType.CONTENT_RELATION in DECLARED_GENERATOR_HANDOFFS
+    assert FACT_TO_CANONICAL_LEAVES[FactType.ITEM_EXISTS][0] == "minecraft/item/registry"
+    assert FACT_TO_CANONICAL_LEAVES[FactType.CRAFTING_RECIPE] == ("minecraft/recipe/serializer",)
+    assert FACT_TO_CANONICAL_LEAVES[FactType.ENTITY_EXISTS] == ("minecraft/entity/registry",)
 
 
 def test_geckolib_has_no_magic_blue_entity_texture():

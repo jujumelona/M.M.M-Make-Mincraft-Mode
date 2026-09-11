@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import pytest
 
 from minecraft_mod_ai.artifact_expansion import (
     expand_facts_to_jobs,
-    FACT_TO_CANONICAL_LEAVES,
 )
 from minecraft_mod_ai.atomic_slot_executor import (
     fill_one_slot,
@@ -17,8 +15,6 @@ from minecraft_mod_ai.host_version_catalog import audit_host_catalog, host_targe
 from minecraft_mod_ai.minecraft_template_steps import (
     responsibility_ids_for_artifact,
     steps_for_artifact,
-    TemplateStep,
-    ContextProjection,
 )
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 from minecraft_mod_ai.resolved_version_context import ResolvedVersionContext, VersionContextError, _encode
@@ -72,45 +68,17 @@ def test_missing_canonical_leaf_causes_audit_failure():
 
 
 def test_canonical_pipeline_lowering_item_and_block():
-    """Verify lowering from PromptFact through canonical leaves to concrete ArtifactJobs with context_id."""
-    target = host_target("auto")
-    ctx = target.version_context
-
-    facts = [
-        PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="ruby"),
-        PromptFact(fact_id="f2", fact_type=FactType.ITEM_STACK_LIMIT, subject="ruby", value=32),
-        PromptFact(fact_id="f3", fact_type=FactType.BLOCK_EXISTS, subject="ruby_block"),
-    ]
-
-    jobs = expand_facts_to_jobs(
-        facts,
-        mod_id="gemmod",
-        package_name="com.gemmod",
-        version_context=ctx,
-    )
-
-    assert len(jobs) == 13
-    assert all(job.context_id == ctx.context_id for job in jobs)
-    template_ids = {job.template_id for job in jobs}
-    assert "fabric/item/register_basic" in template_ids
-    assert "fabric/item/settings_max_stack" in template_ids
-    assert "fabric/block/register_basic" in template_ids
-    assert "fabric/block/blockstate_basic" in template_ids
+    """Metadata discovery must not authorize untested production execution."""
+    ctx = host_target("auto").version_context
+    with pytest.raises(VersionContextError, match="UNSUPPORTED_LEAF"):
+        expand_facts_to_jobs([PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="ruby")],
+                            mod_id="gemmod", package_name="com.gemmod", version_context=ctx)
 
 
 def test_unsupported_leaf_rejected_by_version_context():
-    """Recipes on legacy Minecraft (< 1.21.2) must fail closed with UNSUPPORTED_LEAF."""
-    ctx_1_20_1 = host_target("1.20.1").version_context
-
-    with pytest.raises(VersionContextError) as exc_info:
-        ctx_1_20_1.require_leaf_binding("minecraft/recipe/serializer")
-    assert "UNSUPPORTED_LEAF" in str(exc_info.value)
-    assert "unsupported" in str(exc_info.value)
-
-    # In modern 1.21.4, recipe serializer is admitted
-    ctx_1_21_4 = host_target("1.21.4").version_context
-    binding = ctx_1_21_4.require_leaf_binding("minecraft/recipe/serializer")
-    assert binding["state"] == "admitted"
+    for version in ("1.20.1", "1.21.4"):
+        with pytest.raises(VersionContextError, match="UNSUPPORTED_LEAF"):
+            host_target(version).version_context.require_leaf_binding("minecraft/recipe/serializer")
 
 
 def test_specialized_leaf_contracts_and_side_separation():
@@ -157,42 +125,21 @@ def test_context_projection_exceeding_4096_bytes_fails_closed():
 
 
 def test_generator_handoff_subordinated_to_canonical_leaf_and_admitted():
-    """Generator handoffs must be bound to canonical leaves with context_id and hash."""
-    from minecraft_mod_ai.artifact_expansion import generator_implementation_profile
-
-    target = host_target("auto")
-    ctx = target.version_context
-
-    profile = generator_implementation_profile(FactType.ENTITY_EXISTS, version_context=ctx)
-    assert profile.canonical_leaf == "minecraft/entity/registry"
-    assert profile.executor == "generator_handoff_entity_exists"
-    assert profile.context_id == ctx.context_id
-    assert profile.implementation_hash.startswith("sha256:")
-    assert "java_syntax" in profile.validators or "java_parse" in profile.validators or len(profile.validators) >= 0
+    from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
+    authority = bootstrap_integrity()
+    ctx = host_target("auto").version_context
+    impl = ctx.facts["leaf_bindings"]["minecraft/entity/registry"]["implementation"]
+    assert impl["executor_type"] == "python_generator"
+    assert callable(authority.executors[impl["implementation_id"]])
+    assert "evidence_id" not in impl
 
 
 def test_version_bounded_generator_leaves_fail_closed_on_legacy_versions():
-    """Version-bounded generator handoffs fail closed with UNSUPPORTED_LEAF on older versions."""
-    from minecraft_mod_ai.artifact_expansion import generator_implementation_profile
-
-    ctx_1_20_1 = host_target("1.20.1").version_context
-    with pytest.raises(VersionContextError) as exc_info:
-        generator_implementation_profile(FactType.DATA_COMPONENT, version_context=ctx_1_20_1)
-    assert "UNSUPPORTED_LEAF" in str(exc_info.value)
-    assert "minecraft/component/type" in str(exc_info.value)
-
-    # 1.21.4 admits DATA_COMPONENT
-    ctx_1_21_4 = host_target("1.21.4").version_context
-    profile = generator_implementation_profile(FactType.DATA_COMPONENT, version_context=ctx_1_21_4)
-    assert profile.canonical_leaf == "minecraft/component/type"
-    assert profile.context_id == ctx_1_21_4.context_id
-
-    # 1.15.2 rejects DIMENSION (custom dimensions were introduced in 1.16)
-    ctx_1_15_2 = host_target("1.15.2").version_context
-    with pytest.raises(VersionContextError) as exc_info:
-        generator_implementation_profile(FactType.DIMENSION, version_context=ctx_1_15_2)
-    assert "UNSUPPORTED_LEAF" in str(exc_info.value)
-    assert "minecraft/dimension/registry" in str(exc_info.value)
+    for version, leaf in (("1.20.1", "minecraft/component/type"),
+                          ("1.21.4", "minecraft/component/type"),
+                          ("1.15.2", "minecraft/dimension/registry")):
+        with pytest.raises(VersionContextError, match="UNSUPPORTED_LEAF"):
+            host_target(version).version_context.require_leaf_binding(leaf)
 
 
 def test_artifact_validation_prevents_cross_side_leakage():
@@ -240,51 +187,23 @@ def test_artifact_validation_verifies_api_invocation_syntax():
 
 
 def test_canonical_leaf_attached_to_jobs_and_receipts():
-    """ArtifactJob carries canonical_leaf and propagates it into validation receipts."""
     from minecraft_mod_ai.task_template_runner import execute_artifact_template
-
-    target = host_target("auto")
-    ctx = target.version_context
-
-    facts = [
-        PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="sapphire"),
-    ]
-    jobs = expand_facts_to_jobs(
-        facts,
-        mod_id="testmod",
-        package_name="com.testmod",
-        version_context=ctx,
-    )
-
-    for job in jobs:
-        assert job.canonical_leaf != ""
-        assert job.canonical_leaf.startswith("minecraft/")
-
-    key_job = next(j for j in jobs if j.template_id == "fabric/item/key")
-    assert key_job.canonical_leaf == "minecraft/item/registry"
-
-    result = execute_artifact_template(key_job, context={"resolved_version_context": ctx})
-    assert result["status"] == "PASS"
-    assert len(key_job.validation_receipts) > 0
-    for receipt in key_job.validation_receipts:
-        assert receipt.get("canonical_leaf") == "minecraft/item/registry"
-        assert receipt.get("implementation_id") != ""
-        assert receipt.get("executor_type") == "deterministic_renderer"
+    jobs = expand_facts_to_jobs([PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="sapphire")],
+                               mod_id="testmod", package_name="com.testmod")
+    assert all(job.canonical_leaf.startswith("minecraft/") for job in jobs)
+    with pytest.raises(VersionContextError, match="VERSION_CONTEXT_REQUIRED"):
+        execute_artifact_template(jobs[0])
 
 
 def test_production_readiness_audit_and_rejection():
-    """production_readiness_audit passes on default scope and rejects unreviewed leaves."""
     from minecraft_mod_ai.host_version_catalog import production_readiness_audit
-
     report = production_readiness_audit()
-    assert report["status"] == "PASS"
+    assert report["status"] == "FAIL"
     assert report["bundles_evaluated"] == 43
-    assert report["scope_size"] >= 90
-
-    with pytest.raises(VersionContextError) as exc_info:
-        production_readiness_audit(["minecraft/advancement/criterion"])
-    assert "PRODUCTION_AUDIT_FAILED" in str(exc_info.value)
-    assert "minecraft/advancement/criterion" in str(exc_info.value)
+    assert report["failures"]
+    specific = production_readiness_audit(["minecraft/advancement/criterion"])
+    assert specific["status"] == "FAIL"
+    assert all(row["leaf"] == "minecraft/advancement/criterion" for row in specific["failures"])
 
 
 def test_admitted_leaf_requires_all_eight_fields():
@@ -292,7 +211,7 @@ def test_admitted_leaf_requires_all_eight_fields():
     target = host_target("auto")
     ctx = target.version_context
 
-    binding = ctx.require_leaf_binding("minecraft/item/registry")
+    binding = ctx.facts["leaf_bindings"]["minecraft/item/registry"]
     impl = binding["implementation"]
     required_fields = (
         "implementation_id",
@@ -302,7 +221,6 @@ def test_admitted_leaf_requires_all_eight_fields():
         "validator_sha256",
         "input_schema_sha256",
         "output_schema_sha256",
-        "evidence_id",
     )
     for field in required_fields:
         assert field in impl
@@ -314,7 +232,9 @@ def test_admitted_leaf_requires_all_eight_fields():
     bundle_dict = ctx.to_dict()
     bundle_dict.pop("context_id", None)
     corrupted_impl = dict(impl)
+    corrupted_impl["evidence_id"] = "sha256:" + "0" * 64
     corrupted_impl.pop("validator_sha256")
+    bundle_dict["host_facts"]["leaf_bindings"]["minecraft/item/registry"]["state"] = "admitted"
     bundle_dict["host_facts"]["leaf_bindings"]["minecraft/item/registry"]["implementation"] = corrupted_impl
 
     with pytest.raises(VersionContextError) as exc_info:

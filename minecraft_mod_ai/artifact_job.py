@@ -13,7 +13,7 @@ class ArtifactJob:
     job_id: str
     template_id: str
     owner_module: str
-    executor_type: ExecutorType = ExecutorType.TEMPLATE
+    executor_type: ExecutorType = field(default=ExecutorType.TEMPLATE, kw_only=True)
     target_path: str = ""
     anchor: str = ""
     operation: str = ""

@@ -75,3 +75,37 @@ There is no fixed product-wide cap on feature count, module count, or total mod 
 ## License
 
 [MIT](LICENSE)
+
+
+## Integrity registration and execution evidence
+
+`minecraft_mod_ai.integrity_bootstrap.bootstrap_integrity()` registers all 346
+canonical leaf callables, their 692 input/output schemas, executable validators,
+and the actual YAML templates as one authority. Missing files, conflicting
+registrations and changed source fail closed. There are no `LENIENT` identities.
+Registration is separate from production admission: packaged leaf bindings remain
+`not_reviewed` until a matching candidate has real compile and GameTest evidence.
+A generic registered callable does not prove all 346 Minecraft behaviors.
+
+The generator consumes an explicit HOST render mold and bounded, schema-constrained
+slots. A candidate is generated in isolation, tested with Gradle, then admitted
+through `integrity_catalog.admit_evidenced_leaves`. Production dispatch checks the
+same input contract, generated content, implementation, validators, schemas,
+classpath, side and content-addressed evidence before materialization or reuse.
+
+```bash
+python tools/integrity_pipeline.py registration --minecraft 1.20.1 --output registration.json
+python tools/integrity_pipeline.py inspect --minecraft 1.20.1 --loader fabric --namespace named --java 17 --jar minecraft.jar --mappings mappings.tiny --source-namespace official --output api.json
+python tools/integrity_pipeline.py candidate --help
+python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
+```
+
+The inspection command parses JVM class files and Tiny v2 names/descriptors;
+API epochs are derived from declarations and separated by loader. Java validation
+uses the installed JDK compiler for syntax and classpath symbol attribution.
+Use a JDK matching the requested target. The reproducible evidence probe requires
+JDK 17 and network access, and runs Fabric 1.20.1 item registration through Gradle
+and a real GameTest. Its result is scoped to that item fixture and target.
+Evidence retains raw source, actual Gradle classpath, compiled classes, logs and
+XML test reports under the selected output directory. CI uploads these records.
+Missing evidence or zero executed tests never authorizes production.

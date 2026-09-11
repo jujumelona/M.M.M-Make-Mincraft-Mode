@@ -104,11 +104,9 @@ def test_host_missing_facts_do_not_get_defaults():
 def test_same_context_render_validation_and_ports():
     ctx = target_fixture().version_context
     registry = PortRegistry()
-    result = execute_artifact_graph([job_fixture(ctx)], context={"resolved_version_context": ctx.to_dict()}, port_registry=registry)
-    receipt = result["receipts"][0]
-    assert receipt["context_id"] == ctx.context_id
-    assert receipt["validations"][0]["context_id"] == ctx.context_id
-    assert all(port.context_id == ctx.context_id for port in registry.all_ports().values())
+    with pytest.raises(VersionContextError, match="HOST_FACT_UNAVAILABLE"):
+        execute_artifact_graph([job_fixture(ctx)], context={"resolved_version_context": ctx.to_dict()}, port_registry=registry)
+    assert registry.all_ports() == {}
 
 
 def test_mixed_context_graph_rejects_before_any_execution(monkeypatch):

@@ -12,7 +12,6 @@ This replaces all scattered hash calculation with a single authority.
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -51,6 +50,8 @@ class ImplementationRegistry:
         self._implementations: dict[str, ImplementationId] = {}
         self._validators: dict[str, ValidatorRegistration] = {}
         self._schemas: dict[str, SchemaRegistration] = {}
+        self._executor_functions: dict[str, Callable] = {}
+        self._validator_functions: dict[str, Callable] = {}
         
         # Reverse lookup: content_hash -> implementation_id
         self._hash_to_impl: dict[str, str] = {}
@@ -115,6 +116,7 @@ class ImplementationRegistry:
         module_name = module.__name__ if module else "unknown"
         function_name = executor_fn.__name__
         
+        self._executor_functions[executor_id] = executor_fn
         return self._register_implementation(
             implementation_id=executor_id,
             content_hash=source_hash,
@@ -169,6 +171,7 @@ class ImplementationRegistry:
                 )
             return existing
         
+        self._validator_functions[validator_id] = validator_fn
         self._validators[validator_id] = registration
         return registration
     
@@ -314,7 +317,12 @@ class ImplementationRegistry:
         This is used at runtime to ensure implementation hasn't changed.
         """
         impl = self.get_implementation(implementation_id)
-        return impl.content_sha256 == expected_hash
+        if impl.content_sha256 != expected_hash:
+            return False
+        if impl.executor_type == ExecutorType.TEMPLATE:
+            return compute_content_hash(Path(impl.source_reference).read_bytes()) == expected_hash
+        function = self._executor_functions.get(implementation_id)
+        return function is not None and compute_source_hash(inspect.getsource(function)) == expected_hash
     
     def verify_validator_hash(
         self,
@@ -323,7 +331,9 @@ class ImplementationRegistry:
     ) -> bool:
         """Verify that current validator hash matches expected."""
         validator = self.get_validator(validator_id)
-        return validator.source_hash == expected_hash
+        function = self._validator_functions.get(validator_id)
+        return (validator.source_hash == expected_hash and function is not None
+                and compute_source_hash(inspect.getsource(function)) == expected_hash)
     
     def verify_schema_hash(
         self,
@@ -433,3 +443,9 @@ def reset_global_registry():
     """Reset global registry (for testing)."""
     global _global_registry
     _global_registry = None
+
+
+def install_global_registry(registry):
+    """Publish a fully constructed registry from the central bootstrap."""
+    global _global_registry
+    _global_registry = registry

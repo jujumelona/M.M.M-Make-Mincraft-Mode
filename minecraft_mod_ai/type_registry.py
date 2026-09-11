@@ -5,7 +5,6 @@ P0-8: Connect leaf type names to actual runtime validators.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
 
 from .implementation_identity import compute_json_schema_hash
@@ -35,11 +34,15 @@ class TypeRegistry:
         """
         schema_hash = compute_json_schema_hash(schema)
         
+        if type_id in self._validators and self.get_schema_hash(type_id) != schema_hash:
+            raise TypeValidationError(f"Conflicting schema: {type_id}")
+
         # Create validator from schema
         validator = self._create_json_schema_validator(schema)
         
         self._validators[type_id] = (validator, schema_hash)
-        self._schemas[type_id] = schema
+        from copy import deepcopy
+        self._schemas[type_id] = deepcopy(schema)
     
     def register_pydantic_model(self, type_id: str, model_class: type):
         """Register a Pydantic model for a type.
@@ -69,7 +72,8 @@ class TypeRegistry:
                 return model_class.parse_obj(value)
         
         self._validators[type_id] = (pydantic_validator, schema_hash)
-        self._schemas[type_id] = schema
+        from copy import deepcopy
+        self._schemas[type_id] = deepcopy(schema)
     
     def register_custom_validator(
         self,
@@ -86,7 +90,8 @@ class TypeRegistry:
         """
         schema_hash = compute_json_schema_hash(schema)
         self._validators[type_id] = (validator, schema_hash)
-        self._schemas[type_id] = schema
+        from copy import deepcopy
+        self._schemas[type_id] = deepcopy(schema)
     
     def validate_input(self, type_id: str, value: Any) -> Any:
         """Validate input value against registered type.
@@ -149,47 +154,26 @@ class TypeRegistry:
         """Get JSON Schema for a type."""
         if type_id not in self._schemas:
             raise TypeValidationError(f"Type not registered: {type_id}")
-        return self._schemas[type_id]
+        from copy import deepcopy
+        return deepcopy(self._schemas[type_id])
     
     def list_types(self) -> list[str]:
         """List all registered type IDs."""
         return list(self._validators.keys())
     
     def _create_json_schema_validator(self, schema: dict[str, Any]) -> Callable:
-        """Create a validator function from JSON Schema.
-        
-        Uses jsonschema library if available, otherwise basic validation.
-        """
-        try:
-            import jsonschema
-            
-            def validator(value: Any) -> Any:
-                jsonschema.validate(instance=value, schema=schema)
-                return value
-            
-            return validator
-        except ImportError:
-            # Fallback: basic type checking only
-            def basic_validator(value: Any) -> Any:
-                if "type" in schema:
-                    expected_type = schema["type"]
-                    type_map = {
-                        "string": str,
-                        "integer": int,
-                        "number": (int, float),
-                        "boolean": bool,
-                        "array": list,
-                        "object": dict,
-                    }
-                    if expected_type in type_map:
-                        expected = type_map[expected_type]
-                        if not isinstance(value, expected):
-                            raise TypeValidationError(
-                                f"Expected {expected_type}, got {type(value).__name__}"
-                            )
-                return value
-            
-            return basic_validator
+        """Compile complete JSON Schema; missing dependencies are fatal."""
+        from copy import deepcopy
+        from jsonschema import Draft202012Validator
+        schema = deepcopy(schema)
+        Draft202012Validator.check_schema(schema)
+        compiled = Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+        def validator(value: Any) -> Any:
+            compiled.validate(value)
+            return value
+
+        return validator
 
 
 # Global type registry
@@ -208,3 +192,9 @@ def reset_global_type_registry():
     """Reset global type registry (for testing)."""
     global _global_type_registry
     _global_type_registry = None
+
+
+def install_global_type_registry(registry):
+    """Publish a fully constructed registry from the central bootstrap."""
+    global _global_type_registry
+    _global_type_registry = registry

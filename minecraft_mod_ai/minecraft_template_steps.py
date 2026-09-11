@@ -3,6 +3,7 @@ from __future__ import annotations
 """Compile canonical Minecraft artifact responsibilities into narrow execution steps."""
 
 from dataclasses import dataclass, replace
+from collections.abc import Iterable
 from typing import Any
 
 from .minecraft_template_catalog import validate_artifact_kinds

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -189,4 +189,4 @@ def compute_json_schema_hash(schema: dict[str, Any]) -> str:
 
 def current_timestamp() -> str:
     """Get current UTC timestamp in ISO 8601 format."""
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

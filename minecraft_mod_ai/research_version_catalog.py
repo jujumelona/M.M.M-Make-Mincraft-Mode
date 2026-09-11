@@ -197,6 +197,7 @@ def research(output):
                 "minimum_gradle": attributes["org.gradle.plugin.api-version"]},
                 "minecraft_java_minimum": java, "build_java_minimum": build_java,
                 "mojang_version_json": embedded,
+            })
             base_facts = {
                 "repositories": [MAVEN, "https://libraries.minecraft.net/", "https://repo.maven.apache.org/maven2/"],
                 "dependency_coordinates": {"minecraft": f"com.mojang:minecraft:{version}",

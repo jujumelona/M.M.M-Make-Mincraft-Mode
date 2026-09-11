@@ -253,152 +253,41 @@ def make_implementation(
     hashes: dict[str, str] | None = None,
     extra: dict | None = None,
 ) -> dict:
-    """Create implementation metadata using ImplementationRegistry.
-    
-    P0-1: FAIL-CLOSED - Must have real registry object, no fallback.
-    All admitted leaves must reference actual ImplementationRegistry entries.
-    
-    NOTE: This function is INCOMPLETE and will fail until bootstrap is implemented.
-    Required: integrity_bootstrap.py with full validator/schema/template registration.
-    """
-    from .implementation_registry import get_global_registry, ImplementationRegistryError
-    from .implementation_identity import ExecutorType
-    from .type_registry import get_global_type_registry, TypeValidationError
-    
-    registry = get_global_registry()
-    type_registry = get_global_type_registry()
-    
-    # TEMPORARY: Until bootstrap is complete, use lenient mode
-    # TODO: Remove after integrity_bootstrap.py is implemented
-    LENIENT_MODE = True
-    
-    # Get implementation from registry
-    impl_sha = None
-    impl_id = None
-    
-    if template_id is not None:
-        # Template-based implementation
-        try:
-            impl = registry.get_implementation(template_id)
-            impl_id = impl.implementation_id
-            # content_sha256 already has "sha256:" prefix
-            impl_sha = impl.content_sha256
-        except ImplementationRegistryError:
-            if not LENIENT_MODE:
-                raise ValueError(
-                    f"IMPLEMENTATION_NOT_IN_REGISTRY: {template_id} not registered"
-                )
-            # TEMPORARY lenient fallback
-            from .task_template_catalog import TEMPLATE_DIR
-            template_path = TEMPLATE_DIR / f"{template_id}.yaml"
-            if template_path.exists():
-                impl = registry.register_template(template_id, template_path)
-                impl_id = impl.implementation_id
-                impl_sha = impl.content_sha256
-            else:
-                impl_id = f"template:{template_id}"
-                impl_sha = _sha256_text(f"LENIENT:{template_id}")
-    else:
-        # Non-template implementation (generator, model, etc)
-        if not LENIENT_MODE:
-            raise ValueError(
-                f"IMPLEMENTATION_REQUIRES_REGISTRATION: {leaf} executor_type={executor_type} not in registry"
-            )
-        # TEMPORARY lenient fallback
-        impl_id = f"{executor_type}:{leaf}"
-        impl_sha = _sha256_text(f"LENIENT:{executor_type}:{leaf}")
-    
-    # Get validator hash from registry
-    val_sha = None
-    try:
-        validator = registry.get_validator(validator_profile)
-        # source_hash already has "sha256:" prefix
-        val_sha = validator.source_hash
-    except ImplementationRegistryError:
-        if not LENIENT_MODE:
-            raise ValueError(
-                f"VALIDATOR_NOT_IN_REGISTRY: {validator_profile} not registered"
-            )
-        # TEMPORARY lenient fallback
-        val_sha = _sha256_text(f"LENIENT:validator:{validator_profile}")
-    
-    # Get schema hashes from TypeRegistry
-    in_sha = None
-    out_sha = None
-    
-    try:
-        in_sha = type_registry.get_schema_hash(f"{leaf}:input")
-    except (TypeValidationError, KeyError, AttributeError):
-        if not LENIENT_MODE:
-            raise ValueError(
-                f"INPUT_SCHEMA_NOT_IN_REGISTRY: {leaf}:input not found"
-            )
-        # TEMPORARY lenient fallback
-        in_sha = _sha256_text(f"LENIENT:input_schema:{leaf}")
-    
-    try:
-        out_sha = type_registry.get_schema_hash(f"{leaf}:output")
-    except (TypeValidationError, KeyError, AttributeError):
-        if not LENIENT_MODE:
-            raise ValueError(
-                f"OUTPUT_SCHEMA_NOT_IN_REGISTRY: {leaf}:output not found"
-            )
-        # TEMPORARY lenient fallback
-        out_sha = _sha256_text(f"LENIENT:output_schema:{leaf}")
-    
-    # Compute evidence ID
-    # TEMPORARY: Use simple ID until evidence generation is implemented
-    evidence_id = _sha256_text(f"evidence:{leaf}:{minecraft_version}:{impl_sha}:{val_sha}")
-    
-    impl = {
-        "implementation_id": impl_id,
-        "executor_type": executor_type,
-        "implementation_sha256": impl_sha,
+    """Describe a real registered implementation; evidence is attached after execution."""
+    from .integrity_bootstrap import bootstrap_integrity
+    authority = bootstrap_integrity()
+    registry = authority.implementations
+    identifier = template_id or f"python_generator:{leaf}"
+    implementation = registry.get_implementation(identifier)
+    validator = registry.get_validator(validator_profile)
+    result = {
+        "implementation_id": identifier,
+        "executor_type": "deterministic_renderer" if template_id else "python_generator",
+        "implementation_sha256": implementation.content_sha256,
         "validator_profile": validator_profile,
-        "validator_sha256": val_sha,
-        "input_schema_sha256": in_sha,
-        "output_schema_sha256": out_sha,
-        "evidence_id": evidence_id,
+        "validator_sha256": validator.source_hash,
+        "input_schema_sha256": authority.types.get_schema_hash(f"{leaf}:input"),
+        "output_schema_sha256": authority.types.get_schema_hash(f"{leaf}:output"),
+        "authority_sha256": authority.content_hash,
     }
-    
     if template_id:
-        impl["template"] = template_id
-        impl["template_sha256"] = impl_sha
-    
+        result.update(template=template_id, template_sha256=implementation.content_sha256)
     if extra:
-        impl.update(extra)
-    
-    return impl
+        overlap = result.keys() & extra.keys()
+        if any(result[k] != extra[k] for k in overlap):
+            raise ValueError("IMPLEMENTATION_IDENTITY_OVERRIDE")
+        result.update(extra)
+    return result
 
 
 def template_hashes() -> dict[str, str]:
-    """Compute real template hashes using ImplementationRegistry.
-    
-    P0-1: FAIL-CLOSED with lenient mode during bootstrap.
-    """
-    from .implementation_registry import get_global_registry, ImplementationRegistryError
-    from .task_template_catalog import TEMPLATE_DIR
-    
-    registry = get_global_registry()
-    hashes = {}
-    
+    """Return verified canonical template hashes used by HOST artifact rules."""
+    from .integrity_bootstrap import bootstrap_integrity
+    authority = bootstrap_integrity()
+    authority.verify_live()
     for identifier in LEAF_TEMPLATES:
-        try:
-            # Try to get from registry
-            impl = registry.get_implementation(identifier)
-            # content_sha256 already has "sha256:" prefix
-            hashes[identifier] = impl.content_sha256
-        except ImplementationRegistryError:
-            # Register template from file
-            template_path = TEMPLATE_DIR / f"{identifier}.yaml"
-            if not template_path.exists():
-                # LENIENT: Generate placeholder during bootstrap
-                hashes[identifier] = _sha256_text(f"LENIENT:{identifier}")
-            else:
-                impl = registry.register_template(identifier, template_path)
-                hashes[identifier] = impl.content_sha256
-    
-    return hashes
+        authority.implementations.get_implementation(identifier)
+    return {identifier: _sha256_text(_encode(load_template(identifier))) for identifier in LEAF_TEMPLATES}
 
 
 from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
@@ -1409,6 +1298,15 @@ def build_version_facts(
         k: ARTIFACT_SCHEMAS[k] for k in admitted_templates if k in ARTIFACT_SCHEMAS
     }
     facts["artifact_rules"] = rules
+    for leaf, binding in leaf_bindings.items():
+        if binding.get("state") == "admitted":
+            binding["state"] = "not_reviewed"
+            binding["reason"] = "REAL_EXECUTION_EVIDENCE_REQUIRED"
+    # Every canonical responsibility has an executable, typed generator profile.
+    for leaf in all_canonical_leaves():
+        if leaf_bindings[leaf].get("implementation") is None:
+            leaf_bindings[leaf] = {"state": "not_reviewed", "reason": "REAL_EXECUTION_EVIDENCE_REQUIRED",
+                                   "implementation": make_implementation(leaf, minecraft_version)}
     facts["leaf_bindings"] = leaf_bindings
     facts["replacements"] = {
         "new Identifier": "Identifier.of" if is_modern_id else "new Identifier"

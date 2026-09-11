@@ -113,8 +113,7 @@ def _templates_for_canonical_leaf(leaf_id: str, version_context=None) -> tuple[s
             templates.append(impl["template"])
         if "extra_templates" in impl:
             templates.extend(impl["extra_templates"])
-        if templates:
-            return tuple(dict.fromkeys(templates))
+        return tuple(dict.fromkeys(templates))
     return CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
 
 
@@ -289,29 +288,16 @@ def expand_facts_to_jobs(
 
         leaf_template_pairs: list[tuple[str, str]] = []
         for leaf_id in canonical_leaf_ids:
-            for tid in _templates_for_canonical_leaf(leaf_id, version_context):
-                leaf_template_pairs.append((leaf_id, tid))
-        
-        # P0-2: If no templates, try to use PYTHON_GENERATOR from registry
-        if not leaf_template_pairs:
-            if version_context is not None:
-                # Check if any leaf has PYTHON_GENERATOR implementation
-                for leaf_id in canonical_leaf_ids:
-                    try:
-                        binding = version_context.require_leaf_binding(leaf_id)
-                        impl_dict = binding.get("implementation", {})
-                        exec_type = impl_dict.get("executor_type", "")
-                        if exec_type == "python_generator":
-                            # Use PYTHON_GENERATOR - no template needed
-                            leaf_template_pairs.append((leaf_id, ""))
-                            break
-                    except Exception:
-                        continue
-            
-            # Fallback to default templates if still empty
-            if not leaf_template_pairs:
-                default_leaf = canonical_leaf_ids[0]
-                leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS.get(fact.fact_type, ())]
+            templates = _templates_for_canonical_leaf(leaf_id, version_context)
+            if templates:
+                leaf_template_pairs.extend((leaf_id, tid) for tid in templates)
+                continue
+            if version_context is None:
+                raise ArtifactExpansionError("EXACT_HOST_IMPLEMENTATION_REQUIRED")
+            binding = version_context.require_leaf_binding(leaf_id)
+            if binding["implementation"]["executor_type"] != "python_generator":
+                raise ArtifactExpansionError(f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}")
+            leaf_template_pairs.append((leaf_id, ""))
 
         resource_values = {}
         if fact.fact_type in {
@@ -322,6 +308,8 @@ def expand_facts_to_jobs(
             from .resource_fact_inputs import resource_inputs
 
             identifier, resource_values = resource_inputs(fact, mod_id)
+            if version_context is not None and identifier not in {tid for _, tid in leaf_template_pairs}:
+                raise ArtifactExpansionError("HOST_RESOURCE_TEMPLATE_NOT_BOUND")
             leaf_template_pairs = [(canonical_leaf_ids[0], identifier)]
         subject = _require_subject(fact)
         constant = _constant_name(subject)

@@ -514,6 +514,13 @@ def execute_artifact_template(
     from .implementation_template_renderer import render_template
     from .task_template_catalog import load_template
 
+    from .implementation_identity import ExecutorType
+    executor = _job_value(job, "executor_type", "")
+    if executor == ExecutorType.PYTHON_GENERATOR or executor == "python_generator":
+        from .integrity_dispatcher import execute_generator_job
+        return execute_generator_job(job, context=dict(context or {}), router=router,
+                                     port_registry=port_registry, base_dir=base_dir)
+
     template_id = str(_job_value(job, "template_id", ""))
     if not template_id:
         raise ValueError("TEMPLATE_JOB_ID: artifact job has no template_id")
@@ -528,6 +535,7 @@ def execute_artifact_template(
 
     resolved = execution_context(context_map, job)
     if resolved is not None:
+        from .integrity_dispatcher import verify_job_binding
         resolved.admit_template(template)
     if resolved is not None and port_registry is not None:
         port_registry.bind_context(resolved.context_id)
@@ -540,6 +548,10 @@ def execute_artifact_template(
                     raise VersionContextError("HOST_FACT_OVERRIDE", field=key, context_id=resolved.context_id)
             det_inputs[key] = host_target[key]
     values: dict[str, Any] = {**context_map, **det_inputs}
+    if resolved is not None:
+        authority = verify_job_binding(job, resolved, context_map)
+        from .integrity_dispatcher import canonical_contract
+        canonical_contract(job, resolved, context_map, authority)
 
     from .artifact_target_contract import validate_artifact_target
 
@@ -576,6 +588,9 @@ def execute_artifact_template(
 
     validation_receipts = []
     if resolved is not None:
+        from .integrity_dispatcher import validate_canonical_output
+        validation_receipts.extend(validate_canonical_output(job, rendered_output, resolved=resolved,
+            context=context_map, authority=authority, target_path=target_file, anchor=anchor))
         validation_receipts.append(resolved.validate_artifact(template, rendered_output))
     supported_validators = {
         "java_parse",
@@ -612,10 +627,29 @@ def execute_artifact_template(
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
         elif validator_name == "json_schema":
-            receipt = validate_json_resource(rendered_output)
-            validation_receipts.append({**receipt, "validator": "json_schema"})
-        elif validator_name in {"semantic_contract", "mod_integration_test", "client_side_only"}:
-            validation_receipts.append({"validator": validator_name, "status": "PASS"})
+            from .integrity_validators import validate_json_schema
+            schema = template.get("output_schema") or values.get("output_schema")
+            if schema is None and resolved is not None:
+                schema = resolved.require_fact("schemas", template_id)
+            if schema is None:
+                raise ValueError("JSON_SCHEMA_REQUIRED")
+            validation_receipts.append(validate_json_schema(json.loads(rendered_output), schema))
+        elif validator_name == "semantic_contract":
+            from .integrity_validators import validate_semantic_contract
+            validation_receipts.append(validate_semantic_contract(rendered_output,
+                contract=values["semantic_contract"], context_id=resolved.context_id if resolved else values["context_id"],
+                leaf_id=_job_value(job, "canonical_leaf", "")))
+        elif validator_name == "client_side_only":
+            from .integrity_validators import validate_side
+            validation_receipts.append(validate_side(rendered_output,
+                leaf_id=_job_value(job, "canonical_leaf", ""), side=values["side"],
+                classpath=values["java_classpath"], java_version=str(values["java_version"])))
+        elif validator_name == "mod_integration_test":
+            from .integrity_validators import validate_mod_integration
+            from .evidence_store import EvidenceStore
+            validation_receipts.append(validate_mod_integration(
+                store=EvidenceStore(Path(values["evidence_store"])), evidence_id=values["evidence_id"],
+                expected=values["evidence_expected"]))
 
     canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
     impl_id = str(_job_value(job, "implementation_id", "") or "")

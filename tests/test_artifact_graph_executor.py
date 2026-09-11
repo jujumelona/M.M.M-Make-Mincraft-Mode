@@ -4,7 +4,13 @@ from threading import Event
 
 import pytest
 
-from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
+from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs as _expand_facts_to_jobs
+from dataclasses import replace
+
+def expand_facts_to_jobs(*args, **kwargs):
+    """Exercise low-level renderer/port scheduling with explicitly unbound fixtures."""
+    return [replace(job, canonical_leaf="", implementation_id="")
+            for job in _expand_facts_to_jobs(*args, **kwargs)]
 from minecraft_mod_ai.artifact_graph_executor import (
     ArtifactGraphError,
     execute_artifact_graph,

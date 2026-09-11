@@ -1,12 +1,9 @@
 """Tests for ImplementationRegistry - ensuring real content hashes, not fake ones."""
 
-import json
-from pathlib import Path
 
 import pytest
 
 from minecraft_mod_ai.implementation_identity import (
-    ExecutorType,
     ValidatorType,
     compute_content_hash,
     compute_json_schema_hash,

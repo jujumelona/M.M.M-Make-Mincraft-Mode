@@ -82,7 +82,7 @@ class ResolvedVersionContext:
             raise VersionContextError("INVALID_VERSION_CONTEXT")
         target_contract_from_mapping(value["target"])
         facts = value["host_facts"]
-        if not isinstance(facts, dict) or set(facts) != _FACT_FIELDS:
+        if not isinstance(facts, dict) or not _FACT_FIELDS <= set(facts) or set(facts) - _FACT_FIELDS - {"api_inspection"}:
             raise VersionContextError("HOST_BUNDLE_INCOMPLETE", fields=sorted(_FACT_FIELDS))
         if not isinstance(facts["host_revision"], str) or not facts["host_revision"].strip():
             raise VersionContextError("HOST_REVISION_REQUIRED")
@@ -458,7 +458,7 @@ def execution_context(context, job):
     raw = (context or {}).get("resolved_version_context")
     identifier = getattr(job, "context_id", "")
     if raw is None:
-        if identifier:
+        if identifier or getattr(job, "canonical_leaf", "") or getattr(job, "implementation_id", ""):
             raise VersionContextError("VERSION_CONTEXT_REQUIRED", artifact=job.job_id)
         return None
     if isinstance(raw, ResolvedVersionContext):

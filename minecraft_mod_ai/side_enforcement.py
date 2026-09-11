@@ -75,8 +75,7 @@ def validate_side_constraints(
     # Get rules for this side
     rules = SOURCE_SET_RULES.get(leaf_side.lower())
     if not rules:
-        # Unknown side - assume COMMON (most restrictive)
-        rules = SOURCE_SET_RULES["common"]
+        raise ValueError(f"UNKNOWN_SOURCE_SIDE: {leaf_side}")
     
     allowed_sides = set(rules["allowed_symbol_sides"])
     
@@ -87,7 +86,9 @@ def validate_side_constraints(
         
         # Look up in HOST symbols
         host_decl = host_symbols.get(symbol_qualified, {})
-        symbol_side = host_decl.get("side", "COMMON")
+        symbol_side = getattr(symbol, "side", None) or host_decl.get("side")
+        if symbol_side is None:
+            raise ValueError(f"SYMBOL_SIDE_UNRESOLVED: {symbol_qualified}")
         
         # Check if allowed
         if symbol_side not in allowed_sides:
@@ -111,30 +112,23 @@ def enforce_side_at_compile_time(
     leaf_side: str,
     classpath: list[str],
 ) -> bool:
-    """Enforce side by compiling with side-specific classpath.
-    
-    P1-4: Additional check - compile with server-only classpath for server/common.
-    
-    Args:
-        java_files: Java source files to compile
-        leaf_side: Side being compiled (CLIENT, SERVER, COMMON)
-        classpath: Full classpath
-        
-    Returns:
-        True if compile succeeds with appropriate classpath
-    """
-    if leaf_side.upper() == "CLIENT":
-        # Client can use full classpath
-        return True
-    
-    # For server/common, try compiling with server-only classpath
-    # This would reject client-only APIs
-    
-    # TODO P1-4: Implement dedicated-server compilation
-    # Would filter classpath to remove client-only JARs
-    # Then run javac and check for compilation errors
-    
-    return True  # Placeholder
+    """Resolve source references against the supplied actual classpath and enforce side."""
+    from pathlib import Path
+    from .integrity_validators import validate_side
+    import subprocess
+    import shutil
+    import re
+    compiler = shutil.which("javac")
+    if not compiler:
+        raise ValueError("JAVAC_REQUIRED")
+    version = subprocess.run([compiler, "-version"], capture_output=True, text=True, check=True)
+    match = re.search(r"javac (\d+)", version.stdout + version.stderr)
+    if not match or not java_files:
+        raise ValueError("JAVA_TOOLCHAIN_OR_SOURCES_MISSING")
+    for file in java_files:
+        validate_side(Path(file).read_text(encoding="utf-8"), leaf_id=str(file), side=leaf_side,
+                      classpath=[Path(p) for p in classpath], java_version=match[1])
+    return True
 
 
 def get_allowed_sides_for_leaf(leaf_side: str) -> list[str]:
@@ -146,7 +140,9 @@ def get_allowed_sides_for_leaf(leaf_side: str) -> list[str]:
     Returns:
         List of allowed symbol sides
     """
-    rules = SOURCE_SET_RULES.get(leaf_side.lower(), SOURCE_SET_RULES["common"])
+    rules = SOURCE_SET_RULES.get(leaf_side.lower())
+    if rules is None:
+        raise ValueError(f"UNKNOWN_SOURCE_SIDE: {leaf_side}")
     return rules["allowed_symbol_sides"]
 
 

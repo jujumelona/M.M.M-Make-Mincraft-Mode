@@ -113,7 +113,12 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
 
     resolved = execution_context(context, job)
     if resolved is not None:
+        from .integrity_dispatcher import verify_job_binding
+        verify_job_binding(job, resolved, context or {})
         registry.bind_context(resolved.context_id)
+    from .implementation_identity import ExecutorType
+    if job.executor_type == ExecutorType.PYTHON_GENERATOR:
+        return execute(job, context=context, router=router, port_registry=registry, base_dir=base_dir)
     if base_dir is None:
         return execute(job, context=context, router=router, port_registry=registry)
     root = Path(base_dir).resolve()
