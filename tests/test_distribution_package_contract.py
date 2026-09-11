@@ -35,7 +35,7 @@ def test_wheel_contains_all_python_packages_and_runtime_resources(
         "minecraft_mod_ai/config/runtime_profiles.yaml",
         "minecraft_mod_ai/integrations/mineflayer/bridge.mjs",
         "minecraft_mod_ai/integrations/mineflayer/package.json",
-        "minecraft_mod_ai/templates/prompt/capture.yaml",
+        "minecraft_mod_ai/templates/prompt/parse.yaml",
     }
     missing_resources = sorted(required_resources - names)
     assert not missing_resources, f"wheel omitted runtime resources: {missing_resources}"
