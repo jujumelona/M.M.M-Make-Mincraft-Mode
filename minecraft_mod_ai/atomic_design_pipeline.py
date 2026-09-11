@@ -69,18 +69,26 @@ def compile_atomic_design(
     progress=None,
     checkpoint=None,
 ) -> dict[str, Any]:
-    """Compile discrete atomic design slots into an authoritative canonical game design specification."""
+    """Compile atomic design and finish only the fields deterministic generation consumes."""
     prompt_text = str(prompt).strip()
     if not prompt_text:
         raise ValueError("ATOMIC_DESIGN: prompt must not be empty")
 
     from .content_design_graph import compile_content_graph
+    from .minecraft_generation_design import complete_generation_fields
 
-    return compile_content_graph(
+    graph = compile_content_graph(
         prompt_text,
         router,
         request_catalog=request_catalog,
         research=research,
+        progress=progress,
+        checkpoint=checkpoint,
+    )
+    return complete_generation_fields(
+        graph,
+        router,
+        prompt=prompt_text,
         progress=progress,
         checkpoint=checkpoint,
     )
