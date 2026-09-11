@@ -1,29 +1,17 @@
 id: design/content_relation
-task: Resolve exactly one explicit relationship between host-supplied content entities.
+task: Resolve exactly one explicit relationship type for the fixed host-supplied ordered entity pair.
 record_schema:
   type: object
   properties:
     relation_type:
       type: string
-      minLength: 1
-      maxLength: 32
-      pattern: ^(consumes|produces|contains|drops|requires|unlocks|upgrades|opens|controls|spawns|transports_to|displays|synchronizes|key_[A-Za-z0-9])$
-    source_id:
-      type: string
-      minLength: 1
-      maxLength: 32
-      pattern: ^[a-z][a-z0-9_]+$
-    target_id:
-      type: string
-      minLength: 1
-      maxLength: 32
-      pattern: ^[a-z][a-z0-9_]+$
+      enum: [consumes, produces, contains, drops, requires, unlocks, upgrades, opens, controls, spawns, transports_to, displays, synchronizes, key_A, key_B, key_C, key_D, key_E, key_F, key_G, key_H, key_I, key_J, key_K, key_L, key_M, key_N, key_O, key_P, key_Q, key_R, key_S, key_T, key_U, key_V, key_W, key_X, key_Y, key_Z, key_0, key_1, key_2, key_3, key_4, key_5, key_6, key_7, key_8, key_9]
   required:
     - relation_type
-    - source_id
-    - target_id
   additionalProperties: false
 rules:
-  - Use only exact entity IDs supplied by the host; never invent a missing endpoint.
-  - Emit only relationships explicitly required by the current requirement; the host must skip this template when none are required.
-  - Do not infer drops, ingredients, progression, networking, or other relations from convention alone.
+  - Return exactly one relationship explicitly required by the active requirement for the fixed source_id and target_id supplied by the host.
+  - Never emit source_id or target_id; endpoints are host-owned and are injected after validation.
+  - Use only a relation_type allowed by the fixed schema.
+  - Do not infer drops, ingredients, progression, networking, keys, or other relations from convention alone.
+  - The host owns cardinality, ordering, repetition, duplicate detection, endpoint injection, and termination.
