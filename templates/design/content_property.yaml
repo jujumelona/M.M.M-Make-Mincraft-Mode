@@ -1,11 +1,12 @@
 id: design/content_property
-task: Resolve exactly one explicit property of the current content entity.
+task: Resolve exactly one property of the current content entity.
 record_schema:
   type: object
   properties:
     property:
       type: string
-      pattern: ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind)$
+      pattern: >-
+        ^(display_name|stack_limit|shape|material|main_color|accent|surface|silhouette|transparency|tileability|category|health|attack_damage|speed|tracking_range|width|height|archetype|behavior|screen_type|slot_count|packet_name|channel|direction|sync_type|container_size|component_name|value_type|codec|feature_type|step|biomes|dimension_type|ambient_light|coordinate_scale|temperature|downfall|precipitation|color|beneficial|sound_id|subtitle|particle_name|override_limiter|loot_table_id|type|parent|frame_type|slot|defense|toughness|action|cooldown|trigger|interaction|recipe_kind|count|pattern_[1-3]|cooking_type|experience|cookingtime|registry_kind)$
     value:
       type: string
       minLength: 1
@@ -15,7 +16,11 @@ record_schema:
     - value
   additionalProperties: false
 rules:
-  - Emit only properties explicitly required by the current requirement; the host must skip this template when none are required.
-  - Do not invent numeric defaults or serialize a complete Minecraft resource into value.
-  - Use display_name for the authored English display name and stack_limit only for an explicitly required item stack limit.
+  - Emit exactly one property record; the host controls repetition, ordering, and termination.
+  - When requested_property is present in context, property must equal requested_property exactly.
+  - property must be one of allowed_properties supplied by the host.
+  - Do not invent host-owned identifiers, paths, registry keys, or serialized Minecraft resources in value.
+  - Do not substitute generic defaults merely because a property is missing; resolve only a property justified by the active requirement, accepted design state, relations, or grounded evidence.
+  - Use display_name for the authored English display name and stack_limit only when the active requirement or design state requires a non-default stack limit.
   - Recipe pattern rows use pattern_1 through pattern_3; emit each property as a separate record.
+  - When requested_property is supplied by the host, return exactly that property and no other property.
