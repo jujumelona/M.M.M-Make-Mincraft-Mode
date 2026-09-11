@@ -4,6 +4,7 @@ from pathlib import Path
 
 from minecraft_mod_ai.agent_roles import load_agent_role_routes
 from minecraft_mod_ai.capability_plugins import PLUGIN_STATUSES
+from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
 from minecraft_mod_ai.skill_catalog import CANONICAL_SKILLS
 
@@ -14,7 +15,7 @@ _STALE_MCP_ALIASES = frozenset(
         "mmm-planning",
     }
 )
-_MIRRORED_CONFIGS = (
+_CANONICAL_CONFIGS = (
     "agent_roles.yaml",
     "external_mcp_registry.yaml",
     "model_registry.yaml",
@@ -56,9 +57,12 @@ def test_agent_role_skill_names_are_unique_within_each_role() -> None:
         assert len(route.mcp_servers) == len(set(route.mcp_servers))
 
 
-def test_packaged_runtime_configs_exactly_match_repository_sources() -> None:
+def test_runtime_configs_have_one_packaged_canonical_source() -> None:
     root = Path(__file__).resolve().parents[1]
-    for name in _MIRRORED_CONFIGS:
-        source = (root / "config" / name).read_bytes()
-        packaged = (root / "minecraft_mod_ai" / "config" / name).read_bytes()
-        assert packaged == source, f"Packaged config drift: {name}"
+    package_config = root / "minecraft_mod_ai" / "config"
+    legacy_config = root / "config"
+    for name in _CANONICAL_CONFIGS:
+        canonical = package_config / name
+        assert config_path(name) == canonical.resolve()
+        assert canonical.is_file(), f"Missing canonical packaged config: {name}"
+        assert not (legacy_config / name).exists(), f"Duplicate legacy config reintroduced: {name}"
