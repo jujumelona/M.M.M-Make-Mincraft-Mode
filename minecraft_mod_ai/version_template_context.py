@@ -10,12 +10,19 @@ from .resolved_version_context import ResolvedVersionContext, VersionContextErro
 from .target_contract import mappings_applicable
 
 
-# These catalog sections are immutable, version-coupled build facts.  They belong in
-# deterministic template execution, not in model-authored project semantics.
-_ECOSYSTEM_FACT_KEYS = (
+# Every deterministic HOST domain exposed by ResolvedVersionContext must cross the
+# template boundary unchanged.  Templates may consume these values, but callers/models
+# may not re-derive, default, or override them locally.
+_HOST_FACT_KEYS = (
+    "host_revision",
+    "capabilities",
+    "api_symbols",
+    "schemas",
+    "artifact_rules",
     "dependency_coordinates",
     "repositories",
     "replacements",
+    "leaf_bindings",
 )
 
 
@@ -28,6 +35,14 @@ def resolved_template_facts(resolved: ResolvedVersionContext) -> dict[str, Any]:
         raise VersionContextError(
             "HOST_FACTS_INVALID",
             actual=type(host_facts).__name__,
+            context_id=resolved.context_id,
+        )
+
+    missing = [key for key in _HOST_FACT_KEYS if key not in host_facts]
+    if missing:
+        raise VersionContextError(
+            "HOST_BUNDLE_INCOMPLETE",
+            fields=missing,
             context_id=resolved.context_id,
         )
 
@@ -49,11 +64,8 @@ def resolved_template_facts(resolved: ResolvedVersionContext) -> dict[str, Any]:
             "version": target["mappings_version"],
         }
 
-    # Keep large catalogs such as assets/templates/invariants HOST-side.  Only compact
-    # build facts that deterministic templates need are projected into execution values.
-    for key in _ECOSYSTEM_FACT_KEYS:
-        if key in host_facts:
-            canonical[key] = deepcopy(host_facts[key])
+    for key in _HOST_FACT_KEYS:
+        canonical[key] = deepcopy(host_facts[key])
     return canonical
 
 
@@ -76,11 +88,12 @@ def validate_resolved_template_overrides(
 
 
 def resolved_template_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Return execution values with immutable version/build facts prefilled.
+    """Return execution values with immutable HOST facts prefilled.
 
-    The resolved HOST snapshot is the sole authority for target coordinates and compact
-    ecosystem/build facts. Callers may omit those facts, but may not contradict them.
-    Project-specific semantic values remain untouched.
+    The resolved HOST snapshot is the sole authority for target coordinates and every
+    deterministic capability/API/schema/artifact/dependency/leaf binding fact. Callers
+    may omit those facts, but may not contradict them. Project-specific semantic values
+    remain untouched.
     """
     merged = dict(values)
     raw = merged.get("resolved_version_context")
