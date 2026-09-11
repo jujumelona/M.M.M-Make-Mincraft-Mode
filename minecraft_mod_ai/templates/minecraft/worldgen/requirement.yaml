@@ -1,5 +1,32 @@
 id: minecraft/worldgen/requirement
 task: Implement only the requirement responsibility of the supplied worldgen artifact.
+execution_mode: deterministic
+side:
+- server
+inputs:
+- name: worldgen_identity
+  type: identifier
+  required: true
+outputs:
+- name: worldgen_contract
+  type: contract_receipt
+host_requirements:
+  capabilities:
+  - WORLDGEN_FEATURE
+implementation_key: fabric/worldgen/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/worldgen/requirement
+  writable_anchors:
+  - /* MMM:worldgen_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for worldgen strictly within declared WORLDGEN_FEATURE
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required worldgen prerequisite receipt is missing; never invent defaults.
+- Output must satisfy semantic_contract validator before completion.

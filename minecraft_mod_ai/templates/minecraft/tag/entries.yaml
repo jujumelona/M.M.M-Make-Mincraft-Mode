@@ -4,8 +4,8 @@ execution_mode: deterministic
 side:
 - common
 inputs:
-- name: tag_values
-  type: array
+- name: tag_identity
+  type: identifier
   required: true
 outputs:
 - name: tag_json
@@ -13,7 +13,7 @@ outputs:
 host_requirements:
   capabilities:
   - TAGS
-implementation_key: fabric/tag/registry
+implementation_key: fabric/tag/entries
 validators:
 - json_schema
 context_projection:
@@ -21,6 +21,7 @@ context_projection:
   include:
   - mod_id
   - registry_path
+  - package_path
 repair:
   scope:
   - minecraft/tag/entries
@@ -38,9 +39,7 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement entries responsibility for tag strictly within declared TAGS capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required tag prerequisite receipt is missing; never invent defaults.
+- Output must satisfy json_schema validator before completion.

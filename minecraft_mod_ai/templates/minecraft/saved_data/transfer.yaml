@@ -1,5 +1,32 @@
 id: minecraft/saved_data/transfer
 task: Implement only the transfer responsibility of the supplied saved data artifact.
+execution_mode: model
+side:
+- server
+inputs:
+- name: saved_data_identity
+  type: identifier
+  required: true
+outputs:
+- name: saved_data_transfer_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - PERSISTENT_STATE
+implementation_key: fabric/saved_data/transfer
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/saved_data/transfer
+  writable_anchors:
+  - /* MMM:saved_data_transfer */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,9 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement transfer responsibility for saved_data strictly within declared PERSISTENT_STATE
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required saved_data prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy java_parse validator before completion.

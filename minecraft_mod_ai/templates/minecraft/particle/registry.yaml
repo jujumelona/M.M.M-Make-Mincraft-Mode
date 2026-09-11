@@ -1,5 +1,38 @@
 id: minecraft/particle/registry
 task: Implement only the registry responsibility of the supplied particle artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: particle_identity
+  type: identifier
+  required: true
+outputs:
+- name: particle_registry_id
+  type: string
+- name: particle_java_symbol
+  type: string
+host_requirements:
+  capabilities:
+  - PARTICLE_TYPE
+  symbols:
+  - particle_type_register
+implementation_key: fabric/particle/registry
+validators:
+- java_parse
+- registry_identifier_unique
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - java_constant
+repair:
+  scope:
+  - minecraft/particle/registry
+  writable_anchors:
+  - /* MMM:particle_registry */
 consumes:
 - artifact_requirement
 - target_cell
@@ -13,9 +46,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement registry responsibility for particle strictly within declared PARTICLE_TYPE
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required particle prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

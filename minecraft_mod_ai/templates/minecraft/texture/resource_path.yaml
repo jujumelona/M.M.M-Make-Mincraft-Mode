@@ -1,5 +1,32 @@
 id: minecraft/texture/resource_path
 task: Implement only the resource path responsibility of the supplied texture artifact.
+execution_mode: deterministic
+side:
+- client
+inputs:
+- name: texture_identity
+  type: identifier
+  required: true
+outputs:
+- name: texture_resource_path_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - TEXTURE_ASSET
+implementation_key: fabric/texture/resource_path
+validators:
+- json_schema
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/texture/resource_path
+  writable_anchors:
+  - /* MMM:texture_resource_path */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement resource_path responsibility for texture strictly within declared TEXTURE_ASSET
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required texture prerequisite receipt is missing; never invent defaults.
+- Output must satisfy json_schema validator before completion.

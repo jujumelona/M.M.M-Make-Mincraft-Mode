@@ -1,5 +1,32 @@
 id: minecraft/menu/quick_move
 task: Implement only the quick move responsibility of the supplied menu artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: menu_identity
+  type: identifier
+  required: true
+outputs:
+- name: menu_quick_move_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - SCREEN_HANDLER
+implementation_key: fabric/menu/quick_move
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/menu/quick_move
+  writable_anchors:
+  - /* MMM:menu_quick_move */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement quick_move responsibility for menu strictly within declared SCREEN_HANDLER
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required menu prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

@@ -4,17 +4,15 @@ execution_mode: model
 side:
 - common
 inputs:
-- name: component_type
-  type: string
+- name: item_identity
+  type: identifier
   required: true
-- name: component_value
-  type: any
 outputs:
-- name: component_application
-  type: code_fragment
+- name: item_component_receipt
+  type: receipt
 host_requirements:
   capabilities:
-  - DATA_COMPONENTS
+  - REGISTER_ITEM
 implementation_key: fabric/item/component
 validators:
 - java_parse
@@ -23,6 +21,7 @@ context_projection:
   include:
   - mod_id
   - registry_path
+  - package_path
   - java_constant
 repair:
   scope:
@@ -41,9 +40,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement component responsibility for item strictly within declared REGISTER_ITEM
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required item prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

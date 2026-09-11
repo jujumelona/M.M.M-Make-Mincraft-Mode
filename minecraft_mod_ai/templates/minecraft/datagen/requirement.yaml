@@ -1,5 +1,32 @@
 id: minecraft/datagen/requirement
 task: Implement only the requirement responsibility of the supplied datagen artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: datagen_identity
+  type: identifier
+  required: true
+outputs:
+- name: datagen_contract
+  type: contract_receipt
+host_requirements:
+  capabilities:
+  - DATA_GENERATOR
+implementation_key: fabric/datagen/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/datagen/requirement
+  writable_anchors:
+  - /* MMM:datagen_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for datagen strictly within declared DATA_GENERATOR
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required datagen prerequisite receipt is missing; never invent defaults.
+- Output must satisfy semantic_contract validator before completion.

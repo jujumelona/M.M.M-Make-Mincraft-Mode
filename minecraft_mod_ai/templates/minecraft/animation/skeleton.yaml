@@ -1,5 +1,32 @@
 id: minecraft/animation/skeleton
 task: Implement only the skeleton responsibility of the supplied animation artifact.
+execution_mode: deterministic
+side:
+- client
+inputs:
+- name: animation_identity
+  type: identifier
+  required: true
+outputs:
+- name: animation_skeleton_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - ANIMATION_DEFINITION
+implementation_key: fabric/animation/skeleton
+validators:
+- json_schema
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/animation/skeleton
+  writable_anchors:
+  - /* MMM:animation_skeleton */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,9 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement skeleton responsibility for animation strictly within declared ANIMATION_DEFINITION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required animation prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy json_schema validator before completion.

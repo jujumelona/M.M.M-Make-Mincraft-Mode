@@ -1,5 +1,32 @@
 id: minecraft/command/execution
 task: Implement only the execution responsibility of the supplied command artifact.
+execution_mode: model
+side:
+- server
+inputs:
+- name: command_identity
+  type: identifier
+  required: true
+outputs:
+- name: command_execution_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - COMMAND_REGISTRATION
+implementation_key: fabric/command/execution
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/command/execution
+  writable_anchors:
+  - /* MMM:command_execution */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement execution responsibility for command strictly within declared COMMAND_REGISTRATION
+  capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required command prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

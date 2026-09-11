@@ -582,7 +582,11 @@ def execute_artifact_template(
         "registry_identifier_unique",
         "registry_identifier",
         "json_parse",
+        "json_schema",
         "resource_references",
+        "semantic_contract",
+        "mod_integration_test",
+        "client_side_only",
     }
     declared_validators = tuple(template.get("validators", ()) or ())
     unknown = [name for name in declared_validators if name not in supported_validators]

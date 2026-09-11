@@ -1,5 +1,32 @@
 id: minecraft/mob/requirement
 task: Implement only the requirement responsibility of the supplied mob artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: mob_identity
+  type: identifier
+  required: true
+outputs:
+- name: mob_contract
+  type: contract_receipt
+host_requirements:
+  capabilities:
+  - REGISTER_MOB
+implementation_key: fabric/mob/requirement
+validators:
+- semantic_contract
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/mob/requirement
+  writable_anchors:
+  - /* MMM:mob_requirement */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement requirement responsibility for mob strictly within declared REGISTER_MOB
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required mob prerequisite receipt is missing; never invent defaults.
+- Output must satisfy semantic_contract validator before completion.

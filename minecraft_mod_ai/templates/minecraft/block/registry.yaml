@@ -10,7 +10,7 @@ inputs:
 outputs:
 - name: block_registry_id
   type: string
-- name: java_symbol
+- name: block_java_symbol
   type: string
 host_requirements:
   capabilities:
@@ -18,7 +18,7 @@ host_requirements:
   symbols:
   - register_block
   - builtin_block_registry
-implementation_key: fabric/block/register_basic
+implementation_key: fabric/block/registry
 validators:
 - java_parse
 - registry_identifier_unique
@@ -27,8 +27,8 @@ context_projection:
   include:
   - mod_id
   - registry_path
-  - java_constant
   - package_path
+  - java_constant
 repair:
   scope:
   - minecraft/block/registry
@@ -47,9 +47,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement registry responsibility for block strictly within declared REGISTER_BLOCK
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required block prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

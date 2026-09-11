@@ -1,5 +1,34 @@
 id: minecraft/block/model
 task: Implement only the model responsibility of the supplied block artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: block_identity
+  type: identifier
+  required: true
+outputs:
+- name: block_model_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - REGISTER_BLOCK
+implementation_key: fabric/block/model
+validators:
+- java_parse
+- client_side_only
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - java_constant
+repair:
+  scope:
+  - minecraft/block/model
+  writable_anchors:
+  - /* MMM:block_model */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +41,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement model responsibility for block strictly within declared REGISTER_BLOCK
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required block prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

@@ -1,5 +1,32 @@
 id: minecraft/effect/tick
 task: Implement only the tick responsibility of the supplied effect artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: effect_identity
+  type: identifier
+  required: true
+outputs:
+- name: effect_tick_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - STATUS_EFFECT
+implementation_key: fabric/effect/tick
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/effect/tick
+  writable_anchors:
+  - /* MMM:effect_tick */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement tick responsibility for effect strictly within declared STATUS_EFFECT
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required effect prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

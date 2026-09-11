@@ -43,6 +43,14 @@ class TemplateStep:
     context_projection: ContextProjection = ContextProjection()
     repair: RepairContract = RepairContract()
 
+    @property
+    def execution(self) -> str:
+        return self.execution_mode
+
+    @property
+    def implementation(self) -> str:
+        return self.implementation_key
+
 
 def _string_contract(identifier: str, field: str, raw) -> tuple[str, ...]:
     if not isinstance(raw, list):

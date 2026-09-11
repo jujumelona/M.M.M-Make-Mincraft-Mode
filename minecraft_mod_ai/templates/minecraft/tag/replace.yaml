@@ -1,5 +1,32 @@
 id: minecraft/tag/replace
 task: Implement only the replace responsibility of the supplied tag artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: tag_identity
+  type: identifier
+  required: true
+outputs:
+- name: tag_replace_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - TAGS
+implementation_key: fabric/tag/replace
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/tag/replace
+  writable_anchors:
+  - /* MMM:tag_replace */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,7 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement replace responsibility for tag strictly within declared TAGS capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required tag prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

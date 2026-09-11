@@ -1,5 +1,32 @@
 id: minecraft/loot/condition
 task: Implement only the condition responsibility of the supplied loot artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: loot_identity
+  type: identifier
+  required: true
+outputs:
+- name: loot_condition_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - LOOT_TABLE
+implementation_key: fabric/loot/condition
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/loot/condition
+  writable_anchors:
+  - /* MMM:loot_condition */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement condition responsibility for loot strictly within declared LOOT_TABLE
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required loot prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.

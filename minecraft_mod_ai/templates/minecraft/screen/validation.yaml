@@ -1,5 +1,32 @@
 id: minecraft/screen/validation
 task: Implement only the validation responsibility of the supplied screen artifact.
+execution_mode: deterministic
+side:
+- client
+inputs:
+- name: screen_identity
+  type: identifier
+  required: true
+outputs:
+- name: screen_validation_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - SCREEN_CLIENT
+implementation_key: fabric/screen/validation
+validators:
+- mod_integration_test
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/screen/validation
+  writable_anchors:
+  - /* MMM:screen_validation */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,8 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement validation responsibility for screen strictly within declared SCREEN_CLIENT
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required screen prerequisite receipt is missing; never invent defaults.
+- Output must satisfy mod_integration_test validator before completion.

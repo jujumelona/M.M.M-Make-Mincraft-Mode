@@ -1,5 +1,32 @@
 id: minecraft/biome/datagen
 task: Implement only the datagen responsibility of the supplied biome artifact.
+execution_mode: deterministic
+side:
+- server
+inputs:
+- name: biome_identity
+  type: identifier
+  required: true
+outputs:
+- name: biome_datagen_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - BIOME
+implementation_key: fabric/biome/datagen
+validators:
+- json_schema
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/biome/datagen
+  writable_anchors:
+  - /* MMM:biome_datagen */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +39,7 @@ anchor_kinds:
 - symbol
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement datagen responsibility for biome strictly within declared BIOME capability.
+- Target side must remain server; reject cross-side symbol leakage.
+- Fail closed if required biome prerequisite receipt is missing; never invent defaults.
+- Output must satisfy json_schema validator before completion.

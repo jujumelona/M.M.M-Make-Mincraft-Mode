@@ -1,5 +1,33 @@
 id: minecraft/sound/file
 task: Implement only the file responsibility of the supplied sound artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: sound_identity
+  type: identifier
+  required: true
+outputs:
+- name: sound_file_receipt
+  type: receipt
+host_requirements:
+  capabilities:
+  - SOUND_EVENT
+implementation_key: fabric/sound/file
+validators:
+- java_parse
+- client_side_only
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+repair:
+  scope:
+  - minecraft/sound/file
+  writable_anchors:
+  - /* MMM:sound_file */
 consumes:
 - artifact_requirement
 - target_cell
@@ -12,9 +40,7 @@ anchor_kinds:
 - resource
 - test
 rules:
-- Use the supplied artifact identity and acceptance contract.
-- Use only target-compatible symbols verified in the supplied bindings.
-- If this concern is inapplicable, record its concrete reason and perform no edit.
-- If information is missing, return blocked; never invent a default implementation.
-- Modify only the owned anchor for this responsibility.
-- Complete only after its declared postcondition is checked.
+- Implement file responsibility for sound strictly within declared SOUND_EVENT capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required sound prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
