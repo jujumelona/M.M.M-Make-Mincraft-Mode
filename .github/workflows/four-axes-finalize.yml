@@ -1,5 +1,5 @@
 name: Four Axes Final Validation
-# rerun after regression-test quoting fix
+# rerun after host-loop anchor fix
 on:
   push:
     branches: [main]
