@@ -2,6 +2,7 @@
 
 import os
 
+from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
@@ -33,6 +34,7 @@ def _configure_default_llama_parallelism() -> None:
 
 
 _configure_default_llama_parallelism()
+install_hardware_concurrency()
 initialize_runtime()
 from . import java_lsp as _java_lsp
 
